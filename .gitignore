@@ -1,0 +1,34 @@
+# --- Editor / IDE ---
+*.swp
+*.swo
+*~
+.idea/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+
+# --- OS ---
+.DS_Store
+Thumbs.db
+
+# --- Node / TypeScript (extension) ---
+node_modules/
+dist/
+build/
+coverage/
+*.tsbuildinfo
+.npm/
+.pnpm-store/
+
+# --- Zig (core) ---
+.zig-cache/
+zig-cache/
+zig-out/
+
+# --- WASM build artifacts ---
+*.wasm.map
+
+# --- Logs / misc ---
+*.log
+.env
+.env.local

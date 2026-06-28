@@ -1,5 +1,6 @@
-# Unity Prefab Diff — 設計ドキュメント
+# PrefabLens — 設計ドキュメント
 
+- **プロダクト名**: PrefabLens（リポジトリ: `prefab-lens`）。「Unity」は商標のため固有名は造語とし、説明に "for Unity" を添える方針。
 - **日付**: 2026-06-29
 - **ステータス**: 承認済み（実装計画フェーズへ）
 - **対象**: Unity の prefab/scene/asset を意味的に diff し、GitHub Pull Request のレビュー画面に分かりやすく表示する OSS ツール

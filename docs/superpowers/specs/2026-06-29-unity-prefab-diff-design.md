@@ -1,23 +1,30 @@
-# PrefabLens — 設計ドキュメント
+# PrefabLens — 設計ドキュメント（アーキテクチャ & ロードマップ）
 
 - **プロダクト名**: PrefabLens（リポジトリ: `prefab-lens`）。「Unity」は商標のため固有名は造語とし、説明に "for Unity" を添える方針。
 - **日付**: 2026-06-29
-- **ステータス**: 承認済み（実装計画フェーズへ）
-- **対象**: Unity の prefab/scene/asset を意味的に diff し、GitHub Pull Request のレビュー画面に分かりやすく表示する OSS ツール
+- **ステータス**: 承認済み（Phase 1 を実装計画フェーズへ）
+- **アーキテクチャ**: マルチホスト共通コア（Zig 製の純粋な diff エンジンを、CLI / Chrome 拡張 / Unity Editor / AI(MCP) の各ホストが再利用）
+- **対象**: Unity の prefab/scene/asset を意味的に diff し、ローカル（CLI・Editor）と GitHub PR（Chrome 拡張）の両方で分かりやすく表示する OSS ツール
 
 ---
 
 ## 1. 概要 / 目的
 
-Unity の prefab・scene・ScriptableObject は YAML テキストだが、人間がレビューするための形式ではない。GitHub PR で生 YAML の diff を見ても、`{fileID: 11500000, guid: abc..., type: 3}` のような参照や、コンポーネント追加で複数箇所に散る行差分のせいで実質レビュー不能になる。
+Unity の prefab・scene・ScriptableObject は YAML テキストだが、人間がレビューするための形式ではない。生 YAML の diff は `{fileID: 11500000, guid: abc..., type: 3}` のような参照や、コンポーネント追加で複数箇所に散る行差分のせいで実質レビュー不能になる。
 
-本ツールは **Unity アセットを意味単位（GameObject・コンポーネント・フィールド）で diff し、その結果を Chrome 拡張で GitHub PR の「Files changed」画面にインライン表示**する。バックエンドサーバを持たず、すべてユーザーのブラウザ内で完結させる（運用費ゼロ・OSS として配布）。**性能を最優先**する。
+PrefabLens は **Unity アセットを意味単位（GameObject・コンポーネント・フィールド）で diff** し、それを複数の場所で読める形に表示する：
+
+- **ローカル**: CLI（ターミナル）と Unity Editor（EditorWindow）で、手元の変更を即座に確認。
+- **GitHub PR**: Chrome 拡張で「Files changed」にインライン表示し、レビューを実用化。
+- **AI 連携**: 構造化 diff を MCP 経由で AI エージェント（Unity の AI Agents 含む）へ渡し、要約・リスク指摘・自動レビューを可能にする。
+
+中核は **Zig 製の純粋な diff エンジン（共通コア）**。各ホストはこのコアを再利用する薄いフロントエンドであり、コアは 1 つのソースから WASM / ネイティブの両方へコンパイルされる。**性能を最優先**し、Chrome ホストは**バックエンド無し・費用ゼロ**で動く。
 
 ### ゴール（成功基準）
 
 - prefab/scene/asset の差分を「追加/削除されたコンポーネント・変更されたフィールド（旧→新）」として読める形で表示する。
 - `fileID`/`guid` 参照を実名（型名・スクリプト名・対象オブジェクト名）に解決する（L2）。
-- バックエンド不要・費用ゼロ・private/public リポジトリ両対応。
+- 1 つの共通コアを、CLI / Chrome / Editor / AI が再利用する（重複実装ゼロ）。
 - 性能予算（§5.7）を CI で強制する。
 
 ---
@@ -26,13 +33,13 @@ Unity の prefab・scene・ScriptableObject は YAML テキストだが、人間
 
 | ツール | 何をする | 本構想との差 |
 |---|---|---|
-| UnityYAMLMerge (SmartMerge) | Unity 公式。prefab/scene YAML を意味的に**マージ**する CLI | マージ専用。PR 上の見やすい diff 表示ではない |
+| UnityYAMLMerge (SmartMerge) | Unity 公式。prefab/scene YAML を意味的に**マージ**する CLI | マージ専用。見やすい diff 表示ではない |
 | UniMerge | Unity Editor 内で色分け diff/マージ | Editor 専用。GitHub PR では使えない |
 | endaye/unity-prefab-compare-tool | prefab 比較 | Editor ツール、PR 連携なし |
-| Unity YAML Prefab Diff Visualizer（個人作） | Editor 内で GUID→名前解決し構造表示 | **Editor 専用**。Chrome 拡張で PR に出す発想は無い |
-| KittyCAD diff-viewer-extension | GitHub PR diff を上書きして 3D CAD を表示する Chrome 拡張 | 対象が CAD。だが「PR diff をブラウザ拡張で上書きする」アーキテクチャの参考事例 |
+| Unity YAML Prefab Diff Visualizer（個人作） | Editor 内で GUID→名前解決し構造表示 | Editor 専用。Chrome 拡張で PR に出す発想は無い |
+| KittyCAD diff-viewer-extension | GitHub PR diff を上書きして 3D CAD を表示する Chrome 拡張 | 対象が CAD。「PR diff をブラウザ拡張で上書きする」参考事例 |
 
-**結論**: 「Unity prefab を意味的に diff し、それを Chrome 拡張で GitHub PR に直接出す」という組み合わせは空白地帯であり、作る価値がある。
+**結論**: 既存ツールには「ローカル表示（Editor/CLI）」という大きな価値があるが、いずれも単一ホストに閉じている。PrefabLens は**1 つの共通コアを、ローカル（CLI/Editor）と GitHub PR（Chrome）と AI(MCP) の全てで再利用**する点が新しく、空白地帯を埋める。
 
 ---
 
@@ -40,91 +47,63 @@ Unity の prefab・scene・ScriptableObject は YAML テキストだが、人間
 
 | 項目 | 決定 | 理由 |
 |---|---|---|
-| diff の深さ | **L2: 名前解決つき構造 diff** | PR レビューで最も実用的。fileID/guid を実名解決 |
-| 実行場所 | **Chrome 拡張内で完結（WASM・バックエンド無し）** | 運用費ゼロ・プライバシー・配布容易 |
-| エンジン言語 | **Zig** | GC/ランタイム無しで最小 WASM・最速。性能最優先に忠実 |
-| 責務分担 | **案1: Thin Shell + Fat Core** | 解析/差分を Zig に集約。JS↔WASM 境界を最終 diff のみに絞り性能最大化 |
+| diff の深さ | **L2: 名前解決つき構造 diff** | PR/ローカルで最も実用的。fileID/guid を実名解決 |
+| アーキテクチャ | **マルチホスト共通コア** | コアを純関数・明確 ABI で切り、全ホストが再利用 |
+| エンジン言語 | **Zig** | GC/ランタイム無しで最小 WASM・最速。1 ソースから WASM/ネイティブ両対応 |
+| 責務分担 | **案1: Thin Shell + Fat Core** | 解析/差分を Zig に集約。ホストは I/O・解決・描画のみ |
+| ビルド順 | **Core+CLI → Chrome → Editor → AI** | 最単純な CLI でエンジンを実証→難しい Chrome のリスク低減 |
 | 対象アセット | **prefab / scene / asset（3 種）** | YAML 形式は共通、コア解析モデルは 1 つで済む |
-| 対象リポジトリ | **private + public** | Unity 開発は非公開が多い |
-| PR 内表示 | **インライン置換 ＋ `[Raw\|Semantic]` トグル** | レビューの流れを崩さない |
-| 認証 | **PAT のみ（プロバイダ層で抽象化）／ baseURL 設定あり** | 最小実装。github.com/GHEC/GHES を無設定でカバー。将来 OAuth を差し込める |
-| 描画 | **Shadow DOM ツリービュー** | GitHub の CSS と相互非干渉 |
-| WASM 実行 | **Web Worker に隔離** | メインスレッドのジャンクゼロ |
+| 名前解決の seam | **ホスト別の解決器を差し替え** | Chrome=GitHub API / CLI=.meta 走査 / Editor=AssetDatabase |
+| Chrome ホスト | **拡張内完結（WASM・バックエンド無し）／PAT 認証／インライン `[Raw\|Semantic]` トグル／Shadow DOM** | 運用費ゼロ・レビューの流れを崩さない |
+| CLI/Editor ホスト | **ネイティブ・ローカル完結** | ローカルに全ファイルがあり guid 解決が完全かつ高速 |
 
 ---
 
-## 4. アーキテクチャ
+## 4. アーキテクチャ（マルチホスト）
 
-### 4.1 コンポーネント図
+### 4.1 全体図
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│  Chrome Extension (Manifest V3) — すべてユーザーのブラウザ内    │
-│                                                             │
-│  ┌───────────────┐   postMessage   ┌──────────────────────┐ │
-│  │ Content Script │◀───────────────▶│ Web Worker           │ │
-│  │ (TS)           │  transferable   │  ┌─────────────────┐ │ │
-│  │ ・ファイル検出   │  ArrayBuffer    │  │ Zig コア (WASM) │ │ │
-│  │ ・トグル注入     │                 │  │ parse/match/diff │ │ │
-│  │ ・Renderer 呼出  │                 │  └─────────────────┘ │ │
-│  └───────┬────────┘                 └──────────────────────┘ │
-│          │ message                                          │
-│  ┌───────▼────────┐    GitHub API    ┌──────────────────────┐│
-│  │ Service Worker │◀────────────────▶│ chrome.storage       ││
-│  │ (background TS)│   (認証付 fetch)  │ ・PAT                ││
-│  │ ・PAT 管理      │                  │ ・guid→path キャッシュ││
-│  │ ・blob/.meta取得 │                  └──────────────────────┘│
-│  │ ・guid 解決      │                                          │
-│  └────────────────┘                                          │
-│  ┌────────────────┐                                          │
-│  │ Options/Popup  │ PAT 入力・baseURL・テーマ・既定ビュー設定   │
-│  └────────────────┘                                          │
-└─────────────────────────────────────────────────────────────┘
-                     ▲
-                     │ DOM 注入 / GitHub REST API（CORS 許可済）
-            ┌────────┴─────────┐
-            │ github.com (PR)   │
-            └───────────────────┘
+                    ┌─────────────────────────────┐
+                    │  Zig 共通コア（純粋な差分エンジン）│
+                    │  parse → fileID突合 → diff   │
+                    │  → 構造化diff(JSON/struct)    │
+                    │  ＋ 未解決guid集合を返す       │
+                    └──────────────┬──────────────┘
+        ┌──────────────┬───────────┼───────────┬──────────────┐
+        ▼              ▼           ▼           ▼              ▼
+   ┌─────────┐   ┌─────────┐  ┌─────────┐ ┌──────────┐  ┌──────────┐
+   │ CLI     │   │ Chrome  │  │ Unity   │ │ AI / MCP │  │ (将来)   │
+   │(native) │   │ (WASM)  │  │ Editor  │ │          │  │ VS Code  │
+   │Phase 1  │   │Phase 2  │  │(C#)     │ │ Phase 4  │  │ ...      │
+   │.meta走査│   │GitHub   │  │Phase 3  │ │構造化diff│  │          │
+   │で解決   │   │APIで解決│  │AssetDB  │ │をLLMへ   │  │          │
+   │ターミナル│   │Shadow   │  │で解決   │ │MCPツール │  │          │
+   │/JSON/HTML│  │DOM描画  │  │Editor   │ │として公開│  │          │
+   │         │   │         │  │Window   │ │          │  │          │
+   └─────────┘   └─────────┘  └─────────┘ └──────────┘  └──────────┘
 ```
 
-> 注: MV3 の "Service Worker" は拡張機能のバックグラウンド・スクリプトであり、**ユーザーのブラウザ内で動く**。Web のバックエンドサーバではない。本ツールに運用サーバは存在しない。
+> MV3 の "Service Worker"（Chrome ホスト内）は拡張機能のバックグラウンド・スクリプトであり、ユーザーのブラウザ内で動く。Web のバックエンドサーバではない。本ツールに運用サーバは存在しない。
 
-### 4.2 各コンポーネントの責務
+### 4.2 共通コアとホストの責務境界
 
-| コンポーネント | 何をするか | 依存 |
+- **共通コア（Zig）**: 入力＝前後 2 版のバイト列。出力＝構造化 diff ＋未解決 guid 集合。**純関数・グローバル状態なし・I/O なし**。組み込み型（静的 classID テーブル）とローカル参照（同一ファイル内 fileID）は内部解決する。
+- **ホスト**: ①差分元の調達（ファイル/git ref/blob）②未解決 guid の解決（ホスト別の解決器）③描画（ターミナル/DOM/EditorWindow）④認証・設定。
+
+### 4.3 名前解決の seam（ホスト別の解決器）
+
+| ホスト | guid → アセットパスの解決方法 | ネットワーク |
 |---|---|---|
-| Content Script (TS) | Unity アセット検出、`[Raw\|Semantic]` トグル注入、Worker へ解析依頼、Renderer 呼出 | DOM, Worker, background |
-| Web Worker (TS 薄) | WASM ロード、バイト列を Zig に渡し構造化 diff を返す。メインスレッド隔離 | WASM |
-| Zig コア (WASM) | 前後 2 版をパース→fileID 突合→構造 diff→組み込み型/ローカル参照を内部解決→構造化 diff(JSON) | なし（純関数） |
-| Service Worker (background TS) | PAT で GitHub 認証、blob(前後)・`.meta` 取得、guid→path 解決、キャッシュ | GitHub API, chrome.storage |
-| Renderer (TS) | 構造化 diff ＋ guid→path 表 → Shadow DOM ツリー。トグル・折りたたみ・テーマ | DOM |
-| Options/Popup (TS) | PAT 入力、baseURL、設定 | chrome.storage |
+| CLI | ローカルの `.meta` を走査して guid→path 索引を構築 | 不要 |
+| Unity Editor | `AssetDatabase.GUIDToAssetPath()` 一発 | 不要 |
+| Chrome 拡張 | ①PR 変更 `.meta` ②コード検索 `"<guid>" path:*.meta` ③キャッシュ | 必要（少数） |
 
-### 4.3 データフロー（トグル ON 時）
-
-```
-1. PR「Files changed」を開く
-2. Content Script: パスが *.prefab/*.unity/*.asset に一致 → ファイル頭にトグル注入
-3. (ユーザーが Semantic 選択 or 既定で自動)
-4. Content → background: 当該ファイルの前後 blob 要求
-5. background → GitHub API: base SHA / head SHA の blob 取得（PAT 認証付）
-6. Content → Worker: 前後バイト列を transferable で渡す（ゼロコピー）
-7. Worker → Zig(WASM): diff(before, after)
-     Zig 内部で解決:
-       ・!u!114 → "MonoBehaviour"（静的 classID テーブル）
-       ・{fileID:12345}（guid 無し）→ 同一ファイル内の対象に突合
-     外部解決が要るものは「未解決 guid 集合」として併せて返す
-8. Worker → Content: 構造化 diff JSON ＋ 未解決 guid 集合
-9. Content → background: guid 集合の解決依頼
-     → ①PR 変更 .meta ②コード検索 `"<guid>" path:*.meta` ③キャッシュ
-     → guid→path 表（repo + head SHA でキャッシュ）
-10. Renderer: 構造化 diff を描画、スクリプト名は guid→path 表で解決
-    GitHub の生 diff を隠し、トグルで相互切替
-```
+> コアが「未解決 guid 集合を返す → ホストが解決」という共通の継ぎ目を持つため、各ホストは**同じ seam に別の解決器を差すだけ**。ローカルホストでは解決が完全かつ高速になる。
 
 ---
 
-## 5. Zig コア設計
+## 5. Zig 共通コア設計（ホスト非依存）
 
 ### 5.1 Unity YAML の構造
 
@@ -158,18 +137,18 @@ Node = union { Map(entries), Seq(items), Scalar([]const u8), Ref{fileID, guid?, 
 
 ### 5.3 パーサ
 
-- 汎用 YAML ライブラリは使わず、**Unity YAML 限定サブセット専用の一発パス・パーサ**を自作する。
+- 汎用 YAML ライブラリは使わず、**Unity YAML 限定サブセット専用の一発パス・パーサ**を自作。
   - ブロックスタイル中心、flow は `{fileID:..}` 等の埋め込みのみ、2 スペース固定インデント、エイリアスはドキュメントの `&fileID` のみ。
 - インデントスタックでドキュメント群を生成。`{fileID:.., guid:.., type:..}` は Ref ノードとして特別認識。
-- malformed 入力に対して堅牢（フォールバックのためエラーを返す）。
+- malformed 入力に堅牢（フォールバックのためエラーを返す）。
 
-### 5.4 名前解決の 3 分岐
+### 5.4 名前解決の 3 分岐（コア内 / ホスト委譲）
 
-| 参照の種類 | 例 | 解決方法 | ネットワーク |
+| 参照の種類 | 例 | 解決方法 | 担当 |
 |---|---|---|---|
-| 組み込み classID | `!u!1`, `!u!4`, `!u!114` | Zig 内蔵の静的 classID テーブル → 型名 | 不要 |
-| ローカル参照 | `{fileID: 234}` | 同一ファイル内の同 anchor ドキュメントへ突合 | 不要 |
-| 外部参照(guid) | `{fileID:.., guid:.., type:3}` | Zig は不能 → 未解決 guid 集合として出力、TS が解決 | 必要（少数） |
+| 組み込み classID | `!u!1`, `!u!4`, `!u!114` | Zig 内蔵の静的 classID テーブル → 型名 | コア |
+| ローカル参照 | `{fileID: 234}` | 同一ファイル内の同 anchor ドキュメントへ突合 | コア |
+| 外部参照(guid) | `{fileID:.., guid:.., type:3}` | 未解決 guid 集合として出力 → ホストが解決 | ホスト |
 
 ### 5.5 diff アルゴリズム
 
@@ -182,15 +161,16 @@ Node = union { Map(entries), Seq(items), Scalar([]const u8), Ref{fileID, guid?, 
 6. GameObject 階層を反映した差分ツリーを生成（Unchanged は畳む）
 ```
 
-- **突合キー = fileID**。Unity は編集をまたいで安定した fileID を振るため、行位置でなくオブジェクトの同一性で前後対応できる。これが「コンポーネント追加で複数行がズレる」問題に惑わされない根拠。
-- 例外（fileID が変わる稀ケース）には二次マッチ `(型 + m_Name + 親)` の類似度で救済。**v1 は fileID 主・名前フォールバックは v1.1 以降**でも可。
-- フィールド diff は参照を「解決後のアイデンティティ」で比較（ローカル=対象 fileID、外部=guid+fileID）。値の前後・追加キー・削除キー・参照の張り替えを区別。
+- **突合キー = fileID**。Unity は編集をまたいで安定した fileID を振るため、行位置でなくオブジェクトの同一性で前後対応できる。「コンポーネント追加で複数行がズレる」問題に惑わされない根拠。
+- 例外（fileID が変わる稀ケース）には二次マッチ `(型 + m_Name + 親)` の類似度で救済。**Phase 1 は fileID 主・名前フォールバックは後続**。
+- フィールド diff は参照を「解決後のアイデンティティ」で比較（ローカル=対象 fileID、外部=guid+fileID）。
 
-### 5.6 WASM ABI / メモリ
+### 5.6 コア ABI（WASM / ネイティブ共通）
 
+- コアは C ABI のエクスポートを持ち、**WASM（Chrome 用）とネイティブ静的/動的ライブラリ（CLI/Editor 用）の両方**へコンパイルされる（同一ソース、ターゲット違い）。
 - エクスポート: `alloc(len)`, `free(ptr,len)`, `diff(before*, beforeLen, after*, afterLen) -> resultPtr`（長さ前置の JSON バイト列）。
-- diff 1 回 = 1 arena、呼出ごとにリセット。グローバル状態なし＝**純関数**でテスト容易・再入可能。
-- 出力は v1 では **JSON**（差分のみで小さく、境界コストは無視可）。必要ならコンパクトバイナリへ差替可能。
+- diff 1 回 = 1 arena、呼出ごとにリセット。グローバル状態なし＝**純関数**で再入可能・テスト容易。
+- CLI は同じコアを直接リンク（FFI 不要）。Chrome は WASM をロード。Editor は CLI バイナリをサブプロセスで利用（後で P/Invoke も可）。
 
 ### 5.7 性能目標（CI で強制）
 
@@ -200,101 +180,105 @@ Node = union { Map(entries), Seq(items), Scalar([]const u8), Ref{fileID, guid?, 
 | 典型 prefab(≤200KB) の parse+diff | < 5 ms |
 | 巨大 scene(~10MB) の parse+diff | < 150 ms |
 | ピークメモリ | input の約 3 倍以内 |
-| メインスレッド | Web Worker 隔離＝ジャンクゼロ |
+| Chrome のメインスレッド | Web Worker 隔離＝ジャンクゼロ |
 | トグル→描画(ネット除く) | < 300 ms |
-| 巨大ファイルガード | 25MB 超は「クリックで描画」に切替 |
+| 巨大ファイルガード | 25MB 超は「クリックで描画」（Chrome） |
 
 ---
 
-## 6. TypeScript 拡張設計
+## 6. ホスト別設計
 
-### 6.1 Renderer
+### 6.1 CLI ホスト（Phase 1 = v1）
 
-- 入力: 構造化 diff JSON ＋ guid→path 表 → GitHub のファイル枠に注入する DOM。
-- **GameObject 階層を反映したツリービュー**。状態色（追加=緑/削除=赤/変更=黄、GitHub 配色準拠＋アクセシブル）。Modified コンポーネントはフィールド変更（旧→新）を展開。折りたたみ可。
-- スクリプト名は guid→path 表で解決。未解決は短縮 guid ＋「unresolved」バッジ。
-- **Shadow DOM で隔離**注入。light/dark は GitHub テーマを読み CSS 変数で追従。
+- **入力**: 2 つのファイルパス、または git ref（例: `prefab-lens HEAD~1 HEAD path/to/Foo.prefab`、`--staged`、ワーキングツリー比較）。git 連携は `git show <ref>:<path>` をサブプロセスで取得。
+- **名前解決**: カレントの Unity プロジェクトの `.meta` を走査して guid→path 索引を構築（キャッシュ可）。ローカルなので完全解決。
+- **出力**:
+  - 既定: **ANSI カラーのツリー表示**（追加=緑/削除=赤/変更=黄、GameObject 階層、フィールド旧→新）。
+  - `--json`: 構造化 diff をそのまま（CI・他ツール・AI 連携用）。
+  - `--html`: 自己完結 HTML（共有用）。
+- **用途**: コミット前の確認、`git difftool` 連携、CI でのレビュー補助。
 
-### 6.2 GitHub 統合
+### 6.2 Chrome 拡張ホスト（Phase 2）
 
-- **検出**: Files changed 内で `*.prefab` / `*.unity` / `*.asset` のファイル枠を特定。GitHub が畳んでいるケースも考慮。
-- **注入の堅牢性**: GitHub は SPA・遅延ロード（スクロールで順次描画、PJAX/turbo 遷移）。`MutationObserver` で動的再注入、セレクタは防御的に。
-- **blob 取得**: PR の base/head SHA から前後内容を取得（Contents API か Git Blobs API）。追加/削除は片側空。
-- **guid 解決の 3 段**: ①PR 自身の変更 `.meta`（PR 内追加の新規スクリプトを拾う）→ ②コード検索 `"<guid>" path:*.meta`（既存）→ ③`repo+sha` でキャッシュ → ④未解決はフォールバック。
+- **構成**: Content Script（検出・トグル注入・オーケストレーション）／Web Worker（WASM ロード・コア呼出、メインスレッド隔離）／background Service Worker（PAT・GitHub API・guid 解決・キャッシュ）／Renderer（Shadow DOM ツリー）／Options（PAT 入力・baseURL）。
+- **検出**: Files changed 内で `*.prefab` / `*.unity` / `*.asset` を特定。GitHub の SPA・遅延ロードに `MutationObserver` で追従、セレクタは防御的に。
+- **blob 取得**: PR の base/head SHA から前後内容を取得（Contents/Blobs API）。追加/削除は片側空。
+- **guid 解決**: ①PR 変更 `.meta` ②コード検索 `"<guid>" path:*.meta` ③`repo+sha` でキャッシュ ④未解決はフォールバック表示。
+- **認証**: **PAT のみ**（`getToken()` を返すプロバイダ層の裏に置き、将来 OAuth を差込可）。`chrome.storage` 保存。**baseURL 設定**で github.com / GHEC / GHES をカバー。
+- **表示**: インライン `[Raw|Semantic]` トグルで生 diff と意味的 diff を相互切替。Shadow DOM で GitHub の CSS と非干渉、light/dark 追従。
 
-### 6.3 認証
+### 6.3 Unity Editor ホスト（Phase 3）
 
-- **PAT のみ**。`chrome.storage` に保存。`getToken()` を返す**プロバイダ層**の裏に置き、将来 OAuth Device Flow / GitHub App を差し込めるようにする。
-- **baseURL 設定**で github.com / GHEC / GHES をカバー（GHES はユーザーが自インスタンスで PAT 作成→貼付で無設定動作）。
+- **実装**: EditorWindow（IMGUI/UIToolkit）。**CLI バイナリをサブプロセスで叩き、stdout の JSON を受け取って描画**（ネイティブ連携の複雑さゼロ。後で密結合が要れば P/Invoke 化）。
+- **名前解決**: `AssetDatabase.GUIDToAssetPath()` で完全解決。
+- **差分元**: git（HEAD/ステージ/任意 ref）との比較、または 2 つの prefab/版の比較。
+- **用途**: Editor を離れずに変更を確認、シーン内オブジェクトとの対応づけ。
 
-### 6.4 エラー処理 / エッジケース（原則: ページを壊さない）
+### 6.4 AI / MCP 連携（Phase 4）
 
-| ケース | 挙動 |
-|---|---|
-| パース失敗・想定外形式 | 生 diff にフォールバック＋小さな注意表示 |
-| 巨大ファイル(>25MB) | 「クリックで描画」ガード |
-| 追加/削除/リネーム | 片側 diff として処理 |
-| guid 未解決（外部パッケージ等） | 短縮 guid ＋バッジ |
-| レート制限(403/429)・認証失敗(401) | 設定（PAT 追加/更新）への導線 |
-| バイナリ `.asset` | YAML ヘッダ検出、非 YAML はスキップ |
-| GitHub の DOM 変更 | try/catch で安全側、生 diff を残す。console にログ |
-| WASM ロード失敗 | 生 diff にフォールバック |
+- **公開形態**: **MCP サーバ**として「2 ref 間の prefab/scene 意味的 diff を返す」ツールを提供。入力は構造化 diff（JSON）。
+- **ユースケース**: 変更の自然言語要約、リスクの高い変更の指摘、PR の自動レビュー、Unity の AI Agents からの呼出。
+- **前提**: コアの構造化 JSON 出力がそのまま LLM 入力になる（既存設計の自然な拡張）。
 
 ---
 
 ## 7. テスト戦略
 
 - **Zig コア**: `std.testing` でパーサ＋diff の単体テスト。フィクスチャ群（追加/削除コンポーネント、reparent、ネスト prefab、巨大 scene、fileID 衝突）。diff 出力のゴールデンファイル比較。malformed 入力のファジング。
-- **WASM 境界**: コンパイル済 WASM を Node で実行しフィクスチャ→JSON 出力をゴールデン照合。
-- **TS 単体**: GitHub API クライアント（fetch モック）、guid 解決＋キャッシュ、レンダラの DOM スナップショット。
-- **E2E**: Playwright で保存済み PR ページ HTML に対し、検出→トグル注入→描画→Raw/Semantic 切替を検証。
-- **CI**: GitHub Actions で Zig→WASM ビルド／Zig テスト／Node WASM テスト／TS・Playwright／WASM バンドルサイズ予算チェック（上限超で失敗）。
+- **CLI（Phase 1 の主テストハーネス）**: フィクスチャを CLI に通し、ANSI/JSON 出力をゴールデン照合。コアを端から端まで検証する最短経路。
+- **WASM 境界（Phase 2）**: コンパイル済 WASM を Node で実行し JSON 出力をゴールデン照合。
+- **TS（Phase 2）**: GitHub API クライアント（fetch モック）、guid 解決＋キャッシュ、レンダラの DOM スナップショット。E2E は Playwright で保存済み PR ページ HTML に対し検出→トグル→描画を検証。
+- **Editor（Phase 3）**: サブプロセス呼出と JSON パースの単体、EditorWindow のスモーク。
+- **CI**: GitHub Actions で Zig→WASM/ネイティブ ビルド／Zig テスト／CLI ゴールデン／Node WASM テスト／TS・Playwright／**WASM バンドルサイズ予算チェック**（上限超で失敗）。
 
 ---
 
 ## 8. プロジェクト構成（モノレポ）
 
 ```
-/core        ← Zig: parser, model, diff, WASM exports
-  build.zig
+/core        ← Zig: parser, model, diff（build.zig が WASM/ネイティブlib/CLI を出力）
   src/
   tests/fixtures/
-/extension   ← TS(MV3)
-  src/content/   (検出・注入・オーケストレーション)
-  src/worker/    (WASM ローダ)
-  src/background/(PAT・GitHub API・guid 解決・キャッシュ)
-  src/renderer/  (Shadow DOM ツリービュー)
-  src/options/   (PAT 入力・設定)
+/cli         ← Zig: core を直接リンクする薄い CLI フロントエンド（Phase 1）
+/extension   ← TS(MV3) Chrome ホスト（Phase 2）
+  src/{content,worker,background,renderer,options}/
   manifest.json
+/editor      ← Unity package（C#）Editor ホスト（Phase 3）。CLI をサブプロセス利用
+/mcp         ← MCP サーバ（Phase 4）。構造化 diff を AI へ公開
 /docs
 ```
 
+> `/core` と `/cli` は 1 つの Zig ビルドにまとめてもよい（lib ターゲット＋bin ターゲット）。WASM は内部ビルド成果物であって公開パッケージではない。
+
 ---
 
-## 9. スコープ
+## 9. フェーズ / スコープ
 
-### 9.1 v1 に入れる
+各フェーズは独立して出荷可能で、**すべて同じ Zig 共通コアを再利用**する。
 
-- prefab/scene/asset の L2 意味的 diff
-- Zig WASM コア（fileID 突合・フィールド diff・静的 classID テーブル・ローカル参照解決）
-- TS 拡張（検出・インライン `[Raw|Semantic]` トグル・Shadow DOM ツリーレンダラ）
-- GitHub PR「Files changed」面
-- PAT 認証（プロバイダ層で抽象化）・baseURL 設定（github.com/GHEC/GHES）
-- guid 解決（PR 変更 meta ＋コード検索＋キャッシュ）
-- Chrome (MV3)・CI で性能予算を強制
+### Phase 1（v1）— Core + CLI
 
-### 9.2 v1 に入れない（後追い）
+**入れる**: Zig 共通コア（パーサ・fileID 突合・フィールド diff・静的 classID テーブル・ローカル参照解決・構造化 JSON 出力）／CLI ホスト（ファイル/git ref 入力、ローカル `.meta` 走査による guid 解決、ANSI ツリー・`--json`・`--html` 出力）／フィクスチャ＋ゴールデンテスト／CI と性能予算。
 
-- L3 ビジュアル描画
-- OAuth Device Flow / GitHub App 認証
-- Firefox / Edge 移植
-- Unity Editor 統合・CI/CLI 版
-- 意味ノードに紐づく PR レビューコメント
-- マージ衝突解決
-- commit 比較・blob 単体ビューの面（v1 は PR Files changed のみ）
-- 名前ベースの二次マッチング（v1 は fileID 主）
+**入れない**: Chrome/Editor/AI ホスト、名前ベース二次マッチング（fileID 主）。
 
-> v1 から外したものの多くは「面の追加」と「認証方式の追加」であり、Zig の diff エンジン（コア）に手を入れずに足せる。v1 の投資は無駄にならない。
+### Phase 2 — Chrome 拡張ホスト
+
+検出・インライン `[Raw|Semantic]` トグル・Shadow DOM レンダラ・GitHub API・PAT 認証（プロバイダ層）・baseURL（github.com/GHEC/GHES）・guid 解決（PR 変更 meta＋コード検索＋キャッシュ）・Web Worker 隔離・WASM サイズ予算。**面は PR Files changed のみ**（commit 比較・blob 単体ビューは後続）。
+
+### Phase 3 — Unity Editor ホスト
+
+EditorWindow、CLI サブプロセス＋JSON 描画、`AssetDatabase` による完全解決、git/版比較。
+
+### Phase 4 — AI / MCP 連携
+
+構造化 diff を MCP ツールとして公開。要約・リスク指摘・自動レビュー・Unity AI Agents 連携。
+
+### 全フェーズ共通で「入れない」（さらに後 / 非目標）
+
+L3 ビジュアル描画 ／ OAuth Device Flow・GitHub App 認証 ／ Firefox・Edge 移植 ／ マージ衝突解決 ／ VS Code 拡張。
+
+> Phase 2 以降は「ホストの追加」であり、Zig 共通コアに手を入れずに足せる。Phase 1 の投資は全フェーズで再利用される。
 
 ---
 
@@ -302,8 +286,10 @@ Node = union { Map(entries), Seq(items), Scalar([]const u8), Ref{fileID, guid?, 
 
 | リスク | 緩和策 |
 |---|---|
-| GitHub UI 変更で注入が壊れる | 防御的セレクタ・try/catch・生 diff フォールバック。E2E で早期検知 |
-| コード検索 API のレート制限・インデックス遅延（既定ブランチのみ等） | PR 変更 meta を先に使う／キャッシュ／未解決フォールバック |
+| GitHub UI 変更で注入が壊れる（Phase 2） | 防御的セレクタ・try/catch・生 diff フォールバック。E2E で早期検知 |
+| コード検索 API のレート制限・インデックス遅延（Phase 2） | PR 変更 meta を先に使う／キャッシュ／未解決フォールバック |
 | Zig pre-1.0 の破壊的変更 | Zig バージョンを固定（`build.zig.zon`）。CI で追従 |
-| 巨大 scene の相互参照・ネスト prefab の複雑さ | フィクスチャに含めて段階対応。v1 は fileID 突合を堅実に |
-| fileID が変わるケースで誤マッチ | v1 は fileID 主、二次マッチは後続で追加 |
+| ネイティブバイナリ配布（CLI/Editor） | プラットフォーム別ビルドを CI で生成し Releases 配布。Editor はサブプロセスで CLI を同梱/取得 |
+| 巨大 scene の相互参照・ネスト prefab の複雑さ | フィクスチャに含めて段階対応。Phase 1 は fileID 突合を堅実に |
+| fileID が変わるケースで誤マッチ | Phase 1 は fileID 主、二次マッチは後続で追加 |
+| MCP 連携のスコープ肥大（Phase 4） | 「構造化 diff を返す」最小ツールに限定、要約等はエージェント側に委譲 |

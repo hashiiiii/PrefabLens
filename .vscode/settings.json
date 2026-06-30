@@ -3,4 +3,9 @@
     "zig.zls.enabled": "on",
     "zig.path": "${userHome}/.local/share/mise/shims/zig",
     "zig.zls.path": "${userHome}/.local/share/mise/shims/zls",
+    "zig.testArgs": [
+        "build",
+        "test",
+        "-Dtest-filter=${filter}"
+    ],
 }

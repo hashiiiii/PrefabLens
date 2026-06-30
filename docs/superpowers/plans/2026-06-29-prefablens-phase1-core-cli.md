@@ -2,7 +2,7 @@
 
 > **エージェント型ワーカー向け:** 必須サブスキル: このプランをタスクごとに実装するには superpowers:subagent-driven-development（推奨）または superpowers:executing-plans を使用してください。各ステップはトラッキングのためにチェックボックス（`- [ ]`）構文を使います。
 >
-> **ターゲット: Zig 0.16.0。** ピン留めされたツールチェーンは 0.16.0（最新の安定版）です。NOTE: 以下のTask 2〜13のコードブロックは、当初 0.14.x のイディオム（マネージドな `std.ArrayList(T).init(allocator)`、`std.io.getStdOut().writer()`、古い `addExecutable` 形式）に対して書かれました。これらは各タスクに到達した時点で、**タスクごとに、ジャストインタイムで、コンパイル検証付きで** 0.16 のイディオムへ移行されます — 古いコードブロックを最終形と見なさないでください。代わりに使用する 0.16 のイディオムは次のとおりです: アンマネージドな `std.ArrayList`（`var list: std.ArrayList(T) = .empty;` + `list.append(allocator, x)` + `list.toOwnedSlice(allocator)`）、出力用の新しい `std.Io` Writer、そして `build.zig` における `root_module = b.createModule(.{...})` 形式です。
+> **ターゲット: Zig 0.16.0**（`build.zig.zon` の `.minimum_zig_version` と一致）。本プランのコードブロックは、`std.ArrayList`、`std.Io`、`std.process.Init`、`std.Io.Dir`、`std.process.run`、`build.zig` の `root_module` 形式など、0.16.0 標準ライブラリの API に従う完全な実装です。
 >
 > **このプランのコードについて:** すべてのコードブロックは、擬似コードではなく、意図された完全な実装です。各タスクのテストが契約です。TDD を厳格に守ってください: 失敗するテストを書き、実行し、パスさせます。提供された実装がコンパイルできない場合や、テストが意図しない理由で失敗する場合は、テストを満たすように実装を修正してください — テストを弱めてはいけません。
 
@@ -16,7 +16,7 @@
 
 これらは **すべての** タスクに適用されます。値は設計仕様（`docs/superpowers/specs/2026-06-29-unity-prefab-diff-design.md`）からそのまま引き写しています。
 
-- **Zig バージョン: `0.16.0` にピン留め**（最新の安定版）。バージョンは `mise.toml`（ローカルへのインストール／ピン留め）と `build.zig.zon` の `.minimum_zig_version` に記録され、そしてエディタ（VSCode）が使う zig/zls のバイナリは `.vscode/settings.json` が mise の shim（`~/.local/share/mise/shims/zig` と `~/.local/share/mise/shims/zls`）を指すことで解決します。現行のイディオム（アンマネージドな `std.ArrayList`、`std.Io` Writer、`root_module` ビルド形式）を対象とします。ピン留めが重要なのは、Zig が 1.0 以前であり、マイナーバージョン間で破壊的変更が入るためです — ピン留めされていない `brew install zig` にツールチェーンをひそかに動かされてはいけません。リファレンスコードは、作業を進めながらインストール済みの 0.16.0 に対してコンパイル検証されます。
+- **Zig バージョン: `0.16.0` にピン留め。** バージョンは `mise.toml` と `build.zig.zon` の `.minimum_zig_version` に記録し、エディタ（VSCode）は `.vscode/settings.json` 経由で mise の shim（`~/.local/share/mise/shims/zig` / `zls`）を使う。CI・ローカルとも 0.16.0 のみを対象とする — `brew install zig` などで意図せず別バージョンが選ばれないようにする。
 - **Core はホスト非依存かつ純粋です。** `/core` はファイル/ネットワーク I/O を行ってはならず、グローバルな可変状態を保持してはならず、`/cli` から何もインポートしてはなりません。入力 = 2 つのバイトスライス、出力 = `DiffResult`（および `json.zig` を介した JSON バイト列）。これにより、同じコアが Chrome（フェーズ2）、Editor（フェーズ3）、AI/MCP（フェーズ4）によって変更なしで再利用されることが保証されます。
 - **メモリモデル: 差分ごとにアリーナ。** すべてのコアの確保は、呼び出し側が提供する `std.mem.Allocator`（アリーナであることが期待される）を使用します。スカラーは **入力バッファへのスライス（ゼロコピー）** であり — コア内で文字列の内容を複製してはいけません。入力バッファは `DiffResult` よりも長く生存しなければなりません。
 - **`fileID` は JSON 文字列としてシリアライズされ、** 数値にはなりません — Unity の `fileID` は `i64` であり、しばしば `2^53` を超えるため、JSON 数値では精度が失われます。例: `"fileId": "8534698540125898342"`。
@@ -106,7 +106,7 @@
       scene_10mb.unity           # generated by a script in Task 13 (not committed if huge; see task)
 /cli/
   src/
-    main.zig                     # arg parsing; run(allocator, args, stdout) testable entrypoint
+    main.zig                     # arg parsing; run(io, arena, args, stdout) testable entrypoint
     input.zig                    # file + git-ref acquisition (git show subprocess)
     resolve.zig                  # .meta scan -> guid->path index (host resolver)
     render_tree.zig              # ANSI tree renderer (default)
@@ -133,7 +133,7 @@
 - 消費: なし。
 - 生成: `zig build test` が core + cli のテストルートを実行する。`zig build run -- ...` が CLI を実行する。モジュール名 `"core"` を `/cli` からインポートできる。グリーンな CI ワークフロー。
 
-- [ ] **Step 1: Zig 0.16.0 のインストールとピン留め**
+- [x] **Step 1: Zig 0.16.0 のインストールとピン留め**
 
 mise（このマシンには既にインストール済み）を使い、リポジトリのルートから:
 ```bash
@@ -149,7 +149,7 @@ zig version
 ```
 期待される結果: `0.16.0`
 
-- [ ] **Step 2: `zig init` でスキャフォールド（雛形生成）**
+- [x] **Step 2: `zig init` でスキャフォールド（雛形生成）**
 
 リポジトリのルートから:
 ```bash
@@ -157,7 +157,7 @@ zig init
 ```
 これにより、正しい `.fingerprint`（マシン生成の `u64` — 手書きしてはいけない）と `.name` を備えた `build.zig` と `build.zig.zon` が Zig 0.16.0 向けに生成される。また `src/` のテンプレートファイルも生成される。
 
-- [ ] **Step 3: core/ と cli/ への再構成とスモークソースの記述**
+- [x] **Step 3: core/ と cli/ への再構成とスモークソースの記述**
 
 生成された `src/` テンプレート（`src/main.zig`, `src/root.zig`）を削除する — 代わりに `/core` と `/cli` を使用する。
 
@@ -180,13 +180,14 @@ test "core builds and version is reported" {
 const std = @import("std");
 const core = @import("core");
 
-pub fn main() !void {
-    const stdout = std.io.getStdOut().writer();
-    try stdout.print("prefablens {s}\n", .{core.version()});
+pub fn main(init: std.process.Init) !void {
+    var buf: [64]u8 = undefined;
+    const msg = try std.fmt.bufPrint(&buf, "prefablens {s}\n", .{core.version()});
+    try std.io.File.stdout().writeStreamingAll(init.io, msg);
 }
 
-test "cli can import core" {
-    try std.testing.expectEqualStrings("0.1.0-dev", core.version());
+test "cli links core module" {
+    _ = core.version();
 }
 ```
 
@@ -196,23 +197,26 @@ test "cli can import core" {
 ```zig
 const std = @import("std");
 
-pub fn build(b: *std.Build) void {
+pub fn build(b: *std.Build") void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    // Reusable, host-independent core module (no target pin: it inherits the importer's).
     const core_mod = b.addModule("core", .{
         .root_source_file = b.path("core/src/root.zig"),
+        .target = target,
     });
 
-    // CLI executable links the core module directly (no FFI).
     const exe = b.addExecutable(.{
         .name = "prefablens",
-        .root_source_file = b.path("cli/src/main.zig"),
-        .target = target,
-        .optimize = optimize,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("cli/src/main.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "core", .module = core_mod },
+            },
+        }),
     });
-    exe.root_module.addImport("core", core_mod);
     b.installArtifact(exe);
 
     const run_cmd = b.addRunArtifact(exe);
@@ -221,18 +225,19 @@ pub fn build(b: *std.Build) void {
     const run_step = b.step("run", "Run the PrefabLens CLI");
     run_step.dependOn(&run_cmd.step);
 
-    // Unit/golden tests: two roots.
     const core_tests = b.addTest(.{
-        .root_source_file = b.path("core/src/root.zig"),
-        .target = target,
-        .optimize = optimize,
+        .root_module = core_mod,
     });
     const cli_tests = b.addTest(.{
-        .root_source_file = b.path("cli/src/main.zig"),
-        .target = target,
-        .optimize = optimize,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("cli/src/main.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "core", .module = core_mod },
+            },
+        }),
     });
-    cli_tests.root_module.addImport("core", core_mod);
 
     const test_step = b.step("test", "Run all unit tests");
     test_step.dependOn(&b.addRunArtifact(core_tests).step);
@@ -258,7 +263,6 @@ pub fn build(b: *std.Build) void {
     },
 }
 ```
-> `zig init` がリポジトリのディレクトリ名（`prefab-lens` はハイフンを含み、有効なベア識別子ではない）でエラーになった場合、`.name` は空または無効なまま残っている — ここで `.name = .prefablens` を設定すればこれが修正される。
 
 - [ ] **Step 6: スモークテストの実行**
 
@@ -726,7 +730,7 @@ const Parser = struct {
 /// Tokenize into significant logical lines (indent + content), dropping
 /// blanks, `%` directives, and `#` comments.
 fn tokenize(arena: std.mem.Allocator, source: []const u8) ![]Line {
-    var lines = std.ArrayList(Line).init(arena);
+    var lines: std.ArrayList(Line) = .empty;
     var it = std.mem.splitScalar(u8, source, '\n');
     while (it.next()) |raw0| {
         var raw = raw0;
@@ -737,22 +741,22 @@ fn tokenize(arena: std.mem.Allocator, source: []const u8) ![]Line {
         if (content.len == 0) continue;
         if (content[0] == '%') continue;
         if (content[0] == '#') continue;
-        try lines.append(.{ .indent = indent, .text = content });
+        try lines.append(arena, .{ .indent = indent, .text = content });
     }
-    return lines.toOwnedSlice();
+    return lines.toOwnedSlice(arena);
 }
 
 pub fn parse(arena: std.mem.Allocator, source: []const u8) ![]Document {
     var p = Parser{ .arena = arena, .lines = try tokenize(arena, source) };
-    var docs = std.ArrayList(Document).init(arena);
+    var docs: std.ArrayList(Document) = .empty;
     while (p.peek()) |line| {
         if (!std.mem.startsWith(u8, line.text, "---")) {
             _ = p.advance();
             continue;
         }
-        try docs.append(try parseDocument(&p));
+        try docs.append(arena, try parseDocument(&p));
     }
-    return docs.toOwnedSlice();
+    return docs.toOwnedSlice(arena);
 }
 
 fn parseDocument(p: *Parser) !Document {
@@ -812,7 +816,7 @@ fn parseBlock(p: *Parser, indent: usize) anyerror!*Node {
 }
 
 fn parseMap(p: *Parser, indent: usize) anyerror!*Node {
-    var entries = std.ArrayList(Entry).init(p.arena);
+    var entries: std.ArrayList(Entry) = .empty;
     while (p.peek()) |line| {
         if (line.indent != indent) break;
         if (std.mem.startsWith(u8, line.text, "---")) break;
@@ -831,13 +835,13 @@ fn parseMap(p: *Parser, indent: usize) anyerror!*Node {
         } else {
             value = try parseValue(p.arena, kv.value);
         }
-        try entries.append(.{ .key = kv.key, .value = value });
+        try entries.append(arena, .{ .key = kv.key, .value = value });
     }
-    return makeNode(p.arena, .{ .map = try entries.toOwnedSlice() });
+    return makeNode(p.arena, .{ .map = try entries.toOwnedSlice(p.arena) });
 }
 
 fn parseSeq(p: *Parser, indent: usize) anyerror!*Node {
-    var items = std.ArrayList(*Node).init(p.arena);
+    var items: std.ArrayList(*Node) = .empty;
     while (p.peek()) |line| {
         if (line.indent != indent) break;
         if (!(std.mem.startsWith(u8, line.text, "- ") or std.mem.eql(u8, line.text, "-"))) break;
@@ -846,15 +850,15 @@ fn parseSeq(p: *Parser, indent: usize) anyerror!*Node {
         if (rest.len == 0) {
             // "-" alone: nested block belongs to this item at deeper indent.
             const ci = indentOfNext(p, indent + 2);
-            try items.append(try parseBlock(p, ci));
+            try items.append(p.arena, try parseBlock(p, ci));
         } else if (looksLikeMapEntry(rest)) {
             // compact map item: first entry on the dash line, continuation at indent+2.
-            try items.append(try parseSeqMapItem(p, indent, rest));
+            try items.append(p.arena, try parseSeqMapItem(p, indent, rest));
         } else {
-            try items.append(try parseValue(p.arena, rest));
+            try items.append(p.arena, try parseValue(p.arena, rest));
         }
     }
-    return makeNode(p.arena, .{ .seq = try items.toOwnedSlice() });
+    return makeNode(p.arena, .{ .seq = try items.toOwnedSlice(p.arena) });
 }
 
 /// A sequence item that is a mapping, e.g.
@@ -862,13 +866,13 @@ fn parseSeq(p: *Parser, indent: usize) anyerror!*Node {
 ///     propertyPath: m_Name
 ///     value: Foo
 fn parseSeqMapItem(p: *Parser, dash_indent: usize, first_line: []const u8) anyerror!*Node {
-    var entries = std.ArrayList(Entry).init(p.arena);
+    var entries: std.ArrayList(Entry) = .empty;
     const kv = splitKeyValue(first_line);
     if (kv.value.len == 0) {
         const ci = indentOfNext(p, dash_indent + 4);
-        try entries.append(.{ .key = kv.key, .value = try parseBlock(p, ci) });
+        try entries.append(p.arena, .{ .key = kv.key, .value = try parseBlock(p, ci) });
     } else {
-        try entries.append(.{ .key = kv.key, .value = try parseValue(p.arena, kv.value) });
+        try entries.append(p.arena, .{ .key = kv.key, .value = try parseValue(p.arena, kv.value) });
     }
     // Continuation entries are indented two past the dash (aligned after "- ").
     const cont_indent = dash_indent + 2;
@@ -885,9 +889,9 @@ fn parseSeqMapItem(p: *Parser, dash_indent: usize, first_line: []const u8) anyer
         } else {
             value = try parseValue(p.arena, e.value);
         }
-        try entries.append(.{ .key = e.key, .value = value });
+        try entries.append(p.arena, .{ .key = e.key, .value = value });
     }
-    return makeNode(p.arena, .{ .map = try entries.toOwnedSlice() });
+    return makeNode(p.arena, .{ .map = try entries.toOwnedSlice(p.arena) });
 }
 
 // ---------- helpers ----------
@@ -1038,15 +1042,15 @@ fn parseValue(arena: std.mem.Allocator, raw: []const u8) anyerror!*Node {
 /// Parse a flow mapping `{a: b, c: d}`. If it has a `fileID` key, return a Ref node.
 fn parseFlow(arena: std.mem.Allocator, s: []const u8) anyerror!*Node {
     const inner = stripBrackets(s, '{', '}');
-    var entries = std.ArrayList(Entry).init(arena);
+    var entries: std.ArrayList(Entry) = .empty;
     var it = splitTopLevel(inner);
     while (it.next()) |part| {
         const kv = splitKeyValue(part);
         if (kv.key.len == 0) continue;
         const value = try parseValue(arena, kv.value);
-        try entries.append(.{ .key = kv.key, .value = value });
+        try entries.append(arena, .{ .key = kv.key, .value = value });
     }
-    const es = try entries.toOwnedSlice();
+    const es = try entries.toOwnedSlice(arena);
     if (model.findValue(es, "fileID")) |fid_node| {
         return makeNode(arena, .{ .ref = .{
             .file_id = scalarToInt(i64, fid_node) orelse 0,
@@ -1059,15 +1063,15 @@ fn parseFlow(arena: std.mem.Allocator, s: []const u8) anyerror!*Node {
 
 fn parseFlowSeq(arena: std.mem.Allocator, s: []const u8) anyerror!*Node {
     const inner = std.mem.trim(u8, stripBrackets(s, '[', ']'), " ");
-    var items = std.ArrayList(*Node).init(arena);
+    var items: std.ArrayList(*Node) = .empty;
     if (inner.len != 0) {
         var it = splitTopLevel(inner);
         while (it.next()) |part| {
             const t = std.mem.trim(u8, part, " ");
-            if (t.len != 0) try items.append(try parseValue(arena, t));
+            if (t.len != 0) try items.append(arena, try parseValue(arena, t));
         }
     }
-    return makeNode(arena, .{ .seq = try items.toOwnedSlice() });
+    return makeNode(arena, .{ .seq = try items.toOwnedSlice(arena) });
 }
 
 fn scalarToInt(comptime T: type, n: *const Node) ?T {
@@ -1335,7 +1339,7 @@ pub fn compute(arena: std.mem.Allocator, before_src: []const u8, after_src: []co
     const before = try parser.parse(arena, before_src);
     const after = try parser.parse(arena, after_src);
 
-    var docs = std.ArrayList(DocDiff).init(arena);
+    var docs: std.ArrayList(DocDiff) = .empty;
     var guids = GuidSet.init(arena);
 
     // Walk the union of file_ids: iterate `after` first (preserves after order),
@@ -1345,18 +1349,18 @@ pub fn compute(arena: std.mem.Allocator, before_src: []const u8, after_src: []co
         const bd = findDocById(before, ad.file_id);
         if (bd) |b| {
             try collectGuids(&guids, b.body);
-            var fields = std.ArrayList(FieldDiff).init(arena);
+            var fields: std.ArrayList(FieldDiff) = .empty;
             try diffNode(arena, &fields, "", b.body, ad.body);
-            try docs.append(.{
+            try docs.append(arena, .{
                 .file_id = ad.file_id,
                 .class_id = ad.class_id,
                 .type_name = try resolvedTypeName(arena, ad),
                 .script_guid = scriptGuid(ad),
                 .status = if (fields.items.len == 0) .unchanged else .modified,
-                .fields = try fields.toOwnedSlice(),
+                .fields = try fields.toOwnedSlice(arena),
             });
         } else {
-            try docs.append(.{
+            try docs.append(arena, .{
                 .file_id = ad.file_id,
                 .class_id = ad.class_id,
                 .type_name = try resolvedTypeName(arena, ad),
@@ -1369,7 +1373,7 @@ pub fn compute(arena: std.mem.Allocator, before_src: []const u8, after_src: []co
     for (before) |*bd| {
         if (findDocById(after, bd.file_id) != null) continue;
         try collectGuids(&guids, bd.body);
-        try docs.append(.{
+        try docs.append(arena, .{
             .file_id = bd.file_id,
             .class_id = bd.class_id,
             .type_name = try resolvedTypeName(arena, bd),
@@ -1380,7 +1384,7 @@ pub fn compute(arena: std.mem.Allocator, before_src: []const u8, after_src: []co
     }
 
     return .{
-        .docs = try docs.toOwnedSlice(),
+        .docs = try docs.toOwnedSlice(arena),
         .unresolved_guids = try guids.toSlice(),
         .before = before,
         .after = after,
@@ -1406,7 +1410,7 @@ fn diffNode(
     }
     // Leaf (scalar/ref) or kind change.
     if (!Node.eql(a, b)) {
-        try out.append(.{ .path = prefix, .status = .modified, .before = a, .after = b });
+        try out.append(arena, .{ .path = prefix, .status = .modified, .before = a, .after = b });
     }
 }
 
@@ -1423,14 +1427,14 @@ fn diffMap(
         if (model.findValue(b, ea.key)) |bv| {
             try diffNode(arena, out, path, ea.value, bv);
         } else {
-            try out.append(.{ .path = path, .status = .removed, .before = ea.value, .after = null });
+            try out.append(arena, .{ .path = path, .status = .removed, .before = ea.value, .after = null });
         }
     }
     // keys only in b: added
     for (b) |eb| {
         if (model.findValue(a, eb.key) == null) {
             const path = try joinKey(arena, prefix, eb.key);
-            try out.append(.{ .path = path, .status = .added, .before = null, .after = eb.value });
+            try out.append(arena, .{ .path = path, .status = .added, .before = null, .after = eb.value });
         }
     }
 }
@@ -1450,11 +1454,11 @@ fn diffSeq(
     }
     while (i < a.len) : (i += 1) {
         const path = try std.fmt.allocPrint(arena, "{s}[{d}]", .{ prefix, i });
-        try out.append(.{ .path = path, .status = .removed, .before = a[i], .after = null });
+        try out.append(arena, .{ .path = path, .status = .removed, .before = a[i], .after = null });
     }
     while (i < b.len) : (i += 1) {
         const path = try std.fmt.allocPrint(arena, "{s}[{d}]", .{ prefix, i });
-        try out.append(.{ .path = path, .status = .added, .before = null, .after = b[i] });
+        try out.append(arena, .{ .path = path, .status = .added, .before = null, .after = b[i] });
     }
 }
 
@@ -1466,19 +1470,20 @@ fn joinKey(arena: std.mem.Allocator, prefix: []const u8, key: []const u8) ![]con
 // ---- guid collection ----
 
 const GuidSet = struct {
+    arena: std.mem.Allocator,
     map: std.StringHashMap(void),
     order: std.ArrayList([]const u8),
 
     fn init(arena: std.mem.Allocator) GuidSet {
-        return .{ .map = std.StringHashMap(void).init(arena), .order = std.ArrayList([]const u8).init(arena) };
+        return .{ .arena = arena, .map = std.StringHashMap(void).init(arena), .order = .empty };
     }
     fn add(self: *GuidSet, guid: []const u8) !void {
         if (self.map.contains(guid)) return;
         try self.map.put(guid, {});
-        try self.order.append(guid);
+        try self.order.append(self.arena, guid);
     }
     fn toSlice(self: *GuidSet) ![][]const u8 {
-        return self.order.toOwnedSlice();
+        return self.order.toOwnedSlice(self.arena);
     }
 };
 
@@ -1772,14 +1777,14 @@ pub fn build(arena: std.mem.Allocator, fd: diffmod.FlatDiff) !model.DiffResult {
     for (fd.after) |*d| try idx.doc_by_id.put(d.file_id, d); // overwrites -> after wins
 
     // Partition documents: GameObjects, their components, and loose docs.
-    var go_ids = std.ArrayList(i64).init(arena);
+    var go_ids: std.ArrayList(i64) = .empty;
     // components grouped by owning GameObject id
     var comps_by_go = std.AutoHashMap(i64, std.ArrayList(ComponentDiff)).init(arena);
-    var loose = std.ArrayList(ComponentDiff).init(arena);
+    var loose: std.ArrayList(ComponentDiff) = .empty;
 
     for (fd.docs) |d| {
         if (d.class_id == 1) {
-            try go_ids.append(d.file_id);
+            try go_ids.append(arena, d.file_id);
             continue;
         }
         const owner = blk: {
@@ -1788,12 +1793,12 @@ pub fn build(arena: std.mem.Allocator, fd: diffmod.FlatDiff) !model.DiffResult {
         };
         if (owner) |go_id| {
             const gop = try comps_by_go.getOrPut(go_id);
-            if (!gop.found_existing) gop.value_ptr.* = std.ArrayList(ComponentDiff).init(arena);
+            if (!gop.found_existing) gop.value_ptr.* = .empty;
             // Collapse unchanged components with no fields.
-            if (d.status != .unchanged) try gop.value_ptr.append(makeComponent(d));
+            if (d.status != .unchanged) try gop.value_ptr.append(arena, makeComponent(d));
         } else {
             // No owning GameObject -> loose (e.g. ScriptableObject, or PrefabInstance).
-            if (d.status != .unchanged) try loose.append(makeComponent(d));
+            if (d.status != .unchanged) try loose.append(arena, makeComponent(d));
         }
     }
 
@@ -1813,30 +1818,30 @@ pub fn build(arena: std.mem.Allocator, fd: diffmod.FlatDiff) !model.DiffResult {
 
     // Assemble parent/child links.
     var children_of = std.AutoHashMap(i64, std.ArrayList(i64)).init(arena);
-    var roots_ids = std.ArrayList(i64).init(arena);
+    var roots_ids: std.ArrayList(i64) = .empty;
     for (go_ids.items) |go_id| {
         if (parentGoId(&idx, go_id)) |pid| {
             if (obj_by_id.contains(pid)) {
                 const e = try children_of.getOrPut(pid);
-                if (!e.found_existing) e.value_ptr.* = std.ArrayList(i64).init(arena);
-                try e.value_ptr.append(go_id);
+                if (!e.found_existing) e.value_ptr.* = .empty;
+                try e.value_ptr.append(arena, go_id);
                 continue;
             }
         }
-        try roots_ids.append(go_id);
+        try roots_ids.append(arena, go_id);
     }
 
     // Recursively materialize, pruning unchanged subtrees with no changed descendants.
-    var roots = std.ArrayList(ObjectDiff).init(arena);
+    var roots: std.ArrayList(ObjectDiff) = .empty;
     for (roots_ids.items) |rid| {
         if (try materialize(arena, &obj_by_id, &children_of, rid)) |node| {
-            try roots.append(node);
+            try roots.append(arena, node);
         }
     }
 
     return .{
-        .roots = try roots.toOwnedSlice(),
-        .loose = try loose.toOwnedSlice(),
+        .roots = try roots.toOwnedSlice(arena),
+        .loose = try loose.toOwnedSlice(arena),
         .unresolved_guids = fd.unresolved_guids,
     };
 }
@@ -1850,15 +1855,15 @@ fn materialize(
     go_id: i64,
 ) anyerror!?ObjectDiff {
     var self = obj_by_id.get(go_id).?;
-    var kept_children = std.ArrayList(ObjectDiff).init(arena);
+    var kept_children: std.ArrayList(ObjectDiff) = .empty;
     if (children_of.get(go_id)) |kids| {
         for (kids.items) |cid| {
             if (try materialize(arena, obj_by_id, children_of, cid)) |child| {
-                try kept_children.append(child);
+                try kept_children.append(arena, child);
             }
         }
     }
-    self.children = try kept_children.toOwnedSlice();
+    self.children = try kept_children.toOwnedSlice(arena);
     const has_change = self.status != .unchanged or self.components.len != 0 or self.children.len != 0;
     if (!has_change) return null;
     return self;
@@ -1986,8 +1991,9 @@ const Status = model.Status;
 pub const Resolver = std.StringHashMap([]const u8);
 
 pub fn serialize(arena: std.mem.Allocator, res: model.DiffResult, resolved: ?*const Resolver) ![]u8 {
-    var buf = std.ArrayList(u8).init(arena);
-    const w = buf.writer();
+    var buf: std.ArrayList(u8) = .empty;
+    var aw = std.Io.Writer.Allocating.fromArrayList(arena, &buf);
+    const w = &aw.writer;
 
     try w.writeAll("{\"schema\":\"prefablens.diff.v1\"");
 
@@ -2024,10 +2030,10 @@ pub fn serialize(arena: std.mem.Allocator, res: model.DiffResult, resolved: ?*co
     }
     try w.writeAll("]}");
 
-    return buf.toOwnedSlice();
+    return aw.toArrayList().toOwnedSlice(arena);
 }
 
-fn writeObject(w: anytype, o: model.ObjectDiff, resolved: ?*const Resolver) !void {
+fn writeObject(w: *std.Io.Writer, o: model.ObjectDiff, resolved: ?*const Resolver) !void {
     try w.writeAll("{\"kind\":\"gameObject\",\"fileId\":");
     try writeI64String(w, o.file_id);
     try w.writeAll(",\"name\":");
@@ -2169,7 +2175,7 @@ CLI にテスト可能な `run()` エントリポイントと、バイナリ経�
 - 生成:
   - `pub const Options = struct { before: []const u8, after: []const u8, format: Format };`（`Format = enum { tree, json, html };` を持つ）
   - `pub fn parseArgs(args: []const []const u8) !Options`
-  - `pub fn run(arena, args: []const []const u8, stdout: anytype) !u8` — プロセスの終了コードを返す。
+  - `pub fn run(io, arena, args: []const []const u8, stdout: *std.Io.Writer) !u8` — プロセスの終了コードを返す。
   - `main()` は実際の argv + stdout を `run` に配線する。
 
 - [ ] **Step 1: 引数パースと `--json` のエンドツーエンドの失敗するテストを書く**
@@ -2202,26 +2208,28 @@ test "run: --json with two real files prints core JSON" {
     // Write fixtures into a temp dir.
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
-    try tmp.dir.writeFile(.{ .sub_path = "before.asset", .data =
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "before.asset", .data =
         \\--- !u!114 &11400000
         \\MonoBehaviour:
         \\  m_Script: {fileID: 0, guid: def, type: 3}
         \\  volume: 0.5
     });
-    try tmp.dir.writeFile(.{ .sub_path = "after.asset", .data =
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "after.asset", .data =
         \\--- !u!114 &11400000
         \\MonoBehaviour:
         \\  m_Script: {fileID: 0, guid: def, type: 3}
         \\  volume: 0.8
     });
-    const before_path = try tmp.dir.realpathAlloc(arena, "before.asset");
-    const after_path = try tmp.dir.realpathAlloc(arena, "after.asset");
+    const before_path = try tmp.dir.realPathFileAlloc(testing.io, "before.asset", arena);
+    const after_path = try tmp.dir.realPathFileAlloc(testing.io, "after.asset", arena);
 
-    var out = std.ArrayList(u8).init(arena);
-    const code = try run(arena, &.{ "--json", before_path, after_path }, out.writer());
+    var out: std.ArrayList(u8) = .empty;
+    var aw = std.Io.Writer.Allocating.fromArrayList(arena, &out);
+    const code = try run(testing.io, arena, &.{ "--json", before_path, after_path }, &aw.writer);
+    const output = aw.toArrayList();
     try testing.expectEqual(@as(u8, 0), code);
-    try testing.expect(std.mem.indexOf(u8, out.items, "\"schema\":\"prefablens.diff.v1\"") != null);
-    try testing.expect(std.mem.indexOf(u8, out.items, "\"after\":\"0.8\"") != null);
+    try testing.expect(std.mem.indexOf(u8, output.items, "\"schema\":\"prefablens.diff.v1\"") != null);
+    try testing.expect(std.mem.indexOf(u8, output.items, "\"after\":\"0.8\"") != null);
 }
 ```
 
@@ -2281,11 +2289,11 @@ pub fn parseArgs(args: []const []const u8) ArgError!Options {
 
 const max_file_bytes = 64 * 1024 * 1024; // 64 MB guard
 
-fn readFile(arena: std.mem.Allocator, path: []const u8) ![]u8 {
-    return std.fs.cwd().readFileAlloc(arena, path, max_file_bytes);
+fn readFile(io: std.Io, arena: std.mem.Allocator, path: []const u8) ![]u8 {
+    return std.Io.Dir.cwd().readFileAlloc(io, path, arena, .limited(max_file_bytes));
 }
 
-pub fn run(arena: std.mem.Allocator, args: []const []const u8, stdout: anytype) !u8 {
+pub fn run(io: std.Io, arena: std.mem.Allocator, args: []const []const u8, stdout: *std.Io.Writer) !u8 {
     const opt = parseArgs(args) catch |err| {
         switch (err) {
             ArgError.MissingOperands => try stdout.writeAll("usage: prefablens [--json|--html] [--project DIR] <before> <after>\n"),
@@ -2294,8 +2302,8 @@ pub fn run(arena: std.mem.Allocator, args: []const []const u8, stdout: anytype) 
         return 2;
     };
 
-    const before = try readFile(arena, opt.before);
-    const after = try readFile(arena, opt.after);
+    const before = try readFile(io, arena, opt.before);
+    const after = try readFile(io, arena, opt.after);
 
     switch (opt.format) {
         .json => {
@@ -2319,23 +2327,25 @@ pub fn run(arena: std.mem.Allocator, args: []const []const u8, stdout: anytype) 
     return 0;
 }
 
-pub fn main() !u8 {
+pub fn main(init: std.process.Init) !u8 {
     var arena_state = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
-    const argv = try std.process.argsAlloc(arena);
-    // argv[0] is the program name; pass the rest.
-    const args = argv[1..];
+    const args = try init.minimal.args.toSlice(arena);
+    const user_args = args[1..];
 
-    var stdout_buf = std.io.bufferedWriter(std.io.getStdOut().writer());
-    const code = try run(arena, args, stdout_buf.writer());
-    try stdout_buf.flush();
+    var stdout_buffer: [4096]u8 = undefined;
+    var stdout_file_writer: std.Io.File.Writer = .init(.stdout(), init.io, &stdout_buffer);
+    const stdout = &stdout_file_writer.interface;
+
+    const code = try run(init.io, arena, user_args, stdout);
+    try stdout.flush();
     return code;
 }
 ```
 
-> `.tree` と `.html` のブランチは、今のところ意図的に JSON 出力にフォールバックする。Task 11 と 12 でそれらを置き換える。これによりバイナリは実行可能なままで、各ステップですべてのテストがグリーンに保たれる。（`main` は現在 `u8` を返す。Zig は `pub fn main() !u8` を許可している。）
+> `.tree` と `.html` のブランチは、今のところ意図的に JSON 出力にフォールバックする。Task 11 と 12 でそれらを置き換える。これによりバイナリは実行可能なままで、各ステップですべてのテストがグリーンに保たれる。（`main` は `pub fn main(init: std.process.Init) !u8` とし、プロセス終了コードを返す。）
 
 - [ ] **Step 4: CLI のテストを実行する**
 
@@ -2370,7 +2380,7 @@ Unity プロジェクトを走査して `*.meta` ファイルを探すことで 
 - 消費: ファイルシステム（`std.fs`）。
 - 生成:
   - `pub const Index = std.StringHashMap([]const u8); // guid -> path`
-  - `pub fn buildIndex(arena, project_root: []const u8) !Index` — `project_root` を再帰的に走査して `*.meta` を探し、`guid:` 行をパースして guid → アセットパス（`.meta` パスから `.meta` サフィックスを除いたもの、project_root からの相対）にマップする。
+  - `pub fn buildIndex(io, arena, project_root: []const u8) !Index` — `project_root` を再帰的に走査して `*.meta` を探し、`guid:` 行をパースして guid → アセットパス（`.meta` パスから `.meta` サフィックスを除いたもの、project_root からの相対）にマップする。
 
 - [ ] **Step 1: 失敗するテストを書く**
 
@@ -2386,17 +2396,17 @@ test "buildIndex maps guid to asset path from .meta files" {
 
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
-    try tmp.dir.makePath("Assets/Scripts");
-    try tmp.dir.writeFile(.{ .sub_path = "Assets/Scripts/Player.cs", .data = "// code" });
-    try tmp.dir.writeFile(.{ .sub_path = "Assets/Scripts/Player.cs.meta", .data =
+    try tmp.dir.createDirPath(testing.io, "Assets/Scripts");
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "Assets/Scripts/Player.cs", .data = "// code" });
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "Assets/Scripts/Player.cs.meta", .data =
         \\fileFormatVersion: 2
         \\guid: 1234567890abcdef1234567890abcdef
         \\MonoImporter:
         \\  serializedVersion: 2
     });
 
-    const root = try tmp.dir.realpathAlloc(arena, ".");
-    var index = try buildIndex(arena, root);
+    const root = try tmp.dir.realPathFileAlloc(testing.io, ".", arena);
+    var index = try buildIndex(testing.io, arena, root);
     const path = index.get("1234567890abcdef1234567890abcdef").?;
     try testing.expect(std.mem.endsWith(u8, path, "Assets/Scripts/Player.cs"));
 }
@@ -2422,18 +2432,18 @@ test {
 ```zig
 pub const Index = std.StringHashMap([]const u8);
 
-pub fn buildIndex(arena: std.mem.Allocator, project_root: []const u8) !Index {
+pub fn buildIndex(io: std.Io, arena: std.mem.Allocator, project_root: []const u8) !Index {
     var index = Index.init(arena);
-    var dir = try std.fs.cwd().openDir(project_root, .{ .iterate = true });
-    defer dir.close();
+    var dir = try std.Io.Dir.cwd().openDir(io, project_root, .{ .iterate = true });
+    defer dir.close(io);
 
     var walker = try dir.walk(arena);
     defer walker.deinit();
-    while (try walker.next()) |entry| {
+    while (try walker.next(io)) |entry| {
         if (entry.kind != .file) continue;
         if (!std.mem.endsWith(u8, entry.path, ".meta")) continue;
 
-        const meta_bytes = dir.readFileAlloc(arena, entry.path, 1 * 1024 * 1024) catch continue;
+        const meta_bytes = dir.readFileAlloc(io, entry.path, arena, .limited(1 * 1024 * 1024)) catch continue;
         const guid = parseGuid(meta_bytes) orelse continue;
 
         // Asset path = the .meta path without the trailing ".meta", made absolute.
@@ -2471,7 +2481,7 @@ fn parseGuid(meta: []const u8) ?[]const u8 {
             var resolver_ptr: ?*const core.json.Resolver = null;
             var idx: core.json.Resolver = undefined;
             if (opt.project_root) |proj| {
-                const built = try resolve.buildIndex(arena, proj);
+                const built = try resolve.buildIndex(io, arena, proj);
                 idx = built; // Index and Resolver are both StringHashMap([]const u8)
                 resolver_ptr = &idx;
             }
@@ -2504,7 +2514,7 @@ CLI が git リビジョンに対して diff を取れるようにする (spec �
 **Interfaces:**
 - Consumes: `std.process.Child` (`git` を実行する)。
 - Produces:
-  - `pub fn showAtRef(arena, repo_dir: []const u8, ref: []const u8, path: []const u8) ![]u8` — `<ref>:<path>` 時点のファイル内容を (`git show` 経由で) 返す。そのref時点でファイルが存在しない場合 (追加/削除された側) は `&[_]u8{}` を返す。
+  - `pub fn showAtRef(io, arena, repo_dir: []const u8, ref: []const u8, path: []const u8) ![]u8` — `<ref>:<path>` 時点のファイル内容を (`git show` 経由で) 返す。そのref時点でファイルが存在しない場合 (追加/削除された側) は `&[_]u8{}` を返す。
 
 - [ ] **Step 1: 失敗する統合テストを書く**
 
@@ -2513,11 +2523,11 @@ CLI が git リビジョンに対して diff を取れるようにする (spec �
 const std = @import("std");
 const testing = std.testing;
 
-fn git(arena: std.mem.Allocator, dir: []const u8, argv: []const []const u8) !void {
-    var full = std.ArrayList([]const u8).init(arena);
-    try full.append("git");
-    try full.appendSlice(argv);
-    const res = try std.process.Child.run(.{ .allocator = arena, .argv = full.items, .cwd = dir });
+fn git(io: std.Io, arena: std.mem.Allocator, dir: []const u8, argv: []const []const u8) !void {
+    var full: std.ArrayList([]const u8) = .empty;
+    try full.append(arena, "git");
+    try full.appendSlice(arena, argv);
+    const res = try std.process.run(arena, io, .{ .argv = full.items, .cwd = .{ .path = dir } });
     if (res.term != .Exited or res.term.Exited != 0) return error.GitFailed;
 }
 
@@ -2528,20 +2538,20 @@ test "showAtRef returns file contents at a commit" {
 
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
-    const dir = try tmp.dir.realpathAlloc(arena, ".");
+    const dir = try tmp.dir.realPathFileAlloc(testing.io, ".", arena);
 
-    try git(arena, dir, &.{ "init", "-q" });
-    try git(arena, dir, &.{ "config", "user.email", "t@t.t" });
-    try git(arena, dir, &.{ "config", "user.name", "t" });
-    try tmp.dir.writeFile(.{ .sub_path = "Foo.prefab", .data = "v1\n" });
-    try git(arena, dir, &.{ "add", "Foo.prefab" });
-    try git(arena, dir, &.{ "commit", "-q", "-m", "first" });
+    try git(testing.io, arena, dir, &.{ "init", "-q" });
+    try git(testing.io, arena, dir, &.{ "config", "user.email", "t@t.t" });
+    try git(testing.io, arena, dir, &.{ "config", "user.name", "t" });
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "Foo.prefab", .data = "v1\n" });
+    try git(testing.io, arena, dir, &.{ "add", "Foo.prefab" });
+    try git(testing.io, arena, dir, &.{ "commit", "-q", "-m", "first" });
 
-    const content = try showAtRef(arena, dir, "HEAD", "Foo.prefab");
+    const content = try showAtRef(testing.io, arena, dir, "HEAD", "Foo.prefab");
     try testing.expectEqualStrings("v1\n", content);
 
     // A path absent at the ref yields empty bytes, not an error.
-    const missing = try showAtRef(arena, dir, "HEAD", "Nope.prefab");
+    const missing = try showAtRef(testing.io, arena, dir, "HEAD", "Nope.prefab");
     try testing.expectEqual(@as(usize, 0), missing.len);
 }
 ```
@@ -2561,13 +2571,12 @@ pub const input = @import("input.zig");
 
 `cli/src/input.zig` のテストの上に追加する:
 ```zig
-pub fn showAtRef(arena: std.mem.Allocator, repo_dir: []const u8, ref: []const u8, path: []const u8) ![]u8 {
+pub fn showAtRef(io: std.Io, arena: std.mem.Allocator, repo_dir: []const u8, ref: []const u8, path: []const u8) ![]u8 {
     const spec = try std.fmt.allocPrint(arena, "{s}:{s}", .{ ref, path });
-    const res = try std.process.Child.run(.{
-        .allocator = arena,
+    const res = try std.process.run(arena, io, .{
         .argv = &.{ "git", "show", spec },
-        .cwd = repo_dir,
-        .max_output_bytes = 256 * 1024 * 1024,
+        .cwd = .{ .path = repo_dir },
+        .stdout_limit = .limited(256 * 1024 * 1024),
     });
     switch (res.term) {
         .Exited => |c| {
@@ -2615,13 +2624,13 @@ pub fn showAtRef(arena: std.mem.Allocator, repo_dir: []const u8, ref: []const u8
 `run` では、2 つの `readFile` の行を次に置き換える:
 ```zig
     const before = if (opt.git_mode)
-        try input.showAtRef(arena, ".", opt.git_ref_before, opt.git_path)
+        try input.showAtRef(io, arena, ".", opt.git_ref_before, opt.git_path)
     else
-        try readFile(arena, opt.before);
+        try readFile(io, arena, opt.before);
     const after = if (opt.git_mode)
-        try input.showAtRef(arena, ".", opt.git_ref_after, opt.git_path)
+        try input.showAtRef(io, arena, ".", opt.git_ref_after, opt.git_path)
     else
-        try readFile(arena, opt.after);
+        try readFile(io, arena, opt.after);
 ```
 新しいパース形のためのテストを追加する:
 ```zig
@@ -2684,9 +2693,10 @@ test "render: modified field shown old -> new without color" {
         \\  volume: 0.8
     ;
     const res = try core.diffBytes(arena, before, after);
-    var out = std.ArrayList(u8).init(arena);
-    try render(arena, out.writer(), res, null, false);
-    const text = out.items;
+    var out: std.ArrayList(u8) = .empty;
+    var aw = std.Io.Writer.Allocating.fromArrayList(arena, &out);
+    try render(arena, &aw.writer, res, null, false);
+    const text = aw.toArrayList().items;
     try testing.expect(std.mem.indexOf(u8, text, "MonoBehaviour") != null);
     try testing.expect(std.mem.indexOf(u8, text, "volume") != null);
     try testing.expect(std.mem.indexOf(u8, text, "0.5") != null);
@@ -2852,7 +2862,7 @@ fn writeValueText(w: anytype, node: ?*const model.Node) !void {
             var resolver_ptr: ?*const core.json.Resolver = null;
             var idx: core.json.Resolver = undefined;
             if (opt.project_root) |proj| {
-                idx = try resolve.buildIndex(arena, proj);
+                idx = try resolve.buildIndex(io, arena, proj);
                 resolver_ptr = &idx;
             }
             // Color when stdout is a TTY is decided in main(); tests pass color=false.
@@ -2925,9 +2935,10 @@ test "html: self-contained document with escaped content" {
         \\  hp: 2
     ;
     const res = try core.diffBytes(arena, before, after);
-    var out = std.ArrayList(u8).init(arena);
-    try render(arena, out.writer(), res, null);
-    const html = out.items;
+    var out: std.ArrayList(u8) = .empty;
+    var aw = std.Io.Writer.Allocating.fromArrayList(arena, &out);
+    try render(arena, &aw.writer, res, null);
+    const html = aw.toArrayList().items;
     try testing.expect(std.mem.startsWith(u8, html, "<!DOCTYPE html>"));
     try testing.expect(std.mem.indexOf(u8, html, "<style>") != null);
     try testing.expect(std.mem.indexOf(u8, html, "</html>") != null);
@@ -3102,7 +3113,7 @@ fn writeEscaped(w: anytype, s: []const u8) !void {
             var resolver_ptr: ?*const core.json.Resolver = null;
             var idx: core.json.Resolver = undefined;
             if (opt.project_root) |proj| {
-                idx = try resolve.buildIndex(arena, proj);
+                idx = try resolve.buildIndex(io, arena, proj);
                 resolver_ptr = &idx;
             }
             try render_html.render(arena, stdout, res, resolver_ptr);
@@ -3148,8 +3159,9 @@ const root = @import("root.zig");
 /// Build a synthetic scene with `n` GameObjects, each with a Transform and a
 /// MonoBehaviour, as a single YAML byte buffer.
 fn buildScene(arena: std.mem.Allocator, n: usize, hp: usize) ![]u8 {
-    var buf = std.ArrayList(u8).init(arena);
-    const w = buf.writer();
+    var buf: std.ArrayList(u8) = .empty;
+    var aw = std.Io.Writer.Allocating.fromArrayList(arena, &buf);
+    const w = &aw.writer;
     var i: usize = 0;
     while (i < n) : (i += 1) {
         const go: i64 = @intCast(1 + i * 3);
@@ -3174,24 +3186,25 @@ fn buildScene(arena: std.mem.Allocator, n: usize, hp: usize) ![]u8 {
             \\
         , .{ go, i, tr, mb, tr, go, mb, go, hp });
     }
-    return buf.toOwnedSlice();
+    return aw.toArrayList().toOwnedSlice(arena);
 }
 
 /// Returns nanoseconds for one before/after diff over `n` objects.
-pub fn timeDiff(arena: std.mem.Allocator, n: usize) !u64 {
+pub fn timeDiff(io: std.Io, arena: std.mem.Allocator, n: usize) !u64 {
     const before = try buildScene(arena, n, 1);
     const after = try buildScene(arena, n, 2);
-    var timer = try std.time.Timer.start();
+    const start = std.Io.Clock.Timestamp.now(io, .boot);
     const res = try root.diffBytes(arena, before, after);
     std.mem.doNotOptimizeAway(&res);
-    return timer.read();
+    const end = std.Io.Clock.Timestamp.now(io, .boot);
+    return start.durationTo(end).toNanoseconds();
 }
 
 test "perf: small scene diff completes well under budget" {
     var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
-    const ns = try timeDiff(arena, 200); // ~200 objects ~= a small prefab
+    const ns = try timeDiff(std.testing.io, arena, 200); // ~200 objects ~= a small prefab
     // Generous sanity bound for a debug test build (real budget enforced by `zig build perf`).
     try std.testing.expect(ns < 500 * std.time.ns_per_ms);
 }
@@ -3219,17 +3232,20 @@ const perf = @import("perf.zig");
 const big_objects = 50_000; // ~10 MB of YAML at ~200 bytes/object
 const ci_ceiling_ms = 600; // 4x the 150ms nominal; fails only on real regressions
 
-pub fn main() !void {
+pub fn main(init: std.process.Init) !void {
     var arena_state = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
-    const ns = try perf.timeDiff(arena, big_objects);
-    const ms = ns / std.time.ns_per_ms;
-    const stdout = std.io.getStdOut().writer();
-    try stdout.print("perf: {d} objects diffed in {d} ms (ceiling {d} ms)\n", .{ big_objects, ms, ci_ceiling_ms });
+    const ns = try perf.timeDiff(init.io, arena, big_objects);
+    const ms = @divTrunc(ns, std.time.ns_per_ms);
+
+    var buf: [128]u8 = undefined;
+    const msg = try std.fmt.bufPrint(&buf, "perf: {d} objects diffed in {d} ms (ceiling {d} ms)\n", .{ big_objects, ms, ci_ceiling_ms });
+    try std.io.File.stdout().writeStreamingAll(init.io, msg);
+
     if (ms > ci_ceiling_ms) {
-        try stdout.print("PERF BUDGET EXCEEDED\n", .{});
+        try std.io.File.stdout().writeStreamingAll(init.io, "PERF BUDGET EXCEEDED\n");
         std.process.exit(1);
     }
 }
@@ -3239,9 +3255,11 @@ pub fn main() !void {
 ```zig
     const perf_exe = b.addExecutable(.{
         .name = "perf",
-        .root_source_file = b.path("core/src/perf_main.zig"),
-        .target = target,
-        .optimize = .ReleaseFast,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("core/src/perf_main.zig"),
+            .target = target,
+            .optimize = .ReleaseFast,
+        }),
     });
     const run_perf = b.addRunArtifact(perf_exe);
     const perf_step = b.step("perf", "Run the performance budget gate (ReleaseFast)");

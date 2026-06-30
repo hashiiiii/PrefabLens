@@ -331,7 +331,7 @@ git commit -m "chore: scaffold Zig 0.16.0 monorepo with core module, CLI, and CI
   - `ObjectDiff = struct { file_id: i64, name: []const u8, status: Status, components: []ComponentDiff, children: []ObjectDiff }`
   - `DiffResult = struct { roots: []ObjectDiff, loose: []ComponentDiff, unresolved_guids: [][]const u8 }`
 
-- [ ] **Step 1: `Node.eql` の失敗するテストを書く**
+- [x] **Step 1: `Node.eql` の失敗するテストを書く**
 
 テストのみを記述した `core/src/model.zig` を作成する（および*失敗する*状態にコンパイルされるよう、空のスタブを付ける）:
 ```zig

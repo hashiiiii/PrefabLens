@@ -1,35 +1,35 @@
-# PrefabLens Phase 1 (Core + CLI) Implementation Plan
+# PrefabLens フェーズ1（コア + CLI）実装計画
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **エージェント型ワーカー向け:** 必須サブスキル: このプランをタスクごとに実装するには superpowers:subagent-driven-development（推奨）または superpowers:executing-plans を使用してください。各ステップはトラッキングのためにチェックボックス（`- [ ]`）構文を使います。
 >
-> **Target: Zig 0.16.0.** The pinned toolchain is 0.16.0 (latest stable). NOTE: the code blocks in Tasks 2–13 below were first drafted against 0.14.x idioms (managed `std.ArrayList(T).init(allocator)`, `std.io.getStdOut().writer()`, the old `addExecutable` form). These are migrated to 0.16 idioms **per-task, just-in-time, and compile-verified** when each task is reached — do not treat the older code blocks as final. The 0.16 idioms you will use instead: unmanaged `std.ArrayList` (`var list: std.ArrayList(T) = .empty;` + `list.append(allocator, x)` + `list.toOwnedSlice(allocator)`), the new `std.Io` Writer for output, and the `root_module = b.createModule(.{...})` form in `build.zig`.
+> **ターゲット: Zig 0.16.0。** ピン留めされたツールチェーンは 0.16.0（最新の安定版）です。NOTE: 以下のTask 2〜13のコードブロックは、当初 0.14.x のイディオム（マネージドな `std.ArrayList(T).init(allocator)`、`std.io.getStdOut().writer()`、古い `addExecutable` 形式）に対して書かれました。これらは各タスクに到達した時点で、**タスクごとに、ジャストインタイムで、コンパイル検証付きで** 0.16 のイディオムへ移行されます — 古いコードブロックを最終形と見なさないでください。代わりに使用する 0.16 のイディオムは次のとおりです: アンマネージドな `std.ArrayList`（`var list: std.ArrayList(T) = .empty;` + `list.append(allocator, x)` + `list.toOwnedSlice(allocator)`）、出力用の新しい `std.Io` Writer、そして `build.zig` における `root_module = b.createModule(.{...})` 形式です。
 >
-> **On the code in this plan:** Every code block is a complete, intended implementation — not pseudocode. The tests in each task are the contract. Follow TDD strictly: write the failing test, run it, make it pass. If a provided implementation does not compile or a test fails for a reason the test did not intend, fix the implementation to satisfy the test — do not weaken the test.
+> **このプランのコードについて:** すべてのコードブロックは、擬似コードではなく、意図された完全な実装です。各タスクのテストが契約です。TDD を厳格に守ってください: 失敗するテストを書き、実行し、パスさせます。提供された実装がコンパイルできない場合や、テストが意図しない理由で失敗する場合は、テストを満たすように実装を修正してください — テストを弱めてはいけません。
 
-**Goal:** Ship a native CLI that semantically diffs Unity `.prefab` / `.unity` / `.asset` YAML files — matching objects by `fileID`, diffing fields (old→new), resolving local `guid` references via a `.meta` scan — and renders the result as an ANSI tree, structured JSON, or self-contained HTML.
+**目標:** Unity の `.prefab` / `.unity` / `.asset` という YAML ファイルを意味的に差分するネイティブ CLI を提供します — オブジェクトを `fileID` で突合し、フィールドを差分し（old→new）、ローカルの `guid` 参照を `.meta` スキャンで解決します — そして結果を ANSI ツリー、構造化 JSON、または自己完結型 HTML としてレンダリングします。
 
-**Architecture:** A pure Zig **core** library (`/core`) parses Unity-YAML into a document model, matches documents by `fileID`, computes a field-level diff, reconstructs the GameObject hierarchy, and serializes a structured `prefablens.diff.v1` JSON — with no I/O and no global state. A thin Zig **CLI** (`/cli`) links the core directly (no FFI), acquires the before/after bytes (files or git refs), resolves `guid`s through a local `.meta` index, and renders the `DiffResult`. This mirrors the spec's seam (§4.2): core returns a structured diff + an *unresolved guid set*; each host plugs its own resolver into that seam.
+**アーキテクチャ:** 純粋な Zig の **core** ライブラリ（`/core`）は、Unity-YAML をドキュメントモデルへパースし、ドキュメントを `fileID` で突合し、フィールドレベルの差分を計算し、GameObject 階層を再構築し、構造化された `prefablens.diff.v1` JSON へシリアライズします — I/O もグローバルステートもありません。薄い Zig の **CLI**（`/cli`）はコアを直接リンクし（FFI なし）、before/after のバイト列（ファイルまたは git ref）を取得し、ローカルの `.meta` インデックスを通じて `guid` を解決し、`DiffResult` をレンダリングします。これは仕様のシーム（§4.2）を反映しています: コアは構造化された差分と *未解決の guid 集合* を返し、各ホストはそのシームに自身のリゾルバを差し込みます。
 
-**Tech Stack:** Zig 0.16.0 (pinned), `std.testing` for unit/golden tests, GitHub Actions for CI. No third-party dependencies. Git is invoked as a subprocess for ref input.
+**技術スタック:** Zig 0.16.0（ピン留め）、ユニット/ゴールデンテスト用に `std.testing`、CI 用に GitHub Actions。サードパーティ依存なし。ref 入力のために Git をサブプロセスとして起動します。
 
-## Global Constraints
+## グローバル制約
 
-These apply to **every** task. Values are copied verbatim from the design spec (`docs/superpowers/specs/2026-06-29-unity-prefab-diff-design.md`).
+これらは **すべての** タスクに適用されます。値は設計仕様（`docs/superpowers/specs/2026-06-29-unity-prefab-diff-design.md`）からそのまま引き写しています。
 
-- **Zig version: pinned to `0.16.0`** (latest stable). Recorded in `mise.toml` (local install/pin), `.zigversion` (portable marker), and `build.zig.zon`'s `.minimum_zig_version`. We target current idioms (unmanaged `std.ArrayList`, `std.Io` Writer, `root_module` build form). Pinning matters because Zig is pre-1.0 and breaks across minor versions — never let an unpinned `brew install zig` silently move the toolchain. Reference code is compile-verified against the installed 0.16.0 as we go.
-- **Core is host-independent and pure.** `/core` must not perform file/network I/O, must not hold global mutable state, and must not import anything from `/cli`. Input = two byte slices; output = `DiffResult` (and, via `json.zig`, JSON bytes). This guarantees the same core is reused unchanged by Chrome (Phase 2), Editor (Phase 3), AI/MCP (Phase 4).
-- **Memory model: arena per diff.** All core allocations use a caller-provided `std.mem.Allocator` that is expected to be an arena; scalars are **slices into the input buffer (zero-copy)** — never duplicate string content in the core. The input buffers must outlive the `DiffResult`.
-- **`fileID` is serialized as a JSON string,** never a number — Unity `fileID`s are `i64` and routinely exceed `2^53`, so a JSON number would lose precision. Example: `"fileId": "8534698540125898342"`.
-- **Match key is `fileID`** (spec §5.5). Name-based secondary matching is explicitly **out of scope for Phase 1**.
-- **Product naming:** the product is **PrefabLens**; the CLI binary is `prefablens`; the Zig package name is the enum literal `.prefablens`. Never use the string "Unity" as a product/brand name (trademark); it may appear only descriptively ("for Unity").
-- **Performance budget (native), enforced in CI (spec §5.7):** typical prefab (≤200 KB) parse+diff **< 5 ms**; large scene (~10 MB) parse+diff **< 150 ms**; peak memory ≤ ~3× input size. (CI gate uses a generous multiplier to avoid runner-noise flakiness; see Task 13.)
-- **Commits:** conventional-commit subjects, imperative mood, ≤ 72 chars. Commit at the end of every task (some tasks commit mid-way at natural checkpoints).
+- **Zig バージョン: `0.16.0` にピン留め**（最新の安定版）。バージョンは `mise.toml`（ローカルへのインストール／ピン留め）と `build.zig.zon` の `.minimum_zig_version` に記録され、そしてエディタ（VSCode）が使う zig/zls のバイナリは `.vscode/settings.json` が mise の shim（`~/.local/share/mise/shims/zig` と `~/.local/share/mise/shims/zls`）を指すことで解決します。現行のイディオム（アンマネージドな `std.ArrayList`、`std.Io` Writer、`root_module` ビルド形式）を対象とします。ピン留めが重要なのは、Zig が 1.0 以前であり、マイナーバージョン間で破壊的変更が入るためです — ピン留めされていない `brew install zig` にツールチェーンをひそかに動かされてはいけません。リファレンスコードは、作業を進めながらインストール済みの 0.16.0 に対してコンパイル検証されます。
+- **Core はホスト非依存かつ純粋です。** `/core` はファイル/ネットワーク I/O を行ってはならず、グローバルな可変状態を保持してはならず、`/cli` から何もインポートしてはなりません。入力 = 2 つのバイトスライス、出力 = `DiffResult`（および `json.zig` を介した JSON バイト列）。これにより、同じコアが Chrome（フェーズ2）、Editor（フェーズ3）、AI/MCP（フェーズ4）によって変更なしで再利用されることが保証されます。
+- **メモリモデル: 差分ごとにアリーナ。** すべてのコアの確保は、呼び出し側が提供する `std.mem.Allocator`（アリーナであることが期待される）を使用します。スカラーは **入力バッファへのスライス（ゼロコピー）** であり — コア内で文字列の内容を複製してはいけません。入力バッファは `DiffResult` よりも長く生存しなければなりません。
+- **`fileID` は JSON 文字列としてシリアライズされ、** 数値にはなりません — Unity の `fileID` は `i64` であり、しばしば `2^53` を超えるため、JSON 数値では精度が失われます。例: `"fileId": "8534698540125898342"`。
+- **突合キーは `fileID`**（仕様 §5.5）。名前ベースの二次的な突合は明示的に **フェーズ1のスコープ外** です。
+- **製品名:** 製品は **PrefabLens**、CLI バイナリは `prefablens`、Zig パッケージ名は enum リテラル `.prefablens` です。"Unity" という文字列を製品名/ブランド名（商標）として使ってはいけません。記述的な用途（"for Unity"）でのみ登場できます。
+- **パフォーマンス予算（ネイティブ）、CI で強制（仕様 §5.7）:** 典型的なプレハブ（≤200 KB）のパース+差分 **< 5 ms**、大規模シーン（~10 MB）のパース+差分 **< 150 ms**、ピークメモリ ≤ 入力サイズの約 3 倍。（CI ゲートはランナーノイズによる不安定さを避けるため余裕のある乗数を使います。Task 13 を参照。）
+- **コミット:** conventional-commit の件名、命令法、≤ 72 文字。すべてのタスクの最後にコミットします（一部のタスクは自然なチェックポイントで途中コミットします）。
 
 ---
 
-## Data Contract: `prefablens.diff.v1`
+## データ契約: `prefablens.diff.v1`
 
-This is the cross-host output contract. The core produces it; the CLI renderers and (later) every other host consume it. Defined here once; Tasks 7–12 reference it.
+これはホスト横断の出力契約です。コアがこれを生成し、CLI レンダラと（後に）他のすべてのホストがこれを消費します。ここで一度だけ定義し、Tasks 7〜12 がこれを参照します。
 
 ```jsonc
 {
@@ -75,22 +75,23 @@ This is the cross-host output contract. The core produces it; the CLI renderers 
 | { "ref": { "fileId": "<i64 as string>", "guid": "<guid>" | null, "type": <number> | null } }
 ```
 
-Rules:
-- `status: "unchanged"` nodes are **collapsed** out of `roots`/`loose`/`children`/`components` *unless* they are needed as a structural parent of a changed descendant (an unchanged GameObject that contains a modified component is kept, with `status: "unchanged"`, so the tree stays connected).
-- For an `added` component/object, `fields` is empty and the node's mere presence + `status: "added"` conveys the addition. Same for `removed`. (Phase 1 does not snapshot every field of an added object.)
-- Object key ordering in JSON: emit keys in the order shown above. Arrays preserve discovery order (document order from the *after* version; removed items keep their *before* order, appended after).
+ルール:
+- `status: "unchanged"` のノードは、変更された子孫の構造上の親として必要でない *限り*、`roots`/`loose`/`children`/`components` から **畳み込まれます**（変更されたコンポーネントを含む変更なしの GameObject は、ツリーが繋がったままになるよう `status: "unchanged"` を付けて保持されます）。
+- `added` のコンポーネント/オブジェクトの場合、`fields` は空であり、ノードが存在すること自体 + `status: "added"` が追加を表します。`removed` も同様です。（フェーズ1は追加されたオブジェクトのすべてのフィールドをスナップショットしません。）
+- JSON におけるオブジェクトのキー順序: キーは上に示した順序で出力します。配列は発見順序を保持します（*after* バージョンのドキュメント順序。削除された項目は *before* の順序を保持し、後ろに追加されます）。
 
 ---
 
-## File Structure
+## ファイル構成
 
-One Zig build at the repo root drives both `/core` and `/cli` (spec §8 permits combining them).
+リポジトリルートにある 1 つの Zig ビルドが `/core` と `/cli` の両方を駆動します（仕様 §8 はこれらを統合することを許可しています）。
 
 ```
-/.zigversion                     # "0.14.1"
 /build.zig                       # core module + cli exe + test step + perf step
 /build.zig.zon                   # package manifest (generated by `zig init`, then edited)
-/.github/workflows/ci.yml        # install Zig 0.14.1; zig build test; perf gate
+/mise.toml                       # pins zig & zls 0.16.0 for this dir (via mise)
+/.vscode/settings.json           # points VSCode at mise shims for zig/zls
+/.github/workflows/ci.yml        # install toolchain via mise; zig build test; perf gate
 /core/
   src/
     root.zig                     # public surface: re-exports + diffBytes() convenience
@@ -114,55 +115,53 @@ One Zig build at the repo root drives both `/core` and `/cli` (spec §8 permits 
     fixtures/                    # on-disk fixtures for CLI golden tests (real files the binary reads)
 ```
 
-Each `src/*.zig` file owns one responsibility and contains its own `test {}` blocks (Zig convention). `root.zig` and `main.zig` are the two test roots wired in `build.zig`.
+各 `src/*.zig` ファイルは 1 つの責務を担い、それ自身の `test {}` ブロックを含みます（Zig の慣習）。`root.zig` と `main.zig` が `build.zig` に組み込まれる 2 つのテストルートです。
 
 ---
 
-## Task 1: Toolchain pin, project scaffold, build wiring, CI skeleton
+## Task 1: ツールチェーンのピン留め、プロジェクトのスキャフォールド（雛形生成）、ビルド配線、CI スケルトン
 
-**Files:**
-- Create: `.zigversion`
-- Create/Modify: `build.zig`, `build.zig.zon` (generated by `zig init`, then edited)
-- Create: `core/src/root.zig`, `cli/src/main.zig` (minimal smoke versions)
-- Create: `.github/workflows/ci.yml`
-- Modify: `.gitignore`
+**ファイル:**
+- 作成/変更: `build.zig`, `build.zig.zon`（`zig init` で生成し、その後編集）
+- 作成: `core/src/root.zig`, `cli/src/main.zig`（最小限のスモークバージョン）
+- 作成: `.github/workflows/ci.yml`
+- 変更: `.gitignore`
+- 更新/作成: `mise.toml`（`mise use` が書き込む）
+- 参照: `.vscode/settings.json`（既存。VSCode を mise の shim に向ける）
 
-**Interfaces:**
-- Consumes: nothing.
-- Produces: `zig build test` runs core + cli test roots; `zig build run -- ...` runs the CLI; module name `"core"` is importable from `/cli`. A green CI workflow.
+**インターフェース:**
+- 消費: なし。
+- 生成: `zig build test` が core + cli のテストルートを実行する。`zig build run -- ...` が CLI を実行する。モジュール名 `"core"` を `/cli` からインポートできる。グリーンな CI ワークフロー。
 
-- [ ] **Step 1: Install and pin Zig 0.16.0**
+- [ ] **Step 1: Zig 0.16.0 のインストールとピン留め**
 
-Using mise (already installed on this machine), from the repo root:
+mise（このマシンには既にインストール済み）を使い、リポジトリのルートから:
 ```bash
-mise use zig@0.16.0
+mise use zig@0.16.0 zls@0.16.0
 ```
-This installs Zig 0.16.0 and writes `mise.toml` pinning it for this directory.
+これにより Zig 0.16.0 と zls 0.16.0 がインストールされ、このディレクトリ用にバージョンをピン留めする `mise.toml` が作成/更新される。
 
-Also create `.zigversion` (a portable marker some CI/tools read):
-```
-0.16.0
-```
+VSCode は `.vscode/settings.json` の `zig.path` と `zig.zls.path` が mise の shim を指しているため、zig/zls のバイナリを解決できる。したがって `.zigversion` ファイルは不要。
 
-Verify the active toolchain:
+有効なツールチェーンを検証する:
 ```bash
 zig version
 ```
-Expected: `0.16.0`
+期待される結果: `0.16.0`
 
-- [ ] **Step 2: Scaffold with `zig init`**
+- [ ] **Step 2: `zig init` でスキャフォールド（雛形生成）**
 
-From the repo root:
+リポジトリのルートから:
 ```bash
 zig init
 ```
-This generates `build.zig` and `build.zig.zon` with a correct `.fingerprint` (a machine-generated `u64` — never hand-write it) and `.name` for Zig 0.14.1. It also generates `src/` template files.
+これにより、正しい `.fingerprint`（マシン生成の `u64` — 手書きしてはいけない）と `.name` を備えた `build.zig` と `build.zig.zon` が Zig 0.16.0 向けに生成される。また `src/` のテンプレートファイルも生成される。
 
-- [ ] **Step 3: Restructure into core/ and cli/ and write the smoke sources**
+- [ ] **Step 3: core/ と cli/ への再構成とスモークソースの記述**
 
-Remove the generated `src/` template (`src/main.zig`, `src/root.zig`) — we use `/core` and `/cli` instead.
+生成された `src/` テンプレート（`src/main.zig`, `src/root.zig`）を削除する — 代わりに `/core` と `/cli` を使用する。
 
-Create `core/src/root.zig`:
+`core/src/root.zig` を作成する:
 ```zig
 const std = @import("std");
 
@@ -176,7 +175,7 @@ test "core builds and version is reported" {
 }
 ```
 
-Create `cli/src/main.zig`:
+`cli/src/main.zig` を作成する:
 ```zig
 const std = @import("std");
 const core = @import("core");
@@ -191,9 +190,9 @@ test "cli can import core" {
 }
 ```
 
-- [ ] **Step 4: Write `build.zig`**
+- [ ] **Step 4: `build.zig` の記述**
 
-Replace the generated `build.zig` with:
+生成された `build.zig` を以下で置き換える:
 ```zig
 const std = @import("std");
 
@@ -241,14 +240,14 @@ pub fn build(b: *std.Build) void {
 }
 ```
 
-- [ ] **Step 5: Edit `build.zig.zon`**
+- [ ] **Step 5: `build.zig.zon` の編集**
 
-Open the generated `build.zig.zon`. Keep the generated `.fingerprint` untouched. Set `.name`, `.version`, add `.minimum_zig_version`, and set `.paths`:
+生成された `build.zig.zon` を開く。生成された `.fingerprint` はそのまま変更しない。`.name`, `.version` を設定し、`.minimum_zig_version` を追加し、`.paths` を設定する:
 ```zig
 .{
     .name = .prefablens,
     .version = "0.1.0",
-    .minimum_zig_version = "0.14.1",
+    .minimum_zig_version = "0.16.0",
     // .fingerprint = 0x...  <- KEEP whatever `zig init` generated; do not change.
     .dependencies = .{},
     .paths = .{
@@ -259,19 +258,19 @@ Open the generated `build.zig.zon`. Keep the generated `.fingerprint` untouched.
     },
 }
 ```
-> If `zig init` errored on the repo directory name (`prefab-lens` contains a hyphen, which is not a valid bare identifier), it will have left `.name` blank or invalid — setting `.name = .prefablens` here fixes it.
+> `zig init` がリポジトリのディレクトリ名（`prefab-lens` はハイフンを含み、有効なベア識別子ではない）でエラーになった場合、`.name` は空または無効なまま残っている — ここで `.name = .prefablens` を設定すればこれが修正される。
 
-- [ ] **Step 6: Run the smoke tests**
+- [ ] **Step 6: スモークテストの実行**
 
-Run: `zig build test`
-Expected: PASS (no output, exit 0). If it fails, the build wiring or manifest is wrong — fix before continuing.
+実行: `zig build test`
+期待される結果: PASS（出力なし、終了コード 0）。失敗する場合はビルド配線またはマニフェストが誤っている — 続行する前に修正すること。
 
-Run: `zig build run`
-Expected output: `prefablens 0.1.0-dev`
+実行: `zig build run`
+期待される出力: `prefablens 0.1.0-dev`
 
-- [ ] **Step 7: Update `.gitignore`**
+- [ ] **Step 7: `.gitignore` の更新**
 
-Append Zig build artifacts:
+Zig のビルド成果物を追記する:
 ```
 # Zig
 zig-cache/
@@ -279,9 +278,9 @@ zig-cache/
 zig-out/
 ```
 
-- [ ] **Step 8: Write CI workflow**
+- [ ] **Step 8: CI ワークフローの記述**
 
-Create `.github/workflows/ci.yml`:
+`.github/workflows/ci.yml` を作成する:
 ```yaml
 name: CI
 on:
@@ -294,33 +293,32 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Install Zig 0.14.1
-        uses: mlugg/setup-zig@v1
-        with:
-          version: 0.14.1
+      - name: Install tools via mise
+        uses: jdx/mise-action@v2
       - name: Build
         run: zig build
       - name: Test
         run: zig build test
 ```
+CI は `mise.toml` からツールチェーンのバージョンを読むため、バージョンの二重管理が不要。
 
-- [ ] **Step 9: Commit**
+- [ ] **Step 9: コミット**
 ```bash
-git add .zigversion build.zig build.zig.zon core cli .github .gitignore
-git commit -m "chore: scaffold Zig 0.14.1 monorepo with core module, CLI, and CI"
+git add mise.toml .vscode/settings.json build.zig build.zig.zon core cli .github .gitignore
+git commit -m "chore: scaffold Zig 0.16.0 monorepo with core module, CLI, and CI"
 ```
 
 ---
 
-## Task 2: Core data model (`model.zig`)
+## Task 2: コアデータモデル (`model.zig`)
 
-**Files:**
-- Create: `core/src/model.zig`
-- Modify: `core/src/root.zig` (re-export `model`)
+**ファイル:**
+- 作成: `core/src/model.zig`
+- 変更: `core/src/root.zig`（`model` を再エクスポート）
 
-**Interfaces:**
-- Consumes: nothing.
-- Produces:
+**インターフェース:**
+- 消費: なし。
+- 生成:
   - `Ref = struct { file_id: i64, guid: ?[]const u8 = null, type_id: ?i64 = null }`
   - `Entry = struct { key: []const u8, value: *Node }`
   - `Node = union(enum) { map: []Entry, seq: []*Node, scalar: []const u8, ref: Ref }`
@@ -331,9 +329,9 @@ git commit -m "chore: scaffold Zig 0.14.1 monorepo with core module, CLI, and CI
   - `ObjectDiff = struct { file_id: i64, name: []const u8, status: Status, components: []ComponentDiff, children: []ObjectDiff }`
   - `DiffResult = struct { roots: []ObjectDiff, loose: []ComponentDiff, unresolved_guids: [][]const u8 }`
 
-- [ ] **Step 1: Write the failing test for `Node.eql`**
+- [ ] **Step 1: `Node.eql` の失敗するテストを書く**
 
-Create `core/src/model.zig` with only the test (and an empty stub so it compiles to a *failing* state):
+テストのみを記述した `core/src/model.zig` を作成する（および*失敗する*状態にコンパイルされるよう、空のスタブを付ける）:
 ```zig
 const std = @import("std");
 
@@ -375,14 +373,14 @@ test "Node.eql: scalars, refs, seqs, maps" {
 }
 ```
 
-- [ ] **Step 2: Run it to confirm it fails to compile**
+- [ ] **Step 2: コンパイルに失敗することを確認するために実行する**
 
-Run: `zig build test`
-Expected: FAIL — `error: use of undeclared identifier 'Node'` / `'Entry'`.
+実行: `zig build test`
+期待される結果: FAIL — `error: use of undeclared identifier 'Node'` / `'Entry'`。
 
-- [ ] **Step 3: Implement the model types and `eql`**
+- [ ] **Step 3: モデル型と `eql` を実装する**
 
-Replace the top of `core/src/model.zig` (above the test) with:
+`core/src/model.zig` の先頭（テストより上の部分）を以下で置き換える:
 ```zig
 const std = @import("std");
 
@@ -488,23 +486,23 @@ pub const DiffResult = struct {
 };
 ```
 
-- [ ] **Step 4: Run the test to confirm it passes**
+- [ ] **Step 4: テストが通ることを確認するために実行する**
 
-Run: `zig build test`
-Expected: PASS.
+実行: `zig build test`
+期待される結果: PASS。
 
-- [ ] **Step 5: Re-export from `root.zig`**
+- [ ] **Step 5: `root.zig` から再エクスポートする**
 
-Edit `core/src/root.zig` — add under the existing `const std`:
+`core/src/root.zig` を編集する — 既存の `const std` の下に以下を追加する:
 ```zig
 pub const model = @import("model.zig");
 ```
-(Keep `version()` and its test.)
+（`version()` とそのテストはそのまま残す。）
 
-Run: `zig build test`
-Expected: PASS.
+実行: `zig build test`
+期待される結果: PASS。
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 6: コミットする**
 ```bash
 git add core/src/model.zig core/src/root.zig
 git commit -m "feat(core): add document/diff data model with Node.eql"
@@ -512,19 +510,19 @@ git commit -m "feat(core): add document/diff data model with Node.eql"
 
 ---
 
-## Task 3: Static classID → type-name table (`classid.zig`)
+## Task 3: 静的な classID → 型名テーブル (`classid.zig`)
 
-**Files:**
-- Create: `core/src/classid.zig`
-- Modify: `core/src/root.zig` (re-export `classid`)
+**ファイル:**
+- 作成: `core/src/classid.zig`
+- 変更: `core/src/root.zig`（`classid` を再エクスポート）
 
-**Interfaces:**
-- Consumes: nothing.
-- Produces: `pub fn typeName(class_id: u32) ?[]const u8` — returns the Unity built-in component type name, or `null` for unknown classIDs (host/script-defined).
+**インターフェース:**
+- 消費: なし。
+- 生成: `pub fn typeName(class_id: u32) ?[]const u8` — Unity の組み込みコンポーネントの型名を返す。未知の classID（ホスト/スクリプト定義）の場合は `null` を返す。
 
-- [ ] **Step 1: Write the failing test**
+- [ ] **Step 1: 失敗するテストを書く**
 
-Create `core/src/classid.zig`:
+`core/src/classid.zig` を作成する:
 ```zig
 const std = @import("std");
 
@@ -539,14 +537,14 @@ test "classID lookup covers common types and returns null for unknown" {
 }
 ```
 
-- [ ] **Step 2: Run to confirm failure**
+- [ ] **Step 2: 失敗を確認するために実行する**
 
-Run: `zig build test`
-Expected: FAIL — `use of undeclared identifier 'typeName'`.
+実行: `zig build test`
+期待される結果: FAIL — `use of undeclared identifier 'typeName'`。
 
-- [ ] **Step 3: Implement the table**
+- [ ] **Step 3: テーブルを実装する**
 
-Add above the test in `core/src/classid.zig`:
+`core/src/classid.zig` のテストより上に以下を追加する:
 ```zig
 const Pair = struct { id: u32, name: []const u8 };
 
@@ -592,14 +590,14 @@ pub fn typeName(class_id: u32) ?[]const u8 {
 }
 ```
 
-- [ ] **Step 4: Run to confirm pass**
+- [ ] **Step 4: 成功を確認するために実行する**
 
-Run: `zig build test`
-Expected: PASS.
+実行: `zig build test`
+期待される結果: PASS。
 
-- [ ] **Step 5: Re-export and commit**
+- [ ] **Step 5: 再エクスポートしてコミットする**
 
-Edit `core/src/root.zig`, add:
+`core/src/root.zig` を編集し、以下を追加する:
 ```zig
 pub const classid = @import("classid.zig");
 ```
@@ -610,21 +608,21 @@ git commit -m "feat(core): add static Unity classID to type-name table"
 
 ---
 
-## Task 4: Unity-YAML subset parser (`parser.zig`)
+## Task 4: Unity-YAML サブセットパーサ (`parser.zig`)
 
-This is the largest core task. Build it test-first, one Unity pattern at a time. The parser is an indentation-driven recursive-descent over logical lines.
+これはコアタスクの中で最大のものです。テストファーストで、Unity のパターンを 1 つずつ実装していきます。このパーサは、論理行に対するインデント駆動の再帰下降パーサです。
 
 **Files:**
 - Create: `core/src/parser.zig`
-- Modify: `core/src/root.zig` (re-export `parser`)
+- Modify: `core/src/root.zig` (`parser` を再エクスポート)
 
 **Interfaces:**
-- Consumes: `model.Document`, `model.Node`, `model.Entry`, `model.Ref`.
-- Produces: `pub fn parse(arena: std.mem.Allocator, source: []const u8) ![]model.Document`. All returned slices/strings are backed by `arena` or are slices into `source`.
+- Consumes: `model.Document`, `model.Node`, `model.Entry`, `model.Ref`。
+- Produces: `pub fn parse(arena: std.mem.Allocator, source: []const u8) ![]model.Document`。返されるスライス／文字列はすべて `arena` がバッキングしているか、`source` へのスライスです。
 
-- [ ] **Step 1: Write failing tests for the simplest cases (document split + flat map)**
+- [ ] **Step 1: 最もシンプルなケース（ドキュメント分割 + フラットマップ）の失敗するテストを書く**
 
-Create `core/src/parser.zig` with the test block first:
+まず `core/src/parser.zig` をテストブロックから作成します:
 ```zig
 const std = @import("std");
 const model = @import("model.zig");
@@ -697,14 +695,14 @@ test "parse: stripped flag on PrefabInstance documents" {
 }
 ```
 
-- [ ] **Step 2: Run — confirm failure (no `parse`)**
+- [ ] **Step 2: 実行 — 失敗を確認する（`parse` が存在しない）**
 
-Run: `zig build test`
-Expected: FAIL — `use of undeclared identifier 'parse'`.
+実行: `zig build test`
+期待される結果: FAIL — `use of undeclared identifier 'parse'`。
 
-- [ ] **Step 3: Implement the line model, document split, and block mapping**
+- [ ] **Step 3: 行モデル、ドキュメント分割、ブロックマッピングを実装する**
 
-Add above the tests in `core/src/parser.zig`:
+`core/src/parser.zig` のテストの上に追加します:
 ```zig
 const Ref = model.Ref;
 
@@ -933,11 +931,11 @@ fn looksLikeMapEntry(s: []const u8) bool {
 }
 ```
 
-> Note: `parseValue` (flow maps/seqs, refs, scalars) is added in Step 5 — this step won't compile until then, so do Steps 3 and 5 together, then run the tests.
+> Note: `parseValue`（フローマップ／フローシーケンス、参照(ref)、スカラー）は Step 5 で追加します。このステップだけではコンパイルが通らないため、Step 3 と Step 5 をまとめて実施してから、テストを実行してください。
 
-- [ ] **Step 4: Write failing tests for flow values and refs**
+- [ ] **Step 4: フロー値と参照(ref)の失敗するテストを書く**
 
-Append to the test section of `core/src/parser.zig`:
+`core/src/parser.zig` のテストセクションに追記します:
 ```zig
 test "parse: nested map and block sequence of refs" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
@@ -1025,9 +1023,9 @@ test "parse: quoted scalar and empty flow seq" {
 }
 ```
 
-- [ ] **Step 5: Implement `parseValue` (flow maps/seqs, refs, scalars)**
+- [ ] **Step 5: `parseValue`（フローマップ／フローシーケンス、参照(ref)、スカラー）を実装する**
 
-Add to `core/src/parser.zig` (helpers section):
+`core/src/parser.zig`（helpers セクション）に追加します:
 ```zig
 fn parseValue(arena: std.mem.Allocator, raw: []const u8) anyerror!*Node {
     const s = std.mem.trim(u8, raw, " ");
@@ -1122,14 +1120,14 @@ fn splitTopLevel(s: []const u8) TopLevelIter {
 }
 ```
 
-- [ ] **Step 6: Run all parser tests**
+- [ ] **Step 6: すべてのパーサテストを実行する**
 
-Run: `zig build test`
-Expected: PASS (all 7 parser tests). Fix the implementation against any failing test until green.
+実行: `zig build test`
+期待される結果: PASS（パーサテスト 7 件すべて）。失敗するテストがあれば、グリーンになるまで実装を修正してください。
 
-- [ ] **Step 7: Re-export and commit**
+- [ ] **Step 7: 再エクスポートしてコミットする**
 
-Edit `core/src/root.zig`, add:
+`core/src/root.zig` を編集し、以下を追加します:
 ```zig
 pub const parser = @import("parser.zig");
 ```
@@ -1140,9 +1138,9 @@ git commit -m "feat(core): add Unity-YAML subset parser (blocks, flow, refs)"
 
 ---
 
-## Task 5: Diff engine (`diff.zig`) — match by fileID + field diff
+## Task 5: 差分エンジン (`diff.zig`) — fileID による突合 + フィールド差分
 
-Produces a **flat** per-document diff (one `ComponentDiff`-shaped record per document) plus the unresolved-guid set. The GameObject hierarchy is assembled in Task 6.
+**フラット(平坦)** なドキュメント単位の差分(ドキュメントごとに `ComponentDiff` 形状のレコードを1つ)と、未解決の guid 集合を生成する。GameObject 階層の組み立ては Task 6 で行う。
 
 **Files:**
 - Create: `core/src/diff.zig`
@@ -1155,9 +1153,9 @@ Produces a **flat** per-document diff (one `ComponentDiff`-shaped record per doc
   - `FlatDiff = struct { docs: []DocDiff, unresolved_guids: [][]const u8, before: []model.Document, after: []model.Document }`
   - `pub fn compute(arena, before_src: []const u8, after_src: []const u8) !FlatDiff`
 
-- [ ] **Step 1: Write failing tests**
+- [ ] **Step 1: 失敗するテストを書く**
 
-Create `core/src/diff.zig`:
+`core/src/diff.zig` を作成する:
 ```zig
 const std = @import("std");
 const model = @import("model.zig");
@@ -1282,14 +1280,14 @@ test "diff: unresolved guids collected from external refs" {
 }
 ```
 
-- [ ] **Step 2: Run — confirm failure**
+- [ ] **Step 2: 実行 — 失敗を確認する**
 
-Run: `zig build test`
-Expected: FAIL — `use of undeclared identifier 'compute'` / `'FlatDiff'`.
+実行: `zig build test`
+期待される結果: FAIL — `use of undeclared identifier 'compute'` / `'FlatDiff'`。
 
-- [ ] **Step 3: Implement the diff engine**
+- [ ] **Step 3: 差分エンジンを実装する**
 
-Add above the tests in `core/src/diff.zig`:
+`core/src/diff.zig` のテストの上に追加する:
 ```zig
 const parser = @import("parser.zig");
 const classid = @import("classid.zig");
@@ -1494,14 +1492,14 @@ fn collectGuids(set: *GuidSet, node: *const Node) anyerror!void {
 }
 ```
 
-- [ ] **Step 4: Run the diff tests**
+- [ ] **Step 4: 差分テストを実行する**
 
-Run: `zig build test`
-Expected: PASS (all 4 diff tests + prior tests). Fix until green.
+実行: `zig build test`
+期待される結果: PASS(4つの差分テストすべて + これまでのテスト)。green になるまで修正する。
 
-- [ ] **Step 5: Re-export and commit**
+- [ ] **Step 5: re-export してコミットする**
 
-Edit `core/src/root.zig`, add:
+`core/src/root.zig` を編集し、追加する:
 ```zig
 pub const diff = @import("diff.zig");
 ```
@@ -1512,9 +1510,9 @@ git commit -m "feat(core): add fileID-matched recursive field diff engine"
 
 ---
 
-## Task 6: GameObject hierarchy reconstruction (`tree.zig`)
+## Task 6: GameObject 階層の再構築 (`tree.zig`)
 
-Turns the flat `DocDiff` list into the `DiffResult` tree: components grouped under their GameObject, GameObjects nested by Transform parentage, unchanged-but-empty nodes collapsed.
+フラットな `DocDiff` のリストを `DiffResult` ツリーに変換する。コンポーネントはそれぞれの GameObject の下にまとめ、GameObject は Transform の親子関係でネストし、変更がなく空のノードは畳み込む(省略する)。
 
 **Files:**
 - Create: `core/src/tree.zig`
@@ -1526,9 +1524,9 @@ Turns the flat `DocDiff` list into the `DiffResult` tree: components grouped und
   - `pub fn build(arena, fd: diff.FlatDiff) !model.DiffResult`
   - (in `root.zig`) `pub fn diffBytes(arena, before_src, after_src) !model.DiffResult`
 
-- [ ] **Step 1: Write failing tests**
+- [ ] **Step 1: 失敗するテストを書く**
 
-Create `core/src/tree.zig`:
+`core/src/tree.zig` を作成する:
 ```zig
 const std = @import("std");
 const model = @import("model.zig");
@@ -1669,9 +1667,9 @@ test "tree: ScriptableObject .asset becomes a loose component" {
 }
 ```
 
-- [ ] **Step 2: Add `diffBytes` to `root.zig` and run to confirm failure**
+- [ ] **Step 2: `root.zig` に `diffBytes` を追加し、実行して失敗を確認する**
 
-Edit `core/src/root.zig`:
+`core/src/root.zig` を編集する:
 ```zig
 pub const tree = @import("tree.zig");
 
@@ -1680,12 +1678,12 @@ pub fn diffBytes(arena: std.mem.Allocator, before_src: []const u8, after_src: []
     return tree.build(arena, fd);
 }
 ```
-Run: `zig build test`
-Expected: FAIL — `tree.build` undeclared.
+実行: `zig build test`
+期待される結果: FAIL — `tree.build` undeclared.
 
-- [ ] **Step 3: Implement hierarchy reconstruction**
+- [ ] **Step 3: 階層の再構築を実装する**
 
-Add above the tests in `core/src/tree.zig`:
+`core/src/tree.zig` のテストより上に追加する:
 ```zig
 const diffmod = @import("diff.zig");
 
@@ -1867,12 +1865,12 @@ fn materialize(
 }
 ```
 
-- [ ] **Step 4: Run the tree tests**
+- [ ] **Step 4: tree のテストを実行する**
 
-Run: `zig build test`
-Expected: PASS. Fix until green. Pay attention to the "loose component" and "child nesting" cases — they exercise the index lookups.
+実行: `zig build test`
+期待される結果: PASS。green になるまで修正する。「loose component」と「child nesting」のケースに注意すること — これらは index のルックアップを検証している。
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 5: コミットする**
 ```bash
 git add core/src/tree.zig core/src/root.zig
 git commit -m "feat(core): reconstruct GameObject hierarchy into DiffResult tree"
@@ -1880,22 +1878,22 @@ git commit -m "feat(core): reconstruct GameObject hierarchy into DiffResult tree
 
 ---
 
-## Task 7: JSON serialization (`json.zig`) — `prefablens.diff.v1`
+## Task 7: JSON シリアライズ (`json.zig`) — `prefablens.diff.v1`
 
 **Files:**
 - Create: `core/src/json.zig`
 - Modify: `core/src/root.zig` (re-export `json`, add `diffToJson`)
 
 **Interfaces:**
-- Consumes: `model.DiffResult`, `model.ObjectDiff`, `model.ComponentDiff`, `model.FieldDiff`, `model.Node`, `model.Status`.
+- Consumes: `model.DiffResult`, `model.ObjectDiff`, `model.ComponentDiff`, `model.FieldDiff`, `model.Node`, `model.Status`。
 - Produces:
   - `pub const Resolver = std.StringHashMap([]const u8);`
-  - `pub fn serialize(arena, res: model.DiffResult, resolved: ?*const Resolver) ![]u8` — bytes of `prefablens.diff.v1` JSON (see Data Contract).
-  - (in `root.zig`) `pub fn diffToJson(arena, before_src, after_src) ![]u8` (calls `serialize(.., null)`).
+  - `pub fn serialize(arena, res: model.DiffResult, resolved: ?*const Resolver) ![]u8` — `prefablens.diff.v1` JSON のバイト列(Data Contract を参照)。
+  - (`root.zig` 内)`pub fn diffToJson(arena, before_src, after_src) ![]u8`(`serialize(.., null)` を呼び出す)。
 
-- [ ] **Step 1: Write the failing golden test**
+- [ ] **Step 1: 失敗するゴールデンテストを書く**
 
-Create `core/src/json.zig`:
+`core/src/json.zig` を作成する:
 ```zig
 const std = @import("std");
 const model = @import("model.zig");
@@ -1964,9 +1962,9 @@ test "json: string escaping" {
 }
 ```
 
-- [ ] **Step 2: Add re-export + `diffToJson` and run to confirm failure**
+- [ ] **Step 2: re-export と `diffToJson` を追加し、実行して失敗を確認する**
 
-Edit `core/src/root.zig`:
+`core/src/root.zig` を編集する:
 ```zig
 pub const json = @import("json.zig");
 
@@ -1975,12 +1973,12 @@ pub fn diffToJson(arena: std.mem.Allocator, before_src: []const u8, after_src: [
     return json.serialize(arena, res, null);
 }
 ```
-Run: `zig build test`
-Expected: FAIL — `json.serialize` undeclared.
+実行: `zig build test`
+期待される結果: FAIL — `json.serialize` が未宣言。
 
-- [ ] **Step 3: Implement the JSON writer**
+- [ ] **Step 3: JSON ライタを実装する**
 
-Add above the tests in `core/src/json.zig`:
+`core/src/json.zig` のテストより上に追加する:
 ```zig
 const Node = model.Node;
 const Status = model.Status;
@@ -2144,14 +2142,14 @@ fn writeJsonString(w: anytype, s: []const u8) !void {
 }
 ```
 
-> Note on the escaping test: the fixture value `"a\"b"` in the Zig multiline string is the literal characters `a`, `"`, `b` once parsed by the YAML parser's `unquote` (the surrounding quotes are stripped, the inner `\"` stays as backslash-quote in the raw slice). JSON output must contain `a\"b` (backslash + quote). If the assertion mismatches, inspect the raw scalar the parser produced and adjust `unquote` only if it is wrong — the JSON escaper is the component under test here.
+> Note(エスケープテストについて): Zig マルチライン文字列内のフィクスチャ値 `"a\"b"` は、YAML パーサの `unquote` でパースされると、リテラルの文字 `a`、`"`、`b` になる(囲みのクォートは除去され、内側の `\"` は raw スライス内ではバックスラッシュ+クォートのまま残る)。JSON 出力には `a\"b`(バックスラッシュ + クォート)が含まれていなければならない。アサーションが一致しない場合は、パーサが生成した raw スカラを調べ、それが誤っている場合に限り `unquote` を修正すること — ここでテスト対象となっているコンポーネントは JSON エスケーパである。
 
-- [ ] **Step 4: Run the golden tests**
+- [ ] **Step 4: ゴールデンテストを実行する**
 
-Run: `zig build test`
-Expected: PASS. The first test is an exact-string golden — if it mismatches, print `out` (`std.debug.print("{s}\n", .{out});`) and reconcile byte-for-byte against the Data Contract ordering. Fix the serializer (not the contract).
+実行: `zig build test`
+期待される結果: PASS。最初のテストは完全一致のゴールデンである — もし一致しなければ `out` を出力し(`std.debug.print("{s}\n", .{out});`)、Data Contract の順序とバイト単位で照合すること。シリアライザを修正すること(契約のほうではない)。
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 5: コミットする**
 ```bash
 git add core/src/json.zig core/src/root.zig
 git commit -m "feat(core): serialize DiffResult to prefablens.diff.v1 JSON"
@@ -2159,24 +2157,24 @@ git commit -m "feat(core): serialize DiffResult to prefablens.diff.v1 JSON"
 
 ---
 
-## Task 8: CLI core path — arg parsing, file input, `--json` (`main.zig`)
+## Task 8: CLI コアパス — 引数パース、ファイル入力、`--json`（`main.zig`）
 
-Gives the CLI a testable `run()` entrypoint and end-to-end validation of the core through the binary (spec §7: CLI is Phase 1's primary test harness).
+CLI にテスト可能な `run()` エントリポイントと、バイナリ経由でのコアのエンドツーエンド検証を与える（spec §7: CLI は Phase 1 の主要なテストハーネス）。
 
-**Files:**
-- Modify: `cli/src/main.zig`
+**ファイル:**
+- 変更: `cli/src/main.zig`
 
-**Interfaces:**
-- Consumes: `core.diffToJson`.
-- Produces:
-  - `pub const Options = struct { before: []const u8, after: []const u8, format: Format };` with `Format = enum { tree, json, html };`
+**インターフェース:**
+- 消費: `core.diffToJson`。
+- 生成:
+  - `pub const Options = struct { before: []const u8, after: []const u8, format: Format };`（`Format = enum { tree, json, html };` を持つ）
   - `pub fn parseArgs(args: []const []const u8) !Options`
-  - `pub fn run(arena, args: []const []const u8, stdout: anytype) !u8` — returns process exit code.
-  - `main()` wires real argv + stdout to `run`.
+  - `pub fn run(arena, args: []const []const u8, stdout: anytype) !u8` — プロセスの終了コードを返す。
+  - `main()` は実際の argv + stdout を `run` に配線する。
 
-- [ ] **Step 1: Write failing tests for arg parsing and `--json` end-to-end**
+- [ ] **Step 1: 引数パースと `--json` のエンドツーエンドの失敗するテストを書く**
 
-Replace `cli/src/main.zig` test block (and add the prod stubs are added in Step 3). First, the tests:
+`cli/src/main.zig` のテストブロックを置き換える（本番用のスタブは Step 3 で追加する）。まず、テスト:
 ```zig
 const std = @import("std");
 const core = @import("core");
@@ -2227,14 +2225,14 @@ test "run: --json with two real files prints core JSON" {
 }
 ```
 
-- [ ] **Step 2: Run to confirm failure**
+- [ ] **Step 2: 失敗することを確認するために実行する**
 
-Run: `zig build test`
-Expected: FAIL — `parseArgs` / `Format` / `run` undeclared.
+実行: `zig build test`
+期待される結果: FAIL — `parseArgs` / `Format` / `run` が未宣言。
 
-- [ ] **Step 3: Implement arg parsing, file reading, and `run`**
+- [ ] **Step 3: 引数パース、ファイル読み込み、`run` を実装する**
 
-Add above the tests in `cli/src/main.zig`:
+`cli/src/main.zig` のテストの上に追加する:
 ```zig
 pub const Format = enum { tree, json, html };
 
@@ -2337,22 +2335,22 @@ pub fn main() !u8 {
 }
 ```
 
-> The `.tree` and `.html` branches intentionally fall back to JSON output for now; Tasks 11 and 12 replace them. This keeps the binary runnable and every test green at each step. (`main` now returns `u8`; Zig allows `pub fn main() !u8`.)
+> `.tree` と `.html` のブランチは、今のところ意図的に JSON 出力にフォールバックする。Task 11 と 12 でそれらを置き換える。これによりバイナリは実行可能なままで、各ステップですべてのテストがグリーンに保たれる。（`main` は現在 `u8` を返す。Zig は `pub fn main() !u8` を許可している。）
 
-- [ ] **Step 4: Run the CLI tests**
+- [ ] **Step 4: CLI のテストを実行する**
 
-Run: `zig build test`
-Expected: PASS.
+実行: `zig build test`
+期待される結果: PASS。
 
-Manually verify end-to-end:
+手動でエンドツーエンドに検証:
 ```bash
 printf -- '--- !u!114 &1\nMonoBehaviour:\n  hp: 1\n' > /tmp/a.asset
 printf -- '--- !u!114 &1\nMonoBehaviour:\n  hp: 2\n' > /tmp/b.asset
 zig build run -- --json /tmp/a.asset /tmp/b.asset
 ```
-Expected: a single line of `prefablens.diff.v1` JSON containing `"before":"1","after":"2"`.
+期待される結果: `"before":"1","after":"2"` を含む `prefablens.diff.v1` JSON の単一行。
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 5: コミットする**
 ```bash
 git add cli/src/main.zig
 git commit -m "feat(cli): add testable run() with arg parsing and --json output"
@@ -2360,23 +2358,23 @@ git commit -m "feat(cli): add testable run() with arg parsing and --json output"
 
 ---
 
-## Task 9: `.meta` guid resolver (`resolve.zig`)
+## Task 9: `.meta` guid リゾルバ（`resolve.zig`）
 
-Builds a `guid → asset path` index by scanning a Unity project for `*.meta` files, so the CLI can show real names instead of opaque guids (spec §4.3 CLI row).
+Unity プロジェクトを走査して `*.meta` ファイルを探すことで `guid → asset path` のインデックスを構築し、CLI が不透明な guid の代わりに実際の名前を表示できるようにする（spec §4.3 の CLI 行）。
 
-**Files:**
-- Create: `cli/src/resolve.zig`
-- Modify: `cli/src/main.zig` (wire resolver into `--json` when `--project` given; import the test root)
+**ファイル:**
+- 作成: `cli/src/resolve.zig`
+- 変更: `cli/src/main.zig`（`--project` が指定されたとき `--json` にリゾルバを配線する、テストルートをインポートする）
 
-**Interfaces:**
-- Consumes: filesystem (`std.fs`).
-- Produces:
+**インターフェース:**
+- 消費: ファイルシステム（`std.fs`）。
+- 生成:
   - `pub const Index = std.StringHashMap([]const u8); // guid -> path`
-  - `pub fn buildIndex(arena, project_root: []const u8) !Index` — recursively scans `project_root` for `*.meta`, parses the `guid:` line, maps guid → the asset path (the `.meta` path minus the `.meta` suffix, relative to project_root).
+  - `pub fn buildIndex(arena, project_root: []const u8) !Index` — `project_root` を再帰的に走査して `*.meta` を探し、`guid:` 行をパースして guid → アセットパス（`.meta` パスから `.meta` サフィックスを除いたもの、project_root からの相対）にマップする。
 
-- [ ] **Step 1: Write the failing test**
+- [ ] **Step 1: 失敗するテストを書く**
 
-Create `cli/src/resolve.zig`:
+`cli/src/resolve.zig` を作成する:
 ```zig
 const std = @import("std");
 const testing = std.testing;
@@ -2404,9 +2402,9 @@ test "buildIndex maps guid to asset path from .meta files" {
 }
 ```
 
-- [ ] **Step 2: Run to confirm failure**
+- [ ] **Step 2: 失敗することを確認するために実行する**
 
-Add a temporary import so the test root sees this file. Edit `cli/src/main.zig`, add near the top imports:
+テストルートがこのファイルを認識するように、一時的なインポートを追加する。`cli/src/main.zig` を編集し、上部のインポート付近に追加する:
 ```zig
 pub const resolve = @import("resolve.zig");
 
@@ -2415,12 +2413,12 @@ test {
     _ = resolve;
 }
 ```
-Run: `zig build test`
-Expected: FAIL — `buildIndex` undeclared.
+実行: `zig build test`
+期待される結果: FAIL — `buildIndex` が未宣言。
 
-- [ ] **Step 3: Implement the recursive `.meta` scan**
+- [ ] **Step 3: 再帰的な `.meta` 走査を実装する**
 
-Add above the test in `cli/src/resolve.zig`:
+`cli/src/resolve.zig` のテストの上に追加する:
 ```zig
 pub const Index = std.StringHashMap([]const u8);
 
@@ -2459,14 +2457,14 @@ fn parseGuid(meta: []const u8) ?[]const u8 {
 }
 ```
 
-- [ ] **Step 4: Run the resolver test**
+- [ ] **Step 4: リゾルバのテストを実行する**
 
-Run: `zig build test`
-Expected: PASS.
+実行: `zig build test`
+期待される結果: PASS。
 
-- [ ] **Step 5: Wire the resolver into `--json` output**
+- [ ] **Step 5: リゾルバを `--json` 出力に配線する**
 
-In `cli/src/main.zig`, change the `.json` branch of `run` to use the resolver when `--project` was passed. Replace the `.json` branch with:
+`cli/src/main.zig` で、`--project` が渡されたときにリゾルバを使うように `run` の `.json` ブランチを変更する。`.json` ブランチを次で置き換える:
 ```zig
         .json => {
             const res = try core.diffBytes(arena, before, after);
@@ -2482,12 +2480,12 @@ In `cli/src/main.zig`, change the `.json` branch of `run` to use the resolver wh
             try stdout.writeByte('\n');
         },
 ```
-> `resolve.Index` and `core.json.Resolver` are the same type (`std.StringHashMap([]const u8)`), so the built index is passed directly.
+> `resolve.Index` と `core.json.Resolver` は同じ型（`std.StringHashMap([]const u8)`）なので、構築したインデックスを直接渡す。
 
-Run: `zig build test`
-Expected: PASS.
+実行: `zig build test`
+期待される結果: PASS。
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 6: コミットする**
 ```bash
 git add cli/src/resolve.zig cli/src/main.zig
 git commit -m "feat(cli): resolve guids to asset paths via .meta project scan"
@@ -2495,22 +2493,22 @@ git commit -m "feat(cli): resolve guids to asset paths via .meta project scan"
 
 ---
 
-## Task 10: Git ref input (`input.zig`)
+## Task 10: git ref 入力 (`input.zig`)
 
-Lets the CLI diff against git revisions (spec §6.1): `prefablens HEAD~1 HEAD <path>` style, `--staged`, and working-tree comparison.
+CLI が git リビジョンに対して diff を取れるようにする (spec §6.1): `prefablens HEAD~1 HEAD <path>` 形式、`--staged`、そしてワーキングツリーとの比較。
 
 **Files:**
 - Create: `cli/src/input.zig`
-- Modify: `cli/src/main.zig` (recognize git-ref mode)
+- Modify: `cli/src/main.zig` (git-ref モードを認識する)
 
 **Interfaces:**
-- Consumes: `std.process.Child` (runs `git`).
+- Consumes: `std.process.Child` (`git` を実行する)。
 - Produces:
-  - `pub fn showAtRef(arena, repo_dir: []const u8, ref: []const u8, path: []const u8) ![]u8` — returns the file contents at `<ref>:<path>` (via `git show`), or `&[_]u8{}` if the file does not exist at that ref (added/deleted side).
+  - `pub fn showAtRef(arena, repo_dir: []const u8, ref: []const u8, path: []const u8) ![]u8` — `<ref>:<path>` 時点のファイル内容を (`git show` 経由で) 返す。そのref時点でファイルが存在しない場合 (追加/削除された側) は `&[_]u8{}` を返す。
 
-- [ ] **Step 1: Write the failing integration test**
+- [ ] **Step 1: 失敗する統合テストを書く**
 
-Create `cli/src/input.zig`:
+`cli/src/input.zig` を作成する:
 ```zig
 const std = @import("std");
 const testing = std.testing;
@@ -2548,20 +2546,20 @@ test "showAtRef returns file contents at a commit" {
 }
 ```
 
-- [ ] **Step 2: Wire the import and run to confirm failure**
+- [ ] **Step 2: import を接続し、失敗を確認するために実行する**
 
-Edit `cli/src/main.zig`, add to imports + the `test {}` block:
+`cli/src/main.zig` を編集し、imports と `test {}` ブロックに追加する:
 ```zig
 pub const input = @import("input.zig");
 ```
-And inside the existing `test { ... }` block add `_ = input;`.
+そして既存の `test { ... }` ブロック内に `_ = input;` を追加する。
 
-Run: `zig build test`
-Expected: FAIL — `showAtRef` undeclared.
+実行: `zig build test`
+期待される結果: FAIL — `showAtRef` が未宣言。
 
-- [ ] **Step 3: Implement `showAtRef`**
+- [ ] **Step 3: `showAtRef` を実装する**
 
-Add above the test in `cli/src/input.zig`:
+`cli/src/input.zig` のテストの上に追加する:
 ```zig
 pub fn showAtRef(arena: std.mem.Allocator, repo_dir: []const u8, ref: []const u8, path: []const u8) ![]u8 {
     const spec = try std.fmt.allocPrint(arena, "{s}:{s}", .{ ref, path });
@@ -2582,21 +2580,21 @@ pub fn showAtRef(arena: std.mem.Allocator, repo_dir: []const u8, ref: []const u8
 }
 ```
 
-- [ ] **Step 4: Run the integration test**
+- [ ] **Step 4: 統合テストを実行する**
 
-Run: `zig build test`
-Expected: PASS (requires `git` on PATH — it is, per environment).
+実行: `zig build test`
+期待される結果: PASS (PATH 上に `git` が必要 — 環境上は存在する)。
 
-- [ ] **Step 5: Add git-ref mode to the CLI**
+- [ ] **Step 5: CLI に git-ref モードを追加する**
 
-In `cli/src/main.zig`, extend the model so two refs + a path can be supplied. Add a `--git` mode: `prefablens --git <beforeRef> <afterRef> <path>`. Add to `parseArgs` a new shape and to `run` a branch that, when git mode is set, calls `input.showAtRef` for both refs instead of `readFile`. Concretely, add to `Options`:
+`cli/src/main.zig` で、2 つの ref と 1 つの path を渡せるようにモデルを拡張する。`--git` モードを追加する: `prefablens --git <beforeRef> <afterRef> <path>`。`parseArgs` に新しい形を追加し、`run` には git モードが設定されているとき `readFile` の代わりに両方の ref に対して `input.showAtRef` を呼ぶブランチを追加する。具体的には、`Options` に追加する:
 ```zig
     git_mode: bool = false,
     git_ref_before: []const u8 = "",
     git_ref_after: []const u8 = "",
     git_path: []const u8 = "",
 ```
-In `parseArgs`, before the positional handling, detect `--git`:
+`parseArgs` では、位置引数の処理の前に `--git` を検出する:
 ```zig
         } else if (std.mem.eql(u8, a, "--git")) {
             // Expect: --git <beforeRef> <afterRef> <path>
@@ -2612,9 +2610,9 @@ In `parseArgs`, before the positional handling, detect `--git`:
                 .git_path = args[i + 3],
             };
 ```
-> Place this branch so that `--json`/`--html`/`--project` parsed *before* `--git` still apply (they set `format`/`project_root` which are captured in the returned struct). Flags after `--git` are treated as its operands; document that `--git` must come last.
+> このブランチは、`--git` の*前に*パースされた `--json`/`--html`/`--project` が依然として適用されるように配置すること (これらは返される構造体で捕捉される `format`/`project_root` を設定する)。`--git` の後のフラグはそのオペランドとして扱われる。`--git` は必ず最後に来なければならないことをドキュメント化すること。
 
-In `run`, replace the two `readFile` lines with:
+`run` では、2 つの `readFile` の行を次に置き換える:
 ```zig
     const before = if (opt.git_mode)
         try input.showAtRef(arena, ".", opt.git_ref_before, opt.git_path)
@@ -2625,7 +2623,7 @@ In `run`, replace the two `readFile` lines with:
     else
         try readFile(arena, opt.after);
 ```
-Add a test for the new parse shape:
+新しいパース形のためのテストを追加する:
 ```zig
 test "parseArgs: --git captures refs and path" {
     const args = [_][]const u8{ "--json", "--git", "HEAD~1", "HEAD", "Foo.prefab" };
@@ -2638,10 +2636,10 @@ test "parseArgs: --git captures refs and path" {
 }
 ```
 
-Run: `zig build test`
-Expected: PASS.
+実行: `zig build test`
+期待される結果: PASS。
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 6: コミットする**
 ```bash
 git add cli/src/input.zig cli/src/main.zig
 git commit -m "feat(cli): add git-ref input via git show subprocess"
@@ -2649,21 +2647,21 @@ git commit -m "feat(cli): add git-ref input via git show subprocess"
 
 ---
 
-## Task 11: ANSI tree renderer (`render_tree.zig`)
+## Task 11: ANSI ツリーレンダラ (`render_tree.zig`)
 
-The default human-facing output (spec §6.1): a colored GameObject tree with field old→new lines.
+既定の人間向け出力 (spec §6.1): フィールドの旧→新の行を伴う、色付きの GameObject ツリー。
 
 **Files:**
 - Create: `cli/src/render_tree.zig`
-- Modify: `cli/src/main.zig` (use it for the `.tree` branch)
+- Modify: `cli/src/main.zig` (`.tree` ブランチで使用する)
 
 **Interfaces:**
-- Consumes: `core.model.DiffResult`, `core.json.Resolver`.
+- Consumes: `core.model.DiffResult`, `core.json.Resolver`。
 - Produces: `pub fn render(arena, w: anytype, res: core.model.DiffResult, resolved: ?*const core.json.Resolver, color: bool) !void`
 
-- [ ] **Step 1: Write the failing test (color disabled for stable golden)**
+- [ ] **Step 1: 失敗するテストを書く (安定した golden のため色は無効)**
 
-Create `cli/src/render_tree.zig`:
+`cli/src/render_tree.zig` を作成する:
 ```zig
 const std = @import("std");
 const core = @import("core");
@@ -2699,19 +2697,19 @@ test "render: modified field shown old -> new without color" {
 }
 ```
 
-- [ ] **Step 2: Wire import, confirm failure**
+- [ ] **Step 2: import を接続し、失敗を確認する**
 
-Edit `cli/src/main.zig` imports + `test {}`:
+`cli/src/main.zig` の imports と `test {}` を編集する:
 ```zig
 pub const render_tree = @import("render_tree.zig");
 ```
-(`_ = render_tree;` in the test block.)
-Run: `zig build test`
-Expected: FAIL — `render` undeclared.
+(テストブロックには `_ = render_tree;`。)
+実行: `zig build test`
+期待される結果: FAIL — `render` が未宣言。
 
-- [ ] **Step 3: Implement the renderer**
+- [ ] **Step 3: レンダラを実装する**
 
-Add above the test in `cli/src/render_tree.zig`:
+`cli/src/render_tree.zig` のテストの上に追加する:
 ```zig
 const model = core.model;
 
@@ -2840,14 +2838,14 @@ fn writeValueText(w: anytype, node: ?*const model.Node) !void {
 }
 ```
 
-- [ ] **Step 4: Run renderer test**
+- [ ] **Step 4: レンダラのテストを実行する**
 
-Run: `zig build test`
-Expected: PASS.
+実行: `zig build test`
+期待される結果: PASS。
 
-- [ ] **Step 5: Use the renderer in `main.zig`**
+- [ ] **Step 5: `main.zig` でレンダラを使用する**
 
-In `run`, replace the `.tree` branch body (the JSON fallback) with:
+`run` で、`.tree` ブランチの本体 (JSON フォールバック) を次に置き換える:
 ```zig
         .tree => {
             const res = try core.diffBytes(arena, before, after);
@@ -2861,18 +2859,18 @@ In `run`, replace the `.tree` branch body (the JSON fallback) with:
             try render_tree.render(arena, stdout, res, resolver_ptr, false);
         },
 ```
-> Color detection (TTY check) can be added in `main()` later by passing a `color` flag through; Phase 1 keeps `render` color-parameterized and defaults the wired call to `false` for deterministic output. (A `--color` flag is a trivial future addition.)
+> 色判定 (TTY チェック) は後で `main()` に `color` フラグを通すことで追加できる。Phase 1 では `render` を color パラメータ化したまま保ち、接続した呼び出しは決定的な出力のため `false` を既定とする。(`--color` フラグの追加は些細な将来の作業である。)
 
-Run: `zig build test`
-Expected: PASS.
+実行: `zig build test`
+期待される結果: PASS。
 
-Manually verify:
+手動で検証:
 ```bash
 zig build run -- /tmp/a.asset /tmp/b.asset
 ```
-Expected: a tree showing `~ MonoBehaviour` and `~ hp: 1 -> 2`.
+期待される結果: `~ MonoBehaviour` と `~ hp: 1 -> 2` を示すツリー。
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 6: コミットする**
 ```bash
 git add cli/src/render_tree.zig cli/src/main.zig
 git commit -m "feat(cli): add ANSI tree renderer as default output"
@@ -2880,21 +2878,21 @@ git commit -m "feat(cli): add ANSI tree renderer as default output"
 
 ---
 
-## Task 12: HTML renderer (`render_html.zig`)
+## Task 12: HTML レンダラ (`render_html.zig`)
 
-Self-contained, shareable HTML output (spec §6.1, `--html`).
+自己完結型で共有可能な HTML 出力 (spec §6.1, `--html`)。
 
 **Files:**
 - Create: `cli/src/render_html.zig`
-- Modify: `cli/src/main.zig` (use it for the `.html` branch)
+- Modify: `cli/src/main.zig` (`.html` ブランチで使用)
 
 **Interfaces:**
-- Consumes: `core.model.DiffResult`, `core.json.Resolver`.
-- Produces: `pub fn render(arena, w: anytype, res: core.model.DiffResult, resolved: ?*const core.json.Resolver) !void` — writes a complete `<!DOCTYPE html>` document with inline CSS (no external assets).
+- Consumes: `core.model.DiffResult`, `core.json.Resolver`。
+- Produces: `pub fn render(arena, w: anytype, res: core.model.DiffResult, resolved: ?*const core.json.Resolver) !void` — インライン CSS を含む完全な `<!DOCTYPE html>` ドキュメントを書き出す (外部アセットなし)。
 
-- [ ] **Step 1: Write the failing test**
+- [ ] **Step 1: 失敗するテストを書く**
 
-Create `cli/src/render_html.zig`:
+`cli/src/render_html.zig` を作成する:
 ```zig
 const std = @import("std");
 const core = @import("core");
@@ -2939,19 +2937,19 @@ test "html: self-contained document with escaped content" {
 }
 ```
 
-- [ ] **Step 2: Wire import + confirm failure**
+- [ ] **Step 2: import を配線し、失敗を確認する**
 
-Edit `cli/src/main.zig` imports + `test {}`:
+`cli/src/main.zig` の imports と `test {}` を編集する:
 ```zig
 pub const render_html = @import("render_html.zig");
 ```
-(`_ = render_html;` in the test block.)
-Run: `zig build test`
-Expected: FAIL — `render` undeclared.
+(test ブロック内の `_ = render_html;`。)
+実行: `zig build test`
+期待される結果: FAIL — `render` undeclared。
 
-- [ ] **Step 3: Implement the HTML renderer**
+- [ ] **Step 3: HTML レンダラを実装する**
 
-Add above the test in `cli/src/render_html.zig`:
+`cli/src/render_html.zig` のテストの上に追加する:
 ```zig
 const model = core.model;
 
@@ -3090,14 +3088,14 @@ fn writeEscaped(w: anytype, s: []const u8) !void {
 }
 ```
 
-- [ ] **Step 4: Run the HTML test**
+- [ ] **Step 4: HTML テストを実行する**
 
-Run: `zig build test`
-Expected: PASS.
+実行: `zig build test`
+期待される結果: PASS。
 
-- [ ] **Step 5: Use the renderer in `main.zig`**
+- [ ] **Step 5: `main.zig` でレンダラを使用する**
 
-Replace the `.html` branch body in `run` with:
+`run` 内の `.html` ブランチ本体を次で置き換える:
 ```zig
         .html => {
             const res = try core.diffBytes(arena, before, after);
@@ -3110,17 +3108,17 @@ Replace the `.html` branch body in `run` with:
             try render_html.render(arena, stdout, res, resolver_ptr);
         },
 ```
-Run: `zig build test`
-Expected: PASS.
+実行: `zig build test`
+期待される結果: PASS。
 
-Manually verify:
+手動で検証:
 ```bash
 zig build run -- --html /tmp/a.asset /tmp/b.asset > /tmp/diff.html
 head -1 /tmp/diff.html
 ```
-Expected: `<!DOCTYPE html>`.
+期待される結果: `<!DOCTYPE html>`。
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 6: コミット**
 ```bash
 git add cli/src/render_html.zig cli/src/main.zig
 git commit -m "feat(cli): add self-contained HTML renderer (--html)"
@@ -3128,21 +3126,21 @@ git commit -m "feat(cli): add self-contained HTML renderer (--html)"
 
 ---
 
-## Task 13: Performance budget gate (CI)
+## Task 13: 性能予算ゲート（CI）
 
-Enforces the native performance budget (spec §5.7) so regressions fail CI.
+ネイティブの性能予算（仕様 §5.7）を強制し、リグレッション（退行）が発生した場合に CI を失敗させる。
 
-**Files:**
-- Create: `core/src/perf.zig`
-- Modify: `build.zig` (add a `perf` step), `.github/workflows/ci.yml` (run it)
+**ファイル:**
+- 作成: `core/src/perf.zig`
+- 変更: `build.zig`（`perf` ステップを追加）、`.github/workflows/ci.yml`（実行する）
 
-**Interfaces:**
-- Consumes: `parser`, `diff` (via a generated large fixture).
-- Produces: a `zig build perf` step that builds a synthetic large scene in-memory, times `core.diffBytes`, and exits non-zero if over the CI threshold.
+**インターフェイス:**
+- 消費: `parser`、`diff`（生成された大きなフィクスチャ経由）。
+- 生成: メモリ上で合成の大きなシーンを構築し、`core.diffBytes` を計測し、CI のしきい値を超えた場合に非ゼロで終了する `zig build perf` ステップ。
 
-- [ ] **Step 1: Write the perf harness as a test (small budget first to prove the gate)**
+- [ ] **Step 1: perf ハーネスをテストとして記述する（まず小さい予算でゲートを実証する）**
 
-Create `core/src/perf.zig`:
+`core/src/perf.zig` を作成:
 ```zig
 const std = @import("std");
 const root = @import("root.zig");
@@ -3199,18 +3197,18 @@ test "perf: small scene diff completes well under budget" {
 }
 ```
 
-- [ ] **Step 2: Re-export and run to confirm the test passes**
+- [ ] **Step 2: 再エクスポートして実行し、テストがパスすることを確認する**
 
-Edit `core/src/root.zig`:
+`core/src/root.zig` を編集:
 ```zig
 pub const perf = @import("perf.zig");
 ```
-Run: `zig build test`
-Expected: PASS.
+実行: `zig build test`
+期待される結果: PASS。
 
-- [ ] **Step 3: Add a release-mode `perf` executable + build step**
+- [ ] **Step 3: リリースモードの `perf` 実行ファイルとビルドステップを追加する**
 
-Create `core/src/perf_main.zig`:
+`core/src/perf_main.zig` を作成:
 ```zig
 const std = @import("std");
 const perf = @import("perf.zig");
@@ -3237,7 +3235,7 @@ pub fn main() !void {
 }
 ```
 
-Add to `build.zig`, before the final lines of `build()`:
+`build.zig` に、`build()` の最後の行の前に追加:
 ```zig
     const perf_exe = b.addExecutable(.{
         .name = "perf",
@@ -3250,18 +3248,18 @@ Add to `build.zig`, before the final lines of `build()`:
     perf_step.dependOn(&run_perf.step);
 ```
 
-Run: `zig build perf`
-Expected: prints `perf: 50000 objects diffed in <N> ms (ceiling 600 ms)` and exits 0. If it exceeds, the diff has a real performance problem — investigate before continuing.
+実行: `zig build perf`
+期待される結果: `perf: 50000 objects diffed in <N> ms (ceiling 600 ms)` と出力し、0 で終了する。超過した場合、diff に実際の性能上の問題があるため、続行する前に調査すること。
 
-- [ ] **Step 4: Wire perf into CI**
+- [ ] **Step 4: perf を CI に組み込む**
 
-Edit `.github/workflows/ci.yml`, add a step after Test:
+`.github/workflows/ci.yml` を編集し、Test の後にステップを追加:
 ```yaml
       - name: Performance budget
         run: zig build perf
 ```
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 5: コミット**
 ```bash
 git add core/src/perf.zig core/src/perf_main.zig core/src/root.zig build.zig .github/workflows/ci.yml
 git commit -m "feat(core): enforce native parse+diff performance budget in CI"
@@ -3269,36 +3267,36 @@ git commit -m "feat(core): enforce native parse+diff performance budget in CI"
 
 ---
 
-## Final verification
+## 最終検証
 
-- [ ] Run the whole suite and the perf gate:
+- [ ] スイート全体と perf ゲートを実行する:
 ```bash
 zig build test && zig build perf
 ```
-Expected: all tests pass; perf prints under the ceiling.
+期待される結果: すべてのテストがパスし、perf が上限未満で出力する。
 
-- [ ] End-to-end smoke across all three formats:
+- [ ] 3 つすべてのフォーマットにわたるエンドツーエンドのスモーク:
 ```bash
 zig build run -- /tmp/a.asset /tmp/b.asset            # ANSI tree
 zig build run -- --json /tmp/a.asset /tmp/b.asset     # prefablens.diff.v1 JSON
 zig build run -- --html /tmp/a.asset /tmp/b.asset      # HTML document
 ```
 
-- [ ] Confirm CI is green on a pushed branch.
+- [ ] プッシュしたブランチで CI がグリーンであることを確認する。
 
 ---
 
-## Self-Review (performed against the spec)
+## セルフレビュー（仕様に対して実施）
 
-**1. Spec coverage**
+**1. 仕様カバレッジ**
 
-| Spec Phase 1 requirement (§9 "入れる") | Task |
+| 仕様 Phase 1 要件（§9「入れる」） | タスク |
 |---|---|
 | Zig 共通コア: パーサ | Task 4 |
 | fileID 突合 | Task 5 |
 | フィールド diff | Task 5 |
 | 静的 classID テーブル | Task 3 |
-| ローカル参照解決（同一ファイル内 fileID） | Tasks 5–6 (refs carried; local fileID matched in tree) |
+| ローカル参照解決（同一ファイル内 fileID） | Tasks 5–6（参照を保持し、ローカル fileID をツリー内で突合） |
 | 構造化 JSON 出力 (`prefablens.diff.v1`) | Task 7 |
 | CLI: ファイル入力 | Task 8 |
 | CLI: git ref 入力 (`--git`, working tree) | Task 10 |
@@ -3306,14 +3304,14 @@ zig build run -- --html /tmp/a.asset /tmp/b.asset      # HTML document
 | CLI: ANSI ツリー出力 | Task 11 |
 | CLI: `--json` 出力 | Task 8 |
 | CLI: `--html` 出力 | Task 12 |
-| フィクスチャ＋ゴールデンテスト | Every task (inline fixtures + golden in Tasks 7, 11, 12) |
+| フィクスチャ＋ゴールデンテスト | すべてのタスク（インラインフィクスチャ＋Tasks 7, 11, 12 のゴールデン） |
 | CI | Task 1 |
 | 性能予算 (§5.7, native) | Task 13 |
-| 名前ベース二次マッチングは入れない | Honored — fileID-only matching (Task 5) |
-| Chrome/Editor/AI は入れない | Honored — not in this plan |
+| 名前ベース二次マッチングは入れない | 遵守 — fileID のみのマッチング（Task 5） |
+| Chrome/Editor/AI は入れない | 遵守 — 本計画には含まれない |
 
-Gaps intentionally deferred (noted in spec as later/non-Phase-1): C ABI / WASM target (Phase 2 — core stays pure Zig API; `abi.zig` added with Chrome), `--staged` exact convenience flag (working-tree + arbitrary refs covered by `--git`; `--staged` is a thin alias addable later), WASM bundle-size budget (Phase 2, where WASM exists).
+意図的に先送りしたギャップ（仕様で後回し／Phase 1 対象外と記載）: C ABI / WASM ターゲット（Phase 2 — コアは純粋な Zig API のまま。`abi.zig` は Chrome とともに追加）、`--staged` という正確な利便性フラグ（ワーキングツリー＋任意の ref は `--git` でカバー済み。`--staged` は後で追加可能な薄いエイリアス）、WASM バンドルサイズ予算（Phase 2、WASM が存在する段階）。
 
-**2. Placeholder scan:** No "TBD"/"add error handling"/"similar to Task N". The only non-literal value is `build.zig.zon`'s `.fingerprint`, which is *machine-generated by `zig init`* (Task 1 Step 2) and must not be invented — this is correct, not a placeholder. The `.tree`/`.html` JSON fallbacks in Task 8 are explicitly temporary and replaced in Tasks 11/12 (each task leaves the build green).
+**2. プレースホルダのスキャン:** 「TBD」「add error handling」「similar to Task N」は存在しない。唯一のリテラルでない値は `build.zig.zon` の `.fingerprint` で、これは *`zig init` によって機械生成される*（Task 1 Step 2）ものであり、勝手に作ってはならない — これはプレースホルダではなく正しい。Task 8 の `.tree`/`.html` JSON フォールバックは明示的に一時的なもので、Tasks 11/12 で置き換えられる（各タスクはビルドをグリーンに保つ）。
 
-**3. Type consistency:** `core.diffBytes`, `core.diffToJson`, `core.json.serialize`, `core.json.Resolver`, `diff.compute`/`FlatDiff`/`DocDiff`, `tree.build`, `model.*`, `parser.parse`, `classid.typeName`, CLI `parseArgs`/`run`/`Options`/`Format`, `resolve.buildIndex`/`Index`, `input.showAtRef`, `render_tree.render`, `render_html.render`, `perf.timeDiff` are used identically across the tasks that define and consume them. `resolve.Index` and `core.json.Resolver` are deliberately the same type (`std.StringHashMap([]const u8)`) so the index passes straight through.
+**3. 型の整合性:** `core.diffBytes`、`core.diffToJson`、`core.json.serialize`、`core.json.Resolver`、`diff.compute`/`FlatDiff`/`DocDiff`、`tree.build`、`model.*`、`parser.parse`、`classid.typeName`、CLI の `parseArgs`/`run`/`Options`/`Format`、`resolve.buildIndex`/`Index`、`input.showAtRef`、`render_tree.render`、`render_html.render`、`perf.timeDiff` は、それらを定義・消費するタスク全体で同一に使われている。`resolve.Index` と `core.json.Resolver` は意図的に同じ型（`std.StringHashMap([]const u8)`）であり、インデックスがそのまま通過する。

@@ -282,7 +282,7 @@ zig-cache/
 zig-out/
 ```
 
-- [ ] **Step 8: CI ワークフローの記述**
+- [x] **Step 8: CI ワークフローの記述**
 
 `.github/workflows/ci.yml` を作成する（Phase 1 完成形は Task 13 で `perf` ジョブを並列追加）:
 ```yaml
@@ -304,7 +304,7 @@ jobs:
 ```
 `build` ジョブは不要 — `zig build test` が core / cli のコンパイルを検証する。CI は `mise.toml` からツールチェーンのバージョンを読むため、バージョンの二重管理が不要。
 
-- [ ] **Step 9: コミット**
+- [x] **Step 9: コミット**
 ```bash
 git add mise.toml .vscode/settings.json build.zig build.zig.zon core cli .github .gitignore
 git commit -m "chore: scaffold Zig 0.16.0 monorepo with core module, CLI, and CI"

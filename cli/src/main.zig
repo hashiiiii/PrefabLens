@@ -85,6 +85,41 @@ test "run: unreadable input file reports error and exits 1" {
     try testing.expectEqualStrings("error: cannot read file '/no/such/file.asset'\n", output.items);
 }
 
+test "run: hostile deeply-nested input reports a clean error and exits 1" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    // Build a before file whose value is nested far past any sane bound.
+    const depth = 5000;
+    var src: std.ArrayList(u8) = .empty;
+    try src.appendSlice(arena, "--- !u!114 &1\nMonoBehaviour:\n  m_Field: ");
+    var i: usize = 0;
+    while (i < depth) : (i += 1) try src.appendSlice(arena, "{a: ");
+    try src.appendSlice(arena, "1");
+    i = 0;
+    while (i < depth) : (i += 1) try src.append(arena, '}');
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "hostile.asset", .data = src.items });
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "other.asset", .data =
+        \\--- !u!114 &1
+        \\MonoBehaviour:
+        \\  m_Field: 1
+    });
+    const hostile_path = try tmp.dir.realPathFileAlloc(testing.io, "hostile.asset", arena);
+    const other_path = try tmp.dir.realPathFileAlloc(testing.io, "other.asset", arena);
+
+    var out: std.ArrayList(u8) = .empty;
+    var aw = std.Io.Writer.Allocating.fromArrayList(arena, &out);
+    const code = try run(testing.io, arena, &.{ hostile_path, other_path }, &aw.writer);
+    const output = aw.toArrayList();
+    try testing.expectEqual(@as(u8, 1), code);
+    // Exact match: one clean line, no stack trace or extra noise.
+    try testing.expectEqualStrings("error: input nested too deeply\n", output.items);
+}
+
 test "run: unreadable --project directory reports error and exits 1" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
@@ -318,7 +353,13 @@ pub fn run(io: std.Io, arena: std.mem.Allocator, args: []const []const u8, stdou
 
     switch (opt.format) {
         .json => {
-            const res = try core.diffBytes(arena, before, after);
+            const res = core.diffBytes(arena, before, after) catch |err| {
+                if (err == error.NestingTooDeep) {
+                    try stdout.writeAll("error: input nested too deeply\n");
+                    return 1;
+                }
+                return err;
+            };
             var resolver_ptr: ?*const core.json.Resolver = null;
             var idx: core.json.Resolver = undefined;
             if (opt.project_root) |proj| {
@@ -334,7 +375,13 @@ pub fn run(io: std.Io, arena: std.mem.Allocator, args: []const []const u8, stdou
             try stdout.writeByte('\n');
         },
         .tree => {
-            const res = try core.diffBytes(arena, before, after);
+            const res = core.diffBytes(arena, before, after) catch |err| {
+                if (err == error.NestingTooDeep) {
+                    try stdout.writeAll("error: input nested too deeply\n");
+                    return 1;
+                }
+                return err;
+            };
             var resolver_ptr: ?*const core.json.Resolver = null;
             var idx: core.json.Resolver = undefined;
             if (opt.project_root) |proj| {
@@ -348,7 +395,13 @@ pub fn run(io: std.Io, arena: std.mem.Allocator, args: []const []const u8, stdou
             try render_tree.render(arena, stdout, res, resolver_ptr, false);
         },
         .html => {
-            const res = try core.diffBytes(arena, before, after);
+            const res = core.diffBytes(arena, before, after) catch |err| {
+                if (err == error.NestingTooDeep) {
+                    try stdout.writeAll("error: input nested too deeply\n");
+                    return 1;
+                }
+                return err;
+            };
             var resolver_ptr: ?*const core.json.Resolver = null;
             var idx: core.json.Resolver = undefined;
             if (opt.project_root) |proj| {

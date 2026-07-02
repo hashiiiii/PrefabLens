@@ -197,6 +197,25 @@ test "parse: same-indent sequence inside a sequence map item" {
     try testing.expectEqual(@as(i64, 2), added.seq[1].ref.file_id);
 }
 
+test "parse: deeply nested flow value is rejected instead of overflowing the stack" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    // Enough nesting to previously blow the stack (~14000 levels crashes);
+    // 5000 is well past any sane cap and well within the 200 KB file budget.
+    const depth = 5000;
+    var src: std.ArrayList(u8) = .empty;
+    try src.appendSlice(arena, "--- !u!114 &1\nMonoBehaviour:\n  m_Field: ");
+    var i: usize = 0;
+    while (i < depth) : (i += 1) try src.appendSlice(arena, "{a: ");
+    try src.appendSlice(arena, "1");
+    i = 0;
+    while (i < depth) : (i += 1) try src.append(arena, '}');
+
+    try testing.expectError(error.NestingTooDeep, parse(arena, src.items));
+}
+
 const Ref = model.Ref;
 
 const Line = struct { indent: usize, text: []const u8 };
@@ -270,7 +289,7 @@ fn parseDocument(p: *Parser) !Document {
         if (!std.mem.startsWith(u8, first.text, "---")) {
             _ = p.advance(); // the "TypeName:" line at indent 0
             type_name = stripTrailingColon(first.text);
-            body = try parseBlock(p, indentOfNext(p, 2));
+            body = try parseBlock(p, indentOfNext(p, 2), 0);
         } else {
             body = try emptyMap(p.arena);
         }
@@ -294,17 +313,22 @@ fn indentOfNext(p: *const Parser, default_indent: usize) usize {
     return default_indent;
 }
 
+/// Unity YAML never nests more than a handful of levels deep; this is a
+/// generous cap that rejects hostile input before it can overflow the stack.
+const max_nesting_depth: usize = 128;
+
 /// Parse a block (mapping or sequence) whose entries sit at exactly `indent`.
-fn parseBlock(p: *Parser, indent: usize) anyerror!*Node {
+fn parseBlock(p: *Parser, indent: usize, depth: usize) anyerror!*Node {
+    if (depth > max_nesting_depth) return error.NestingTooDeep;
     const first = p.peek() orelse return emptyMap(p.arena);
     if (first.indent < indent or std.mem.startsWith(u8, first.text, "---")) return emptyMap(p.arena);
     if (std.mem.startsWith(u8, first.text, "- ") or std.mem.eql(u8, first.text, "-")) {
-        return parseSeq(p, indent);
+        return parseSeq(p, indent, depth);
     }
-    return parseMap(p, indent);
+    return parseMap(p, indent, depth);
 }
 
-fn parseMap(p: *Parser, indent: usize) anyerror!*Node {
+fn parseMap(p: *Parser, indent: usize, depth: usize) anyerror!*Node {
     var entries: std.ArrayList(Entry) = .empty;
     while (p.peek()) |line| {
         if (line.indent != indent) break;
@@ -313,9 +337,9 @@ fn parseMap(p: *Parser, indent: usize) anyerror!*Node {
         _ = p.advance();
         const kv = splitKeyValue(line.text);
         const value = if (kv.value.len == 0)
-            try parseNestedValue(p, indent)
+            try parseNestedValue(p, indent, depth)
         else
-            try parseValue(p.arena, kv.value);
+            try parseValue(p.arena, kv.value, depth);
         try entries.append(p.arena, .{ .key = kv.key, .value = value });
     }
     return makeNode(p.arena, .{ .map = try entries.toOwnedSlice(p.arena) });
@@ -325,17 +349,17 @@ fn parseMap(p: *Parser, indent: usize) anyerror!*Node {
 /// deeper indent, or a block sequence whose dash items are aligned with the
 /// key's own indent (Unity's convention, e.g. `m_Component:` followed by
 /// `- component: {...}` at the same column); otherwise an empty map.
-fn parseNestedValue(p: *Parser, key_indent: usize) anyerror!*Node {
+fn parseNestedValue(p: *Parser, key_indent: usize, depth: usize) anyerror!*Node {
     if (p.peek()) |next| {
         const is_dash = std.mem.startsWith(u8, next.text, "- ") or std.mem.eql(u8, next.text, "-");
         if (next.indent > key_indent or (is_dash and next.indent == key_indent)) {
-            return parseBlock(p, next.indent);
+            return parseBlock(p, next.indent, depth + 1);
         }
     }
     return emptyMap(p.arena);
 }
 
-fn parseSeq(p: *Parser, indent: usize) anyerror!*Node {
+fn parseSeq(p: *Parser, indent: usize, depth: usize) anyerror!*Node {
     var items: std.ArrayList(*Node) = .empty;
     while (p.peek()) |line| {
         if (line.indent != indent) break;
@@ -345,12 +369,12 @@ fn parseSeq(p: *Parser, indent: usize) anyerror!*Node {
         if (rest.len == 0) {
             // "-" alone: nested block belongs to this item at deeper indent.
             const ci = indentOfNext(p, indent + 2);
-            try items.append(p.arena, try parseBlock(p, ci));
+            try items.append(p.arena, try parseBlock(p, ci, depth + 1));
         } else if (looksLikeMapEntry(rest)) {
             // compact map item: first entry on the dash line, continuation at indent+2.
-            try items.append(p.arena, try parseSeqMapItem(p, indent, rest));
+            try items.append(p.arena, try parseSeqMapItem(p, indent, rest, depth));
         } else {
-            try items.append(p.arena, try parseValue(p.arena, rest));
+            try items.append(p.arena, try parseValue(p.arena, rest, depth));
         }
     }
     return makeNode(p.arena, .{ .seq = try items.toOwnedSlice(p.arena) });
@@ -360,15 +384,15 @@ fn parseSeq(p: *Parser, indent: usize) anyerror!*Node {
 ///   - target: {fileID: 0}
 ///     propertyPath: m_Name
 ///     value: Foo
-fn parseSeqMapItem(p: *Parser, dash_indent: usize, first_line: []const u8) anyerror!*Node {
+fn parseSeqMapItem(p: *Parser, dash_indent: usize, first_line: []const u8, depth: usize) anyerror!*Node {
     var entries: std.ArrayList(Entry) = .empty;
     // All keys of the item sit at the column just past "- ".
     const key_indent = dash_indent + 2;
     const kv = splitKeyValue(first_line);
     if (kv.value.len == 0) {
-        try entries.append(p.arena, .{ .key = kv.key, .value = try parseNestedValue(p, key_indent) });
+        try entries.append(p.arena, .{ .key = kv.key, .value = try parseNestedValue(p, key_indent, depth) });
     } else {
-        try entries.append(p.arena, .{ .key = kv.key, .value = try parseValue(p.arena, kv.value) });
+        try entries.append(p.arena, .{ .key = kv.key, .value = try parseValue(p.arena, kv.value, depth) });
     }
     // Continuation entries are indented two past the dash (aligned after "- ").
     while (p.peek()) |line| {
@@ -378,9 +402,9 @@ fn parseSeqMapItem(p: *Parser, dash_indent: usize, first_line: []const u8) anyer
         _ = p.advance();
         const e = splitKeyValue(line.text);
         const value = if (e.value.len == 0)
-            try parseNestedValue(p, key_indent)
+            try parseNestedValue(p, key_indent, depth)
         else
-            try parseValue(p.arena, e.value);
+            try parseValue(p.arena, e.value, depth);
         try entries.append(p.arena, .{ .key = e.key, .value = value });
     }
     return makeNode(p.arena, .{ .map = try entries.toOwnedSlice(p.arena) });
@@ -426,23 +450,24 @@ fn looksLikeMapEntry(s: []const u8) bool {
     return kv.has_colon and kv.key.len > 0;
 }
 
-fn parseValue(arena: std.mem.Allocator, raw: []const u8) anyerror!*Node {
+fn parseValue(arena: std.mem.Allocator, raw: []const u8, depth: usize) anyerror!*Node {
+    if (depth > max_nesting_depth) return error.NestingTooDeep;
     const s = std.mem.trim(u8, raw, " ");
     if (s.len == 0) return makeNode(arena, .{ .scalar = "" });
-    if (s[0] == '{') return parseFlow(arena, s);
-    if (s[0] == '[') return parseFlowSeq(arena, s);
+    if (s[0] == '{') return parseFlow(arena, s, depth);
+    if (s[0] == '[') return parseFlowSeq(arena, s, depth);
     return makeNode(arena, .{ .scalar = try unquote(arena, s) });
 }
 
 /// Parse a flow mapping `{a: b, c: d}`. If it has a `fileID` key, return a Ref node.
-fn parseFlow(arena: std.mem.Allocator, s: []const u8) anyerror!*Node {
+fn parseFlow(arena: std.mem.Allocator, s: []const u8, depth: usize) anyerror!*Node {
     const inner = stripBrackets(s, '{', '}');
     var entries: std.ArrayList(Entry) = .empty;
     var it = splitTopLevel(inner);
     while (it.next()) |part| {
         const kv = splitKeyValue(part);
         if (kv.key.len == 0) continue;
-        const value = try parseValue(arena, kv.value);
+        const value = try parseValue(arena, kv.value, depth + 1);
         try entries.append(arena, .{ .key = kv.key, .value = value });
     }
     const es = try entries.toOwnedSlice(arena);
@@ -456,14 +481,14 @@ fn parseFlow(arena: std.mem.Allocator, s: []const u8) anyerror!*Node {
     return makeNode(arena, .{ .map = es });
 }
 
-fn parseFlowSeq(arena: std.mem.Allocator, s: []const u8) anyerror!*Node {
+fn parseFlowSeq(arena: std.mem.Allocator, s: []const u8, depth: usize) anyerror!*Node {
     const inner = std.mem.trim(u8, stripBrackets(s, '[', ']'), " ");
     var items: std.ArrayList(*Node) = .empty;
     if (inner.len != 0) {
         var it = splitTopLevel(inner);
         while (it.next()) |part| {
             const t = std.mem.trim(u8, part, " ");
-            if (t.len != 0) try items.append(arena, try parseValue(arena, t));
+            if (t.len != 0) try items.append(arena, try parseValue(arena, t, depth + 1));
         }
     }
     return makeNode(arena, .{ .seq = try items.toOwnedSlice(arena) });

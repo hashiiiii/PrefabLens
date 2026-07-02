@@ -4,11 +4,13 @@ const testing = std.testing;
 
 pub const resolve = @import("resolve.zig");
 pub const input = @import("input.zig");
+pub const render_tree = @import("render_tree.zig");
 
 test {
     std.testing.refAllDecls(@This());
     _ = resolve;
     _ = input;
+    _ = render_tree;
 }
 
 test "parseArgs: two paths default to tree format" {
@@ -269,11 +271,15 @@ pub fn run(io: std.Io, arena: std.mem.Allocator, args: []const []const u8, stdou
             try stdout.writeByte('\n');
         },
         .tree => {
-            // Task 11 replaces this branch with the ANSI tree renderer.
-            // Until then, fall back to JSON so the binary stays usable and tests stay green.
-            const out = try core.diffToJson(arena, before, after);
-            try stdout.writeAll(out);
-            try stdout.writeByte('\n');
+            const res = try core.diffBytes(arena, before, after);
+            var resolver_ptr: ?*const core.json.Resolver = null;
+            var idx: core.json.Resolver = undefined;
+            if (opt.project_root) |proj| {
+                idx = try resolve.buildIndex(io, arena, proj);
+                resolver_ptr = &idx;
+            }
+            // Color when stdout is a TTY is decided in main(); tests pass color=false.
+            try render_tree.render(arena, stdout, res, resolver_ptr, false);
         },
         .html => {
             const out = try core.diffToJson(arena, before, after);

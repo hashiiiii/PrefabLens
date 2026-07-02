@@ -45,4 +45,16 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run all unit tests");
     test_step.dependOn(&b.addRunArtifact(core_tests).step);
     test_step.dependOn(&b.addRunArtifact(cli_tests).step);
+
+    const perf_exe = b.addExecutable(.{
+        .name = "perf",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("core/src/perf_main.zig"),
+            .target = target,
+            .optimize = .ReleaseFast,
+        }),
+    });
+    const run_perf = b.addRunArtifact(perf_exe);
+    const perf_step = b.step("perf", "Run the performance budget gate (ReleaseFast)");
+    perf_step.dependOn(&run_perf.step);
 }

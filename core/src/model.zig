@@ -1,5 +1,106 @@
 const std = @import("std");
 
+/// External or local reference: `{fileID: N}` or `{fileID: N, guid: ..., type: N}`.
+pub const Ref = struct {
+    file_id: i64,
+    guid: ?[]const u8 = null,
+    type_id: ?i64 = null,
+};
+
+pub const Entry = struct {
+    key: []const u8, // slice into source
+    value: *Node,
+};
+
+/// A parsed Unity-YAML value. Scalars/keys/guids are slices into the input buffer.
+pub const Node = union(enum) {
+    map: []Entry,
+    seq: []*Node,
+    scalar: []const u8,
+    ref: Ref,
+
+    pub fn eql(a: *const Node, b: *const Node) bool {
+        if (std.meta.activeTag(a.*) != std.meta.activeTag(b.*)) return false;
+        return switch (a.*) {
+            .scalar => |sa| std.mem.eql(u8, sa, b.scalar),
+            .ref => |ra| blk: {
+                const rb = b.ref;
+                if (ra.file_id != rb.file_id) break :blk false;
+                if (ra.type_id != rb.type_id) break :blk false;
+                break :blk strEqOpt(ra.guid, rb.guid);
+            },
+            .seq => |sa| blk: {
+                const sb = b.seq;
+                if (sa.len != sb.len) break :blk false;
+                for (sa, sb) |ea, eb| if (!eql(ea, eb)) break :blk false;
+                break :blk true;
+            },
+            .map => |ma| blk: {
+                const mb = b.map;
+                if (ma.len != mb.len) break :blk false;
+                for (ma) |entry| {
+                    const other = findValue(mb, entry.key) orelse break :blk false;
+                    if (!eql(entry.value, other)) break :blk false;
+                }
+                break :blk true;
+            },
+        };
+    }
+};
+
+fn strEqOpt(a: ?[]const u8, b: ?[]const u8) bool {
+    if (a == null and b == null) return true;
+    if (a == null or b == null) return false;
+    return std.mem.eql(u8, a.?, b.?);
+}
+
+/// Look up a value by key in a map's entries (linear; Unity maps are small).
+pub fn findValue(entries: []const Entry, key: []const u8) ?*Node {
+    for (entries) |e| if (std.mem.eql(u8, e.key, key)) return e.value;
+    return null;
+}
+
+/// One Unity document: `--- !u!<class_id> &<file_id>` + a body mapping.
+pub const Document = struct {
+    class_id: u32,
+    file_id: i64,
+    type_name: []const u8, // the single top-level key, e.g. "GameObject"
+    stripped: bool = false,
+    body: *Node, // a .map node of the document's fields
+};
+
+pub const Status = enum { added, removed, modified, unchanged };
+
+pub const FieldDiff = struct {
+    path: []const u8, // dotted/indexed path, arena-built
+    status: Status,
+    before: ?*const Node = null,
+    after: ?*const Node = null,
+};
+
+pub const ComponentDiff = struct {
+    file_id: i64,
+    class_id: u32,
+    type_name: []const u8,
+    script_guid: ?[]const u8 = null,
+    status: Status,
+    fields: []FieldDiff,
+};
+
+pub const ObjectDiff = struct {
+    file_id: i64,
+    name: []const u8,
+    status: Status,
+    components: []ComponentDiff,
+    children: []ObjectDiff,
+};
+
+pub const DiffResult = struct {
+    roots: []ObjectDiff,
+    loose: []ComponentDiff,
+    unresolved_guids: [][]const u8,
+};
+
 test "Node.eql: scalars, refs, seqs, maps" {
     const a = std.testing.allocator;
     _ = a;
@@ -17,6 +118,9 @@ test "Node.eql: scalars, refs, seqs, maps" {
     var r3 = Node{ .ref = .{ .file_id = 234, .guid = "xyz", .type_id = 3 } };
     try std.testing.expect(Node.eql(&r1, &r2));
     try std.testing.expect(!Node.eql(&r1, &r3));
+
+    // Cross-kind is never equal
+    try std.testing.expect(!Node.eql(&s1, &r1));
 
     // Seqs
     var seq_a = [_]*Node{ &s1, &s3 };

@@ -41,6 +41,31 @@ test "html: self-contained document with escaped content" {
     try testing.expect(std.mem.indexOf(u8, html, "hp") != null);
 }
 
+test "html: ref guid with markup is escaped" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    // The parser enforces no hex-only constraint on guids: this parses
+    // cleanly into Node.ref.guid and must not reach the HTML unescaped.
+    const before =
+        \\--- !u!114 &1
+        \\MonoBehaviour:
+        \\  m_Target: {fileID: 2, guid: <img src=x onerror=alert(1)>, type: 3}
+    ;
+    const after =
+        \\--- !u!114 &1
+        \\MonoBehaviour:
+        \\  m_Target: {fileID: 3, guid: <img src=x onerror=alert(1)>, type: 3}
+    ;
+    const res = try core.diffBytes(arena, before, after);
+    var out: std.ArrayList(u8) = .empty;
+    var aw = std.Io.Writer.Allocating.fromArrayList(arena, &out);
+    try render(arena, &aw.writer, res, null);
+    const html = aw.toArrayList().items;
+    try testing.expect(std.mem.indexOf(u8, html, "<img") == null);
+    try testing.expect(std.mem.indexOf(u8, html, "&lt;img") != null);
+}
+
 const model = core.model;
 
 const head =
@@ -157,7 +182,9 @@ fn writeValueEscaped(w: anytype, node: ?*const model.Node) !void {
         .scalar => |s| try writeEscaped(w, s),
         .ref => |r| {
             if (r.guid) |g| {
-                try w.print("{{guid:{s}, fileID:{d}}}", .{ g, r.file_id });
+                try w.writeAll("{guid:");
+                try writeEscaped(w, g);
+                try w.print(", fileID:{d}}}", .{r.file_id});
             } else {
                 try w.print("{{fileID:{d}}}", .{r.file_id});
             }

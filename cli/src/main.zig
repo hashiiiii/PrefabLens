@@ -111,6 +111,22 @@ test "run: unreadable --project directory reports error and exits 1" {
     try testing.expectEqualStrings("error: cannot read project directory '/no/such/project'\n", output.items);
 }
 
+test "run: --git with bad ref reports error and exits 1" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    // Whether the test cwd is a git repo (bad revision) or not (not a repo),
+    // git show fails for a bogus ref -- both must surface as a clean error.
+    var out: std.ArrayList(u8) = .empty;
+    var aw = std.Io.Writer.Allocating.fromArrayList(arena, &out);
+    const code = try run(testing.io, arena, &.{ "--json", "--git", "bogus-ref", "HEAD", "Foo.prefab" }, &aw.writer);
+    const output = aw.toArrayList();
+    try testing.expectEqual(@as(u8, 1), code);
+    // Exact match: one clean line, no stack trace or extra noise.
+    try testing.expectEqualStrings("error: git show failed for 'bogus-ref:Foo.prefab'\n", output.items);
+}
+
 test "run: no operands prints usage and exits 2" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
@@ -215,14 +231,20 @@ pub fn run(io: std.Io, arena: std.mem.Allocator, args: []const []const u8, stdou
     };
 
     const before = if (opt.git_mode)
-        try input.showAtRef(io, arena, ".", opt.git_ref_before, opt.git_path)
+        input.showAtRef(io, arena, ".", opt.git_ref_before, opt.git_path) catch {
+            try stdout.print("error: git show failed for '{s}:{s}'\n", .{ opt.git_ref_before, opt.git_path });
+            return 1;
+        }
     else
         readFile(io, arena, opt.before) catch {
             try stdout.print("error: cannot read file '{s}'\n", .{opt.before});
             return 1;
         };
     const after = if (opt.git_mode)
-        try input.showAtRef(io, arena, ".", opt.git_ref_after, opt.git_path)
+        input.showAtRef(io, arena, ".", opt.git_ref_after, opt.git_path) catch {
+            try stdout.print("error: git show failed for '{s}:{s}'\n", .{ opt.git_ref_after, opt.git_path });
+            return 1;
+        }
     else
         readFile(io, arena, opt.after) catch {
             try stdout.print("error: cannot read file '{s}'\n", .{opt.after});

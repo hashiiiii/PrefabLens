@@ -11,10 +11,14 @@ pub fn showAtRef(io: std.Io, arena: std.mem.Allocator, repo_dir: []const u8, ref
     switch (res.term) {
         .exited => |c| {
             if (c == 0) return res.stdout;
-            // Non-zero: path absent at ref (added/deleted side) -> empty.
-            return &[_]u8{};
+            // Path absent at a valid ref (added/deleted side) -> empty.
+            if (std.mem.indexOf(u8, res.stderr, "does not exist in") != null or
+                std.mem.indexOf(u8, res.stderr, "exists on disk, but not in") != null)
+                return &[_]u8{};
+            // Anything else (bad revision, not a git repository, ...) is a real failure.
+            return error.GitShowFailed;
         },
-        else => return error.GitFailed,
+        else => return error.GitShowFailed,
     }
 }
 
@@ -48,4 +52,7 @@ test "showAtRef returns file contents at a commit" {
     // A path absent at the ref yields empty bytes, not an error.
     const missing = try showAtRef(testing.io, arena, dir, "HEAD", "Nope.prefab");
     try testing.expectEqual(@as(usize, 0), missing.len);
+
+    // A bad ref is a real failure, not an absent side.
+    try testing.expectError(error.GitShowFailed, showAtRef(testing.io, arena, dir, "bogus-ref", "Foo.prefab"));
 }

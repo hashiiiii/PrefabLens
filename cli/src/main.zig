@@ -69,6 +69,36 @@ test "run: unreadable input file reports error and exits 1" {
     try testing.expectEqualStrings("error: cannot read file '/no/such/file.asset'\n", output.items);
 }
 
+test "run: unreadable --project directory reports error and exits 1" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    // Real, readable input files so only the project directory is at fault.
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "before.asset", .data =
+        \\--- !u!114 &1
+        \\MonoBehaviour:
+        \\  hp: 1
+    });
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "after.asset", .data =
+        \\--- !u!114 &1
+        \\MonoBehaviour:
+        \\  hp: 2
+    });
+    const before_path = try tmp.dir.realPathFileAlloc(testing.io, "before.asset", arena);
+    const after_path = try tmp.dir.realPathFileAlloc(testing.io, "after.asset", arena);
+
+    var out: std.ArrayList(u8) = .empty;
+    var aw = std.Io.Writer.Allocating.fromArrayList(arena, &out);
+    const code = try run(testing.io, arena, &.{ "--json", "--project", "/no/such/project", before_path, after_path }, &aw.writer);
+    const output = aw.toArrayList();
+    try testing.expectEqual(@as(u8, 1), code);
+    // Exact match: one clean line, no stack trace or extra noise.
+    try testing.expectEqualStrings("error: cannot read project directory '/no/such/project'\n", output.items);
+}
+
 test "run: no operands prints usage and exits 2" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
@@ -170,7 +200,10 @@ pub fn run(io: std.Io, arena: std.mem.Allocator, args: []const []const u8, stdou
             var resolver_ptr: ?*const core.json.Resolver = null;
             var idx: core.json.Resolver = undefined;
             if (opt.project_root) |proj| {
-                const built = try resolve.buildIndex(io, arena, proj);
+                const built = resolve.buildIndex(io, arena, proj) catch {
+                    try stdout.print("error: cannot read project directory '{s}'\n", .{proj});
+                    return 1;
+                };
                 idx = built; // Index and Resolver are both StringHashMap([]const u8)
                 resolver_ptr = &idx;
             }

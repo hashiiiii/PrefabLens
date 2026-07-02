@@ -23,15 +23,17 @@ pub fn serialize(arena: std.mem.Allocator, res: model.DiffResult, resolved: ?*co
     try w.writeByte(']');
 
     if (resolved) |r| {
+        // Scope to guids the diff actually references (not the whole project
+        // index), in the same deterministic order as unresolvedGuids.
         try w.writeAll(",\"resolved\":{");
-        var it = r.iterator();
         var first = true;
-        while (it.next()) |e| {
+        for (res.unresolved_guids) |g| {
+            const path = r.get(g) orelse continue;
             if (!first) try w.writeByte(',');
             first = false;
-            try writeJsonString(w, e.key_ptr.*);
+            try writeJsonString(w, g);
             try w.writeByte(':');
-            try writeJsonString(w, e.value_ptr.*);
+            try writeJsonString(w, path);
         }
         try w.writeByte('}');
     }
@@ -206,6 +208,55 @@ test "json: fileId is a string, ref value serialized as object" {
     const out = try root.diffToJson(arena, before, after);
     try testing.expect(std.mem.indexOf(u8, out, "\"fileId\":\"5\"") != null);
     try testing.expect(std.mem.indexOf(u8, out, "\"after\":{\"ref\":{\"fileId\":\"200\",\"guid\":null,\"type\":null}}") != null);
+}
+
+test "json: resolved is scoped to referenced guids, ordered like unresolvedGuids" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    // A project index built from 2 .meta files -- guidA and guidC are both
+    // resolvable, but only guidA is actually referenced by the diff.
+    var resolver = Resolver.init(arena);
+    try resolver.put("guidA", "Assets/Scripts/A.cs");
+    try resolver.put("guidC", "Assets/Scripts/C.cs");
+
+    var unresolved_guids = [_][]const u8{"guidA"};
+    const res: model.DiffResult = .{
+        .roots = &.{},
+        .loose = &.{},
+        .unresolved_guids = &unresolved_guids,
+    };
+
+    const out = try serialize(arena, res, &resolver);
+    // Only the referenced guid is present in "resolved" ...
+    try testing.expect(std.mem.indexOf(u8, out, "\"resolved\":{\"guidA\":\"Assets/Scripts/A.cs\"}") != null);
+    // ... the unreferenced-but-resolvable guidC must not leak into the dump.
+    try testing.expect(std.mem.indexOf(u8, out, "guidC") == null);
+}
+
+test "json: resolved follows unresolvedGuids order, skipping guids the resolver can't find" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var resolver = Resolver.init(arena);
+    try resolver.put("guidA", "Assets/Scripts/A.cs");
+    try resolver.put("guidB", "Assets/Scripts/B.cs");
+
+    // Referenced order is B, A; guidX is referenced but not in the project index.
+    var unresolved_guids = [_][]const u8{ "guidB", "guidA", "guidX" };
+    const res: model.DiffResult = .{
+        .roots = &.{},
+        .loose = &.{},
+        .unresolved_guids = &unresolved_guids,
+    };
+
+    const out = try serialize(arena, res, &resolver);
+    try testing.expect(std.mem.indexOf(u8, out, "\"resolved\":{\"guidB\":\"Assets/Scripts/B.cs\",\"guidA\":\"Assets/Scripts/A.cs\"}") != null);
+    try testing.expect(std.mem.indexOf(u8, out, "guidX\":") == null);
+    // guidX stays listed as unresolved.
+    try testing.expect(std.mem.indexOf(u8, out, "\"unresolvedGuids\":[\"guidB\",\"guidA\",\"guidX\"]") != null);
 }
 
 test "json: string escaping" {

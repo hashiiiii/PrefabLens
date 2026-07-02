@@ -7,12 +7,9 @@ const diffmod = @import("diff.zig");
 
 const ComponentDiff = model.ComponentDiff;
 const ObjectDiff = model.ObjectDiff;
-const Status = model.Status;
 
 /// Index helpers over the parsed documents (use the union of before+after).
 const Index = struct {
-    arena: std.mem.Allocator,
-    fd: diffmod.FlatDiff,
     // file_id -> DocDiff (status + fields), for quick component construction.
     diff_by_id: std.AutoHashMap(i64, diffmod.DocDiff),
     // file_id -> *Document for the *structural* (after-preferred) version.
@@ -79,8 +76,6 @@ fn makeComponent(dd: diffmod.DocDiff) ComponentDiff {
 
 pub fn build(arena: std.mem.Allocator, fd: diffmod.FlatDiff) !model.DiffResult {
     var idx = Index{
-        .arena = arena,
-        .fd = fd,
         .diff_by_id = std.AutoHashMap(i64, diffmod.DocDiff).init(arena),
         .doc_by_id = std.AutoHashMap(i64, *model.Document).init(arena),
     };

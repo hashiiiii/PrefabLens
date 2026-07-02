@@ -191,10 +191,9 @@ fn scriptGuid(doc: *const model.Document) ?[]const u8 {
     };
 }
 
-fn resolvedTypeName(arena: std.mem.Allocator, doc: *const model.Document) ![]const u8 {
+fn resolvedTypeName(doc: *const model.Document) ![]const u8 {
     if (classid.typeName(doc.class_id)) |n| return n;
     // Unknown classID: fall back to the document's own top key.
-    _ = arena;
     return doc.type_name;
 }
 
@@ -222,7 +221,7 @@ pub fn compute(arena: std.mem.Allocator, before_src: []const u8, after_src: []co
             try docs.append(arena, .{
                 .file_id = ad.file_id,
                 .class_id = ad.class_id,
-                .type_name = try resolvedTypeName(arena, ad),
+                .type_name = try resolvedTypeName(ad),
                 .script_guid = scriptGuid(ad),
                 .status = if (fields.items.len == 0) .unchanged else .modified,
                 .fields = try fields.toOwnedSlice(arena),
@@ -231,7 +230,7 @@ pub fn compute(arena: std.mem.Allocator, before_src: []const u8, after_src: []co
             try docs.append(arena, .{
                 .file_id = ad.file_id,
                 .class_id = ad.class_id,
-                .type_name = try resolvedTypeName(arena, ad),
+                .type_name = try resolvedTypeName(ad),
                 .script_guid = scriptGuid(ad),
                 .status = .added,
                 .fields = &[_]FieldDiff{},
@@ -244,7 +243,7 @@ pub fn compute(arena: std.mem.Allocator, before_src: []const u8, after_src: []co
         try docs.append(arena, .{
             .file_id = bd.file_id,
             .class_id = bd.class_id,
-            .type_name = try resolvedTypeName(arena, bd),
+            .type_name = try resolvedTypeName(bd),
             .script_guid = scriptGuid(bd),
             .status = .removed,
             .fields = &[_]FieldDiff{},

@@ -216,8 +216,6 @@ test "parse: deeply nested flow value is rejected instead of overflowing the sta
     try testing.expectError(error.NestingTooDeep, parse(arena, src.items));
 }
 
-const Ref = model.Ref;
-
 const Line = struct { indent: usize, text: []const u8 };
 
 const Parser = struct {

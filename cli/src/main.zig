@@ -388,10 +388,8 @@ pub fn parseArgs(args: []const []const u8) ArgError!Options {
     };
 }
 
-const max_file_bytes = 64 * 1024 * 1024; // 64 MB guard
-
 fn readFile(io: std.Io, arena: std.mem.Allocator, path: []const u8) ![]u8 {
-    return std.Io.Dir.cwd().readFileAlloc(io, path, arena, .limited(max_file_bytes));
+    return std.Io.Dir.cwd().readFileAlloc(io, path, arena, .limited(input.max_input_bytes));
 }
 
 pub fn run(io: std.Io, arena: std.mem.Allocator, args: []const []const u8, stdout: *std.Io.Writer, stderr: *std.Io.Writer) !u8 {

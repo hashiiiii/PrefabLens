@@ -3,10 +3,16 @@ const testing = std.testing;
 
 pub fn showAtRef(io: std.Io, arena: std.mem.Allocator, repo_dir: []const u8, ref: []const u8, path: []const u8) ![]u8 {
     const spec = try std.fmt.allocPrint(arena, "{s}:{s}", .{ ref, path });
+    // Force the C locale so the stderr substrings matched below are always
+    // English, regardless of the caller's own LC_ALL/LANG.
+    var env = std.process.Environ.Map.init(arena);
+    try env.put("LC_ALL", "C");
+    try env.put("LANG", "C");
     const res = try std.process.run(arena, io, .{
         .argv = &.{ "git", "show", "--end-of-options", spec },
         .cwd = .{ .path = repo_dir },
         .stdout_limit = .limited(256 * 1024 * 1024),
+        .environ_map = &env,
     });
     switch (res.term) {
         .exited => |c| {

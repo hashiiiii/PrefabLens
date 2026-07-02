@@ -2,6 +2,7 @@
 const std = @import("std");
 pub const model = @import("model.zig");
 pub const classid = @import("classid.zig");
+pub const parser = @import("parser.zig");
 
 pub fn version() []const u8 {
     return "0.1.0-dev";
@@ -9,4 +10,8 @@ pub fn version() []const u8 {
 
 test "core builds and version is reported" {
     try std.testing.expectEqualStrings("0.1.0-dev", version());
+}
+
+test {
+    std.testing.refAllDecls(@This());
 }

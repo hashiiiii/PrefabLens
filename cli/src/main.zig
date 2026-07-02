@@ -3,10 +3,12 @@ const core = @import("core");
 const testing = std.testing;
 
 pub const resolve = @import("resolve.zig");
+pub const input = @import("input.zig");
 
 test {
     std.testing.refAllDecls(@This());
     _ = resolve;
+    _ = input;
 }
 
 test "parseArgs: two paths default to tree format" {
@@ -20,6 +22,16 @@ test "parseArgs: two paths default to tree format" {
 test "parseArgs: --json sets json format" {
     const args = [_][]const u8{ "--json", "a.prefab", "b.prefab" };
     const opt = try parseArgs(&args);
+    try testing.expectEqual(Format.json, opt.format);
+}
+
+test "parseArgs: --git captures refs and path" {
+    const args = [_][]const u8{ "--json", "--git", "HEAD~1", "HEAD", "Foo.prefab" };
+    const opt = try parseArgs(&args);
+    try testing.expect(opt.git_mode);
+    try testing.expectEqualStrings("HEAD~1", opt.git_ref_before);
+    try testing.expectEqualStrings("HEAD", opt.git_ref_after);
+    try testing.expectEqualStrings("Foo.prefab", opt.git_path);
     try testing.expectEqual(Format.json, opt.format);
 }
 
@@ -132,6 +144,10 @@ pub const Options = struct {
     after: []const u8,
     format: Format = .tree,
     project_root: ?[]const u8 = null, // for .meta resolution (Task 9)
+    git_mode: bool = false,
+    git_ref_before: []const u8 = "",
+    git_ref_after: []const u8 = "",
+    git_path: []const u8 = "",
 };
 
 pub const ArgError = error{ MissingOperands, UnknownFlag };
@@ -153,6 +169,19 @@ pub fn parseArgs(args: []const []const u8) ArgError!Options {
             i += 1;
             if (i >= args.len) return ArgError.MissingOperands;
             project_root = args[i];
+        } else if (std.mem.eql(u8, a, "--git")) {
+            // Expect: --git <beforeRef> <afterRef> <path>
+            if (i + 3 >= args.len) return ArgError.MissingOperands;
+            return .{
+                .before = "",
+                .after = "",
+                .format = format,
+                .project_root = project_root,
+                .git_mode = true,
+                .git_ref_before = args[i + 1],
+                .git_ref_after = args[i + 2],
+                .git_path = args[i + 3],
+            };
         } else if (std.mem.startsWith(u8, a, "--")) {
             return ArgError.UnknownFlag;
         } else {
@@ -179,20 +208,26 @@ fn readFile(io: std.Io, arena: std.mem.Allocator, path: []const u8) ![]u8 {
 pub fn run(io: std.Io, arena: std.mem.Allocator, args: []const []const u8, stdout: *std.Io.Writer) !u8 {
     const opt = parseArgs(args) catch |err| {
         switch (err) {
-            ArgError.MissingOperands => try stdout.writeAll("usage: prefablens [--json|--html] [--project DIR] <before> <after>\n"),
+            ArgError.MissingOperands => try stdout.writeAll("usage: prefablens [--json|--html] [--project DIR] (<before> <after> | --git <beforeRef> <afterRef> <path>)\n"),
             ArgError.UnknownFlag => try stdout.writeAll("error: unknown flag\n"),
         }
         return 2;
     };
 
-    const before = readFile(io, arena, opt.before) catch {
-        try stdout.print("error: cannot read file '{s}'\n", .{opt.before});
-        return 1;
-    };
-    const after = readFile(io, arena, opt.after) catch {
-        try stdout.print("error: cannot read file '{s}'\n", .{opt.after});
-        return 1;
-    };
+    const before = if (opt.git_mode)
+        try input.showAtRef(io, arena, ".", opt.git_ref_before, opt.git_path)
+    else
+        readFile(io, arena, opt.before) catch {
+            try stdout.print("error: cannot read file '{s}'\n", .{opt.before});
+            return 1;
+        };
+    const after = if (opt.git_mode)
+        try input.showAtRef(io, arena, ".", opt.git_ref_after, opt.git_path)
+    else
+        readFile(io, arena, opt.after) catch {
+            try stdout.print("error: cannot read file '{s}'\n", .{opt.after});
+            return 1;
+        };
 
     switch (opt.format) {
         .json => {

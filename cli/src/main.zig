@@ -5,12 +5,14 @@ const testing = std.testing;
 pub const resolve = @import("resolve.zig");
 pub const input = @import("input.zig");
 pub const render_tree = @import("render_tree.zig");
+pub const render_html = @import("render_html.zig");
 
 test {
     std.testing.refAllDecls(@This());
     _ = resolve;
     _ = input;
     _ = render_tree;
+    _ = render_html;
 }
 
 test "parseArgs: two paths default to tree format" {
@@ -138,6 +140,36 @@ test "run: unreadable --project directory reports error and exits 1 in tree mode
     var aw = std.Io.Writer.Allocating.fromArrayList(arena, &out);
     // No --json: the default tree format must honor the same error contract.
     const code = try run(testing.io, arena, &.{ "--project", "/no/such/project", before_path, after_path }, &aw.writer);
+    const output = aw.toArrayList();
+    try testing.expectEqual(@as(u8, 1), code);
+    // Exact match: one clean line, no stack trace or extra noise.
+    try testing.expectEqualStrings("error: cannot read project directory '/no/such/project'\n", output.items);
+}
+
+test "run: unreadable --project directory reports error and exits 1 in html mode" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    // Real, readable input files so only the project directory is at fault.
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "before.asset", .data =
+        \\--- !u!114 &1
+        \\MonoBehaviour:
+        \\  hp: 1
+    });
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "after.asset", .data =
+        \\--- !u!114 &1
+        \\MonoBehaviour:
+        \\  hp: 2
+    });
+    const before_path = try tmp.dir.realPathFileAlloc(testing.io, "before.asset", arena);
+    const after_path = try tmp.dir.realPathFileAlloc(testing.io, "after.asset", arena);
+
+    var out: std.ArrayList(u8) = .empty;
+    var aw = std.Io.Writer.Allocating.fromArrayList(arena, &out);
+    const code = try run(testing.io, arena, &.{ "--html", "--project", "/no/such/project", before_path, after_path }, &aw.writer);
     const output = aw.toArrayList();
     try testing.expectEqual(@as(u8, 1), code);
     // Exact match: one clean line, no stack trace or extra noise.
@@ -316,9 +348,17 @@ pub fn run(io: std.Io, arena: std.mem.Allocator, args: []const []const u8, stdou
             try render_tree.render(arena, stdout, res, resolver_ptr, false);
         },
         .html => {
-            const out = try core.diffToJson(arena, before, after);
-            try stdout.writeAll(out);
-            try stdout.writeByte('\n');
+            const res = try core.diffBytes(arena, before, after);
+            var resolver_ptr: ?*const core.json.Resolver = null;
+            var idx: core.json.Resolver = undefined;
+            if (opt.project_root) |proj| {
+                idx = resolve.buildIndex(io, arena, proj) catch {
+                    try stdout.print("error: cannot read project directory '{s}'\n", .{proj});
+                    return 1;
+                };
+                resolver_ptr = &idx;
+            }
+            try render_html.render(arena, stdout, res, resolver_ptr);
         },
     }
     return 0;

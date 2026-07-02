@@ -3,6 +3,7 @@ const std = @import("std");
 pub const model = @import("model.zig");
 pub const classid = @import("classid.zig");
 pub const parser = @import("parser.zig");
+pub const diff = @import("diff.zig");
 
 pub fn version() []const u8 {
     return "0.1.0-dev";

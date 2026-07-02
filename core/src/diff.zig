@@ -142,9 +142,11 @@ pub const FlatDiff = struct {
     after: []model.Document,
 };
 
-fn findDocById(docs: []model.Document, file_id: i64) ?*model.Document {
-    for (docs) |*d| if (d.file_id == file_id) return d;
-    return null;
+fn buildIndex(arena: std.mem.Allocator, docs: []model.Document) !std.AutoHashMap(i64, *model.Document) {
+    var idx = std.AutoHashMap(i64, *model.Document).init(arena);
+    try idx.ensureTotalCapacity(@intCast(docs.len));
+    for (docs) |*d| idx.putAssumeCapacity(d.file_id, d);
+    return idx;
 }
 
 fn scriptGuid(doc: *const model.Document) ?[]const u8 {
@@ -169,11 +171,16 @@ pub fn compute(arena: std.mem.Allocator, before_src: []const u8, after_src: []co
     var docs: std.ArrayList(DocDiff) = .empty;
     var guids = GuidSet.init(arena);
 
+    // fileID -> *Document indices so the union walk below is O(n) instead of
+    // O(n^2) linear scans (matters at scene scale: tens of thousands of docs).
+    var before_idx = try buildIndex(arena, before);
+    var after_idx = try buildIndex(arena, after);
+
     // Walk the union of file_ids: iterate `after` first (preserves after order),
     // then `before`-only documents.
     for (after) |*ad| {
         try collectGuids(&guids, ad.body);
-        const bd = findDocById(before, ad.file_id);
+        const bd = before_idx.get(ad.file_id);
         if (bd) |b| {
             try collectGuids(&guids, b.body);
             var fields: std.ArrayList(FieldDiff) = .empty;
@@ -198,7 +205,7 @@ pub fn compute(arena: std.mem.Allocator, before_src: []const u8, after_src: []co
         }
     }
     for (before) |*bd| {
-        if (findDocById(after, bd.file_id) != null) continue;
+        if (after_idx.contains(bd.file_id)) continue;
         try collectGuids(&guids, bd.body);
         try docs.append(arena, .{
             .file_id = bd.file_id,

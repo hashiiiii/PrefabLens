@@ -102,7 +102,12 @@ pub fn build(arena: std.mem.Allocator, fd: diffmod.FlatDiff) !model.DiffResult {
         }
         const owner = blk: {
             const doc = idx.structuralDoc(d.file_id) orelse break :blk null;
-            break :blk gameObjectIdOfComponent(doc);
+            const go_id = gameObjectIdOfComponent(doc) orelse break :blk null;
+            // Only a confirmed GameObject document owns components; an
+            // unresolvable ref ({fileID: 0} or dangling) would otherwise
+            // bucket the component under a phantom id and drop it.
+            const go_doc = idx.structuralDoc(go_id) orelse break :blk null;
+            break :blk if (go_doc.class_id == 1) go_id else null;
         };
         if (owner) |go_id| {
             const gop = try comps_by_go.getOrPut(go_id);
@@ -312,5 +317,30 @@ test "tree: ScriptableObject .asset becomes a loose component" {
     const res = try root.diffBytes(arena, before, after);
     try testing.expectEqual(@as(usize, 0), res.roots.len);
     try testing.expectEqual(@as(usize, 1), res.loose.len);
+    try testing.expectEqual(model.Status.modified, res.loose[0].status);
+}
+
+test "tree: component with unresolvable m_GameObject ref becomes loose, not dropped" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const before =
+        \\--- !u!114 &7
+        \\MonoBehaviour:
+        \\  m_GameObject: {fileID: 0}
+        \\  m_Script: {fileID: 0, guid: ghi, type: 3}
+        \\  speed: 1
+    ;
+    const after =
+        \\--- !u!114 &7
+        \\MonoBehaviour:
+        \\  m_GameObject: {fileID: 0}
+        \\  m_Script: {fileID: 0, guid: ghi, type: 3}
+        \\  speed: 2
+    ;
+    const res = try root.diffBytes(arena, before, after);
+    try testing.expectEqual(@as(usize, 0), res.roots.len);
+    try testing.expectEqual(@as(usize, 1), res.loose.len);
+    try testing.expectEqual(@as(i64, 7), res.loose[0].file_id);
     try testing.expectEqual(model.Status.modified, res.loose[0].status);
 }

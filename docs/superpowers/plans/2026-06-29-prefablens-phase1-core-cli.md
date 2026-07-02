@@ -1,6 +1,6 @@
 # PrefabLens フェーズ1（コア + CLI）実装計画
 
-> **エージェント型ワーカー向け:** 必須サブスキル: このプランをタスクごとに実装するには superpowers:subagent-driven-development（推奨）または superpowers:executing-plans を使用してください。各ステップはトラッキングのためにチェックボックス（`- [ ]`）構文を使います。
+> **実装者: Claude（全タスク）。** 当初はユーザーが手でコードを書く前提だったが、2026-07-02 に全実装を Claude へ委譲した。Claude は superpowers:subagent-driven-development（推奨）または superpowers:executing-plans を使ってタスクごとに実装する。各ステップはトラッキングのためにチェックボックス（`- [ ]`）構文を使います。
 >
 > **ターゲット: Zig 0.16.0**（`build.zig.zon` の `.minimum_zig_version` と一致）。本プランのコードブロックは、`std.ArrayList`、`std.Io`、`std.process.Init`、`std.Io.Dir`、`std.process.run`、`build.zig` の `root_module` 形式など、0.16.0 標準ライブラリの API に従う完全な実装です。
 >
@@ -24,6 +24,7 @@
 - **製品名:** 製品は **PrefabLens**、CLI バイナリは `prefablens`、Zig パッケージ名は enum リテラル `.prefablens` です。"Unity" という文字列を製品名/ブランド名（商標）として使ってはいけません。記述的な用途（"for Unity"）でのみ登場できます。
 - **パフォーマンス予算（ネイティブ）、CI で強制（仕様 §5.7）:** 典型的なプレハブ（≤200 KB）のパース+差分 **< 5 ms**、大規模シーン（~10 MB）のパース+差分 **< 150 ms**、ピークメモリ ≤ 入力サイズの約 3 倍。（CI ゲートはランナーノイズによる不安定さを避けるため余裕のある乗数を使います。Task 13 を参照。）
 - **コミット:** conventional-commit の件名、命令法、≤ 72 文字。すべてのタスクの最後にコミットします（一部のタスクは自然なチェックポイントで途中コミットします）。
+- **コーディングスタイル（ユーザーの好み）:** モデリングを真面目にやる — 型・関数・変数はメンタルモデルとズレない、できるだけ簡潔な命名にする。実装コードはパフォーマンス重視で限りなくシンプルに保つ（不要な抽象化・間接参照・アロケーションを避ける）。テストコードは例外で、網羅性を優先してよい。プランのコードブロックはこの方針で書かれているため、逸脱する変更を加える場合も方針を維持すること。
 
 ---
 
@@ -375,7 +376,7 @@ test "Node.eql: scalars, refs, seqs, maps" {
 実行: `zig build test`
 期待される結果: FAIL — `error: use of undeclared identifier 'Node'` / `'Entry'`。
 
-- [ ] **Step 3: モデル型と `eql` を実装する**
+- [x] **Step 3: モデル型と `eql` を実装する**
 
 `core/src/model.zig` の先頭（テストより上の部分）を以下で置き換える:
 ```zig
@@ -483,12 +484,12 @@ pub const DiffResult = struct {
 };
 ```
 
-- [ ] **Step 4: テストが通ることを確認するために実行する**
+- [x] **Step 4: テストが通ることを確認するために実行する**
 
 実行: `zig build test`
 期待される結果: PASS。
 
-- [ ] **Step 5: `root.zig` から再エクスポートする**
+- [x] **Step 5: `root.zig` から再エクスポートする**
 
 `core/src/root.zig` を編集する — 既存の `const std` の下に以下を追加する:
 ```zig
@@ -499,7 +500,7 @@ pub const model = @import("model.zig");
 実行: `zig build test`
 期待される結果: PASS。
 
-- [ ] **Step 6: コミットする**
+- [x] **Step 6: コミットする**
 ```bash
 git add core/src/model.zig core/src/root.zig
 git commit -m "feat(core): add document/diff data model with Node.eql"
@@ -517,7 +518,7 @@ git commit -m "feat(core): add document/diff data model with Node.eql"
 - 消費: なし。
 - 生成: `pub fn typeName(class_id: u32) ?[]const u8` — Unity の組み込みコンポーネントの型名を返す。未知の classID（ホスト/スクリプト定義）の場合は `null` を返す。
 
-- [ ] **Step 1: 失敗するテストを書く**
+- [x] **Step 1: 失敗するテストを書く**
 
 `core/src/classid.zig` を作成する:
 ```zig
@@ -534,12 +535,12 @@ test "classID lookup covers common types and returns null for unknown" {
 }
 ```
 
-- [ ] **Step 2: 失敗を確認するために実行する**
+- [x] **Step 2: 失敗を確認するために実行する**
 
 実行: `zig build test`
 期待される結果: FAIL — `use of undeclared identifier 'typeName'`。
 
-- [ ] **Step 3: テーブルを実装する**
+- [x] **Step 3: テーブルを実装する**
 
 `core/src/classid.zig` のテストより上に以下を追加する:
 ```zig
@@ -587,12 +588,12 @@ pub fn typeName(class_id: u32) ?[]const u8 {
 }
 ```
 
-- [ ] **Step 4: 成功を確認するために実行する**
+- [x] **Step 4: 成功を確認するために実行する**
 
 実行: `zig build test`
 期待される結果: PASS。
 
-- [ ] **Step 5: 再エクスポートしてコミットする**
+- [x] **Step 5: 再エクスポートしてコミットする**
 
 `core/src/root.zig` を編集し、以下を追加する:
 ```zig

@@ -153,6 +153,50 @@ test "parse: quoted scalar and empty flow seq" {
     try testing.expectEqual(@as(usize, 0), tags.seq.len);
 }
 
+test "parse: block sequence of plain scalars" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const src =
+        \\--- !u!1 &1
+        \\GameObject:
+        \\  m_Layers:
+        \\  - Default
+        \\  - Water
+    ;
+    const doc = try parseOne(arena, src);
+    const layers = model.findValue(doc.body.map, "m_Layers").?;
+    try testing.expectEqual(@as(usize, 2), layers.seq.len);
+    try testing.expectEqualStrings("Default", layers.seq[0].scalar);
+    try testing.expectEqualStrings("Water", layers.seq[1].scalar);
+}
+
+test "parse: same-indent sequence inside a sequence map item" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const src =
+        \\--- !u!1001 &1001
+        \\PrefabInstance:
+        \\  m_Modification:
+        \\    m_Modifications:
+        \\    - target: {fileID: 7}
+        \\      addedObjects:
+        \\      - {fileID: 1}
+        \\      - {fileID: 2}
+    ;
+    const doc = try parseOne(arena, src);
+    const mod = model.findValue(doc.body.map, "m_Modification").?;
+    const mods = model.findValue(mod.map, "m_Modifications").?;
+    try testing.expectEqual(@as(usize, 1), mods.seq.len);
+    const item = mods.seq[0];
+    try testing.expectEqual(@as(i64, 7), model.findValue(item.map, "target").?.ref.file_id);
+    const added = model.findValue(item.map, "addedObjects").?;
+    try testing.expectEqual(@as(usize, 2), added.seq.len);
+    try testing.expectEqual(@as(i64, 1), added.seq[0].ref.file_id);
+    try testing.expectEqual(@as(i64, 2), added.seq[1].ref.file_id);
+}
+
 const Ref = model.Ref;
 
 const Line = struct { indent: usize, text: []const u8 };
@@ -268,27 +312,27 @@ fn parseMap(p: *Parser, indent: usize) anyerror!*Node {
         if (std.mem.startsWith(u8, line.text, "- ") or std.mem.eql(u8, line.text, "-")) break;
         _ = p.advance();
         const kv = splitKeyValue(line.text);
-        var value: *Node = undefined;
-        if (kv.value.len == 0) {
-            // Nested block: a deeper-indented map/seq, or a block sequence
-            // whose dash items are aligned with this key's own indent
-            // (Unity's convention, e.g. `m_Component:` / `- component: {...}`).
-            if (p.peek()) |next| {
-                const is_dash = std.mem.startsWith(u8, next.text, "- ") or std.mem.eql(u8, next.text, "-");
-                if (next.indent > indent or (is_dash and next.indent == indent)) {
-                    value = try parseBlock(p, next.indent);
-                } else {
-                    value = try emptyMap(p.arena);
-                }
-            } else {
-                value = try emptyMap(p.arena);
-            }
-        } else {
-            value = try parseValue(p.arena, kv.value);
-        }
+        const value = if (kv.value.len == 0)
+            try parseNestedValue(p, indent)
+        else
+            try parseValue(p.arena, kv.value);
         try entries.append(p.arena, .{ .key = kv.key, .value = value });
     }
     return makeNode(p.arena, .{ .map = try entries.toOwnedSlice(p.arena) });
+}
+
+/// Value of a "key:" line with nothing after the colon: a nested block at a
+/// deeper indent, or a block sequence whose dash items are aligned with the
+/// key's own indent (Unity's convention, e.g. `m_Component:` followed by
+/// `- component: {...}` at the same column); otherwise an empty map.
+fn parseNestedValue(p: *Parser, key_indent: usize) anyerror!*Node {
+    if (p.peek()) |next| {
+        const is_dash = std.mem.startsWith(u8, next.text, "- ") or std.mem.eql(u8, next.text, "-");
+        if (next.indent > key_indent or (is_dash and next.indent == key_indent)) {
+            return parseBlock(p, next.indent);
+        }
+    }
+    return emptyMap(p.arena);
 }
 
 fn parseSeq(p: *Parser, indent: usize) anyerror!*Node {
@@ -318,28 +362,25 @@ fn parseSeq(p: *Parser, indent: usize) anyerror!*Node {
 ///     value: Foo
 fn parseSeqMapItem(p: *Parser, dash_indent: usize, first_line: []const u8) anyerror!*Node {
     var entries: std.ArrayList(Entry) = .empty;
+    // All keys of the item sit at the column just past "- ".
+    const key_indent = dash_indent + 2;
     const kv = splitKeyValue(first_line);
     if (kv.value.len == 0) {
-        const ci = indentOfNext(p, dash_indent + 4);
-        try entries.append(p.arena, .{ .key = kv.key, .value = try parseBlock(p, ci) });
+        try entries.append(p.arena, .{ .key = kv.key, .value = try parseNestedValue(p, key_indent) });
     } else {
         try entries.append(p.arena, .{ .key = kv.key, .value = try parseValue(p.arena, kv.value) });
     }
     // Continuation entries are indented two past the dash (aligned after "- ").
-    const cont_indent = dash_indent + 2;
     while (p.peek()) |line| {
-        if (line.indent != cont_indent) break;
+        if (line.indent != key_indent) break;
         if (std.mem.startsWith(u8, line.text, "- ") or std.mem.eql(u8, line.text, "-")) break;
         if (std.mem.startsWith(u8, line.text, "---")) break;
         _ = p.advance();
         const e = splitKeyValue(line.text);
-        var value: *Node = undefined;
-        if (e.value.len == 0) {
-            const ci = indentOfNext(p, cont_indent + 2);
-            value = if (ci > cont_indent) try parseBlock(p, ci) else try emptyMap(p.arena);
-        } else {
-            value = try parseValue(p.arena, e.value);
-        }
+        const value = if (e.value.len == 0)
+            try parseNestedValue(p, key_indent)
+        else
+            try parseValue(p.arena, e.value);
         try entries.append(p.arena, .{ .key = e.key, .value = value });
     }
     return makeNode(p.arena, .{ .map = try entries.toOwnedSlice(p.arena) });
@@ -362,7 +403,7 @@ fn stripTrailingColon(s: []const u8) []const u8 {
     return if (t.len > 0 and t[t.len - 1] == ':') t[0 .. t.len - 1] else t;
 }
 
-const KV = struct { key: []const u8, value: []const u8 };
+const KV = struct { key: []const u8, value: []const u8, has_colon: bool };
 
 /// Split "key: value" / "key:" at the first ": " or trailing ":".
 /// Does not split inside a flow value (the value starts after the first colon).
@@ -373,16 +414,16 @@ fn splitKeyValue(line: []const u8) KV {
         if (line[i] == ':' and (i + 1 == line.len or line[i + 1] == ' ')) {
             const key = std.mem.trim(u8, line[0..i], " ");
             const value = std.mem.trim(u8, line[i + 1 ..], " ");
-            return .{ .key = key, .value = value };
+            return .{ .key = key, .value = value, .has_colon = true };
         }
     }
-    return .{ .key = std.mem.trim(u8, line, " "), .value = "" };
+    return .{ .key = std.mem.trim(u8, line, " "), .value = "", .has_colon = false };
 }
 
 fn looksLikeMapEntry(s: []const u8) bool {
     if (s.len > 0 and s[0] == '{') return false; // flow value, not a map entry
     const kv = splitKeyValue(s);
-    return kv.key.len > 0 and kv.value.len != s.len; // a real "key:" was found
+    return kv.has_colon and kv.key.len > 0;
 }
 
 fn parseValue(arena: std.mem.Allocator, raw: []const u8) anyerror!*Node {

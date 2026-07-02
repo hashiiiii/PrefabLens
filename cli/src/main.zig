@@ -39,6 +39,38 @@ test "parseArgs: --git captures refs and path" {
     try testing.expectEqual(Format.json, opt.format);
 }
 
+test "parseArgs: flags after --git operands are honored, not dropped" {
+    const args = [_][]const u8{ "--git", "HEAD~1", "HEAD", "Foo.prefab", "--json" };
+    const opt = try parseArgs(&args);
+    try testing.expect(opt.git_mode);
+    try testing.expectEqualStrings("HEAD~1", opt.git_ref_before);
+    try testing.expectEqualStrings("HEAD", opt.git_ref_after);
+    try testing.expectEqualStrings("Foo.prefab", opt.git_path);
+    try testing.expectEqual(Format.json, opt.format);
+}
+
+test "parseArgs: extra positional after --git operands is a parse error" {
+    const args = [_][]const u8{ "--git", "HEAD~1", "HEAD", "Foo.prefab", "Extra.prefab" };
+    try testing.expectError(ArgError.UnknownFlag, parseArgs(&args));
+}
+
+test "run: extra positional after --git operands exits 2, not silently accepted" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    // Previously the early return on --git ignored everything past its 3
+    // operands, so a stray trailing operand was silently dropped instead of
+    // rejected. With the loop continuing, it must hit the same unknown-flag
+    // arg-error contract as any other unrecognized positional.
+    var out: std.ArrayList(u8) = .empty;
+    var aw = std.Io.Writer.Allocating.fromArrayList(arena, &out);
+    const code = try run(testing.io, arena, &.{ "--git", "HEAD~1", "HEAD", "Foo.prefab", "Extra.prefab" }, &aw.writer);
+    const output = aw.toArrayList();
+    try testing.expectEqual(@as(u8, 2), code);
+    try testing.expect(std.mem.indexOf(u8, output.items, "unknown flag") != null);
+}
+
 test "run: --json with two real files prints core JSON" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
@@ -273,6 +305,10 @@ pub fn parseArgs(args: []const []const u8) ArgError!Options {
     var project_root: ?[]const u8 = null;
     var positionals: [2]?[]const u8 = .{ null, null };
     var pos_count: usize = 0;
+    var git_mode = false;
+    var git_ref_before: []const u8 = "";
+    var git_ref_after: []const u8 = "";
+    var git_path: []const u8 = "";
 
     var i: usize = 0;
     while (i < args.len) : (i += 1) {
@@ -286,25 +322,37 @@ pub fn parseArgs(args: []const []const u8) ArgError!Options {
             if (i >= args.len) return ArgError.MissingOperands;
             project_root = args[i];
         } else if (std.mem.eql(u8, a, "--git")) {
-            // Expect: --git <beforeRef> <afterRef> <path>
+            // Expect: --git <beforeRef> <afterRef> <path>, then keep parsing
+            // so flags following the operands (e.g. --json) still apply.
             if (i + 3 >= args.len) return ArgError.MissingOperands;
-            return .{
-                .before = "",
-                .after = "",
-                .format = format,
-                .project_root = project_root,
-                .git_mode = true,
-                .git_ref_before = args[i + 1],
-                .git_ref_after = args[i + 2],
-                .git_path = args[i + 3],
-            };
+            git_mode = true;
+            git_ref_before = args[i + 1];
+            git_ref_after = args[i + 2];
+            git_path = args[i + 3];
+            i += 3;
         } else if (std.mem.startsWith(u8, a, "--")) {
+            return ArgError.UnknownFlag;
+        } else if (git_mode) {
+            // --git already consumed its three operands; a bare positional
+            // afterward is an unrecognized extra argument.
             return ArgError.UnknownFlag;
         } else {
             if (pos_count >= 2) return ArgError.UnknownFlag;
             positionals[pos_count] = a;
             pos_count += 1;
         }
+    }
+    if (git_mode) {
+        return .{
+            .before = "",
+            .after = "",
+            .format = format,
+            .project_root = project_root,
+            .git_mode = true,
+            .git_ref_before = git_ref_before,
+            .git_ref_after = git_ref_after,
+            .git_path = git_path,
+        };
     }
     if (pos_count != 2) return ArgError.MissingOperands;
     return .{

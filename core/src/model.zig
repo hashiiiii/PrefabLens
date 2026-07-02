@@ -119,6 +119,9 @@ test "Node.eql: scalars, refs, seqs, maps" {
     try std.testing.expect(Node.eql(&r1, &r2));
     try std.testing.expect(!Node.eql(&r1, &r3));
 
+    // Cross-kind is never equal
+    try std.testing.expect(!Node.eql(&s1, &r1));
+
     // Seqs
     var seq_a = [_]*Node{ &s1, &s3 };
     var seq_b = [_]*Node{ &s2, &s3 };

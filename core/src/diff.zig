@@ -95,6 +95,35 @@ test "diff: nested field path and added field" {
     try testing.expect(saw_y and saw_added_scale);
 }
 
+test "diff: duplicate before fileIDs match the first occurrence" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    // Malformed anchors default file_id to 0 in the parser, so genuine
+    // duplicates occur; the linear scan this index replaced matched the
+    // FIRST document, and that semantics must be preserved.
+    const before =
+        \\--- !u!114 &5
+        \\MonoBehaviour:
+        \\  hp: 100
+        \\--- !u!114 &5
+        \\MonoBehaviour:
+        \\  hp: 999
+    ;
+    const after =
+        \\--- !u!114 &5
+        \\MonoBehaviour:
+        \\  hp: 150
+    ;
+    const fd = try compute(arena, before, after);
+    const d = findDoc(fd, 5).?;
+    try testing.expectEqual(model.Status.modified, d.status);
+    try testing.expectEqual(@as(usize, 1), d.fields.len);
+    // First occurrence wins: before must be 100, not the duplicate's 999.
+    try testing.expectEqualStrings("100", d.fields[0].before.?.scalar);
+    try testing.expectEqualStrings("150", d.fields[0].after.?.scalar);
+}
+
 test "diff: unresolved guids collected from external refs" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
@@ -145,7 +174,12 @@ pub const FlatDiff = struct {
 fn buildIndex(arena: std.mem.Allocator, docs: []model.Document) !std.AutoHashMap(i64, *model.Document) {
     var idx = std.AutoHashMap(i64, *model.Document).init(arena);
     try idx.ensureTotalCapacity(@intCast(docs.len));
-    for (docs) |*d| idx.putAssumeCapacity(d.file_id, d);
+    for (docs) |*d| {
+        // First occurrence wins on duplicate fileIDs, matching the linear
+        // scan this index replaced (duplicates occur with malformed anchors).
+        const gop = idx.getOrPutAssumeCapacity(d.file_id);
+        if (!gop.found_existing) gop.value_ptr.* = d;
+    }
     return idx;
 }
 

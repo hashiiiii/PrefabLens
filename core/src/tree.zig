@@ -339,3 +339,35 @@ test "tree: component with unresolvable m_GameObject ref becomes loose, not drop
     try testing.expectEqual(@as(i64, 7), res.loose[0].file_id);
     try testing.expectEqual(model.Status.modified, res.loose[0].status);
 }
+
+test "tree: component whose m_GameObject resolves to a non-GameObject document becomes loose, not dropped" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    // fileID 999 exists but is a MonoBehaviour, not a GameObject: a dangling
+    // reference in spirit (no GameObject there), distinct from fileID: 0.
+    const before =
+        \\--- !u!114 &7
+        \\MonoBehaviour:
+        \\  m_GameObject: {fileID: 999}
+        \\  speed: 1
+        \\--- !u!114 &999
+        \\MonoBehaviour:
+        \\  hp: 1
+    ;
+    const after =
+        \\--- !u!114 &7
+        \\MonoBehaviour:
+        \\  m_GameObject: {fileID: 999}
+        \\  speed: 2
+        \\--- !u!114 &999
+        \\MonoBehaviour:
+        \\  hp: 1
+    ;
+    const res = try root.diffBytes(arena, before, after);
+    try testing.expectEqual(@as(usize, 0), res.roots.len);
+    // Component 999 is unchanged (collapsed); component 7 is loose, not dropped.
+    try testing.expectEqual(@as(usize, 1), res.loose.len);
+    try testing.expectEqual(@as(i64, 7), res.loose[0].file_id);
+    try testing.expectEqual(model.Status.modified, res.loose[0].status);
+}

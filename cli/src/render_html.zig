@@ -66,6 +66,145 @@ test "html: ref guid with markup is escaped" {
     try testing.expect(std.mem.indexOf(u8, html, "&lt;img") != null);
 }
 
+test "html: resolved script guid renders the resolved script name, not the raw type" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const before =
+        \\--- !u!114 &5
+        \\MonoBehaviour:
+        \\  m_Script: {fileID: 11500000, guid: abc123, type: 3}
+        \\  hp: 1
+    ;
+    const after =
+        \\--- !u!114 &5
+        \\MonoBehaviour:
+        \\  m_Script: {fileID: 11500000, guid: abc123, type: 3}
+        \\  hp: 2
+    ;
+    const res = try core.diffBytes(arena, before, after);
+    var resolver = core.json.Resolver.init(arena);
+    try resolver.put("abc123", "Assets/Scripts/PlayerController.cs");
+    var out: std.ArrayList(u8) = .empty;
+    var aw = std.Io.Writer.Allocating.fromArrayList(arena, &out);
+    try render(arena, &aw.writer, res, &resolver);
+    const html = aw.toArrayList().items;
+    try testing.expect(std.mem.indexOf(u8, html, "PlayerController.cs") != null);
+    // The resolved basename replaces the raw type name entirely.
+    try testing.expect(std.mem.indexOf(u8, html, "MonoBehaviour") == null);
+}
+
+test "html: nested child GameObject renders indented one level under its parent" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const before =
+        \\--- !u!1 &1
+        \\GameObject:
+        \\  m_Name: Parent
+        \\  m_Component:
+        \\  - component: {fileID: 4}
+        \\--- !u!4 &4
+        \\Transform:
+        \\  m_GameObject: {fileID: 1}
+        \\  m_Father: {fileID: 0}
+        \\--- !u!1 &2
+        \\GameObject:
+        \\  m_Name: Child
+        \\  m_Component:
+        \\  - component: {fileID: 5}
+        \\--- !u!4 &5
+        \\Transform:
+        \\  m_GameObject: {fileID: 2}
+        \\  m_Father: {fileID: 4}
+    ;
+    const after =
+        \\--- !u!1 &1
+        \\GameObject:
+        \\  m_Name: Parent
+        \\  m_Component:
+        \\  - component: {fileID: 4}
+        \\--- !u!4 &4
+        \\Transform:
+        \\  m_GameObject: {fileID: 1}
+        \\  m_Father: {fileID: 0}
+        \\--- !u!1 &2
+        \\GameObject:
+        \\  m_Name: ChildRenamed
+        \\  m_Component:
+        \\  - component: {fileID: 5}
+        \\--- !u!4 &5
+        \\Transform:
+        \\  m_GameObject: {fileID: 2}
+        \\  m_Father: {fileID: 4}
+    ;
+    const res = try core.diffBytes(arena, before, after);
+    var out: std.ArrayList(u8) = .empty;
+    var aw = std.Io.Writer.Allocating.fromArrayList(arena, &out);
+    try render(arena, &aw.writer, res, null);
+    const html = aw.toArrayList().items;
+    // Parent (depth 0, unchanged) has no leading pad before its span.
+    try testing.expect(std.mem.indexOf(u8, html, "<span class=\"unchanged go\">  Parent</span>") != null);
+    // Child (depth 1, modified) is indented two spaces under it.
+    try testing.expect(std.mem.indexOf(u8, html, "  <span class=\"modified go\">~ ChildRenamed</span>") != null);
+}
+
+test "html: loose component renders without a GameObject wrapper" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const before =
+        \\--- !u!114 &11400000
+        \\MonoBehaviour:
+        \\  m_Script: {fileID: 0, guid: def, type: 3}
+        \\  volume: 0.5
+    ;
+    const after =
+        \\--- !u!114 &11400000
+        \\MonoBehaviour:
+        \\  m_Script: {fileID: 0, guid: def, type: 3}
+        \\  volume: 0.8
+    ;
+    const res = try core.diffBytes(arena, before, after);
+    var out: std.ArrayList(u8) = .empty;
+    var aw = std.Io.Writer.Allocating.fromArrayList(arena, &out);
+    try render(arena, &aw.writer, res, null);
+    const html = aw.toArrayList().items;
+    try testing.expect(std.mem.indexOf(u8, html, "volume") != null);
+    // Loose components render at depth 0 with a plain (non-"go") span class.
+    try testing.expect(std.mem.indexOf(u8, html, "<span class=\"modified\">~ MonoBehaviour</span>") != null);
+    try testing.expect(std.mem.indexOf(u8, html, " go\">") == null);
+}
+
+test "html: added and removed fields render only their one side" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const before =
+        \\--- !u!4 &4
+        \\Transform:
+        \\  m_LocalPosition: {x: 0, y: 0, z: 0}
+        \\  m_OldField: 1
+    ;
+    const after =
+        \\--- !u!4 &4
+        \\Transform:
+        \\  m_LocalPosition: {x: 0, y: 0, z: 0}
+        \\  m_NewField: 2
+    ;
+    const res = try core.diffBytes(arena, before, after);
+    var out: std.ArrayList(u8) = .empty;
+    var aw = std.Io.Writer.Allocating.fromArrayList(arena, &out);
+    try render(arena, &aw.writer, res, null);
+    const html = aw.toArrayList().items;
+    // Added field: only the "new" span, no paired "old" value.
+    try testing.expect(std.mem.indexOf(u8, html, "m_NewField") != null);
+    try testing.expect(std.mem.indexOf(u8, html, "<span class=\"new\">2</span>") != null);
+    // Removed field: only the "old" span, no paired "new" value.
+    try testing.expect(std.mem.indexOf(u8, html, "m_OldField") != null);
+    try testing.expect(std.mem.indexOf(u8, html, "<span class=\"old\">1</span>") != null);
+}
+
 const model = core.model;
 
 const head =

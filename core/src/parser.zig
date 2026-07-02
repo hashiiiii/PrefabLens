@@ -431,7 +431,7 @@ fn parseValue(arena: std.mem.Allocator, raw: []const u8) anyerror!*Node {
     if (s.len == 0) return makeNode(arena, .{ .scalar = "" });
     if (s[0] == '{') return parseFlow(arena, s);
     if (s[0] == '[') return parseFlowSeq(arena, s);
-    return makeNode(arena, .{ .scalar = unquote(s) });
+    return makeNode(arena, .{ .scalar = try unquote(arena, s) });
 }
 
 /// Parse a flow mapping `{a: b, c: d}`. If it has a `fileID` key, return a Ref node.
@@ -483,9 +483,28 @@ fn stripBrackets(s: []const u8, open: u8, close: u8) []const u8 {
     return t;
 }
 
-fn unquote(s: []const u8) []const u8 {
-    if (s.len >= 2 and ((s[0] == '"' and s[s.len - 1] == '"') or (s[0] == '\'' and s[s.len - 1] == '\''))) {
+/// Strip enclosing quotes. Double-quoted scalars also resolve YAML's
+/// backslash escapes for `\"` and `\\` (the only escapes Unity emits),
+/// so the raw scalar holds the literal value rather than the source text.
+fn unquote(arena: std.mem.Allocator, s: []const u8) anyerror![]const u8 {
+    if (s.len >= 2 and s[0] == '\'' and s[s.len - 1] == '\'') {
         return s[1 .. s.len - 1];
+    }
+    if (s.len >= 2 and s[0] == '"' and s[s.len - 1] == '"') {
+        const inner = s[1 .. s.len - 1];
+        if (std.mem.indexOfScalar(u8, inner, '\\') == null) return inner;
+        var out: std.ArrayList(u8) = .empty;
+        var i: usize = 0;
+        while (i < inner.len) : (i += 1) {
+            const c = inner[i];
+            if (c == '\\' and i + 1 < inner.len and (inner[i + 1] == '"' or inner[i + 1] == '\\')) {
+                try out.append(arena, inner[i + 1]);
+                i += 1;
+            } else {
+                try out.append(arena, c);
+            }
+        }
+        return out.toOwnedSlice(arena);
     }
     return s;
 }

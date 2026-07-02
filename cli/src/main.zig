@@ -48,6 +48,46 @@ test "run: --json with two real files prints core JSON" {
     try testing.expect(std.mem.indexOf(u8, output.items, "\"after\":\"0.8\"") != null);
 }
 
+test "run: unreadable input file reports error and exits 1" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var out: std.ArrayList(u8) = .empty;
+    var aw = std.Io.Writer.Allocating.fromArrayList(arena, &out);
+    const code = try run(testing.io, arena, &.{ "--json", "/no/such/file.asset", "/no/such/other.asset" }, &aw.writer);
+    const output = aw.toArrayList();
+    try testing.expectEqual(@as(u8, 1), code);
+    // Exact match: one clean line, no stack trace or extra noise.
+    try testing.expectEqualStrings("error: cannot read file '/no/such/file.asset'\n", output.items);
+}
+
+test "run: no operands prints usage and exits 2" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var out: std.ArrayList(u8) = .empty;
+    var aw = std.Io.Writer.Allocating.fromArrayList(arena, &out);
+    const code = try run(testing.io, arena, &.{}, &aw.writer);
+    const output = aw.toArrayList();
+    try testing.expectEqual(@as(u8, 2), code);
+    try testing.expect(std.mem.indexOf(u8, output.items, "usage:") != null);
+}
+
+test "run: unknown flag prints error and exits 2" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var out: std.ArrayList(u8) = .empty;
+    var aw = std.Io.Writer.Allocating.fromArrayList(arena, &out);
+    const code = try run(testing.io, arena, &.{ "--bogus", "a.prefab", "b.prefab" }, &aw.writer);
+    const output = aw.toArrayList();
+    try testing.expectEqual(@as(u8, 2), code);
+    try testing.expect(std.mem.indexOf(u8, output.items, "unknown flag") != null);
+}
+
 pub const Format = enum { tree, json, html };
 
 pub const Options = struct {
@@ -108,8 +148,14 @@ pub fn run(io: std.Io, arena: std.mem.Allocator, args: []const []const u8, stdou
         return 2;
     };
 
-    const before = try readFile(io, arena, opt.before);
-    const after = try readFile(io, arena, opt.after);
+    const before = readFile(io, arena, opt.before) catch {
+        try stdout.print("error: cannot read file '{s}'\n", .{opt.before});
+        return 1;
+    };
+    const after = readFile(io, arena, opt.after) catch {
+        try stdout.print("error: cannot read file '{s}'\n", .{opt.after});
+        return 1;
+    };
 
     switch (opt.format) {
         .json => {

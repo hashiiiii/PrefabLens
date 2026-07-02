@@ -51,7 +51,12 @@ test "parseArgs: flags after --git operands are honored, not dropped" {
 
 test "parseArgs: extra positional after --git operands is a parse error" {
     const args = [_][]const u8{ "--git", "HEAD~1", "HEAD", "Foo.prefab", "Extra.prefab" };
-    try testing.expectError(ArgError.UnknownFlag, parseArgs(&args));
+    try testing.expectError(ArgError.TooManyArguments, parseArgs(&args));
+}
+
+test "parseArgs: a third plain positional is too many arguments" {
+    const args = [_][]const u8{ "a.prefab", "b.prefab", "c.prefab" };
+    try testing.expectError(ArgError.TooManyArguments, parseArgs(&args));
 }
 
 test "run: extra positional after --git operands exits 2, not silently accepted" {
@@ -70,7 +75,7 @@ test "run: extra positional after --git operands exits 2, not silently accepted"
     const code = try run(testing.io, arena, &.{ "--git", "HEAD~1", "HEAD", "Foo.prefab", "Extra.prefab" }, &aw.writer, &aw_err.writer);
     const err_output = aw_err.toArrayList();
     try testing.expectEqual(@as(u8, 2), code);
-    try testing.expect(std.mem.indexOf(u8, err_output.items, "unknown flag") != null);
+    try testing.expect(std.mem.indexOf(u8, err_output.items, "too many arguments") != null);
 }
 
 test "run: --json with two real files prints core JSON" {
@@ -318,7 +323,7 @@ pub const Options = struct {
     git_path: []const u8 = "",
 };
 
-pub const ArgError = error{ MissingOperands, UnknownFlag };
+pub const ArgError = error{ MissingOperands, UnknownFlag, TooManyArguments };
 
 pub fn parseArgs(args: []const []const u8) ArgError!Options {
     var format: Format = .tree;
@@ -354,10 +359,10 @@ pub fn parseArgs(args: []const []const u8) ArgError!Options {
             return ArgError.UnknownFlag;
         } else if (git_mode) {
             // --git already consumed its three operands; a bare positional
-            // afterward is an unrecognized extra argument.
-            return ArgError.UnknownFlag;
+            // afterward is an extra operand, not an unrecognized flag.
+            return ArgError.TooManyArguments;
         } else {
-            if (pos_count >= 2) return ArgError.UnknownFlag;
+            if (pos_count >= 2) return ArgError.TooManyArguments;
             positionals[pos_count] = a;
             pos_count += 1;
         }
@@ -394,6 +399,7 @@ pub fn run(io: std.Io, arena: std.mem.Allocator, args: []const []const u8, stdou
         switch (err) {
             ArgError.MissingOperands => try stderr.writeAll("usage: prefablens [--json|--html] [--project DIR] (<before> <after> | --git <beforeRef> <afterRef> <path>)\n"),
             ArgError.UnknownFlag => try stderr.writeAll("error: unknown flag\n"),
+            ArgError.TooManyArguments => try stderr.writeAll("error: too many arguments\n"),
         }
         return 2;
     };

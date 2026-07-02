@@ -190,7 +190,7 @@ Node = union { Map(entries), Seq(items), Scalar([]const u8), Ref{fileID, guid?, 
 
 ### 6.1 CLI ホスト（Phase 1 = v1）
 
-- **入力**: 2 つのファイルパス、または git ref（例: `PrefabLens HEAD~1 HEAD path/to/Foo.prefab`、`--staged`、ワーキングツリー比較）。git 連携は `git show <ref>:<path>` をサブプロセスで取得。
+- **入力**: 2 つのファイルパス、または git ref（例: `prefablens --git HEAD~1 HEAD path/to/Foo.prefab`）。git 連携は `git show <ref>:<path>` をサブプロセスで取得。`--staged` やワーキングツリー比較の簡易フラグは Phase 1 後続の薄いエイリアスとして追加。
 - **名前解決**: カレントの Unity プロジェクトの `.meta` を走査して guid→path 索引を構築（キャッシュ可）。ローカルなので完全解決。
 - **出力**:
   - 既定: **ANSI カラーのツリー表示**（追加=緑/削除=赤/変更=黄、GameObject 階層、フィールド旧→新）。

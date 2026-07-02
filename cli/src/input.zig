@@ -1,12 +1,23 @@
 const std = @import("std");
 const testing = std.testing;
 
+/// Shared input-size ceiling for both file reads (main.zig) and `git show`
+/// output (here), so the two acquisition paths reject oversized input the
+/// same way instead of diverging on an arbitrary limit.
+pub const max_input_bytes: usize = 64 * 1024 * 1024; // 64 MiB guard
+
 pub fn showAtRef(io: std.Io, arena: std.mem.Allocator, repo_dir: []const u8, ref: []const u8, path: []const u8) ![]u8 {
     const spec = try std.fmt.allocPrint(arena, "{s}:{s}", .{ ref, path });
+    // Force the C locale so the stderr substrings matched below are always
+    // English, regardless of the caller's own LC_ALL/LANG.
+    var env = std.process.Environ.Map.init(arena);
+    try env.put("LC_ALL", "C");
+    try env.put("LANG", "C");
     const res = try std.process.run(arena, io, .{
         .argv = &.{ "git", "show", "--end-of-options", spec },
         .cwd = .{ .path = repo_dir },
-        .stdout_limit = .limited(256 * 1024 * 1024),
+        .stdout_limit = .limited(max_input_bytes),
+        .environ_map = &env,
     });
     switch (res.term) {
         .exited => |c| {

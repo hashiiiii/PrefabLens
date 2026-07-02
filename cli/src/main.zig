@@ -29,6 +29,15 @@ test "parseArgs: --json sets json format" {
     try testing.expectEqual(Format.json, opt.format);
 }
 
+test "parseArgs: --no-color sets no_color, off by default" {
+    const default_args = [_][]const u8{ "a.prefab", "b.prefab" };
+    try testing.expect(!(try parseArgs(&default_args)).no_color);
+
+    const args = [_][]const u8{ "--no-color", "a.prefab", "b.prefab" };
+    const opt = try parseArgs(&args);
+    try testing.expect(opt.no_color);
+}
+
 test "parseArgs: --git captures refs and path" {
     const args = [_][]const u8{ "--json", "--git", "HEAD~1", "HEAD", "Foo.prefab" };
     const opt = try parseArgs(&args);
@@ -51,7 +60,12 @@ test "parseArgs: flags after --git operands are honored, not dropped" {
 
 test "parseArgs: extra positional after --git operands is a parse error" {
     const args = [_][]const u8{ "--git", "HEAD~1", "HEAD", "Foo.prefab", "Extra.prefab" };
-    try testing.expectError(ArgError.UnknownFlag, parseArgs(&args));
+    try testing.expectError(ArgError.TooManyArguments, parseArgs(&args));
+}
+
+test "parseArgs: a third plain positional is too many arguments" {
+    const args = [_][]const u8{ "a.prefab", "b.prefab", "c.prefab" };
+    try testing.expectError(ArgError.TooManyArguments, parseArgs(&args));
 }
 
 test "run: extra positional after --git operands exits 2, not silently accepted" {
@@ -65,10 +79,12 @@ test "run: extra positional after --git operands exits 2, not silently accepted"
     // arg-error contract as any other unrecognized positional.
     var out: std.ArrayList(u8) = .empty;
     var aw = std.Io.Writer.Allocating.fromArrayList(arena, &out);
-    const code = try run(testing.io, arena, &.{ "--git", "HEAD~1", "HEAD", "Foo.prefab", "Extra.prefab" }, &aw.writer);
-    const output = aw.toArrayList();
+    var errbuf: std.ArrayList(u8) = .empty;
+    var aw_err = std.Io.Writer.Allocating.fromArrayList(arena, &errbuf);
+    const code = try run(testing.io, arena, &.{ "--git", "HEAD~1", "HEAD", "Foo.prefab", "Extra.prefab" }, &aw.writer, &aw_err.writer, false);
+    const err_output = aw_err.toArrayList();
     try testing.expectEqual(@as(u8, 2), code);
-    try testing.expect(std.mem.indexOf(u8, output.items, "unknown flag") != null);
+    try testing.expect(std.mem.indexOf(u8, err_output.items, "too many arguments") != null);
 }
 
 test "run: --json with two real files prints core JSON" {
@@ -96,7 +112,9 @@ test "run: --json with two real files prints core JSON" {
 
     var out: std.ArrayList(u8) = .empty;
     var aw = std.Io.Writer.Allocating.fromArrayList(arena, &out);
-    const code = try run(testing.io, arena, &.{ "--json", before_path, after_path }, &aw.writer);
+    var errbuf: std.ArrayList(u8) = .empty;
+    var aw_err = std.Io.Writer.Allocating.fromArrayList(arena, &errbuf);
+    const code = try run(testing.io, arena, &.{ "--json", before_path, after_path }, &aw.writer, &aw_err.writer, false);
     const output = aw.toArrayList();
     try testing.expectEqual(@as(u8, 0), code);
     try testing.expect(std.mem.indexOf(u8, output.items, "\"schema\":\"prefablens.diff.v1\"") != null);
@@ -110,11 +128,13 @@ test "run: unreadable input file reports error and exits 1" {
 
     var out: std.ArrayList(u8) = .empty;
     var aw = std.Io.Writer.Allocating.fromArrayList(arena, &out);
-    const code = try run(testing.io, arena, &.{ "--json", "/no/such/file.asset", "/no/such/other.asset" }, &aw.writer);
-    const output = aw.toArrayList();
+    var errbuf: std.ArrayList(u8) = .empty;
+    var aw_err = std.Io.Writer.Allocating.fromArrayList(arena, &errbuf);
+    const code = try run(testing.io, arena, &.{ "--json", "/no/such/file.asset", "/no/such/other.asset" }, &aw.writer, &aw_err.writer, false);
+    const err_output = aw_err.toArrayList();
     try testing.expectEqual(@as(u8, 1), code);
     // Exact match: one clean line, no stack trace or extra noise.
-    try testing.expectEqualStrings("error: cannot read file '/no/such/file.asset'\n", output.items);
+    try testing.expectEqualStrings("error: cannot read file '/no/such/file.asset'\n", err_output.items);
 }
 
 test "run: hostile deeply-nested input reports a clean error and exits 1" {
@@ -145,11 +165,13 @@ test "run: hostile deeply-nested input reports a clean error and exits 1" {
 
     var out: std.ArrayList(u8) = .empty;
     var aw = std.Io.Writer.Allocating.fromArrayList(arena, &out);
-    const code = try run(testing.io, arena, &.{ hostile_path, other_path }, &aw.writer);
-    const output = aw.toArrayList();
+    var errbuf: std.ArrayList(u8) = .empty;
+    var aw_err = std.Io.Writer.Allocating.fromArrayList(arena, &errbuf);
+    const code = try run(testing.io, arena, &.{ hostile_path, other_path }, &aw.writer, &aw_err.writer, false);
+    const err_output = aw_err.toArrayList();
     try testing.expectEqual(@as(u8, 1), code);
     // Exact match: one clean line, no stack trace or extra noise.
-    try testing.expectEqualStrings("error: input nested too deeply\n", output.items);
+    try testing.expectEqualStrings("error: input nested too deeply\n", err_output.items);
 }
 
 test "run: unreadable --project directory reports error and exits 1" {
@@ -175,11 +197,13 @@ test "run: unreadable --project directory reports error and exits 1" {
 
     var out: std.ArrayList(u8) = .empty;
     var aw = std.Io.Writer.Allocating.fromArrayList(arena, &out);
-    const code = try run(testing.io, arena, &.{ "--json", "--project", "/no/such/project", before_path, after_path }, &aw.writer);
-    const output = aw.toArrayList();
+    var errbuf: std.ArrayList(u8) = .empty;
+    var aw_err = std.Io.Writer.Allocating.fromArrayList(arena, &errbuf);
+    const code = try run(testing.io, arena, &.{ "--json", "--project", "/no/such/project", before_path, after_path }, &aw.writer, &aw_err.writer, false);
+    const err_output = aw_err.toArrayList();
     try testing.expectEqual(@as(u8, 1), code);
     // Exact match: one clean line, no stack trace or extra noise.
-    try testing.expectEqualStrings("error: cannot read project directory '/no/such/project'\n", output.items);
+    try testing.expectEqualStrings("error: cannot read project directory '/no/such/project'\n", err_output.items);
 }
 
 test "run: unreadable --project directory reports error and exits 1 in tree mode" {
@@ -205,12 +229,14 @@ test "run: unreadable --project directory reports error and exits 1 in tree mode
 
     var out: std.ArrayList(u8) = .empty;
     var aw = std.Io.Writer.Allocating.fromArrayList(arena, &out);
+    var errbuf: std.ArrayList(u8) = .empty;
+    var aw_err = std.Io.Writer.Allocating.fromArrayList(arena, &errbuf);
     // No --json: the default tree format must honor the same error contract.
-    const code = try run(testing.io, arena, &.{ "--project", "/no/such/project", before_path, after_path }, &aw.writer);
-    const output = aw.toArrayList();
+    const code = try run(testing.io, arena, &.{ "--project", "/no/such/project", before_path, after_path }, &aw.writer, &aw_err.writer, false);
+    const err_output = aw_err.toArrayList();
     try testing.expectEqual(@as(u8, 1), code);
     // Exact match: one clean line, no stack trace or extra noise.
-    try testing.expectEqualStrings("error: cannot read project directory '/no/such/project'\n", output.items);
+    try testing.expectEqualStrings("error: cannot read project directory '/no/such/project'\n", err_output.items);
 }
 
 test "run: unreadable --project directory reports error and exits 1 in html mode" {
@@ -236,11 +262,13 @@ test "run: unreadable --project directory reports error and exits 1 in html mode
 
     var out: std.ArrayList(u8) = .empty;
     var aw = std.Io.Writer.Allocating.fromArrayList(arena, &out);
-    const code = try run(testing.io, arena, &.{ "--html", "--project", "/no/such/project", before_path, after_path }, &aw.writer);
-    const output = aw.toArrayList();
+    var errbuf: std.ArrayList(u8) = .empty;
+    var aw_err = std.Io.Writer.Allocating.fromArrayList(arena, &errbuf);
+    const code = try run(testing.io, arena, &.{ "--html", "--project", "/no/such/project", before_path, after_path }, &aw.writer, &aw_err.writer, false);
+    const err_output = aw_err.toArrayList();
     try testing.expectEqual(@as(u8, 1), code);
     // Exact match: one clean line, no stack trace or extra noise.
-    try testing.expectEqualStrings("error: cannot read project directory '/no/such/project'\n", output.items);
+    try testing.expectEqualStrings("error: cannot read project directory '/no/such/project'\n", err_output.items);
 }
 
 test "run: --git with bad ref reports error and exits 1" {
@@ -252,11 +280,13 @@ test "run: --git with bad ref reports error and exits 1" {
     // git show fails for a bogus ref -- both must surface as a clean error.
     var out: std.ArrayList(u8) = .empty;
     var aw = std.Io.Writer.Allocating.fromArrayList(arena, &out);
-    const code = try run(testing.io, arena, &.{ "--json", "--git", "bogus-ref", "HEAD", "Foo.prefab" }, &aw.writer);
-    const output = aw.toArrayList();
+    var errbuf: std.ArrayList(u8) = .empty;
+    var aw_err = std.Io.Writer.Allocating.fromArrayList(arena, &errbuf);
+    const code = try run(testing.io, arena, &.{ "--json", "--git", "bogus-ref", "HEAD", "Foo.prefab" }, &aw.writer, &aw_err.writer, false);
+    const err_output = aw_err.toArrayList();
     try testing.expectEqual(@as(u8, 1), code);
     // Exact match: one clean line, no stack trace or extra noise.
-    try testing.expectEqualStrings("error: git show failed for 'bogus-ref:Foo.prefab'\n", output.items);
+    try testing.expectEqualStrings("error: git show failed for 'bogus-ref:Foo.prefab'\n", err_output.items);
 }
 
 test "run: no operands prints usage and exits 2" {
@@ -266,10 +296,12 @@ test "run: no operands prints usage and exits 2" {
 
     var out: std.ArrayList(u8) = .empty;
     var aw = std.Io.Writer.Allocating.fromArrayList(arena, &out);
-    const code = try run(testing.io, arena, &.{}, &aw.writer);
-    const output = aw.toArrayList();
+    var errbuf: std.ArrayList(u8) = .empty;
+    var aw_err = std.Io.Writer.Allocating.fromArrayList(arena, &errbuf);
+    const code = try run(testing.io, arena, &.{}, &aw.writer, &aw_err.writer, false);
+    const err_output = aw_err.toArrayList();
     try testing.expectEqual(@as(u8, 2), code);
-    try testing.expect(std.mem.indexOf(u8, output.items, "usage:") != null);
+    try testing.expect(std.mem.indexOf(u8, err_output.items, "usage:") != null);
 }
 
 test "run: unknown flag prints error and exits 2" {
@@ -279,10 +311,53 @@ test "run: unknown flag prints error and exits 2" {
 
     var out: std.ArrayList(u8) = .empty;
     var aw = std.Io.Writer.Allocating.fromArrayList(arena, &out);
-    const code = try run(testing.io, arena, &.{ "--bogus", "a.prefab", "b.prefab" }, &aw.writer);
-    const output = aw.toArrayList();
+    var errbuf: std.ArrayList(u8) = .empty;
+    var aw_err = std.Io.Writer.Allocating.fromArrayList(arena, &errbuf);
+    const code = try run(testing.io, arena, &.{ "--bogus", "a.prefab", "b.prefab" }, &aw.writer, &aw_err.writer, false);
+    const err_output = aw_err.toArrayList();
     try testing.expectEqual(@as(u8, 2), code);
-    try testing.expect(std.mem.indexOf(u8, output.items, "unknown flag") != null);
+    try testing.expect(std.mem.indexOf(u8, err_output.items, "unknown flag") != null);
+}
+
+test "run: color=true colors tree output, --no-color forces it back off" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "before.asset", .data =
+        \\--- !u!114 &11400000
+        \\MonoBehaviour:
+        \\  volume: 0.5
+    });
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "after.asset", .data =
+        \\--- !u!114 &11400000
+        \\MonoBehaviour:
+        \\  volume: 0.8
+    });
+    const before_path = try tmp.dir.realPathFileAlloc(testing.io, "before.asset", arena);
+    const after_path = try tmp.dir.realPathFileAlloc(testing.io, "after.asset", arena);
+
+    // color=true (the TTY-detected default) paints the tree output.
+    var out: std.ArrayList(u8) = .empty;
+    var aw = std.Io.Writer.Allocating.fromArrayList(arena, &out);
+    var errbuf: std.ArrayList(u8) = .empty;
+    var aw_err = std.Io.Writer.Allocating.fromArrayList(arena, &errbuf);
+    const code = try run(testing.io, arena, &.{ before_path, after_path }, &aw.writer, &aw_err.writer, true);
+    const output = aw.toArrayList();
+    try testing.expectEqual(@as(u8, 0), code);
+    try testing.expect(std.mem.indexOf(u8, output.items, "\x1b[") != null);
+
+    // --no-color forces it off even though color=true was passed in.
+    var out2: std.ArrayList(u8) = .empty;
+    var aw2 = std.Io.Writer.Allocating.fromArrayList(arena, &out2);
+    var errbuf2: std.ArrayList(u8) = .empty;
+    var aw_err2 = std.Io.Writer.Allocating.fromArrayList(arena, &errbuf2);
+    const code2 = try run(testing.io, arena, &.{ "--no-color", before_path, after_path }, &aw2.writer, &aw_err2.writer, true);
+    const output2 = aw2.toArrayList();
+    try testing.expectEqual(@as(u8, 0), code2);
+    try testing.expect(std.mem.indexOf(u8, output2.items, "\x1b[") == null);
 }
 
 pub const Format = enum { tree, json, html };
@@ -296,9 +371,10 @@ pub const Options = struct {
     git_ref_before: []const u8 = "",
     git_ref_after: []const u8 = "",
     git_path: []const u8 = "",
+    no_color: bool = false,
 };
 
-pub const ArgError = error{ MissingOperands, UnknownFlag };
+pub const ArgError = error{ MissingOperands, UnknownFlag, TooManyArguments };
 
 pub fn parseArgs(args: []const []const u8) ArgError!Options {
     var format: Format = .tree;
@@ -309,6 +385,7 @@ pub fn parseArgs(args: []const []const u8) ArgError!Options {
     var git_ref_before: []const u8 = "";
     var git_ref_after: []const u8 = "";
     var git_path: []const u8 = "";
+    var no_color = false;
 
     var i: usize = 0;
     while (i < args.len) : (i += 1) {
@@ -317,6 +394,8 @@ pub fn parseArgs(args: []const []const u8) ArgError!Options {
             format = .json;
         } else if (std.mem.eql(u8, a, "--html")) {
             format = .html;
+        } else if (std.mem.eql(u8, a, "--no-color")) {
+            no_color = true;
         } else if (std.mem.eql(u8, a, "--project")) {
             i += 1;
             if (i >= args.len) return ArgError.MissingOperands;
@@ -334,10 +413,10 @@ pub fn parseArgs(args: []const []const u8) ArgError!Options {
             return ArgError.UnknownFlag;
         } else if (git_mode) {
             // --git already consumed its three operands; a bare positional
-            // afterward is an unrecognized extra argument.
-            return ArgError.UnknownFlag;
+            // afterward is an extra operand, not an unrecognized flag.
+            return ArgError.TooManyArguments;
         } else {
-            if (pos_count >= 2) return ArgError.UnknownFlag;
+            if (pos_count >= 2) return ArgError.TooManyArguments;
             positionals[pos_count] = a;
             pos_count += 1;
         }
@@ -352,6 +431,7 @@ pub fn parseArgs(args: []const []const u8) ArgError!Options {
             .git_ref_before = git_ref_before,
             .git_ref_after = git_ref_after,
             .git_path = git_path,
+            .no_color = no_color,
         };
     }
     if (pos_count != 2) return ArgError.MissingOperands;
@@ -360,42 +440,42 @@ pub fn parseArgs(args: []const []const u8) ArgError!Options {
         .after = positionals[1].?,
         .format = format,
         .project_root = project_root,
+        .no_color = no_color,
     };
 }
 
-const max_file_bytes = 64 * 1024 * 1024; // 64 MB guard
-
 fn readFile(io: std.Io, arena: std.mem.Allocator, path: []const u8) ![]u8 {
-    return std.Io.Dir.cwd().readFileAlloc(io, path, arena, .limited(max_file_bytes));
+    return std.Io.Dir.cwd().readFileAlloc(io, path, arena, .limited(input.max_input_bytes));
 }
 
-pub fn run(io: std.Io, arena: std.mem.Allocator, args: []const []const u8, stdout: *std.Io.Writer) !u8 {
+pub fn run(io: std.Io, arena: std.mem.Allocator, args: []const []const u8, stdout: *std.Io.Writer, stderr: *std.Io.Writer, color: bool) !u8 {
     const opt = parseArgs(args) catch |err| {
         switch (err) {
-            ArgError.MissingOperands => try stdout.writeAll("usage: prefablens [--json|--html] [--project DIR] (<before> <after> | --git <beforeRef> <afterRef> <path>)\n"),
-            ArgError.UnknownFlag => try stdout.writeAll("error: unknown flag\n"),
+            ArgError.MissingOperands => try stderr.writeAll("usage: prefablens [--json|--html] [--project DIR] [--no-color] (<before> <after> | --git <beforeRef> <afterRef> <path>)\n"),
+            ArgError.UnknownFlag => try stderr.writeAll("error: unknown flag\n"),
+            ArgError.TooManyArguments => try stderr.writeAll("error: too many arguments\n"),
         }
         return 2;
     };
 
     const before = if (opt.git_mode)
         input.showAtRef(io, arena, ".", opt.git_ref_before, opt.git_path) catch {
-            try stdout.print("error: git show failed for '{s}:{s}'\n", .{ opt.git_ref_before, opt.git_path });
+            try stderr.print("error: git show failed for '{s}:{s}'\n", .{ opt.git_ref_before, opt.git_path });
             return 1;
         }
     else
         readFile(io, arena, opt.before) catch {
-            try stdout.print("error: cannot read file '{s}'\n", .{opt.before});
+            try stderr.print("error: cannot read file '{s}'\n", .{opt.before});
             return 1;
         };
     const after = if (opt.git_mode)
         input.showAtRef(io, arena, ".", opt.git_ref_after, opt.git_path) catch {
-            try stdout.print("error: git show failed for '{s}:{s}'\n", .{ opt.git_ref_after, opt.git_path });
+            try stderr.print("error: git show failed for '{s}:{s}'\n", .{ opt.git_ref_after, opt.git_path });
             return 1;
         }
     else
         readFile(io, arena, opt.after) catch {
-            try stdout.print("error: cannot read file '{s}'\n", .{opt.after});
+            try stderr.print("error: cannot read file '{s}'\n", .{opt.after});
             return 1;
         };
 
@@ -403,7 +483,7 @@ pub fn run(io: std.Io, arena: std.mem.Allocator, args: []const []const u8, stdou
         .json => {
             const res = core.diffBytes(arena, before, after) catch |err| {
                 if (err == error.NestingTooDeep) {
-                    try stdout.writeAll("error: input nested too deeply\n");
+                    try stderr.writeAll("error: input nested too deeply\n");
                     return 1;
                 }
                 return err;
@@ -412,7 +492,7 @@ pub fn run(io: std.Io, arena: std.mem.Allocator, args: []const []const u8, stdou
             var idx: core.json.Resolver = undefined;
             if (opt.project_root) |proj| {
                 const built = resolve.buildIndex(io, arena, proj) catch {
-                    try stdout.print("error: cannot read project directory '{s}'\n", .{proj});
+                    try stderr.print("error: cannot read project directory '{s}'\n", .{proj});
                     return 1;
                 };
                 idx = built; // Index and Resolver are both StringHashMap([]const u8)
@@ -425,7 +505,7 @@ pub fn run(io: std.Io, arena: std.mem.Allocator, args: []const []const u8, stdou
         .tree => {
             const res = core.diffBytes(arena, before, after) catch |err| {
                 if (err == error.NestingTooDeep) {
-                    try stdout.writeAll("error: input nested too deeply\n");
+                    try stderr.writeAll("error: input nested too deeply\n");
                     return 1;
                 }
                 return err;
@@ -434,18 +514,18 @@ pub fn run(io: std.Io, arena: std.mem.Allocator, args: []const []const u8, stdou
             var idx: core.json.Resolver = undefined;
             if (opt.project_root) |proj| {
                 idx = resolve.buildIndex(io, arena, proj) catch {
-                    try stdout.print("error: cannot read project directory '{s}'\n", .{proj});
+                    try stderr.print("error: cannot read project directory '{s}'\n", .{proj});
                     return 1;
                 };
                 resolver_ptr = &idx;
             }
-            // Color when stdout is a TTY is decided in main(); tests pass color=false.
-            try render_tree.render(arena, stdout, res, resolver_ptr, false);
+            // Color when stdout is a TTY is decided in main(); --no-color forces it off.
+            try render_tree.render(arena, stdout, res, resolver_ptr, color and !opt.no_color);
         },
         .html => {
             const res = core.diffBytes(arena, before, after) catch |err| {
                 if (err == error.NestingTooDeep) {
-                    try stdout.writeAll("error: input nested too deeply\n");
+                    try stderr.writeAll("error: input nested too deeply\n");
                     return 1;
                 }
                 return err;
@@ -454,7 +534,7 @@ pub fn run(io: std.Io, arena: std.mem.Allocator, args: []const []const u8, stdou
             var idx: core.json.Resolver = undefined;
             if (opt.project_root) |proj| {
                 idx = resolve.buildIndex(io, arena, proj) catch {
-                    try stdout.print("error: cannot read project directory '{s}'\n", .{proj});
+                    try stderr.print("error: cannot read project directory '{s}'\n", .{proj});
                     return 1;
                 };
                 resolver_ptr = &idx;
@@ -471,13 +551,20 @@ pub fn main(init: std.process.Init) !u8 {
     const arena = arena_state.allocator();
 
     const args = try init.minimal.args.toSlice(arena);
-    const user_args = args[1..];
+    const user_args = if (args.len > 1) args[1..] else args[0..0];
 
     var stdout_buffer: [4096]u8 = undefined;
     var stdout_file_writer: std.Io.File.Writer = .init(.stdout(), init.io, &stdout_buffer);
     const stdout = &stdout_file_writer.interface;
 
-    const code = try run(init.io, arena, user_args, stdout);
+    var stderr_buffer: [4096]u8 = undefined;
+    var stderr_file_writer: std.Io.File.Writer = .init(.stderr(), init.io, &stderr_buffer);
+    const stderr = &stderr_file_writer.interface;
+
+    const color = std.Io.File.stdout().isTty(init.io) catch false;
+
+    const code = try run(init.io, arena, user_args, stdout, stderr, color);
     try stdout.flush();
+    try stderr.flush();
     return code;
 }

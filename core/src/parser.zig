@@ -216,7 +216,49 @@ test "parse: deeply nested flow value is rejected instead of overflowing the sta
     try testing.expectError(error.NestingTooDeep, parse(arena, src.items));
 }
 
-const Ref = model.Ref;
+test "parse: CRLF line endings parse identically to LF" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const src = "--- !u!1 &123\r\nGameObject:\r\n  m_Name: Player\r\n  m_IsActive: 1\r\n";
+    const doc = try parseOne(arena, src);
+    try testing.expectEqual(@as(u32, 1), doc.class_id);
+    try testing.expectEqual(@as(i64, 123), doc.file_id);
+    try testing.expectEqualStrings("GameObject", doc.type_name);
+    try testing.expectEqualStrings("Player", model.findValue(doc.body.map, "m_Name").?.scalar);
+    try testing.expectEqualStrings("1", model.findValue(doc.body.map, "m_IsActive").?.scalar);
+}
+
+test "parse: comment lines are skipped" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const src =
+        \\# leading comment before any document
+        \\--- !u!1 &1
+        \\# a comment at the document's top level
+        \\GameObject:
+        \\  # a comment among fields
+        \\  m_Name: Player
+        \\  m_IsActive: 1
+    ;
+    const doc = try parseOne(arena, src);
+    try testing.expectEqualStrings("Player", model.findValue(doc.body.map, "m_Name").?.scalar);
+    try testing.expectEqualStrings("1", model.findValue(doc.body.map, "m_IsActive").?.scalar);
+}
+
+test "parse: single-quoted scalar is unquoted" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const src =
+        \\--- !u!1 &1
+        \\GameObject:
+        \\  m_Name: 'Hello: World'
+    ;
+    const doc = try parseOne(arena, src);
+    try testing.expectEqualStrings("Hello: World", model.findValue(doc.body.map, "m_Name").?.scalar);
+}
 
 const Line = struct { indent: usize, text: []const u8 };
 

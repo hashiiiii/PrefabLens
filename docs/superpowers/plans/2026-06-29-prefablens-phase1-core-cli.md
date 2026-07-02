@@ -3301,7 +3301,7 @@ zig build run -- --json /tmp/a.asset /tmp/b.asset     # prefablens.diff.v1 JSON
 zig build run -- --html /tmp/a.asset /tmp/b.asset      # HTML document
 ```
 
-- [ ] プッシュしたブランチで CI がグリーンであることを確認する。
+- [x] プッシュしたブランチで CI がグリーンであることを確認する。
 
 ---
 

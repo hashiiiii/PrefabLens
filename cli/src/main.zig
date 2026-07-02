@@ -2,6 +2,13 @@ const std = @import("std");
 const core = @import("core");
 const testing = std.testing;
 
+pub const resolve = @import("resolve.zig");
+
+test {
+    std.testing.refAllDecls(@This());
+    _ = resolve;
+}
+
 test "parseArgs: two paths default to tree format" {
     const args = [_][]const u8{ "a.prefab", "b.prefab" };
     const opt = try parseArgs(&args);
@@ -159,7 +166,15 @@ pub fn run(io: std.Io, arena: std.mem.Allocator, args: []const []const u8, stdou
 
     switch (opt.format) {
         .json => {
-            const out = try core.diffToJson(arena, before, after);
+            const res = try core.diffBytes(arena, before, after);
+            var resolver_ptr: ?*const core.json.Resolver = null;
+            var idx: core.json.Resolver = undefined;
+            if (opt.project_root) |proj| {
+                const built = try resolve.buildIndex(io, arena, proj);
+                idx = built; // Index and Resolver are both StringHashMap([]const u8)
+                resolver_ptr = &idx;
+            }
+            const out = try core.json.serialize(arena, res, resolver_ptr);
             try stdout.writeAll(out);
             try stdout.writeByte('\n');
         },

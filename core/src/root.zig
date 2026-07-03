@@ -29,4 +29,5 @@ test "core builds and version is reported" {
 
 test {
     std.testing.refAllDecls(@This());
+    _ = @import("fixture_test.zig");
 }

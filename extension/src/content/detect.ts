@@ -1,0 +1,22 @@
+const UNITY_PATH = /\.(prefab|unity|asset)$/i;
+
+export type FileEntry = { path: string; header: HTMLElement; content: HTMLElement };
+
+export function parsePrUrl(pathname: string): { owner: string; repo: string; prNumber: number } | null {
+  const m = /^\/([^/]+)\/([^/]+)\/pull\/(\d+)\/files(\/|$)/.exec(pathname);
+  return m ? { owner: m[1]!, repo: m[2]!, prNumber: Number(m[3]!) } : null;
+}
+
+// GitHub の Files changed(クラシック DOM)を防御的に探す。合わなければ空配列で無害に終わる。
+export function scanUnityFiles(root: ParentNode): FileEntry[] {
+  const out: FileEntry[] = [];
+  for (const header of root.querySelectorAll<HTMLElement>('.file-header[data-path]')) {
+    const path = header.dataset['path'];
+    if (!path || !UNITY_PATH.test(path)) continue;
+    const container = header.closest('.file');
+    const content = container?.querySelector<HTMLElement>('.js-file-content') ?? null;
+    if (!content) continue;
+    out.push({ path, header, content });
+  }
+  return out;
+}

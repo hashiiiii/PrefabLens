@@ -6,6 +6,7 @@ pub const parser = @import("parser.zig");
 pub const diff = @import("diff.zig");
 pub const tree = @import("tree.zig");
 pub const json = @import("json.zig");
+pub const inspector = @import("inspector.zig");
 pub const perf = @import("perf.zig");
 
 pub fn version() []const u8 {

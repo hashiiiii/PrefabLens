@@ -97,14 +97,12 @@ function renderComponent(c: ComponentDiff, diff: DiffV1): HTMLElement {
     path.className = 'pl-path';
     path.textContent = f.path;
     row.append(path);
-    if (f.before !== null) row.append(valueSpan('pl-before', f.before, diff));
-    if (f.before !== null && f.after !== null) {
-      const arrow = document.createElement('span');
-      arrow.className = 'pl-arrow';
-      arrow.textContent = '→';
-      row.append(arrow);
-    }
-    if (f.after !== null) row.append(valueSpan('pl-after', f.after, diff));
+    row.append(valueSpan('pl-before', f.before, diff));
+    const arrow = document.createElement('span');
+    arrow.className = 'pl-arrow';
+    arrow.textContent = '→';
+    row.append(arrow);
+    row.append(valueSpan('pl-after', f.after, diff));
     details.append(row);
   }
   return details;

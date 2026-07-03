@@ -67,6 +67,14 @@ describe('render', () => {
     expect(text).toContain('Assets/Scripts/Sound.cs'); // resolved guid
   });
 
+  it('renders a dash placeholder for the absent side of added fields', () => {
+    const root = freshRoot();
+    render(root, DIFF);
+    const rows = [...root.querySelectorAll('.pl-field')];
+    const added = rows.find((r) => r.textContent!.includes('newField'))!;
+    expect(added.textContent).toMatch(/newField—→1/);
+  });
+
   it('falls back to the raw guid when unresolved and to #fileId for local refs', () => {
     const root = freshRoot();
     render(root, DIFF);

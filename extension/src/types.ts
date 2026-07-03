@@ -44,6 +44,6 @@ export type SemanticDiffRequest = {
   path: string;
 };
 
-export type BackgroundError = 'pat-missing' | 'auth-failed' | 'fetch-failed' | 'diff-failed';
+export type BackgroundError = 'pat-missing' | 'auth-failed' | 'rate-limited' | 'fetch-failed' | 'diff-failed';
 
 export type SemanticDiffResponse = { ok: true; json: DiffV1 } | { ok: false; error: BackgroundError };

@@ -1,4 +1,4 @@
-import { AuthError, apiBase, type GithubClient, type PrFile, type PrRefs } from '../github/client';
+import { AuthError, RateLimitError, apiBase, type GithubClient, type PrFile, type PrRefs } from '../github/client';
 import { applyResolved, buildGuidIndex } from '../github/guids';
 import { DiffError, type Differ } from '../wasm/differ';
 import type { SemanticDiffRequest, SemanticDiffResponse } from '../types';
@@ -59,6 +59,7 @@ export function createHandler(deps: Deps): (req: SemanticDiffRequest) => Promise
       const json = differ.diff(before, after);
       return { ok: true, json: applyResolved(json, guidIndex) };
     } catch (err) {
+      if (err instanceof RateLimitError) return { ok: false, error: 'rate-limited' };
       if (err instanceof AuthError) return { ok: false, error: 'auth-failed' };
       if (err instanceof DiffError) return { ok: false, error: 'diff-failed' };
       return { ok: false, error: 'fetch-failed' }; // raw エラーは応答に載せない

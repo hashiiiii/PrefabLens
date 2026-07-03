@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ApiError, AuthError, GithubClient, apiBase } from './client';
+import { ApiError, AuthError, GithubClient, RateLimitError, apiBase } from './client';
 
 // パス→レスポンスの固定表を返す fetch フェイク。呼び出しも記録する。
 // 照合は url.includes(key) なのでキーは一意な部分文字列にすること
@@ -101,5 +101,15 @@ describe('GithubClient', () => {
     await expect(auth.getPrRefs('o', 'r', 1)).rejects.toBeInstanceOf(AuthError);
     const boom = new GithubClient('https://api.github.com', 'tok', fakeFetch({ '/pulls/1': () => json({}, 500) }).fn);
     await expect(boom.getPrRefs('o', 'r', 1)).rejects.toBeInstanceOf(ApiError);
+  });
+
+  it('maps rate-limit responses to RateLimitError, not AuthError', async () => {
+    // GitHub の rate limit: primary は 403 + x-ratelimit-remaining: 0、
+    // secondary は 403 + retry-after、新しめの API は 429。
+    const at = (status: number, headers: Record<string, string>) =>
+      new GithubClient('https://api.github.com', 'tok', fakeFetch({ '/pulls/1': () => new Response('', { status, headers }) }).fn);
+    await expect(at(403, { 'x-ratelimit-remaining': '0' }).getPrRefs('o', 'r', 1)).rejects.toBeInstanceOf(RateLimitError);
+    await expect(at(403, { 'retry-after': '60' }).getPrRefs('o', 'r', 1)).rejects.toBeInstanceOf(RateLimitError);
+    await expect(at(429, {}).getPrRefs('o', 'r', 1)).rejects.toBeInstanceOf(RateLimitError);
   });
 });

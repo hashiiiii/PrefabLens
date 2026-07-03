@@ -6,6 +6,7 @@ import type { BackgroundError, SemanticDiffRequest, SemanticDiffResponse } from 
 const ERROR_TEXT: Record<BackgroundError, string> = {
   'pat-missing': 'Set a GitHub token in the PrefabLens options page.',
   'auth-failed': 'GitHub authentication failed. Check your token in the PrefabLens options page.',
+  'rate-limited': 'GitHub rate limit exceeded. Wait a minute and toggle again.',
   'fetch-failed': 'Could not fetch file contents from GitHub.',
   'diff-failed': 'Could not compute a semantic diff for this file.',
 };

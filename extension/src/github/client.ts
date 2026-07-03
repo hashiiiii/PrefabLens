@@ -1,4 +1,5 @@
 export class AuthError extends Error {}
+export class RateLimitError extends Error {}
 export class ApiError extends Error {
   constructor(readonly status: number) {
     super(`GitHub API error (HTTP ${status})`); // raw ボディは持たない(漏洩防止)
@@ -42,6 +43,11 @@ export class GithubClient {
         'x-github-api-version': '2022-11-28',
       },
     });
+    // primary limit は 403 + x-ratelimit-remaining: 0、secondary は 403 + retry-after、新 API は 429
+    const rateLimited =
+      res.status === 429 ||
+      (res.status === 403 && (res.headers.get('x-ratelimit-remaining') === '0' || res.headers.has('retry-after')));
+    if (rateLimited) throw new RateLimitError('GitHub rate limit exceeded');
     if (res.status === 401 || res.status === 403) throw new AuthError('GitHub authentication failed');
     return res;
   }

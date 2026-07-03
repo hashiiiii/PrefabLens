@@ -334,6 +334,61 @@ test "diff: prefab instance override keyed by target+propertyPath" {
     try testing.expectEqualStrings("1", d.overrides[0].after.?.scalar);
 }
 
+test "diff: modified instance overrides are sorted group-contiguous, Transform first" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const before =
+        \\--- !u!1001 &1001
+        \\PrefabInstance:
+        \\  m_Modification:
+        \\    m_Modifications:
+        \\    - target: {fileID: 7, guid: aaa, type: 3}
+        \\      propertyPath: rangeMin
+        \\      value: 1
+        \\      objectReference: {fileID: 0}
+        \\    - target: {fileID: 7, guid: aaa, type: 3}
+        \\      propertyPath: m_LocalPosition.x
+        \\      value: 0
+        \\      objectReference: {fileID: 0}
+        \\    - target: {fileID: 7, guid: aaa, type: 3}
+        \\      propertyPath: maxHp
+        \\      value: 100
+        \\      objectReference: {fileID: 0}
+        \\  m_SourcePrefab: {fileID: 100100000, guid: aaa, type: 3}
+    ;
+    // 生の YAML 順は Overrides, Transform, Overrides: グループ非連続になる入力。
+    const after =
+        \\--- !u!1001 &1001
+        \\PrefabInstance:
+        \\  m_Modification:
+        \\    m_Modifications:
+        \\    - target: {fileID: 7, guid: aaa, type: 3}
+        \\      propertyPath: rangeMin
+        \\      value: 2
+        \\      objectReference: {fileID: 0}
+        \\    - target: {fileID: 7, guid: aaa, type: 3}
+        \\      propertyPath: m_LocalPosition.x
+        \\      value: 5
+        \\      objectReference: {fileID: 0}
+        \\    - target: {fileID: 7, guid: aaa, type: 3}
+        \\      propertyPath: maxHp
+        \\      value: 150
+        \\      objectReference: {fileID: 0}
+        \\  m_SourcePrefab: {fileID: 100100000, guid: aaa, type: 3}
+    ;
+    const fd = try compute(arena, before, after);
+    const d = findDoc(fd, 1001).?;
+    try testing.expectEqual(model.Status.modified, d.status);
+    try testing.expectEqual(@as(usize, 3), d.overrides.len);
+    try testing.expectEqualStrings("Transform", d.overrides[0].group);
+    try testing.expectEqualStrings("Overrides", d.overrides[1].group);
+    try testing.expectEqualStrings("Overrides", d.overrides[2].group);
+    // Overrides 内では元の相対順序(rangeMin が maxHp より先)を維持する。
+    try testing.expectEqualStrings("Range Min", d.overrides[1].label);
+    try testing.expectEqualStrings("Max Hp", d.overrides[2].label);
+}
+
 test "diff: added prefab instance collapses placement to summary" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
@@ -826,7 +881,26 @@ fn diffOverrides(arena: std.mem.Allocator, before_doc: ?*const model.Document, a
         try out.append(arena, try makeOverride(arena, bm.path, .removed, modValue(bm), null));
     }
     try appendStructuralSummaries(arena, &out, before_doc, after_doc);
+    sortByGroup(out.items);
     return out.toOwnedSlice(arena);
+}
+
+/// group 単位で安定ソート(Transform → GameObject → Overrides)。
+/// レンダラは同一グループの行が連続することを前提に見出しを出すため、
+/// 生の m_Modifications 順を group ごとに束ね直す。
+fn groupRank(group: []const u8) u2 {
+    if (std.mem.eql(u8, group, "Transform")) return 0;
+    if (std.mem.eql(u8, group, "GameObject")) return 1;
+    return 2;
+}
+
+fn sortByGroup(overrides: []model.OverrideDiff) void {
+    const Ctx = struct {
+        fn lessThan(_: void, a: model.OverrideDiff, b: model.OverrideDiff) bool {
+            return groupRank(a.group) < groupRank(b.group);
+        }
+    };
+    std.sort.insertion(model.OverrideDiff, overrides, {}, Ctx.lessThan);
 }
 
 const Placement = struct { prefix: []const u8, label: []const u8, comps: []const []const u8 };
@@ -913,6 +987,7 @@ fn addedInstanceOverrides(arena: std.mem.Allocator, doc: *const model.Document) 
         try out.append(arena, try makeOverride(arena, m.path, .added, null, modValue(m)));
     }
     try appendStructuralSummaries(arena, &out, null, doc);
+    sortByGroup(out.items);
     return out.toOwnedSlice(arena);
 }
 

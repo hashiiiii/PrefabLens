@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { applyResolved, buildGuidIndex, parseGuidFromMeta } from './guids';
+import { RateLimitError } from './client';
 import type { DiffV1 } from '../types';
 
 const META = `fileFormatVersion: 2
@@ -43,6 +44,15 @@ describe('buildGuidIndex', () => {
       throw new Error('boom');
     });
     expect(index.size).toBe(0);
+  });
+
+  it('propagates rate limits instead of degrading the index silently', async () => {
+    // 握りつぶすと劣化インデックスが SW 生存期間キャッシュされ、再トグルでも直らない
+    await expect(
+      buildGuidIndex(files, async () => {
+        throw new RateLimitError('limited');
+      }),
+    ).rejects.toBeInstanceOf(RateLimitError);
   });
 
   it('bounds concurrent fetches to 8 even with many changed metas', async () => {

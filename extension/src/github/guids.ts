@@ -1,5 +1,5 @@
 import type { DiffV1 } from '../types';
-import type { PrFile } from './client';
+import { RateLimitError, type PrFile } from './client';
 
 /** cli/src/resolve.zig の parseGuid と同じ規則: 行頭(trim 後)の "guid:" を拾う。 */
 export function parseGuidFromMeta(meta: string): string | undefined {
@@ -22,7 +22,11 @@ export async function buildGuidIndex(files: PrFile[], fetchMeta: MetaFetcher): P
 
   const indexOne = async (f: PrFile): Promise<void> => {
     const side = f.status === 'removed' ? 'base' : 'head';
-    const text = await fetchMeta(f.path, side).catch(() => null);
+    // rate limit だけは伝播させる: 握りつぶすと劣化インデックスが SW 生存期間キャッシュされる
+    const text = await fetchMeta(f.path, side).catch((err) => {
+      if (err instanceof RateLimitError) throw err;
+      return null;
+    });
     if (!text) return;
     const guid = parseGuidFromMeta(text);
     if (guid) index.set(guid, f.path.slice(0, -'.meta'.length));

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createHandler, type Deps } from './handler';
-import { AuthError, type PrFile } from '../github/client';
+import { AuthError, RateLimitError, type PrFile } from '../github/client';
 import { DiffError, type Differ } from '../wasm/differ';
 import type { DiffV1, SemanticDiffRequest } from '../types';
 
@@ -103,5 +103,11 @@ describe('createHandler', () => {
     const net = makeDeps();
     net.client.listPrFiles.mockRejectedValue(new Error('socket'));
     expect(await createHandler(net.deps)(REQ)).toEqual({ ok: false, error: 'fetch-failed' });
+  });
+
+  it('maps RateLimitError to rate-limited', async () => {
+    const limited = makeDeps();
+    limited.client.getPrRefs.mockRejectedValue(new RateLimitError('x'));
+    expect(await createHandler(limited.deps)(REQ)).toEqual({ ok: false, error: 'rate-limited' });
   });
 });

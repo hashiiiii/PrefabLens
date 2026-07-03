@@ -1,4 +1,5 @@
 export class AuthError extends Error {}
+export class RateLimitError extends Error {}
 export class ApiError extends Error {
   constructor(readonly status: number) {
     super(`GitHub API error (HTTP ${status})`); // raw ボディは持たない(漏洩防止)
@@ -7,14 +8,6 @@ export class ApiError extends Error {
 
 export type PrFile = { path: string; status: string; previousPath?: string };
 export type PrRefs = { baseSha: string; headSha: string };
-
-export type TokenProvider = { getToken(): Promise<string | undefined> };
-export const patTokenProvider: TokenProvider = {
-  async getToken() {
-    const stored = await chrome.storage.local.get('pat');
-    return stored['pat'] as string | undefined;
-  },
-};
 
 export function apiBase(baseUrl: string | undefined): string {
   if (!baseUrl) return 'https://api.github.com';
@@ -42,7 +35,19 @@ export class GithubClient {
         'x-github-api-version': '2022-11-28',
       },
     });
-    if (res.status === 401 || res.status === 403) throw new AuthError('GitHub authentication failed');
+    if (res.status === 403 || res.status === 429) {
+      // primary は 403 + x-ratelimit-remaining: 0、secondary は 403 + retry-after または
+      // ヘッダなし(ボディの message のみ)、新 API は 429。ボディは分類にだけ使い、保持しない。
+      const body = await res.text().catch(() => '');
+      const rateLimited =
+        res.status === 429 ||
+        res.headers.has('retry-after') ||
+        res.headers.get('x-ratelimit-remaining') === '0' ||
+        /rate limit|abuse/i.test(body);
+      if (rateLimited) throw new RateLimitError('GitHub rate limit exceeded');
+      throw new AuthError('GitHub authentication failed');
+    }
+    if (res.status === 401) throw new AuthError('GitHub authentication failed');
     return res;
   }
 

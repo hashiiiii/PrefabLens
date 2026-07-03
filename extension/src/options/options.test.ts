@@ -33,4 +33,16 @@ describe('initOptions', () => {
     expect(storage.data['pat']).toBe('tok');
     expect(document.querySelector('#status')!.textContent).toBe('Saved');
   });
+
+  it('reports a failed save instead of staying silent', async () => {
+    document.body.innerHTML = OPTIONS_BODY;
+    const storage = fakeStorage();
+    storage.set = async () => {
+      throw new Error('quota exceeded');
+    };
+    await initOptions(document, storage);
+    document.querySelector<HTMLButtonElement>('#save')!.click();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(document.querySelector('#status')!.textContent).toBe('Save failed');
+  });
 });

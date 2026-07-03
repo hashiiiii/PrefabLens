@@ -30,9 +30,14 @@ export async function initOptions(doc: Document, storage: StorageLike): Promise<
   baseUrl.value = (stored['baseUrl'] as string | undefined) ?? '';
 
   doc.querySelector<HTMLButtonElement>('#save')!.addEventListener('click', () => {
-    void storage.set({ pat: pat.value.trim(), baseUrl: baseUrl.value.trim() }).then(() => {
-      status.textContent = 'Saved';
-    });
+    void storage.set({ pat: pat.value.trim(), baseUrl: baseUrl.value.trim() }).then(
+      () => {
+        status.textContent = 'Saved';
+      },
+      () => {
+        status.textContent = 'Save failed';
+      },
+    );
   });
 }
 

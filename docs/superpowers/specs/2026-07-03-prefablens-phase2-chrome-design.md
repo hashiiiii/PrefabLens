@@ -54,13 +54,13 @@ GitHub PR page (github.com / GHES / GHEC)
 |---|---|---|---|
 | `content/` | Files changed の Unity ファイル検出、`[Raw\|Semantic]` トグル注入、パイプラインのオーケストレーション | DOM に注入される content script。検出した各ファイルについて background から前後内容と guid 索引を取り、worker で diff し、renderer に渡す | DOM API、`worker`、`background`（`chrome.runtime` メッセージ） |
 | `worker/` | WASM をロードし `diff(before, after)` を呼び、`prefablens.diff.v1` JSON を返す | `postMessage({before, after})` → `{json}`。メインスレッドから隔離 | `.wasm`（core） |
-| `background/` | PAT を `getToken()` プロバイダ層の裏で管理、GitHub API 呼出（blob 取得・PR 変更ファイル一覧）、PR 内 `.meta` から guid→path 索引を構築 | `chrome.runtime` メッセージハンドラ。`{type:'blobs', owner, repo, base, head, path}` → `{before, after}`、`{type:'guidIndex', owner, repo, sha}` → `{map}` | `chrome.storage`、GitHub REST API |
+| `background/` | PAT を `chrome.storage` から `getSettings()` シーム経由で読出し、GitHub API 呼出（blob 取得・PR 変更ファイル一覧）、PR 内 `.meta` から guid→path 索引を構築 | `chrome.runtime` メッセージハンドラ。`{type:'blobs', owner, repo, base, head, path}` → `{before, after}`、`{type:'guidIndex', owner, repo, sha}` → `{map}` | `chrome.storage`、GitHub REST API |
 | `renderer/` | `prefablens.diff.v1` JSON（`resolved` 付与済み）を Shadow DOM ツリーに描画。GitHub の CSS と非干渉、light/dark 追従 | `render(shadowRoot, diffJson)` の純関数的 DOM 構築 | なし（DOM のみ） |
 | `options/` | PAT 入力・baseURL 設定 | Options ページ。`chrome.storage` に保存 | `chrome.storage` |
 
 ### 責務分離の根拠
 
-- **PAT は background に閉じる。** content script（isolated world）や worker に PAT を渡さない。認証付き fetch は background Service Worker で行い、トークンの取り回しを一元化し、ページの CSP の影響を避ける。`getToken()` プロバイダ層の裏に置くことで将来 OAuth を差し込める。
+- **PAT は background に閉じる。** content script（isolated world）や worker に PAT を渡さない。認証付き fetch は background Service Worker で行い、トークンの取り回しを一元化し、ページの CSP の影響を避ける。トークン読出しは handler の `Deps.getSettings()` シームに集約されており、将来 OAuth を導入する場合はここを差し替える（当初案の `getToken()` プロバイダ層は未使用のまま死蔵していたため follow-up で削除）。
 - **WASM は Web Worker に隔離。** メインスレッドのジャンクをゼロにする（性能目標 §5.7）。WASM の入出力はバイト列と長さ前置 JSON のみで、UI から切り離す。
 - **guid 解決は content 側で JSON に適用。** core（WASM）は `unresolvedGuids` を返すだけの純関数を保ち（仕様 §4.2 のシーム）、ホスト（拡張）が索引で `resolved` を付与する。フェーズ1 CLI と同じ設計で、core の純粋性・再利用性を崩さない。
 
@@ -131,7 +131,7 @@ GitHub PR page (github.com / GHES / GHEC)
     background/          # Service Worker: PAT・GitHub API・guid 解決
     renderer/           # Shadow DOM ツリー
     options/            # PAT 入力・baseURL 設定
-    github/             # GitHub API クライアント + getToken() プロバイダ層
+    github/             # GitHub API クライアント + guid 索引
   manifest.json         # MV3
   build.mjs             # esbuild ビルドスクリプト（複数エントリ + .wasm 取り込み）
   package.json

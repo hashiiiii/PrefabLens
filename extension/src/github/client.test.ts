@@ -106,10 +106,18 @@ describe('GithubClient', () => {
   it('maps rate-limit responses to RateLimitError, not AuthError', async () => {
     // GitHub の rate limit: primary は 403 + x-ratelimit-remaining: 0、
     // secondary は 403 + retry-after、新しめの API は 429。
-    const at = (status: number, headers: Record<string, string>) =>
-      new GithubClient('https://api.github.com', 'tok', fakeFetch({ '/pulls/1': () => new Response('', { status, headers }) }).fn);
+    // secondary はヘッダなし(ボディの message のみ)のこともある — octokit も message で判定している。
+    const at = (status: number, headers: Record<string, string>, body = '') =>
+      new GithubClient('https://api.github.com', 'tok', fakeFetch({ '/pulls/1': () => new Response(body, { status, headers }) }).fn);
     await expect(at(403, { 'x-ratelimit-remaining': '0' }).getPrRefs('o', 'r', 1)).rejects.toBeInstanceOf(RateLimitError);
     await expect(at(403, { 'retry-after': '60' }).getPrRefs('o', 'r', 1)).rejects.toBeInstanceOf(RateLimitError);
     await expect(at(429, {}).getPrRefs('o', 'r', 1)).rejects.toBeInstanceOf(RateLimitError);
+    await expect(
+      at(403, { 'x-ratelimit-remaining': '4999' }, '{"message":"You have exceeded a secondary rate limit."}').getPrRefs('o', 'r', 1),
+    ).rejects.toBeInstanceOf(RateLimitError);
+    // 権限系 403(rate limit ではない)は引き続き AuthError
+    await expect(
+      at(403, { 'x-ratelimit-remaining': '4999' }, '{"message":"Resource not accessible by personal access token"}').getPrRefs('o', 'r', 1),
+    ).rejects.toBeInstanceOf(AuthError);
   });
 });

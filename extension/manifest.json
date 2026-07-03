@@ -1,0 +1,20 @@
+{
+  "manifest_version": 3,
+  "name": "PrefabLens",
+  "version": "0.1.0",
+  "description": "Semantic diffs for Unity YAML files in GitHub pull requests",
+  "permissions": ["storage"],
+  "host_permissions": ["https://api.github.com/*"],
+  "background": { "service_worker": "background.js" },
+  "content_scripts": [
+    {
+      "matches": ["https://github.com/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "options_page": "options.html",
+  "content_security_policy": {
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"
+  }
+}

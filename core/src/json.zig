@@ -13,7 +13,7 @@ pub fn serialize(arena: std.mem.Allocator, res: model.DiffResult, resolved: ?*co
     var aw = std.Io.Writer.Allocating.fromArrayList(arena, &buf);
     const w = &aw.writer;
 
-    try w.writeAll("{\"schema\":\"prefablens.diff.v1\"");
+    try w.writeAll("{\"schema\":\"prefablens.diff.v2\"");
 
     try w.writeAll(",\"unresolvedGuids\":[");
     for (res.unresolved_guids, 0..) |g, i| {
@@ -55,12 +55,26 @@ pub fn serialize(arena: std.mem.Allocator, res: model.DiffResult, resolved: ?*co
 }
 
 fn writeObject(w: *std.Io.Writer, o: model.ObjectDiff, resolved: ?*const Resolver) !void {
-    try w.writeAll("{\"kind\":\"gameObject\",\"fileId\":");
+    const kind = switch (o.kind) {
+        .game_object => "gameObject",
+        .prefab_instance => "prefabInstance",
+    };
+    try w.print("{{\"kind\":\"{s}\",\"fileId\":", .{kind});
     try writeI64String(w, o.file_id);
     try w.writeAll(",\"name\":");
     try writeJsonString(w, o.name);
     try w.writeAll(",\"status\":");
     try writeStatus(w, o.status);
+    if (o.kind == .prefab_instance) {
+        try w.writeAll(",\"sourceGuid\":");
+        if (o.source_guid) |g| try writeJsonString(w, g) else try w.writeAll("null");
+        try w.writeAll(",\"overrides\":[");
+        for (o.overrides, 0..) |ov, i| {
+            if (i != 0) try w.writeByte(',');
+            try writeOverride(w, ov);
+        }
+        try w.writeByte(']');
+    }
     try w.writeAll(",\"components\":[");
     for (o.components, 0..) |c, i| {
         if (i != 0) try w.writeByte(',');
@@ -74,6 +88,20 @@ fn writeObject(w: *std.Io.Writer, o: model.ObjectDiff, resolved: ?*const Resolve
     try w.writeAll("]}");
 }
 
+fn writeOverride(w: anytype, ov: model.OverrideDiff) !void {
+    try w.writeAll("{\"group\":");
+    try writeJsonString(w, ov.group);
+    try w.writeAll(",\"label\":");
+    try writeJsonString(w, ov.label);
+    try w.writeAll(",\"status\":");
+    try writeStatus(w, ov.status);
+    try w.writeAll(",\"before\":");
+    try writeValue(w, ov.before);
+    try w.writeAll(",\"after\":");
+    try writeValue(w, ov.after);
+    try w.writeByte('}');
+}
+
 fn writeComponent(w: anytype, c: model.ComponentDiff, resolved: ?*const Resolver) !void {
     try w.writeAll("{\"kind\":\"component\",\"fileId\":");
     try writeI64String(w, c.file_id);
@@ -81,6 +109,8 @@ fn writeComponent(w: anytype, c: model.ComponentDiff, resolved: ?*const Resolver
     try writeJsonString(w, c.type_name);
     try w.writeAll(",\"scriptGuid\":");
     if (c.script_guid) |g| try writeJsonString(w, g) else try w.writeAll("null");
+    try w.writeAll(",\"className\":");
+    if (c.class_name) |n| try writeJsonString(w, n) else try w.writeAll("null");
     if (resolved) |r| {
         if (c.script_guid) |g| {
             if (r.get(g)) |path| {
@@ -168,6 +198,52 @@ fn writeJsonString(w: anytype, s: []const u8) !void {
     try w.writeByte('"');
 }
 
+test "json: v2 prefab instance node with overrides" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const after =
+        \\--- !u!1001 &1001
+        \\PrefabInstance:
+        \\  m_Modification:
+        \\    m_TransformParent: {fileID: 0}
+        \\    m_Modifications:
+        \\    - target: {fileID: 8, guid: aaa, type: 3}
+        \\      propertyPath: m_Name
+        \\      value: Cylinder Variant
+        \\    - target: {fileID: 7, guid: aaa, type: 3}
+        \\      propertyPath: m_LocalScale.y
+        \\      value: 2
+        \\  m_SourcePrefab: {fileID: 100100000, guid: aaa, type: 3}
+    ;
+    const out = try root.diffToJson(arena, "", after);
+    try testing.expect(std.mem.indexOf(u8, out, "\"schema\":\"prefablens.diff.v2\"") != null);
+    try testing.expect(std.mem.indexOf(u8, out, "\"kind\":\"prefabInstance\"") != null);
+    try testing.expect(std.mem.indexOf(u8, out, "\"name\":\"Cylinder Variant\"") != null);
+    try testing.expect(std.mem.indexOf(u8, out, "\"sourceGuid\":\"aaa\"") != null);
+    try testing.expect(std.mem.indexOf(u8, out, "\"overrides\":[{\"group\":\"Transform\",\"label\":\"Scale.y\",\"status\":\"added\",\"before\":null,\"after\":\"2\"}]") != null);
+}
+
+test "json: component carries className" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const before =
+        \\--- !u!114 &5
+        \\MonoBehaviour:
+        \\  m_EditorClassIdentifier: Assembly-CSharp::Cylinder1
+        \\  hp: 1
+    ;
+    const after =
+        \\--- !u!114 &5
+        \\MonoBehaviour:
+        \\  m_EditorClassIdentifier: Assembly-CSharp::Cylinder1
+        \\  hp: 2
+    ;
+    const out = try root.diffToJson(arena, before, after);
+    try testing.expect(std.mem.indexOf(u8, out, "\"className\":\"Cylinder1\"") != null);
+}
+
 test "json: modified loose component matches golden" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
@@ -186,7 +262,7 @@ test "json: modified loose component matches golden" {
     ;
     const out = try root.diffToJson(arena, before, after);
     const golden =
-        \\{"schema":"prefablens.diff.v1","unresolvedGuids":["def"],"roots":[],"loose":[{"kind":"component","fileId":"11400000","classId":114,"typeName":"MonoBehaviour","scriptGuid":"def","status":"modified","fields":[{"path":"Volume","status":"modified","before":"0.5","after":"0.8"}]}]}
+        \\{"schema":"prefablens.diff.v2","unresolvedGuids":["def"],"roots":[],"loose":[{"kind":"component","fileId":"11400000","classId":114,"typeName":"MonoBehaviour","scriptGuid":"def","className":null,"status":"modified","fields":[{"path":"Volume","status":"modified","before":"0.5","after":"0.8"}]}]}
     ;
     try testing.expectEqualStrings(golden, out);
 }

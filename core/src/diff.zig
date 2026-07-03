@@ -238,6 +238,56 @@ test "diff: editor class identifier tail is extracted" {
     try testing.expectEqualStrings("Cylinder1", findDoc(fd, 5).?.class_name.?);
 }
 
+test "diff: added document enumerates fields with vector collapse" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const before = "";
+    const after =
+        \\--- !u!4 &4
+        \\Transform:
+        \\  m_GameObject: {fileID: 1}
+        \\  m_LocalPosition: {x: 4, y: 0, z: 0}
+        \\  maxHp: 100
+    ;
+    const fd = try compute(arena, before, after);
+    const d = findDoc(fd, 4).?;
+    try testing.expectEqual(model.Status.added, d.status);
+    // m_GameObject は非表示。Position はベクトル 1 行、maxHp は Max Hp。
+    try testing.expectEqual(@as(usize, 2), d.fields.len);
+    try testing.expectEqualStrings("Position", d.fields[0].path);
+    try testing.expectEqualStrings("(4, 0, 0)", d.fields[0].after.?.scalar);
+    try testing.expectEqualStrings("Max Hp", d.fields[1].path);
+}
+
+test "diff: added map field inside a modified document is flattened" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const before =
+        \\--- !u!4 &4
+        \\Transform:
+        \\  m_LocalPosition: {x: 0, y: 0, z: 0}
+    ;
+    const after =
+        \\--- !u!4 &4
+        \\Transform:
+        \\  m_LocalPosition: {x: 0, y: 5, z: 0}
+        \\  m_LocalScale: {x: 1, y: 1, z: 1}
+    ;
+    const fd = try compute(arena, before, after);
+    const d = findDoc(fd, 4).?;
+    var saw_scale = false;
+    for (d.fields) |f| {
+        if (std.mem.eql(u8, f.path, "Scale")) {
+            saw_scale = true;
+            try testing.expectEqual(model.Status.added, f.status);
+            try testing.expectEqualStrings("(1, 1, 1)", f.after.?.scalar);
+        }
+    }
+    try testing.expect(saw_scale);
+}
+
 const parser = @import("parser.zig");
 const classid = @import("classid.zig");
 const inspector = @import("inspector.zig");
@@ -346,6 +396,10 @@ pub fn compute(arena: std.mem.Allocator, before_src: []const u8, after_src: []co
                 .fields = fields,
             });
         } else {
+            var raw: std.ArrayList(FieldDiff) = .empty;
+            if (ad.class_id != 1001) {
+                for (ad.body.map) |e| try flattenSubtree(arena, &raw, e.key, e.value, .added);
+            }
             try docs.append(arena, .{
                 .file_id = ad.file_id,
                 .class_id = ad.class_id,
@@ -353,7 +407,7 @@ pub fn compute(arena: std.mem.Allocator, before_src: []const u8, after_src: []co
                 .script_guid = scriptGuid(ad),
                 .class_name = editorClassName(ad),
                 .status = .added,
-                .fields = &[_]FieldDiff{},
+                .fields = try presentFields(arena, try raw.toOwnedSlice(arena)),
             });
         }
     }
@@ -416,14 +470,14 @@ fn diffMap(
         if (model.findValue(b, ea.key)) |bv| {
             try diffNode(arena, out, path, ea.value, bv);
         } else {
-            try out.append(arena, .{ .path = path, .status = .removed, .before = ea.value, .after = null });
+            try flattenSubtree(arena, out, path, ea.value, .removed);
         }
     }
     // keys only in b: added
     for (b) |eb| {
         if (model.findValue(a, eb.key) == null) {
             const path = try joinKey(arena, prefix, eb.key);
-            try out.append(arena, .{ .path = path, .status = .added, .before = null, .after = eb.value });
+            try flattenSubtree(arena, out, path, eb.value, .added);
         }
     }
 }
@@ -443,17 +497,72 @@ fn diffSeq(
     }
     while (i < a.len) : (i += 1) {
         const path = try std.fmt.allocPrint(arena, "{s}[{d}]", .{ prefix, i });
-        try out.append(arena, .{ .path = path, .status = .removed, .before = a[i], .after = null });
+        try flattenSubtree(arena, out, path, a[i], .removed);
     }
     while (i < b.len) : (i += 1) {
         const path = try std.fmt.allocPrint(arena, "{s}[{d}]", .{ prefix, i });
-        try out.append(arena, .{ .path = path, .status = .added, .before = null, .after = b[i] });
+        try flattenSubtree(arena, out, path, b[i], .added);
     }
 }
 
 fn joinKey(arena: std.mem.Allocator, prefix: []const u8, key: []const u8) ![]const u8 {
     if (prefix.len == 0) return key;
     return std.fmt.allocPrint(arena, "{s}.{s}", .{ prefix, key });
+}
+
+fn isVectorMap(entries: []model.Entry) bool {
+    if (entries.len < 2 or entries.len > 4) return false;
+    for (entries) |e| {
+        if (e.value.* != .scalar) return false;
+        if (e.key.len != 1) return false;
+        if (std.mem.indexOfScalar(u8, "xyzwrgba", e.key[0]) == null) return false;
+    }
+    return true;
+}
+
+fn vectorNode(arena: std.mem.Allocator, entries: []model.Entry) !*Node {
+    var out: std.ArrayList(u8) = .empty;
+    try out.append(arena, '(');
+    for (entries, 0..) |e, i| {
+        if (i != 0) try out.appendSlice(arena, ", ");
+        try out.appendSlice(arena, e.value.scalar);
+    }
+    try out.append(arena, ')');
+    const n = try arena.create(Node);
+    n.* = .{ .scalar = try out.toOwnedSlice(arena) };
+    return n;
+}
+
+fn appendLeaf(arena: std.mem.Allocator, out: *std.ArrayList(FieldDiff), path: []const u8, status: Status, node: *const Node) !void {
+    try out.append(arena, switch (status) {
+        .added => .{ .path = path, .status = .added, .before = null, .after = node },
+        .removed => .{ .path = path, .status = .removed, .before = node, .after = null },
+        else => unreachable,
+    });
+}
+
+/// added/removed サブツリーを leaf 単位に展開する。ベクトル風 map は 1 行に縮約。
+fn flattenSubtree(
+    arena: std.mem.Allocator,
+    out: *std.ArrayList(FieldDiff),
+    prefix: []const u8,
+    node: *const Node,
+    status: Status,
+) anyerror!void {
+    switch (node.*) {
+        .map => |entries| {
+            if (isVectorMap(entries)) {
+                try appendLeaf(arena, out, prefix, status, try vectorNode(arena, entries));
+                return;
+            }
+            for (entries) |e| try flattenSubtree(arena, out, try joinKey(arena, prefix, e.key), e.value, status);
+        },
+        .seq => |items| for (items, 0..) |it, i| {
+            const path = try std.fmt.allocPrint(arena, "{s}[{d}]", .{ prefix, i });
+            try flattenSubtree(arena, out, path, it, status);
+        },
+        else => try appendLeaf(arena, out, prefix, status, node),
+    }
 }
 
 // ---- guid collection ----

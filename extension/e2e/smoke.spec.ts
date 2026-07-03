@@ -56,3 +56,36 @@ test('detects a Unity file, toggles to Semantic, renders the tree', async ({ pag
   await expect(page.locator('.file:has(.file-header[data-path="Assets/Foo.prefab"]) .js-file-content')).toBeVisible();
   await expect(view).toBeHidden();
 });
+
+test('recovers after an error response', async ({ page }) => {
+  await page.route('**/pull/1/files', (route) => route.fulfill({ body: fixture, contentType: 'text/html' }));
+  // 1回目は pat-missing エラー、2回目以降は正常応答を返す(エラーはキャッシュされず再フェッチされることを確認)
+  await page.addInitScript((res) => {
+    (window as unknown as Record<string, unknown>)['__prefablensCalls'] = 0;
+    (window as unknown as Record<string, unknown>)['chrome'] = {
+      runtime: {
+        sendMessage: () => {
+          const w = window as unknown as Record<string, number>;
+          const call = w['__prefablensCalls']!;
+          w['__prefablensCalls'] = call + 1;
+          return Promise.resolve(call === 0 ? { ok: false, error: 'pat-missing' } : res);
+        },
+      },
+    };
+  }, cannedResponse);
+
+  await page.goto('https://prefablens.test/owner/repo/pull/1/files');
+  await page.addScriptTag({ path: 'dist/content.js' });
+
+  const unityHeader = page.locator('.file-header[data-path="Assets/Foo.prefab"]');
+  const view = page.locator('[data-prefablens-view]');
+
+  // 1回目のトグル: エラー表示
+  await unityHeader.getByRole('button', { name: 'Semantic' }).click();
+  await expect(view).toContainText('Set a GitHub token');
+
+  // Raw → Semantic と再トグルすると再フェッチされ、正常結果に回復する
+  await unityHeader.getByRole('button', { name: 'Raw' }).click();
+  await unityHeader.getByRole('button', { name: 'Semantic' }).click();
+  await expect(view).toContainText('MonoBehaviour');
+});

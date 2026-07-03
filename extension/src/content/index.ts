@@ -37,13 +37,17 @@ function attachToggle(pr: { owner: string; repo: string; prNumber: number }, ent
       entry.content.after(host);
     }
     host.style.display = '';
-    if (requested) return; // 結果はファイル単位でキャッシュ(再トグルで再フェッチしない)
+    if (requested) return; // 成功結果のみファイル単位でキャッシュ(再トグルで再フェッチしない)
     requested = true;
     const root = host.shadowRoot!;
     renderLoading(root);
     void requestDiff({ type: 'semanticDiff', ...pr, path: entry.path }).then((res) => {
-      if (res.ok) render(root, res.json);
-      else renderError(root, ERROR_TEXT[res.error]);
+      if (res.ok) {
+        render(root, res.json);
+      } else {
+        requested = false; // エラーはキャッシュしない: 次回トグルで再フェッチさせる
+        renderError(root, ERROR_TEXT[res.error]);
+      }
     });
   });
   entry.header.append(toggle);

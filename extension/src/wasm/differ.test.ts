@@ -24,7 +24,7 @@ describe('createDiffer', () => {
     const json = differ.diff(BEFORE, AFTER);
     expect(json.schema).toBe('prefablens.diff.v2');
     expect(json.unresolvedGuids).toEqual(['def']);
-    expect(json.loose[0]!.fields[0]).toEqual({ path: 'volume', status: 'modified', before: '0.5', after: '0.8' });
+    expect(json.loose[0]!.fields[0]).toEqual({ path: 'Volume', status: 'modified', before: '0.5', after: '0.8' });
   });
 
   it('handles empty before (added file)', () => {

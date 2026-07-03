@@ -9,14 +9,6 @@ export class ApiError extends Error {
 export type PrFile = { path: string; status: string; previousPath?: string };
 export type PrRefs = { baseSha: string; headSha: string };
 
-export type TokenProvider = { getToken(): Promise<string | undefined> };
-export const patTokenProvider: TokenProvider = {
-  async getToken() {
-    const stored = await chrome.storage.local.get('pat');
-    return stored['pat'] as string | undefined;
-  },
-};
-
 export function apiBase(baseUrl: string | undefined): string {
   if (!baseUrl) return 'https://api.github.com';
   // Options フォームの入力はスキームなし("github.com")のことがある。

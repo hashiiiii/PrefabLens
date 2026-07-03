@@ -12,19 +12,27 @@ export function parseGuidFromMeta(meta: string): string | undefined {
 
 export type MetaFetcher = (path: string, side: 'base' | 'head') => Promise<string | null>;
 
-/** PR 内で変更された .meta のみから guid → asset path 索引を作る(設計スコープ)。removed は base 側から読む。 */
+const MAX_CONCURRENT_META_FETCHES = 8;
+
+/** PR 内で変更された .meta のみから guid → asset path 索引を作る(設計スコープ)。removed は base 側から読む。
+ *  同時フェッチ数を上限 8 に抑える(大量 .meta 変更での GitHub secondary rate limit 回避)。 */
 export async function buildGuidIndex(files: PrFile[], fetchMeta: MetaFetcher): Promise<Map<string, string>> {
   const index = new Map<string, string>();
   const metas = files.filter((f) => f.path.endsWith('.meta'));
-  await Promise.all(
-    metas.map(async (f) => {
-      const side = f.status === 'removed' ? 'base' : 'head';
-      const text = await fetchMeta(f.path, side).catch(() => null);
-      if (!text) return;
-      const guid = parseGuidFromMeta(text);
-      if (guid) index.set(guid, f.path.slice(0, -'.meta'.length));
-    }),
-  );
+
+  const indexOne = async (f: PrFile): Promise<void> => {
+    const side = f.status === 'removed' ? 'base' : 'head';
+    const text = await fetchMeta(f.path, side).catch(() => null);
+    if (!text) return;
+    const guid = parseGuidFromMeta(text);
+    if (guid) index.set(guid, f.path.slice(0, -'.meta'.length));
+  };
+
+  for (let i = 0; i < metas.length; i += MAX_CONCURRENT_META_FETCHES) {
+    const chunk = metas.slice(i, i + MAX_CONCURRENT_META_FETCHES);
+    await Promise.all(chunk.map(indexOne));
+  }
+
   return index;
 }
 

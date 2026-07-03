@@ -44,6 +44,25 @@ describe('buildGuidIndex', () => {
     });
     expect(index.size).toBe(0);
   });
+
+  it('bounds concurrent fetches to 8 even with many changed metas', async () => {
+    const manyFiles = Array.from({ length: 20 }, (_, i) => ({
+      path: `Assets/Scripts/File${i}.cs.meta`,
+      status: 'modified',
+    }));
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const index = await buildGuidIndex(manyFiles, async (path, _side) => {
+      inFlight++;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      await new Promise((r) => setTimeout(r, 0));
+      inFlight--;
+      const i = path.match(/File(\d+)\.cs\.meta/)![1];
+      return `guid: g${i}\n`;
+    });
+    expect(maxInFlight).toBeLessThanOrEqual(8);
+    expect(index.size).toBe(20);
+  });
 });
 
 describe('applyResolved', () => {

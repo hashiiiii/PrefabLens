@@ -89,8 +89,9 @@ test "html: resolved script guid renders the resolved script name, not the raw t
     var aw = std.Io.Writer.Allocating.fromArrayList(arena, &out);
     try render(arena, &aw.writer, res, &resolver);
     const html = aw.toArrayList().items;
-    try testing.expect(std.mem.indexOf(u8, html, "PlayerController.cs") != null);
-    // The resolved basename replaces the raw type name entirely.
+    // The resolved stem (extension-less basename) replaces the raw type name entirely.
+    try testing.expect(std.mem.indexOf(u8, html, "PlayerController") != null);
+    try testing.expect(std.mem.indexOf(u8, html, "PlayerController.cs") == null);
     try testing.expect(std.mem.indexOf(u8, html, "MonoBehaviour") == null);
 }
 
@@ -219,7 +220,7 @@ const head =
     \\.old{color:#f85149}.new{color:#3fb950}
     \\h1{font-size:1rem;color:#58a6ff}
     \\</style></head><body>
-    \\<h1>PrefabLens — prefablens.diff.v1</h1>
+    \\<h1>PrefabLens — prefablens.diff.v2</h1>
     \\<div class="tree">
 ;
 
@@ -262,21 +263,56 @@ fn pad(w: anytype, depth: usize) !void {
     while (i < depth) : (i += 1) try w.writeAll("  ");
 }
 
+fn displayObjectName(o: model.ObjectDiff, resolved: ?*const core.json.Resolver) []const u8 {
+    if (o.name.len != 0) return o.name;
+    if (o.kind == .prefab_instance) {
+        if (o.source_guid) |g| if (resolved) |r| if (r.get(g)) |p| {
+            return std.fs.path.stem(p);
+        };
+        return "Prefab Instance";
+    }
+    return "(GameObject)";
+}
+
 fn renderObject(arena: std.mem.Allocator, w: anytype, o: model.ObjectDiff, resolved: ?*const core.json.Resolver, depth: usize) !void {
     try pad(w, depth);
     try w.print("<span class=\"{s} go\">{s} ", .{ cls(o.status), sign(o.status) });
-    try writeEscaped(w, if (o.name.len != 0) o.name else "(GameObject)");
+    try writeEscaped(w, displayObjectName(o, resolved));
+    if (o.kind == .prefab_instance) try w.writeAll(" &lt;Prefab&gt;");
     try w.writeAll("</span>\n");
-    for (o.components) |c| try renderComponent(arena, w, c, resolved, depth + 1);
+    // 表示次元の規則: コンポーネント/override は必ず components セクション配下。
+    // ラベル行には sign+space の前置がないため、render_tree.zig と同様に
+    // depth+2 を使って子オブジェクトの名前列に視覚的に揃える。
+    if (o.overrides.len != 0 or o.components.len != 0) {
+        try pad(w, depth + 2);
+        try w.writeAll("<span class=\"unchanged\">components</span>\n");
+        try renderOverrides(w, o.overrides, depth + 3);
+        for (o.components) |c| try renderComponent(arena, w, c, resolved, depth + 3);
+    }
     for (o.children) |child| try renderObject(arena, w, child, resolved, depth + 1);
+}
+
+fn renderOverrides(w: anytype, overrides: []const model.OverrideDiff, depth: usize) !void {
+    var current: []const u8 = "";
+    for (overrides) |ov| {
+        if (!std.mem.eql(u8, current, ov.group)) {
+            current = ov.group;
+            try pad(w, depth);
+            try w.print("<span class=\"{s}\">{s} ", .{ cls(ov.status), sign(ov.status) });
+            try writeEscaped(w, ov.group);
+            try w.writeAll("</span>\n");
+        }
+        try renderField(w, .{ .path = ov.label, .status = ov.status, .before = ov.before, .after = ov.after }, depth + 1);
+    }
 }
 
 fn renderComponent(arena: std.mem.Allocator, w: anytype, c: model.ComponentDiff, resolved: ?*const core.json.Resolver, depth: usize) !void {
     _ = arena;
     try pad(w, depth);
     var display = c.type_name;
+    if (c.class_name) |n| display = n;
     if (c.script_guid) |g| if (resolved) |r| if (r.get(g)) |p| {
-        display = std.fs.path.basename(p);
+        display = std.fs.path.stem(p);
     };
     try w.print("<span class=\"{s}\">{s} ", .{ cls(c.status), sign(c.status) });
     try writeEscaped(w, display);

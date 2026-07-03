@@ -39,19 +39,22 @@ export function detectTheme(doc: Document): 'light' | 'dark' {
 
 export function render(root: ShadowRoot, diff: DiffV1): void {
   const container = mount(root);
-  for (const go of diff.roots) container.append(renderGameObject(go, diff));
-  for (const c of diff.loose) container.append(renderComponent(c, diff));
+  const doc = container.ownerDocument;
+  for (const go of diff.roots) container.append(renderGameObject(doc, go, diff));
+  for (const c of diff.loose) container.append(renderComponent(doc, c, diff));
   if (!diff.roots.length && !diff.loose.length) {
-    container.append(note('pl-empty', 'No semantic changes'));
+    container.append(note(doc, 'pl-empty', 'No semantic changes'));
   }
 }
 
 export function renderError(root: ShadowRoot, message: string): void {
-  mount(root).append(note('pl-error', message));
+  const container = mount(root);
+  container.append(note(container.ownerDocument, 'pl-error', message));
 }
 
 export function renderLoading(root: ShadowRoot): void {
-  mount(root).append(note('pl-loading', 'Computing semantic diff…'));
+  const container = mount(root);
+  container.append(note(container.ownerDocument, 'pl-loading', 'Computing semantic diff…'));
 }
 
 function mount(root: ShadowRoot): HTMLElement {
@@ -65,69 +68,69 @@ function mount(root: ShadowRoot): HTMLElement {
   return container;
 }
 
-function note(className: string, text: string): HTMLElement {
-  const p = document.createElement('p');
+function note(doc: Document, className: string, text: string): HTMLElement {
+  const p = doc.createElement('p');
   p.className = className;
   p.textContent = text;
   return p;
 }
 
-function renderGameObject(go: GameObjectDiff, diff: DiffV1): HTMLElement {
-  const details = openDetails('pl-go', go.status);
-  details.append(summaryLine(go.status, go.name));
-  for (const c of go.components) details.append(renderComponent(c, diff));
-  for (const child of go.children) details.append(renderGameObject(child, diff));
+function renderGameObject(doc: Document, go: GameObjectDiff, diff: DiffV1): HTMLElement {
+  const details = openDetails(doc, 'pl-go', go.status);
+  details.append(summaryLine(doc, go.status, go.name));
+  for (const c of go.components) details.append(renderComponent(doc, c, diff));
+  for (const child of go.children) details.append(renderGameObject(doc, child, diff));
   return details;
 }
 
-function renderComponent(c: ComponentDiff, diff: DiffV1): HTMLElement {
-  const details = openDetails('pl-comp', c.status);
-  const summary = summaryLine(c.status, c.typeName);
+function renderComponent(doc: Document, c: ComponentDiff, diff: DiffV1): HTMLElement {
+  const details = openDetails(doc, 'pl-comp', c.status);
+  const summary = summaryLine(doc, c.status, c.typeName);
   if (c.scriptGuid) {
-    const script = document.createElement('span');
+    const script = doc.createElement('span');
     script.className = 'pl-script';
     script.textContent = diff.resolved?.[c.scriptGuid] ?? `guid:${c.scriptGuid}`;
     summary.append(script);
   }
   details.append(summary);
   for (const f of c.fields) {
-    const row = document.createElement('div');
+    const row = doc.createElement('div');
     row.className = `pl-field pl-${f.status}`;
-    const path = document.createElement('span');
+    const path = doc.createElement('span');
     path.className = 'pl-path';
     path.textContent = f.path;
     row.append(path);
-    row.append(valueSpan('pl-before', f.before, diff));
-    const arrow = document.createElement('span');
+    row.append(valueSpan(doc, 'pl-before', f.before, diff));
+    const arrow = doc.createElement('span');
     arrow.className = 'pl-arrow';
     arrow.textContent = '→';
     row.append(arrow);
-    row.append(valueSpan('pl-after', f.after, diff));
+    row.append(valueSpan(doc, 'pl-after', f.after, diff));
     details.append(row);
   }
   return details;
 }
 
-function openDetails(kind: string, status: Status): HTMLDetailsElement {
-  const details = document.createElement('details');
+function openDetails(doc: Document, kind: string, status: Status): HTMLDetailsElement {
+  const details = doc.createElement('details');
   details.open = true;
   details.className = `${kind} pl-${status}`;
   return details;
 }
 
-function summaryLine(status: Status, text: string): HTMLElement {
-  const summary = document.createElement('summary');
-  const badge = document.createElement('span');
+function summaryLine(doc: Document, status: Status, text: string): HTMLElement {
+  const summary = doc.createElement('summary');
+  const badge = doc.createElement('span');
   badge.className = 'pl-badge';
   badge.textContent = BADGE[status];
-  const label = document.createElement('span');
+  const label = doc.createElement('span');
   label.textContent = text;
   summary.append(badge, label);
   return summary;
 }
 
-function valueSpan(className: string, value: FieldValue, diff: DiffV1): HTMLElement {
-  const span = document.createElement('span');
+function valueSpan(doc: Document, className: string, value: FieldValue, diff: DiffV1): HTMLElement {
+  const span = doc.createElement('span');
   span.className = className;
   span.textContent = formatValue(value, diff);
   return span;

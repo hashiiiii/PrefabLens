@@ -18,7 +18,10 @@ export const patTokenProvider: TokenProvider = {
 
 export function apiBase(baseUrl: string | undefined): string {
   if (!baseUrl) return 'https://api.github.com';
-  const origin = new URL(baseUrl).origin;
+  // Options フォームの入力はスキームなし("github.com")のことがある。
+  // 素の new URL は throw し、握りつぶされて fetch-failed に化けるため補完する。
+  const withScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(baseUrl) ? baseUrl : `https://${baseUrl}`;
+  const origin = new URL(withScheme).origin;
   return origin === 'https://github.com' ? 'https://api.github.com' : `${origin}/api/v3`;
 }
 
@@ -26,7 +29,9 @@ export class GithubClient {
   constructor(
     private readonly base: string,
     private readonly token: string,
-    private readonly fetchFn: typeof fetch = fetch,
+    // 素の `fetch` を既定値にすると `this.fetchFn(...)` の this がインスタンスになり
+    // Chrome では Illegal invocation で落ちる(Node の fetch は this を無視する)。
+    private readonly fetchFn: typeof fetch = (input, init) => fetch(input, init),
   ) {}
 
   private async request(path: string, accept: string): Promise<Response> {

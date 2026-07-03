@@ -28,9 +28,35 @@ describe('apiBase', () => {
   it('maps GHES origins to <origin>/api/v3', () => {
     expect(apiBase('https://ghe.example.com')).toBe('https://ghe.example.com/api/v3');
   });
+  it('tolerates scheme-less and trailing-slash input from the options form', () => {
+    // "github.com" と入力すると new URL が throw し fetch-failed に化けていた実障害の回帰テスト
+    expect(apiBase('github.com')).toBe('https://api.github.com');
+    expect(apiBase('github.com/')).toBe('https://api.github.com');
+    expect(apiBase('https://github.com/')).toBe('https://api.github.com');
+    expect(apiBase('ghe.example.com')).toBe('https://ghe.example.com/api/v3');
+  });
 });
 
 describe('GithubClient', () => {
+  it('default fetchFn survives strict-this runtimes (Chrome Illegal invocation)', async () => {
+    // Chrome の fetch はグローバル以外の this で呼ばれると Illegal invocation を投げる。
+    // Node の fetch は this を無視するため、この strict スタブで実機挙動を模す。
+    const realFetch = globalThis.fetch;
+    function strictFetch(this: unknown, ..._args: Parameters<typeof fetch>) {
+      if (this !== undefined && this !== globalThis) {
+        return Promise.reject(new TypeError("Failed to execute 'fetch': Illegal invocation"));
+      }
+      return Promise.resolve(new Response(new Uint8Array([1])));
+    }
+    globalThis.fetch = strictFetch as typeof fetch;
+    try {
+      const client = new GithubClient('https://api.github.com', 'tok'); // fetchFn 省略 = 既定値
+      await expect(client.getFileAtRef('o', 'r', 'a.prefab', 'sha')).resolves.not.toBeNull();
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+
   it('getPrRefs returns the merge base as baseSha', async () => {
     const { fn, calls } = fakeFetch({
       '/compare/base-tip...head-sha': () => json({ merge_base_commit: { sha: 'merge-base' } }),

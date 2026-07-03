@@ -1,0 +1,105 @@
+import { describe, expect, it } from 'vitest';
+import { ApiError, AuthError, GithubClient, apiBase } from './client';
+
+// パス→レスポンスの固定表を返す fetch フェイク。呼び出しも記録する。
+// 照合は url.includes(key) なのでキーは一意な部分文字列にすること
+// (例: 'page=1' は 'per_page=100' にもマッチしてしまう — '&page=1' を使う)。
+function fakeFetch(routes: Record<string, () => Response>) {
+  const calls: Array<{ url: string; headers: Record<string, string> }> = [];
+  const fn = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    calls.push({ url, headers: Object.fromEntries(Object.entries(init?.headers ?? {})) });
+    for (const [suffix, make] of Object.entries(routes)) {
+      if (url.includes(suffix)) return make();
+    }
+    return new Response('not found', { status: 404 });
+  }) as typeof fetch;
+  return { fn, calls };
+}
+
+const json = (body: unknown, status = 200) =>
+  new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
+
+describe('apiBase', () => {
+  it('defaults to api.github.com', () => {
+    expect(apiBase(undefined)).toBe('https://api.github.com');
+    expect(apiBase('https://github.com')).toBe('https://api.github.com');
+  });
+  it('maps GHES origins to <origin>/api/v3', () => {
+    expect(apiBase('https://ghe.example.com')).toBe('https://ghe.example.com/api/v3');
+  });
+  it('tolerates scheme-less and trailing-slash input from the options form', () => {
+    // "github.com" と入力すると new URL が throw し fetch-failed に化けていた実障害の回帰テスト
+    expect(apiBase('github.com')).toBe('https://api.github.com');
+    expect(apiBase('github.com/')).toBe('https://api.github.com');
+    expect(apiBase('https://github.com/')).toBe('https://api.github.com');
+    expect(apiBase('ghe.example.com')).toBe('https://ghe.example.com/api/v3');
+  });
+});
+
+describe('GithubClient', () => {
+  it('default fetchFn survives strict-this runtimes (Chrome Illegal invocation)', async () => {
+    // Chrome の fetch はグローバル以外の this で呼ばれると Illegal invocation を投げる。
+    // Node の fetch は this を無視するため、この strict スタブで実機挙動を模す。
+    const realFetch = globalThis.fetch;
+    function strictFetch(this: unknown, ..._args: Parameters<typeof fetch>) {
+      if (this !== undefined && this !== globalThis) {
+        return Promise.reject(new TypeError("Failed to execute 'fetch': Illegal invocation"));
+      }
+      return Promise.resolve(new Response(new Uint8Array([1])));
+    }
+    globalThis.fetch = strictFetch as typeof fetch;
+    try {
+      const client = new GithubClient('https://api.github.com', 'tok'); // fetchFn 省略 = 既定値
+      await expect(client.getFileAtRef('o', 'r', 'a.prefab', 'sha')).resolves.not.toBeNull();
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+
+  it('getPrRefs returns the merge base as baseSha', async () => {
+    const { fn, calls } = fakeFetch({
+      '/compare/base-tip...head-sha': () => json({ merge_base_commit: { sha: 'merge-base' } }),
+      '/pulls/7': () => json({ base: { sha: 'base-tip' }, head: { sha: 'head-sha' } }),
+    });
+    const client = new GithubClient('https://api.github.com', 'tok', fn);
+    const refs = await client.getPrRefs('o', 'r', 7);
+    expect(refs).toEqual({ baseSha: 'merge-base', headSha: 'head-sha' });
+    expect(calls[0]!.headers['authorization']).toBe('Bearer tok');
+  });
+
+  it('listPrFiles paginates past 100 entries', async () => {
+    const page1 = Array.from({ length: 100 }, (_, i) => ({ filename: `f${i}.cs`, status: 'modified' }));
+    const page2 = [{ filename: 'Assets/Foo.prefab', status: 'renamed', previous_filename: 'Assets/Old.prefab' }];
+    const { fn } = fakeFetch({
+      '&page=1': () => json(page1),
+      '&page=2': () => json(page2),
+    });
+    const client = new GithubClient('https://api.github.com', 'tok', fn);
+    const files = await client.listPrFiles('o', 'r', 1);
+    expect(files).toHaveLength(101);
+    expect(files[100]).toEqual({ path: 'Assets/Foo.prefab', status: 'renamed', previousPath: 'Assets/Old.prefab' });
+  });
+
+  it('getFileAtRef requests raw content with URL-encoded path segments', async () => {
+    const { fn, calls } = fakeFetch({ '/contents/': () => new Response(new Uint8Array([1, 2, 3])) });
+    const client = new GithubClient('https://api.github.com', 'tok', fn);
+    const bytes = await client.getFileAtRef('o', 'r', 'Assets/My Prefab#1.prefab', 'sha1');
+    expect([...bytes!]).toEqual([1, 2, 3]);
+    expect(calls[0]!.url).toContain('/contents/Assets/My%20Prefab%231.prefab?ref=sha1');
+    expect(calls[0]!.headers['accept']).toBe('application/vnd.github.raw+json');
+  });
+
+  it('getFileAtRef returns null on 404 (file absent on that side)', async () => {
+    const { fn } = fakeFetch({});
+    const client = new GithubClient('https://api.github.com', 'tok', fn);
+    expect(await client.getFileAtRef('o', 'r', 'gone.prefab', 'sha1')).toBeNull();
+  });
+
+  it('maps 401/403 to AuthError and other failures to ApiError', async () => {
+    const auth = new GithubClient('https://api.github.com', 'bad', fakeFetch({ '/pulls/1': () => json({}, 401) }).fn);
+    await expect(auth.getPrRefs('o', 'r', 1)).rejects.toBeInstanceOf(AuthError);
+    const boom = new GithubClient('https://api.github.com', 'tok', fakeFetch({ '/pulls/1': () => json({}, 500) }).fn);
+    await expect(boom.getPrRefs('o', 'r', 1)).rejects.toBeInstanceOf(ApiError);
+  });
+});

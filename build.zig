@@ -57,4 +57,17 @@ pub fn build(b: *std.Build) void {
     const run_perf = b.addRunArtifact(perf_exe);
     const perf_step = b.step("perf", "Run the performance budget gate (ReleaseFast)");
     perf_step.dependOn(&run_perf.step);
+
+    const wasm = b.addExecutable(.{
+        .name = "prefablens",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("core/src/wasm.zig"),
+            .target = b.resolveTargetQuery(.{ .cpu_arch = .wasm32, .os_tag = .freestanding }),
+            .optimize = .ReleaseSmall,
+        }),
+    });
+    wasm.entry = .disabled;
+    wasm.rdynamic = true;
+    const wasm_step = b.step("wasm", "Build the core as a freestanding WASM library");
+    wasm_step.dependOn(&b.addInstallArtifact(wasm, .{}).step);
 }

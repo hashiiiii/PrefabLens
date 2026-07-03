@@ -186,7 +186,7 @@ test "json: modified loose component matches golden" {
     ;
     const out = try root.diffToJson(arena, before, after);
     const golden =
-        \\{"schema":"prefablens.diff.v1","unresolvedGuids":["def"],"roots":[],"loose":[{"kind":"component","fileId":"11400000","classId":114,"typeName":"MonoBehaviour","scriptGuid":"def","status":"modified","fields":[{"path":"volume","status":"modified","before":"0.5","after":"0.8"}]}]}
+        \\{"schema":"prefablens.diff.v1","unresolvedGuids":["def"],"roots":[],"loose":[{"kind":"component","fileId":"11400000","classId":114,"typeName":"MonoBehaviour","scriptGuid":"def","status":"modified","fields":[{"path":"Volume","status":"modified","before":"0.5","after":"0.8"}]}]}
     ;
     try testing.expectEqualStrings(golden, out);
 }

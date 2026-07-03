@@ -24,7 +24,7 @@ test "render: modified field shown old -> new without color" {
     try render(arena, &aw.writer, res, null, false);
     const text = aw.toArrayList().items;
     try testing.expect(std.mem.indexOf(u8, text, "MonoBehaviour") != null);
-    try testing.expect(std.mem.indexOf(u8, text, "volume") != null);
+    try testing.expect(std.mem.indexOf(u8, text, "Volume") != null);
     try testing.expect(std.mem.indexOf(u8, text, "0.5") != null);
     try testing.expect(std.mem.indexOf(u8, text, "0.8") != null);
     try testing.expect(std.mem.indexOf(u8, text, "->") != null);

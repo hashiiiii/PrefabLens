@@ -28,7 +28,7 @@ test "diff: modified scalar field is detected old->new" {
     try testing.expectEqual(model.Status.modified, d.status);
     try testing.expectEqualStrings("abc", d.script_guid.?);
     try testing.expectEqual(@as(usize, 1), d.fields.len);
-    try testing.expectEqualStrings("maxHp", d.fields[0].path);
+    try testing.expectEqualStrings("Max Hp", d.fields[0].path);
     try testing.expectEqual(model.Status.modified, d.fields[0].status);
     try testing.expectEqualStrings("100", d.fields[0].before.?.scalar);
     try testing.expectEqualStrings("150", d.fields[0].after.?.scalar);
@@ -81,13 +81,13 @@ test "diff: nested field path and added field" {
     var saw_y = false;
     var saw_added_scale = false;
     for (d.fields) |f| {
-        if (std.mem.eql(u8, f.path, "m_LocalPosition.y")) {
+        if (std.mem.eql(u8, f.path, "Position.y")) {
             saw_y = true;
             try testing.expectEqual(model.Status.modified, f.status);
             try testing.expectEqualStrings("0", f.before.?.scalar);
             try testing.expectEqualStrings("5", f.after.?.scalar);
         }
-        if (std.mem.startsWith(u8, f.path, "m_LocalScale")) {
+        if (std.mem.startsWith(u8, f.path, "Scale")) {
             saw_added_scale = true;
             try testing.expectEqual(model.Status.added, f.status);
         }
@@ -149,8 +149,98 @@ test "diff: unresolved guids collected from external refs" {
     try testing.expect(saw_a and saw_b);
 }
 
+test "diff: stripped documents are excluded from docs but kept in before/after" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const before =
+        \\--- !u!1 &1
+        \\GameObject:
+        \\  m_Name: A
+    ;
+    const after =
+        \\--- !u!1 &1
+        \\GameObject:
+        \\  m_Name: A
+        \\--- !u!4 &42 stripped
+        \\Transform:
+        \\  m_PrefabInstance: {fileID: 99}
+    ;
+    const fd = try compute(arena, before, after);
+    try testing.expect(findDoc(fd, 42) == null);
+    // 構造解決用に after 配列には残る。
+    var found = false;
+    for (fd.after) |d| if (d.file_id == 42) {
+        found = true;
+        try testing.expect(d.stripped);
+    };
+    try testing.expect(found);
+}
+
+test "diff: hidden fields are dropped and paths humanized" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const before =
+        \\--- !u!4 &4
+        \\Transform:
+        \\  m_GameObject: {fileID: 1}
+        \\  m_LocalPosition: {x: 0, y: 0, z: 0}
+    ;
+    const after =
+        \\--- !u!4 &4
+        \\Transform:
+        \\  m_GameObject: {fileID: 2}
+        \\  m_LocalPosition: {x: 1, y: 0, z: 0}
+    ;
+    const fd = try compute(arena, before, after);
+    const d = findDoc(fd, 4).?;
+    // m_GameObject の変更は非表示。m_LocalPosition.x は "Position.x" に。
+    try testing.expectEqual(@as(usize, 1), d.fields.len);
+    try testing.expectEqualStrings("Position.x", d.fields[0].path);
+}
+
+test "diff: hidden-only changes leave the document unchanged" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const before =
+        \\--- !u!4 &4
+        \\Transform:
+        \\  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+    ;
+    const after =
+        \\--- !u!4 &4
+        \\Transform:
+        \\  m_LocalEulerAnglesHint: {x: 0, y: 90, z: 0}
+    ;
+    const fd = try compute(arena, before, after);
+    try testing.expectEqual(model.Status.unchanged, findDoc(fd, 4).?.status);
+}
+
+test "diff: editor class identifier tail is extracted" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const src =
+        \\--- !u!114 &5
+        \\MonoBehaviour:
+        \\  m_EditorClassIdentifier: Assembly-CSharp::Cylinder1
+        \\  hp: 1
+    ;
+    const src2 =
+        \\--- !u!114 &5
+        \\MonoBehaviour:
+        \\  m_EditorClassIdentifier: Assembly-CSharp::Cylinder1
+        \\  hp: 2
+    ;
+    const fd = try compute(arena, src, src2);
+    try testing.expectEqualStrings("Cylinder1", findDoc(fd, 5).?.class_name.?);
+}
+
 const parser = @import("parser.zig");
 const classid = @import("classid.zig");
+const inspector = @import("inspector.zig");
 const Node = model.Node;
 const Status = model.Status;
 const FieldDiff = model.FieldDiff;
@@ -160,8 +250,10 @@ pub const DocDiff = struct {
     class_id: u32,
     type_name: []const u8,
     script_guid: ?[]const u8 = null,
+    class_name: ?[]const u8 = null,
     status: Status,
     fields: []FieldDiff,
+    overrides: []model.OverrideDiff = &.{},
 };
 
 pub const FlatDiff = struct {
@@ -191,6 +283,30 @@ fn scriptGuid(doc: *const model.Document) ?[]const u8 {
     };
 }
 
+/// "Assembly-CSharp::Cylinder1" -> "Cylinder1"(最後の ':' より後)。
+fn editorClassName(doc: *const model.Document) ?[]const u8 {
+    const v = model.findValue(doc.body.map, "m_EditorClassIdentifier") orelse return null;
+    const s = switch (v.*) {
+        .scalar => |s| s,
+        else => return null,
+    };
+    const idx = std.mem.lastIndexOfScalar(u8, s, ':') orelse (if (s.len != 0) return s else return null);
+    const tail = s[idx + 1 ..];
+    return if (tail.len != 0) tail else null;
+}
+
+/// 生の field diff から Inspector 非表示を落とし、path を表示名に置換する。
+fn presentFields(arena: std.mem.Allocator, raw: []FieldDiff) ![]FieldDiff {
+    var kept: std.ArrayList(FieldDiff) = .empty;
+    for (raw) |f| {
+        if (inspector.isHidden(f.path)) continue;
+        var out = f;
+        out.path = try inspector.displayPath(arena, f.path);
+        try kept.append(arena, out);
+    }
+    return kept.toOwnedSlice(arena);
+}
+
 fn resolvedTypeName(doc: *const model.Document) ![]const u8 {
     if (classid.typeName(doc.class_id)) |n| return n;
     // Unknown classID: fall back to the document's own top key.
@@ -212,19 +328,22 @@ pub fn compute(arena: std.mem.Allocator, before_src: []const u8, after_src: []co
     // Walk the union of file_ids: iterate `after` first (preserves after order),
     // then `before`-only documents.
     for (after) |*ad| {
+        if (ad.stripped) continue;
         try collectGuids(&guids, ad.body);
         const bd = before_idx.get(ad.file_id);
         if (bd) |b| {
             try collectGuids(&guids, b.body);
-            var fields: std.ArrayList(FieldDiff) = .empty;
-            try diffNode(arena, &fields, "", b.body, ad.body);
+            var raw: std.ArrayList(FieldDiff) = .empty;
+            try diffNode(arena, &raw, "", b.body, ad.body);
+            const fields = try presentFields(arena, try raw.toOwnedSlice(arena));
             try docs.append(arena, .{
                 .file_id = ad.file_id,
                 .class_id = ad.class_id,
                 .type_name = try resolvedTypeName(ad),
                 .script_guid = scriptGuid(ad),
-                .status = if (fields.items.len == 0) .unchanged else .modified,
-                .fields = try fields.toOwnedSlice(arena),
+                .class_name = editorClassName(ad),
+                .status = if (fields.len == 0) .unchanged else .modified,
+                .fields = fields,
             });
         } else {
             try docs.append(arena, .{
@@ -232,12 +351,14 @@ pub fn compute(arena: std.mem.Allocator, before_src: []const u8, after_src: []co
                 .class_id = ad.class_id,
                 .type_name = try resolvedTypeName(ad),
                 .script_guid = scriptGuid(ad),
+                .class_name = editorClassName(ad),
                 .status = .added,
                 .fields = &[_]FieldDiff{},
             });
         }
     }
     for (before) |*bd| {
+        if (bd.stripped) continue;
         if (after_idx.contains(bd.file_id)) continue;
         try collectGuids(&guids, bd.body);
         try docs.append(arena, .{
@@ -245,6 +366,7 @@ pub fn compute(arena: std.mem.Allocator, before_src: []const u8, after_src: []co
             .class_id = bd.class_id,
             .type_name = try resolvedTypeName(bd),
             .script_guid = scriptGuid(bd),
+            .class_name = editorClassName(bd),
             .status = .removed,
             .fields = &[_]FieldDiff{},
         });

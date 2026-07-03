@@ -38,7 +38,7 @@ test "html: self-contained document with escaped content" {
     try testing.expect(std.mem.indexOf(u8, html, "</html>") != null);
     // HTML special chars escaped: "A<x>" -> "A&lt;x&gt;"
     try testing.expect(std.mem.indexOf(u8, html, "A&lt;x&gt;") != null);
-    try testing.expect(std.mem.indexOf(u8, html, "hp") != null);
+    try testing.expect(std.mem.indexOf(u8, html, "Hp") != null);
 }
 
 test "html: ref guid with markup is escaped" {
@@ -170,7 +170,7 @@ test "html: loose component renders without a GameObject wrapper" {
     var aw = std.Io.Writer.Allocating.fromArrayList(arena, &out);
     try render(arena, &aw.writer, res, null);
     const html = aw.toArrayList().items;
-    try testing.expect(std.mem.indexOf(u8, html, "volume") != null);
+    try testing.expect(std.mem.indexOf(u8, html, "Volume") != null);
     // Loose components render at depth 0 with a plain (non-"go") span class.
     try testing.expect(std.mem.indexOf(u8, html, "<span class=\"modified\">~ MonoBehaviour</span>") != null);
     try testing.expect(std.mem.indexOf(u8, html, " go\">") == null);
@@ -198,10 +198,10 @@ test "html: added and removed fields render only their one side" {
     try render(arena, &aw.writer, res, null);
     const html = aw.toArrayList().items;
     // Added field: only the "new" span, no paired "old" value.
-    try testing.expect(std.mem.indexOf(u8, html, "m_NewField") != null);
+    try testing.expect(std.mem.indexOf(u8, html, "New Field") != null);
     try testing.expect(std.mem.indexOf(u8, html, "<span class=\"new\">2</span>") != null);
     // Removed field: only the "old" span, no paired "new" value.
-    try testing.expect(std.mem.indexOf(u8, html, "m_OldField") != null);
+    try testing.expect(std.mem.indexOf(u8, html, "Old Field") != null);
     try testing.expect(std.mem.indexOf(u8, html, "<span class=\"old\">1</span>") != null);
 }
 

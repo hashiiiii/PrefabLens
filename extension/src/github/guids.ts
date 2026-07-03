@@ -1,4 +1,4 @@
-import type { DiffV1 } from '../types';
+import type { DiffV2 } from '../types';
 import { RateLimitError, type PrFile } from './client';
 
 /** cli/src/resolve.zig の parseGuid と同じ規則: 行頭(trim 後)の "guid:" を拾う。 */
@@ -41,7 +41,7 @@ export async function buildGuidIndex(files: PrFile[], fetchMeta: MetaFetcher): P
 }
 
 /** ホスト側解決の seam(親仕様 §4.3)。core の "resolved" と同じスコープ規則で付与する。 */
-export function applyResolved(diff: DiffV1, index: Map<string, string>): DiffV1 {
+export function applyResolved(diff: DiffV2, index: Map<string, string>): DiffV2 {
   const resolved: Record<string, string> = {};
   for (const g of diff.unresolvedGuids) {
     const path = index.get(g);

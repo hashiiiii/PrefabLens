@@ -20,15 +20,15 @@ beforeAll(async () => {
 });
 
 describe('createDiffer', () => {
-  it('returns a parsed diff.v1 document', () => {
+  it('returns a parsed diff.v2 document', () => {
     const json = differ.diff(BEFORE, AFTER);
-    expect(json.schema).toBe('prefablens.diff.v1');
+    expect(json.schema).toBe('prefablens.diff.v2');
     expect(json.unresolvedGuids).toEqual(['def']);
     expect(json.loose[0]!.fields[0]).toEqual({ path: 'volume', status: 'modified', before: '0.5', after: '0.8' });
   });
 
   it('handles empty before (added file)', () => {
-    expect(differ.diff(new Uint8Array(0), AFTER).schema).toBe('prefablens.diff.v1');
+    expect(differ.diff(new Uint8Array(0), AFTER).schema).toBe('prefablens.diff.v2');
   });
 
   it('throws DiffError with the error name on core failure', () => {
@@ -40,6 +40,6 @@ describe('createDiffer', () => {
   });
 
   it('is re-entrant across many calls', () => {
-    for (let i = 0; i < 50; i++) expect(differ.diff(BEFORE, AFTER).schema).toBe('prefablens.diff.v1');
+    for (let i = 0; i < 50; i++) expect(differ.diff(BEFORE, AFTER).schema).toBe('prefablens.diff.v2');
   });
 });

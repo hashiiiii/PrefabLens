@@ -7,7 +7,7 @@ const fixture = readFileSync(new URL('./fixtures/pr-files.html', import.meta.url
 const cannedResponse = {
   ok: true,
   json: {
-    schema: 'prefablens.diff.v1',
+    schema: 'prefablens.diff.v2',
     unresolvedGuids: ['def'],
     resolved: {},
     roots: [],
@@ -18,6 +18,7 @@ const cannedResponse = {
         classId: 114,
         typeName: 'MonoBehaviour',
         scriptGuid: 'def',
+        className: null,
         status: 'modified',
         fields: [{ path: 'volume', status: 'modified', before: '0.5', after: '0.8' }],
       },

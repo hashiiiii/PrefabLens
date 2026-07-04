@@ -12,7 +12,7 @@ namespace PrefabLens
     public static class Cli
     {
         /// ダウンロードする CLI のバージョン(GitHub Releases のタグ v{Version} と一致させる)。
-        public const string Version = "0.1.0";
+        public const string Version = "0.2.0";
         public const string CliPathPref = "PrefabLens.CliPath";
 
         // ---- 純関数(EditMode テスト対象) ----

@@ -11,7 +11,7 @@ metadata:
 
 ## Overview
 
-PrefabLens ships four components on one version line: the Zig CLI, the Chrome extension, the Unity Editor package, and the MCP server (npm). A release is triggered by **pushing a `vX.Y.Z` git tag** — `.github/workflows/release.yml` then cross-compiles the CLI for four targets, zips them, and runs `gh release create` automatically. The release workflow then publishes `@hashiiiii/prefablens-mcp` to npm after the zip assets go live (Trusted Publishing — the npmjs.com side needs to be configured before the first publish).
+PrefabLens ships four components on one version line: the Zig CLI, the Chrome extension, the Unity Editor package, and the MCP server (npm). A release is triggered by **pushing a `vX.Y.Z` git tag** — `.github/workflows/release.yml` then cross-compiles the CLI for four targets, zips them, and runs `gh release create` automatically. The release workflow can also publish `@hashiiiii/prefablens-mcp` to npm after the zip assets go live, but **npm publishing is currently paused** (`if: ${{ false }}` on the publish step — Trusted Publishing on npmjs.com is not configured yet; remove the condition to re-enable).
 
 **Core principle: the human pushes exactly one thing — the tag. Everything downstream is automated. Never create the release by hand.**
 
@@ -63,7 +63,7 @@ Run from a clean `main` that is up to date (`git switch main && git pull`).
 
    Expect four assets: `prefablens-{macos-arm64,macos-x64,linux-x64,windows-x64}.zip`.
 
-   Also verify `npm view @hashiiiii/prefablens-mcp version` matches the tag.
+   Also verify `npm view @hashiiiii/prefablens-mcp version` matches the tag (skip while npm publishing is paused).
 
 ## Red flags — stop and reconsider
 
@@ -76,4 +76,4 @@ Run from a clean `main` that is up to date (`git switch main && git pull`).
 
 ## Verify the outcome, not the intent
 
-A release is done only when `gh release view vX.Y.Z` lists all four zips **and** `npm view @hashiiiii/prefablens-mcp version` prints `X.Y.Z`. If the workflow failed, read `gh run view --log-failed`, fix on `main`, delete the partial tag/release, and re-tag — do not assume a pushed tag means a published release.
+A release is done only when `gh release view vX.Y.Z` lists all four zips **and**, once npm publishing is re-enabled, `npm view @hashiiiii/prefablens-mcp version` prints `X.Y.Z`. If the workflow failed, read `gh run view --log-failed`, fix on `main`, delete the partial tag/release, and re-tag — do not assume a pushed tag means a published release.

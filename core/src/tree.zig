@@ -160,12 +160,15 @@ pub fn build(arena: std.mem.Allocator, fd: diffmod.FlatDiff) !model.DiffResult {
             // stripped GameObject (nested prefab instance's root, placed in
             // the outer document) never becomes a node itself; bridge to its
             // owning PrefabInstance so the component isn't silently dropped.
-            if (go_doc.stripped) {
+            const owner_id = if (go_doc.stripped) inner: {
                 const pi_id = refFileId(model.findValue(go_doc.body.map, "m_PrefabInstance")) orelse break :blk null;
                 const pi_doc = idx.structuralDoc(pi_id) orelse break :blk null;
-                break :blk if (pi_doc.class_id == 1001) pi_id else null;
-            }
-            break :blk go_id;
+                if (pi_doc.class_id != 1001) break :blk null;
+                break :inner pi_id;
+            } else go_id;
+            // Stripped docs are excluded from fd.docs and never become nodes;
+            // only an owner that materializes may claim the component.
+            break :blk if (idx.diff_by_id.contains(owner_id)) owner_id else null;
         };
         if (owner) |owner_id| {
             const gop = try comps_by_owner.getOrPut(owner_id);
@@ -661,6 +664,69 @@ test "tree: component of a stripped GameObject with unresolvable m_PrefabInstanc
         \\  hp: 2
     ;
     const res = try root.diffBytes(arena, before, after);
+    try testing.expectEqual(@as(usize, 0), res.roots.len);
+    try testing.expectEqual(@as(usize, 1), res.loose.len);
+    try testing.expectEqual(@as(i64, 3), res.loose[0].file_id);
+    try testing.expectEqual(model.Status.modified, res.loose[0].status);
+}
+
+test "tree: component bridged to a stripped nested prefab instance becomes loose, not dropped" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    // Component added to a NESTED instance's GameObject: the inner
+    // PrefabInstance itself is stripped in the outer document, so it never
+    // becomes a node; the component must fall back to loose, not vanish.
+    const before =
+        \\--- !u!1001 &1001
+        \\PrefabInstance:
+        \\  m_Modification:
+        \\    m_TransformParent: {fileID: 0}
+        \\    m_Modifications:
+        \\    - target: {fileID: 8, guid: aaa, type: 3}
+        \\      propertyPath: m_Name
+        \\      value: Outer
+        \\  m_SourcePrefab: {fileID: 100100000, guid: aaa, type: 3}
+        \\--- !u!1001 &2002 stripped
+        \\PrefabInstance:
+        \\  m_Modification:
+        \\    m_TransformParent: {fileID: 0}
+        \\  m_SourcePrefab: {fileID: 100100000, guid: bbb, type: 3}
+        \\--- !u!1 &2 stripped
+        \\GameObject:
+        \\  m_PrefabInstance: {fileID: 2002}
+        \\--- !u!114 &3
+        \\MonoBehaviour:
+        \\  m_GameObject: {fileID: 2}
+        \\  m_Script: {fileID: 0, guid: abc, type: 3}
+        \\  hp: 1
+    ;
+    const after =
+        \\--- !u!1001 &1001
+        \\PrefabInstance:
+        \\  m_Modification:
+        \\    m_TransformParent: {fileID: 0}
+        \\    m_Modifications:
+        \\    - target: {fileID: 8, guid: aaa, type: 3}
+        \\      propertyPath: m_Name
+        \\      value: Outer
+        \\  m_SourcePrefab: {fileID: 100100000, guid: aaa, type: 3}
+        \\--- !u!1001 &2002 stripped
+        \\PrefabInstance:
+        \\  m_Modification:
+        \\    m_TransformParent: {fileID: 0}
+        \\  m_SourcePrefab: {fileID: 100100000, guid: bbb, type: 3}
+        \\--- !u!1 &2 stripped
+        \\GameObject:
+        \\  m_PrefabInstance: {fileID: 2002}
+        \\--- !u!114 &3
+        \\MonoBehaviour:
+        \\  m_GameObject: {fileID: 2}
+        \\  m_Script: {fileID: 0, guid: abc, type: 3}
+        \\  hp: 2
+    ;
+    const res = try root.diffBytes(arena, before, after);
+    // Outer instance is unchanged -> pruned as usual; the component stays visible.
     try testing.expectEqual(@as(usize, 0), res.roots.len);
     try testing.expectEqual(@as(usize, 1), res.loose.len);
     try testing.expectEqual(@as(i64, 3), res.loose[0].file_id);

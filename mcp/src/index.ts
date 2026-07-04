@@ -26,10 +26,10 @@ serveStdio(() => {
     {
       description: DESCRIPTION,
       inputSchema: z.object({
-        path: z.string().describe('Asset path (.prefab/.unity/.asset), relative to projectRoot'),
+        path: z.string().min(1).describe('Asset path (.prefab/.unity/.asset), relative to projectRoot'),
         before: z.string().default('HEAD').describe('Base git ref'),
         after: z.string().optional().describe('Target git ref; omit to compare against the working tree'),
-        projectRoot: z.string().optional().describe('Repository root; defaults to the server cwd'),
+        projectRoot: z.string().min(1).optional().describe('Repository root; defaults to the server cwd'),
         format: z.enum(['tree', 'json']).default('tree').describe('tree = readable text, json = prefablens.diff.v2'),
       }),
     },

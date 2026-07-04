@@ -76,6 +76,24 @@ test('prefab_diff format:"json" returns prefablens.diff.v2', async () => {
   expect(parsed.schema).toBe('prefablens.diff.v2');
 });
 
+test('prefab_diff rejects an empty path before reaching the cli', async () => {
+  const res = await client.callTool({
+    name: 'prefab_diff',
+    arguments: { path: '', projectRoot: fixtureRepo },
+  });
+  expect(res.isError).toBe(true);
+  expect(firstText(res)).toContain('Input validation error');
+});
+
+test('prefab_diff rejects an empty projectRoot before reaching the cli', async () => {
+  const res = await client.callTool({
+    name: 'prefab_diff',
+    arguments: { path: 'Plane.prefab', projectRoot: '' },
+  });
+  expect(res.isError).toBe(true);
+  expect(firstText(res)).toContain('Input validation error');
+});
+
 test('prefab_diff surfaces cli errors as tool errors', async () => {
   const res = await client.callTool({
     name: 'prefab_diff',

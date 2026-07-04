@@ -33,7 +33,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh release create "$GITHUB_REF_NAME" dist/*.zip --generate-notes
+      # npm publish は保留中(npmjs.com の Trusted Publisher 未設定)。設定後に if 条件を外して再開する。
       - name: Publish MCP server to npm
+        if: ${{ false }}
         working-directory: mcp
         run: |
           set -euo pipefail

@@ -97,6 +97,34 @@ test "render: components label separates object and component dimensions" {
     try testing.expect(std.mem.indexOf(u8, text, "\n      ~ MonoBehaviour\n") != null);
 }
 
+test "render: component shows editor class name when script is unresolved" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const before =
+        \\--- !u!114 &5
+        \\MonoBehaviour:
+        \\  m_Script: {fileID: 0, guid: def, type: 3}
+        \\  m_EditorClassIdentifier: Assembly-CSharp::Cylinder1
+        \\  hp: 1
+    ;
+    const after =
+        \\--- !u!114 &5
+        \\MonoBehaviour:
+        \\  m_Script: {fileID: 0, guid: def, type: 3}
+        \\  m_EditorClassIdentifier: Assembly-CSharp::Cylinder1
+        \\  hp: 2
+    ;
+    const res = try core.diffBytes(arena, before, after);
+    var out: std.ArrayList(u8) = .empty;
+    var aw = std.Io.Writer.Allocating.fromArrayList(arena, &out);
+    // resolver なし → guid は解決できないが、クラス名で MonoBehaviour より具体的に。
+    try render(arena, &aw.writer, res, null, false);
+    const text = aw.toArrayList().items;
+    try testing.expect(std.mem.indexOf(u8, text, "~ Cylinder1\n") != null);
+    try testing.expect(std.mem.indexOf(u8, text, "MonoBehaviour") == null);
+}
+
 test "render: mixed-status override group gets a modified heading" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();

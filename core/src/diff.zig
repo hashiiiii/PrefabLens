@@ -177,6 +177,28 @@ test "diff: stripped documents are excluded from docs but kept in before/after" 
     try testing.expect(found);
 }
 
+test "diff: removed stripped documents are skipped" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const before =
+        \\--- !u!1 &1
+        \\GameObject:
+        \\  m_Name: A
+        \\--- !u!4 &42 stripped
+        \\Transform:
+        \\  m_PrefabInstance: {fileID: 99}
+    ;
+    const after =
+        \\--- !u!1 &1
+        \\GameObject:
+        \\  m_Name: A
+    ;
+    const fd = try compute(arena, before, after);
+    // stripped はインスタンス側の実体の影なので、消えても removed 行にしない。
+    try testing.expect(findDoc(fd, 42) == null);
+}
+
 test "diff: hidden fields are dropped and paths humanized" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();

@@ -262,6 +262,44 @@ describe('render', () => {
     render(root, diff);
     expect(root.textContent).toContain('Enemy');
   });
+
+  it('falls back to generic instance name and badge when sourceGuid is unresolved', () => {
+    const root = freshRoot();
+    const diff: DiffV2 = {
+      schema: 'prefablens.diff.v2',
+      unresolvedGuids: ['zzz'],
+      roots: [
+        {
+          kind: 'prefabInstance', fileId: '1001', name: '', status: 'added',
+          sourceGuid: 'zzz', overrides: [], components: [], children: [],
+        },
+      ],
+      loose: [],
+    };
+    render(root, diff);
+    expect(root.textContent).toContain('Prefab Instance');
+    expect(root.textContent).toContain('‹Prefab›');
+  });
+
+  it('falls back component display to className when the script guid is unresolved', () => {
+    const root = freshRoot();
+    const diff: DiffV2 = {
+      schema: 'prefablens.diff.v2',
+      unresolvedGuids: ['xyz'],
+      roots: [],
+      loose: [
+        {
+          kind: 'component', fileId: '5', classId: 114, typeName: 'MonoBehaviour',
+          scriptGuid: 'xyz', className: 'Cylinder1', status: 'modified',
+          fields: [{ path: 'Hp', status: 'modified', before: '1', after: '2' }],
+        },
+      ],
+    };
+    render(root, diff);
+    const summary = root.querySelector('details > summary');
+    expect(summary?.textContent).toContain('Cylinder1');
+    expect(summary?.textContent).not.toContain('MonoBehaviour');
+  });
 });
 
 describe('detectTheme', () => {

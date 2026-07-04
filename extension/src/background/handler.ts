@@ -1,24 +1,56 @@
 import { AuthError, RateLimitError, apiBase, type GithubClient, type PrFile, type PrRefs } from '../github/client';
-import { applyResolved, buildGuidIndex } from '../github/guids';
+import { applyResolved, buildGuidIndex, type GuidCache } from '../github/guids';
 import { DiffError, type Differ } from '../wasm/differ';
-import type { SemanticDiffRequest, SemanticDiffResponse } from '../types';
+import type { DiffV2, SemanticDiffRequest, SemanticDiffResponse } from '../types';
 
-type ClientLike = Pick<GithubClient, 'getPrRefs' | 'listPrFiles' | 'getFileAtRef'>;
+type ClientLike = Pick<GithubClient, 'getPrRefs' | 'listPrFiles' | 'getFileAtRef' | 'searchMetaByGuid'>;
 
 export type Deps = {
   getSettings(): Promise<{ pat?: string; baseUrl?: string }>;
   makeClient(base: string, token: string): ClientLike;
   getDiffer(): Promise<Differ>;
+  guidCache: GuidCache;
 };
 
 type PrContext = { refs: PrRefs; files: PrFile[]; guidIndex: Map<string, string> };
 
 const EMPTY = new Uint8Array(0);
+const MAX_SEARCHES = 10; // Code Search は認証済み 10 req/min — 1 応答で使い切らない
 
 export function createHandler(deps: Deps): (req: SemanticDiffRequest) => Promise<SemanticDiffResponse> {
   // PR 単位のコンテキストキャッシュ(follow-up の repo+sha キャッシュの差し込み口)。
   // SW はいつ殺されてもよく、その場合は再取得するだけ。
   const contexts = new Map<string, Promise<PrContext>>();
+  // Code Search の未ヒット guid。索引遅延があるため永続化せず SW 生存期間のみ
+  const misses = new Set<string>();
+
+  /** PR 内 .meta で解決できなかった guid を キャッシュ → Code Search の順で解決する。
+   *  検索の失敗(レート制限含む)で diff は落とさない: 解決できた分だけ載せる。 */
+  async function searchUnresolved(json: DiffV2, client: ClientLike, owner: string, repo: string, repoKey: string): Promise<DiffV2> {
+    const resolved = { ...json.resolved };
+    const pending = json.unresolvedGuids.filter((g) => !(g in resolved) && !misses.has(`${repoKey}:${g}`));
+    if (!pending.length) return { ...json, resolved };
+    const cached = await deps.guidCache.load(repoKey);
+    const found: Record<string, string> = {};
+    let searches = 0;
+    for (const g of pending) {
+      if (cached[g] !== undefined) {
+        resolved[g] = cached[g];
+        continue;
+      }
+      if (searches++ >= MAX_SEARCHES) continue;
+      try {
+        const path = await client.searchMetaByGuid(owner, repo, g);
+        if (path) resolved[g] = found[g] = path;
+        else misses.add(`${repoKey}:${g}`);
+      } catch (err) {
+        if (err instanceof RateLimitError) break;
+        misses.add(`${repoKey}:${g}`);
+      }
+    }
+    if (Object.keys(found).length) await deps.guidCache.save(repoKey, found);
+    return { ...json, resolved };
+  }
 
   function loadContext(client: ClientLike, owner: string, repo: string, prNumber: number): Promise<PrContext> {
     const key = `${owner}/${repo}#${prNumber}`;
@@ -43,7 +75,8 @@ export function createHandler(deps: Deps): (req: SemanticDiffRequest) => Promise
     try {
       const settings = await deps.getSettings();
       if (!settings.pat) return { ok: false, error: 'pat-missing' };
-      const client = deps.makeClient(apiBase(settings.baseUrl), settings.pat);
+      const base = apiBase(settings.baseUrl);
+      const client = deps.makeClient(base, settings.pat);
       const { refs, files, guidIndex } = await loadContext(client, req.owner, req.repo, req.prNumber);
 
       const file = files.find((f) => f.path === req.path);
@@ -57,7 +90,8 @@ export function createHandler(deps: Deps): (req: SemanticDiffRequest) => Promise
 
       const differ = await deps.getDiffer();
       const json = differ.diff(before, after);
-      return { ok: true, json: applyResolved(json, guidIndex) };
+      const withPr = applyResolved(json, guidIndex);
+      return { ok: true, json: await searchUnresolved(withPr, client, req.owner, req.repo, `${base}/${req.owner}/${req.repo}`) };
     } catch (err) {
       if (err instanceof RateLimitError) return { ok: false, error: 'rate-limited' };
       if (err instanceof AuthError) return { ok: false, error: 'auth-failed' };

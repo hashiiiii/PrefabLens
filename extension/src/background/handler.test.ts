@@ -13,6 +13,8 @@ function makeDeps(overrides?: {
   contents?: Record<string, string>; // `${path}@${ref}` → text
   diff?: Differ['diff'];
   pat?: string | undefined;
+  search?: Record<string, string | null>; // guid → asset path(null = 未ヒット)
+  cached?: Record<string, string>; // guidCache の初期内容
 }) {
   const files = overrides?.files ?? [{ path: 'Assets/Foo.prefab', status: 'modified' }];
   const contents = overrides?.contents ?? { 'Assets/Foo.prefab@base-sha': 'b', 'Assets/Foo.prefab@head-sha': 'a' };
@@ -24,14 +26,25 @@ function makeDeps(overrides?: {
     getPrRefs: vi.fn(async () => ({ baseSha: 'base-sha', headSha: 'head-sha' })),
     listPrFiles: vi.fn(async () => files),
     getFileAtRef,
+    searchMetaByGuid: vi.fn(async (_o: string, _r: string, guid: string) => overrides?.search?.[guid] ?? null),
   };
   const differ: Differ = { diff: overrides?.diff ?? vi.fn(() => DIFF) };
+  const cacheData: Record<string, Record<string, string>> = {};
+  if (overrides?.cached) cacheData['https://api.github.com/o/r'] = { ...overrides.cached };
+  const guidCache = {
+    data: cacheData,
+    load: vi.fn(async (repo: string) => cacheData[repo] ?? {}),
+    save: vi.fn(async (repo: string, entries: Record<string, string>) => {
+      cacheData[repo] = { ...cacheData[repo], ...entries };
+    }),
+  };
   const deps: Deps = {
     getSettings: async () => ({ pat: 'pat' in (overrides ?? {}) ? overrides!.pat : 'tok', baseUrl: undefined }),
     makeClient: () => client,
     getDiffer: async () => differ,
+    guidCache,
   };
-  return { deps, client, differ };
+  return { deps, client, differ, guidCache };
 }
 
 describe('createHandler', () => {
@@ -86,6 +99,63 @@ describe('createHandler', () => {
     await handle({ ...REQ, path: 'Assets/Foo.prefab' });
     expect(client.getPrRefs).toHaveBeenCalledTimes(1);
     expect(client.listPrFiles).toHaveBeenCalledTimes(1);
+  });
+
+  it('resolves remaining guids via code search and persists them', async () => {
+    const { deps, guidCache } = makeDeps({ search: { g1: 'Assets/Scripts/S.cs' } });
+    const res = await createHandler(deps)(REQ);
+    expect(res).toEqual({ ok: true, json: { ...DIFF, resolved: { g1: 'Assets/Scripts/S.cs' } } });
+    expect(guidCache.save).toHaveBeenCalledWith('https://api.github.com/o/r', { g1: 'Assets/Scripts/S.cs' });
+  });
+
+  it('prefers the in-PR meta index over code search', async () => {
+    const { deps, client } = makeDeps({
+      files: [
+        { path: 'Assets/Foo.prefab', status: 'modified' },
+        { path: 'Assets/S.cs.meta', status: 'modified' },
+      ],
+      contents: {
+        'Assets/Foo.prefab@base-sha': 'b',
+        'Assets/Foo.prefab@head-sha': 'a',
+        'Assets/S.cs.meta@head-sha': 'guid: g1\n',
+      },
+      search: { g1: 'Assets/Elsewhere.cs' },
+    });
+    const res = await createHandler(deps)(REQ);
+    expect(res).toEqual({ ok: true, json: { ...DIFF, resolved: { g1: 'Assets/S.cs' } } });
+    expect(client.searchMetaByGuid).not.toHaveBeenCalled();
+  });
+
+  it('serves cached guids without searching', async () => {
+    const { deps, client } = makeDeps({ cached: { g1: 'Assets/Cached.cs' } });
+    const res = await createHandler(deps)(REQ);
+    expect(res).toEqual({ ok: true, json: { ...DIFF, resolved: { g1: 'Assets/Cached.cs' } } });
+    expect(client.searchMetaByGuid).not.toHaveBeenCalled();
+  });
+
+  it('does not re-search a missed guid within the worker lifetime', async () => {
+    const { deps, client } = makeDeps(); // search 未ヒット
+    const handle = createHandler(deps);
+    await handle(REQ);
+    await handle(REQ);
+    expect(client.searchMetaByGuid).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the diff usable when code search hits the rate limit', async () => {
+    const twoGuids: DiffV2 = { ...DIFF, unresolvedGuids: ['g1', 'g2'] };
+    const { deps, client } = makeDeps({ diff: () => twoGuids });
+    client.searchMetaByGuid
+      .mockResolvedValueOnce('Assets/First.cs')
+      .mockRejectedValueOnce(new RateLimitError('x'));
+    const res = await createHandler(deps)(REQ);
+    expect(res).toEqual({ ok: true, json: { ...twoGuids, resolved: { g1: 'Assets/First.cs' } } });
+  });
+
+  it('caps code searches at 10 per request', async () => {
+    const many: DiffV2 = { ...DIFF, unresolvedGuids: Array.from({ length: 12 }, (_, i) => `g${i}`) };
+    const { deps, client } = makeDeps({ diff: () => many });
+    await createHandler(deps)(REQ);
+    expect(client.searchMetaByGuid).toHaveBeenCalledTimes(10);
   });
 
   it('maps AuthError / DiffError / other failures to stable error codes', async () => {

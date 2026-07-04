@@ -12,6 +12,13 @@ export function parseGuidFromMeta(meta: string): string | undefined {
 
 export type MetaFetcher = (path: string, side: 'base' | 'head') => Promise<string | null>;
 
+/** Code Search で解決した guid→asset path の永続キャッシュ(repo キーは `<apiBase>/<owner>/<repo>`)。
+ *  guid→path は安定なので TTL なし。save はマージ。 */
+export type GuidCache = {
+  load(repo: string): Promise<Record<string, string>>;
+  save(repo: string, entries: Record<string, string>): Promise<void>;
+};
+
 const MAX_CONCURRENT_META_FETCHES = 8;
 
 /** PR 内で変更された .meta のみから guid → asset path 索引を作る(設計スコープ)。removed は base 側から読む。

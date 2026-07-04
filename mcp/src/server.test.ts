@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { cpSync, mkdtempSync, rmSync } from 'node:fs';
+import { cpSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -101,4 +101,25 @@ test('prefab_diff surfaces cli errors as tool errors', async () => {
   });
   expect(res.isError).toBe(true);
   expect(firstText(res)).toContain("git show failed for 'nosuchref:Plane.prefab'");
+});
+
+test('prefab_diff falls back to the exit code when stderr is empty', async () => {
+  const silentCli = path.join(fixtureRepo, 'silent-fail.sh');
+  writeFileSync(silentCli, '#!/bin/sh\nexit 3\n', { mode: 0o755 });
+  const silent = new Client({ name: 'test', version: '0.0.0' });
+  await silent.connect(new StdioClientTransport({
+    command: process.execPath,
+    args: [serverEntry],
+    env: { PREFABLENS_CLI: silentCli, PATH: process.env['PATH'] ?? '' },
+  }));
+  try {
+    const res = await silent.callTool({
+      name: 'prefab_diff',
+      arguments: { path: 'Plane.prefab', projectRoot: fixtureRepo },
+    });
+    expect(res.isError).toBe(true);
+    expect(firstText(res)).toBe('prefablens exited with code 3');
+  } finally {
+    await silent.close();
+  }
 });

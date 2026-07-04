@@ -16,11 +16,14 @@ type PrContext = { refs: PrRefs; files: PrFile[]; guidIndex: Map<string, string>
 
 const EMPTY = new Uint8Array(0);
 const MAX_SEARCHES = 10; // Code Search は認証済み 10 req/min — 1 応答で使い切らない
+const CONTEXT_TTL_MS = 60_000; // push で headSha が変わるため PR コンテキストは短命
+const BLOB_CACHE_MAX = 32;
 
 export function createHandler(deps: Deps): (req: SemanticDiffRequest) => Promise<SemanticDiffResponse> {
-  // PR 単位のコンテキストキャッシュ(follow-up の repo+sha キャッシュの差し込み口)。
-  // SW はいつ殺されてもよく、その場合は再取得するだけ。
-  const contexts = new Map<string, Promise<PrContext>>();
+  // PR 単位のコンテキストキャッシュ。SW はいつ殺されてもよく、その場合は再取得するだけ。
+  const contexts = new Map<string, { at: number; ctx: Promise<PrContext> }>();
+  // sha+path → bytes。内容は不変なので TTL 不要。25MB ガードの force 再要求もここに当たる
+  const blobs = new Map<string, Uint8Array | null>();
   // Code Search の未ヒット guid。索引遅延があるため永続化せず SW 生存期間のみ
   const misses = new Set<string>();
 
@@ -52,22 +55,31 @@ export function createHandler(deps: Deps): (req: SemanticDiffRequest) => Promise
     return { ...json, resolved };
   }
 
+  async function fetchBlob(client: ClientLike, owner: string, repo: string, path: string, sha: string): Promise<Uint8Array | null> {
+    const key = `${sha}:${path}`;
+    const hit = blobs.get(key); // 格納値は Uint8Array | null なので undefined = 未キャッシュ
+    if (hit !== undefined) return hit;
+    const bytes = await client.getFileAtRef(owner, repo, path, sha);
+    blobs.set(key, bytes);
+    if (blobs.size > BLOB_CACHE_MAX) blobs.delete(blobs.keys().next().value!);
+    return bytes;
+  }
+
   function loadContext(client: ClientLike, owner: string, repo: string, prNumber: number): Promise<PrContext> {
     const key = `${owner}/${repo}#${prNumber}`;
-    let ctx = contexts.get(key);
-    if (!ctx) {
-      ctx = (async () => {
-        const refs = await client.getPrRefs(owner, repo, prNumber);
-        const files = await client.listPrFiles(owner, repo, prNumber);
-        const guidIndex = await buildGuidIndex(files, async (path, side) => {
-          const bytes = await client.getFileAtRef(owner, repo, path, side === 'base' ? refs.baseSha : refs.headSha);
-          return bytes ? new TextDecoder().decode(bytes) : null;
-        });
-        return { refs, files, guidIndex };
-      })();
-      contexts.set(key, ctx);
-      ctx.catch(() => contexts.delete(key)); // 失敗はキャッシュしない
-    }
+    const entry = contexts.get(key);
+    if (entry && Date.now() - entry.at < CONTEXT_TTL_MS) return entry.ctx;
+    const ctx = (async () => {
+      const refs = await client.getPrRefs(owner, repo, prNumber);
+      const files = await client.listPrFiles(owner, repo, prNumber);
+      const guidIndex = await buildGuidIndex(files, async (path, side) => {
+        const bytes = await fetchBlob(client, owner, repo, path, side === 'base' ? refs.baseSha : refs.headSha);
+        return bytes ? new TextDecoder().decode(bytes) : null;
+      });
+      return { refs, files, guidIndex };
+    })();
+    contexts.set(key, { at: Date.now(), ctx });
+    ctx.catch(() => contexts.delete(key)); // 失敗はキャッシュしない
     return ctx;
   }
 
@@ -84,9 +96,9 @@ export function createHandler(deps: Deps): (req: SemanticDiffRequest) => Promise
       const beforePath = file?.previousPath ?? req.path;
 
       const before =
-        status === 'added' ? EMPTY : ((await client.getFileAtRef(req.owner, req.repo, beforePath, refs.baseSha)) ?? EMPTY);
+        status === 'added' ? EMPTY : ((await fetchBlob(client, req.owner, req.repo, beforePath, refs.baseSha)) ?? EMPTY);
       const after =
-        status === 'removed' ? EMPTY : ((await client.getFileAtRef(req.owner, req.repo, req.path, refs.headSha)) ?? EMPTY);
+        status === 'removed' ? EMPTY : ((await fetchBlob(client, req.owner, req.repo, req.path, refs.headSha)) ?? EMPTY);
 
       const differ = await deps.getDiffer();
       const json = differ.diff(before, after);

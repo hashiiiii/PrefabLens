@@ -101,6 +101,32 @@ describe('createHandler', () => {
     expect(client.listPrFiles).toHaveBeenCalledTimes(1);
   });
 
+  it('refreshes PR context after 60s so new pushes are picked up', async () => {
+    vi.useFakeTimers();
+    try {
+      const { deps, client } = makeDeps();
+      const handle = createHandler(deps);
+      await handle(REQ);
+      vi.setSystemTime(Date.now() + 59_000);
+      await handle(REQ);
+      expect(client.getPrRefs).toHaveBeenCalledTimes(1);
+      vi.setSystemTime(Date.now() + 2_000); // 計 61 秒
+      await handle(REQ);
+      expect(client.getPrRefs).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('fetches each sha+path blob only once (immutable content)', async () => {
+    const { deps, client } = makeDeps();
+    const handle = createHandler(deps);
+    await handle(REQ);
+    await handle(REQ);
+    const fooFetches = client.getFileAtRef.mock.calls.filter((c) => c[2] === 'Assets/Foo.prefab');
+    expect(fooFetches).toHaveLength(2); // base + head の 2 回だけ(2 回目の handle では再フェッチしない)
+  });
+
   it('resolves remaining guids via code search and persists them', async () => {
     const { deps, guidCache } = makeDeps({ search: { g1: 'Assets/Scripts/S.cs' } });
     const res = await createHandler(deps)(REQ);

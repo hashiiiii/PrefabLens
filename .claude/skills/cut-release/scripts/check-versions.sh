@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# PrefabLens: verify the four release version strings agree before tagging.
+# PrefabLens: verify the five release version strings agree before tagging.
 # The Editor package downloads prefablens CLI from the release tagged v<Cli.Version>,
 # so a drift between these files silently ships a 404 or a version-mismatched binary.
 #
@@ -17,6 +17,7 @@ cli=$(sed -n 's/.*public const string Version = "\([^"]*\)".*/\1/p' editor/Edito
 epkg=$(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' editor/package.json | head -1)
 xpkg=$(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' extension/package.json | head -1)
 xman=$(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' extension/manifest.json | head -1)
+mpkg=$(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' mcp/package.json | head -1)
 
 fail=0
 check() {
@@ -33,9 +34,10 @@ check "editor/Editor/Cli.cs"      "$cli"
 check "editor/package.json"       "$epkg"
 check "extension/package.json"    "$xpkg"
 check "extension/manifest.json"   "$xman"
+check "mcp/package.json"          "$mpkg"
 
 if [[ "$fail" -ne 0 ]]; then
   echo "version mismatch: bump every source to $want before tagging v$want" >&2
   exit 1
 fi
-echo "all four version sources at $want"
+echo "all five version sources at $want"

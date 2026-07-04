@@ -5,6 +5,7 @@ on:
 
 permissions:
   contents: write
+  id-token: write
 
 jobs:
   release:
@@ -32,3 +33,16 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh release create "$GITHUB_REF_NAME" dist/*.zip --generate-notes
+      - name: Publish MCP server to npm
+        working-directory: mcp
+        run: |
+          set -euo pipefail
+          version=$(node -p "require('./package.json').version")
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "mcp/package.json version $version does not match tag $GITHUB_REF_NAME" >&2
+            exit 1
+          fi
+          npm install -g npm@latest  # trusted publishing は npm >= 11.5.1 が必要(node 22 同梱は 10.x)
+          npm ci
+          npm run build
+          npm publish --access public

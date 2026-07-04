@@ -1,6 +1,6 @@
 ---
 name: cut-release
-description: Use when cutting a new PrefabLens release, publishing a version, or pushing a vX.Y.Z tag. Bumps the four version sources in lockstep, tags main to trigger the release workflow, and verifies the GitHub Release with its four CLI zips. PrefabLens repo only. Explicit invocation only — pushes tags and publishes a public release.
+description: Use when cutting a new PrefabLens release, publishing a version, or pushing a vX.Y.Z tag. Bumps the five version sources in lockstep, tags main to trigger the release workflow, and verifies the GitHub Release with its four CLI zips. PrefabLens repo only. Explicit invocation only — pushes tags and publishes a public release.
 disable-model-invocation: true
 license: Proprietary
 metadata:
@@ -11,7 +11,7 @@ metadata:
 
 ## Overview
 
-PrefabLens ships three components on one version line: the Zig CLI, the Chrome extension, and the Unity Editor package. A release is triggered by **pushing a `vX.Y.Z` git tag** — `.github/workflows/release.yml` then cross-compiles the CLI for four targets, zips them, and runs `gh release create` automatically.
+PrefabLens ships four components on one version line: the Zig CLI, the Chrome extension, the Unity Editor package, and the MCP server (npm). A release is triggered by **pushing a `vX.Y.Z` git tag** — `.github/workflows/release.yml` then cross-compiles the CLI for four targets, zips them, and runs `gh release create` automatically. The release workflow then publishes `@hashiiiii/prefablens-mcp` to npm after the zip assets go live (Trusted Publishing — the npmjs.com side needs to be configured before the first publish).
 
 **Core principle: the human pushes exactly one thing — the tag. Everything downstream is automated. Never create the release by hand.**
 
@@ -35,6 +35,7 @@ Run from a clean `main` that is up to date (`git switch main && git pull`).
    - `editor/package.json` → `"version": "X.Y.Z"`
    - `extension/package.json` → `"version": "X.Y.Z"`
    - `extension/manifest.json` → `"version": "X.Y.Z"`
+   - `mcp/package.json` → `"version": "X.Y.Z"`
 
 3. **Verify they agree** (this is the #1 failure mode):
 
@@ -61,6 +62,8 @@ Run from a clean `main` that is up to date (`git switch main && git pull`).
    ```
 
    Expect four assets: `prefablens-{macos-arm64,macos-x64,linux-x64,windows-x64}.zip`.
+
+   Also verify `npm view @hashiiiii/prefablens-mcp version` matches the tag.
 
 ## Red flags — stop and reconsider
 

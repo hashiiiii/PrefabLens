@@ -224,6 +224,66 @@ test "json: v2 prefab instance node with overrides" {
     try testing.expect(std.mem.indexOf(u8, out, "\"overrides\":[{\"group\":\"Transform\",\"label\":\"Scale.y\",\"status\":\"added\",\"before\":null,\"after\":\"2\"}]") != null);
 }
 
+test "json: v2 root node shape matches golden" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const before =
+        \\--- !u!1 &1
+        \\GameObject:
+        \\  m_Name: Plane
+        \\  m_Component:
+        \\  - component: {fileID: 4}
+        \\  - component: {fileID: 5}
+        \\--- !u!4 &4
+        \\Transform:
+        \\  m_GameObject: {fileID: 1}
+        \\--- !u!114 &5
+        \\MonoBehaviour:
+        \\  m_GameObject: {fileID: 1}
+        \\  m_Script: {fileID: 0, guid: def, type: 3}
+        \\  hp: 1
+    ;
+    const after =
+        \\--- !u!1 &1
+        \\GameObject:
+        \\  m_Name: Plane
+        \\  m_Component:
+        \\  - component: {fileID: 4}
+        \\  - component: {fileID: 5}
+        \\--- !u!4 &4
+        \\Transform:
+        \\  m_GameObject: {fileID: 1}
+        \\--- !u!114 &5
+        \\MonoBehaviour:
+        \\  m_GameObject: {fileID: 1}
+        \\  m_Script: {fileID: 0, guid: def, type: 3}
+        \\  hp: 2
+        \\--- !u!1001 &1001
+        \\PrefabInstance:
+        \\  m_Modification:
+        \\    m_TransformParent: {fileID: 4}
+        \\    m_Modifications:
+        \\    - target: {fileID: 8, guid: aaa, type: 3}
+        \\      propertyPath: m_Name
+        \\      value: Cylinder
+        \\    - target: {fileID: 7, guid: aaa, type: 3}
+        \\      propertyPath: m_LocalScale.y
+        \\      value: 2
+        \\    m_AddedComponents:
+        \\    - targetCorrespondingSourceObject: {fileID: 8, guid: aaa, type: 3}
+        \\      addedObject: {fileID: 9}
+        \\  m_SourcePrefab: {fileID: 100100000, guid: aaa, type: 3}
+    ;
+    const out = try root.diffToJson(arena, before, after);
+    // roots 側のノード全形状 (gameObject + components + 子 prefabInstance +
+    // overrides + 構造サマリ) を byte-for-byte で固定する回帰ピン。
+    const golden =
+        \\{"schema":"prefablens.diff.v2","unresolvedGuids":["def","aaa"],"roots":[{"kind":"gameObject","fileId":"1","name":"Plane","status":"unchanged","components":[{"kind":"component","fileId":"5","classId":114,"typeName":"MonoBehaviour","scriptGuid":"def","className":null,"status":"modified","fields":[{"path":"Hp","status":"modified","before":"1","after":"2"}]}],"children":[{"kind":"prefabInstance","fileId":"1001","name":"Cylinder","status":"added","sourceGuid":"aaa","overrides":[{"group":"Transform","label":"Scale.y","status":"added","before":null,"after":"2"},{"group":"Overrides","label":"Added Components (1)","status":"added","before":null,"after":null}],"components":[],"children":[]}]}],"loose":[]}
+    ;
+    try testing.expectEqualStrings(golden, out);
+}
+
 test "json: component carries className" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();

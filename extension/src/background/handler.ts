@@ -32,7 +32,8 @@ export function createHandler(deps: Deps): (req: SemanticDiffRequest) => Promise
    *  検索の失敗(レート制限含む)で diff は落とさない: 解決できた分だけ載せる。 */
   async function searchUnresolved(json: DiffV2, client: ClientLike, owner: string, repo: string, repoKey: string): Promise<DiffV2> {
     const resolved = { ...json.resolved };
-    const pending = json.unresolvedGuids.filter((g) => !(g in resolved) && !misses.has(`${repoKey}:${g}`));
+    // hasOwn: guid は任意文字列なので 'constructor' 等が in 演算子でプロトタイプに誤ヒットしない
+    const pending = json.unresolvedGuids.filter((g) => !Object.hasOwn(resolved, g) && !misses.has(`${repoKey}:${g}`));
     if (!pending.length) return { ...json, resolved };
     const cached = await deps.guidCache.load(repoKey);
     const found: Record<string, string> = {};

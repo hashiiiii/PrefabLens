@@ -52,3 +52,24 @@ jobs:
         run: npx playwright install --with-deps chromium
       - name: E2E smoke
         run: npm run e2e
+
+  mcp:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: mcp
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install tools
+        uses: jdx/mise-action@v4
+      - name: Build CLI
+        run: zig build
+        working-directory: ${{ github.workspace }}
+      - name: Install deps
+        run: npm ci
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Build
+        run: npm run build
+      - name: Tests
+        run: npm test

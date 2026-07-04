@@ -238,6 +238,23 @@ test "diff: editor class identifier tail is extracted" {
     try testing.expectEqualStrings("Cylinder1", findDoc(fd, 5).?.class_name.?);
 }
 
+test "diff: sortByGroup keeps same-group rows contiguous beyond known ranks" {
+    // レンダラは「同一グループの行は連続」を core の不変条件として前提にする。
+    // groupOf が将来 4 つ目のグループ名を返しても壊れないことを直接固定する。
+    var rows = [_]model.OverrideDiff{
+        .{ .group = "Overrides", .label = "a", .status = .added, .before = null, .after = null },
+        .{ .group = "Custom", .label = "b", .status = .added, .before = null, .after = null },
+        .{ .group = "Overrides", .label = "c", .status = .added, .before = null, .after = null },
+    };
+    sortByGroup(&rows);
+    try testing.expectEqualStrings("Custom", rows[0].group);
+    try testing.expectEqualStrings("Overrides", rows[1].group);
+    try testing.expectEqualStrings("Overrides", rows[2].group);
+    // 同一グループ内の相対順は安定 (a が c より先)。
+    try testing.expectEqualStrings("a", rows[1].label);
+    try testing.expectEqualStrings("c", rows[2].label);
+}
+
 test "diff: added document enumerates fields with vector collapse" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
@@ -897,7 +914,12 @@ fn groupRank(group: []const u8) u2 {
 fn sortByGroup(overrides: []model.OverrideDiff) void {
     const Ctx = struct {
         fn lessThan(_: void, a: model.OverrideDiff, b: model.OverrideDiff) bool {
-            return groupRank(a.group) < groupRank(b.group);
+            const ra = groupRank(a.group);
+            const rb = groupRank(b.group);
+            if (ra != rb) return ra < rb;
+            // rank 同値 (catch-all) はグループ名で tie-break し、groupOf に
+            // 未知のグループ名が増えても同一グループの連続性を保つ。
+            return std.mem.order(u8, a.group, b.group) == .lt;
         }
     };
     std.sort.insertion(model.OverrideDiff, overrides, {}, Ctx.lessThan);

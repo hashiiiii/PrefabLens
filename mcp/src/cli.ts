@@ -34,6 +34,23 @@ export function installFromZip(zipBytes: Uint8Array, dest: string, platform: Nod
   renameSync(tmp, dest);
 }
 
+/** ハング防止の上限。release zip は数 MB、CLI diff は通常 1 秒未満なので 60 秒は十分に保守的。 */
+const TIMEOUT_MS = 60_000;
+
+export async function download(url: string, timeoutMs = TIMEOUT_MS): Promise<Uint8Array> {
+  try {
+    const res = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) });
+    if (!res.ok) throw new Error(`download failed: HTTP ${res.status} for ${url}`);
+    return new Uint8Array(await res.arrayBuffer());
+  } catch (e) {
+    // AbortSignal.timeout の reason は DOMException(name: TimeoutError)。ヘッダー待ちと body 読み取り中のどちらの abort もこれで捕捉できる。
+    if (e instanceof DOMException && e.name === 'TimeoutError') {
+      throw new Error(`download timed out after ${timeoutMs}ms for ${url}`);
+    }
+    throw e;
+  }
+}
+
 /**
  * env PREFABLENS_CLI → キャッシュ → GitHub Releases の順で CLI を確保する。
  * PREFABLENS_CLI が存在しないパスを指す場合はエラーにせず次の候補へフォールスルーする
@@ -45,9 +62,7 @@ export async function ensureCli(version: string): Promise<string> {
   const dest = cachePath(version, process.platform, homedir());
   if (existsSync(dest)) return dest;
   const url = downloadUrl(version, releaseAssetName(process.platform, process.arch));
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`download failed: HTTP ${res.status} for ${url}`);
-  installFromZip(new Uint8Array(await res.arrayBuffer()), dest, process.platform);
+  installFromZip(await download(url), dest, process.platform);
   return dest;
 }
 
@@ -57,16 +72,34 @@ export interface CliResult {
   stderr: string;
 }
 
-export function runCli(cliPath: string, args: string[], cwd: string): Promise<CliResult> {
+export function runCli(cliPath: string, args: string[], cwd: string, timeoutMs = TIMEOUT_MS): Promise<CliResult> {
   return new Promise((resolve, reject) => {
     const child = spawn(cliPath, args, { cwd });
     let stdout = '';
     let stderr = '';
+    // タイマー内で直接 reject する。'close' 待ちにすると、SIGKILL 後も stdio パイプを
+    // 継承した孫プロセス(git 等)が掴んでいる間 'close' が発火せずハングしたままになる。
+    const timer = setTimeout(() => {
+      // すでに終了済みなら timeout 扱いにしない(exit と 'close' の隙間で発火したレース)。
+      if (child.exitCode !== null || child.signalCode !== null) return;
+      child.kill('SIGKILL');
+      // 読み取り側ハンドルを閉じ、孫プロセスが残ってもイベントループを塞がないようにする。
+      child.stdout.destroy();
+      child.stderr.destroy();
+      const hint = stderr.trim() === '' ? '' : `\nstderr: ${stderr.trim()}`;
+      reject(new Error(`prefablens CLI timed out after ${timeoutMs}ms${hint}`));
+    }, timeoutMs);
     child.stdout.setEncoding('utf8');
     child.stderr.setEncoding('utf8');
     child.stdout.on('data', (c: string) => { stdout += c; });
     child.stderr.on('data', (c: string) => { stderr += c; });
-    child.on('error', reject);
-    child.on('close', (code) => resolve({ code: code ?? -1, stdout, stderr }));
+    child.on('error', (err) => {
+      clearTimeout(timer);
+      reject(err);
+    });
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      resolve({ code: code ?? -1, stdout, stderr });
+    });
   });
 }

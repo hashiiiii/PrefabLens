@@ -136,8 +136,8 @@ pub fn build(arena: std.mem.Allocator, fd: diffmod.FlatDiff) !model.DiffResult {
     // Partition documents: GameObjects, PrefabInstances, their components, and loose docs.
     var go_ids: std.ArrayList(i64) = .empty;
     var pi_ids: std.ArrayList(i64) = .empty;
-    // components grouped by owning GameObject id
-    var comps_by_go = std.AutoHashMap(i64, std.ArrayList(ComponentDiff)).init(arena);
+    // components grouped by owning GameObject/PrefabInstance id
+    var comps_by_owner = std.AutoHashMap(i64, std.ArrayList(ComponentDiff)).init(arena);
     var loose: std.ArrayList(ComponentDiff) = .empty;
 
     for (fd.docs) |d| {
@@ -156,15 +156,24 @@ pub fn build(arena: std.mem.Allocator, fd: diffmod.FlatDiff) !model.DiffResult {
             // unresolvable ref ({fileID: 0} or dangling) would otherwise
             // bucket the component under a phantom id and drop it.
             const go_doc = idx.structuralDoc(go_id) orelse break :blk null;
-            break :blk if (go_doc.class_id == 1) go_id else null;
+            if (go_doc.class_id != 1) break :blk null;
+            // stripped GameObject (nested prefab instance's root, placed in
+            // the outer document) never becomes a node itself; bridge to its
+            // owning PrefabInstance so the component isn't silently dropped.
+            if (go_doc.stripped) {
+                const pi_id = refFileId(model.findValue(go_doc.body.map, "m_PrefabInstance")) orelse break :blk null;
+                const pi_doc = idx.structuralDoc(pi_id) orelse break :blk null;
+                break :blk if (pi_doc.class_id == 1001) pi_id else null;
+            }
+            break :blk go_id;
         };
-        if (owner) |go_id| {
-            const gop = try comps_by_go.getOrPut(go_id);
+        if (owner) |owner_id| {
+            const gop = try comps_by_owner.getOrPut(owner_id);
             if (!gop.found_existing) gop.value_ptr.* = .empty;
             // Collapse unchanged components with no fields.
             if (d.status != .unchanged) try gop.value_ptr.append(arena, makeComponent(d));
         } else {
-            // No owning GameObject -> loose (e.g. ScriptableObject).
+            // No owning GameObject/PrefabInstance -> loose (e.g. ScriptableObject).
             if (d.status != .unchanged) try loose.append(arena, makeComponent(d));
         }
     }
@@ -173,7 +182,7 @@ pub fn build(arena: std.mem.Allocator, fd: diffmod.FlatDiff) !model.DiffResult {
     var obj_by_id = std.AutoHashMap(i64, ObjectDiff).init(arena);
     for (go_ids.items) |go_id| {
         const gd = idx.diff_by_id.get(go_id).?;
-        const comps: []ComponentDiff = if (comps_by_go.get(go_id)) |list| list.items else &[_]ComponentDiff{};
+        const comps: []ComponentDiff = if (comps_by_owner.get(go_id)) |list| list.items else &[_]ComponentDiff{};
         try obj_by_id.put(go_id, .{
             .file_id = go_id,
             .name = goName(&idx, go_id),
@@ -185,6 +194,7 @@ pub fn build(arena: std.mem.Allocator, fd: diffmod.FlatDiff) !model.DiffResult {
     for (pi_ids.items) |pi_id| {
         const dd = idx.diff_by_id.get(pi_id).?;
         const doc = idx.structuralDoc(pi_id);
+        const comps: []ComponentDiff = if (comps_by_owner.get(pi_id)) |list| list.items else &[_]ComponentDiff{};
         try obj_by_id.put(pi_id, .{
             .kind = .prefab_instance,
             .file_id = pi_id,
@@ -192,7 +202,7 @@ pub fn build(arena: std.mem.Allocator, fd: diffmod.FlatDiff) !model.DiffResult {
             .source_guid = if (doc) |dc| sourcePrefabGuid(dc) else null,
             .status = dd.status,
             .overrides = dd.overrides,
-            .components = &[_]ComponentDiff{},
+            .components = comps,
             .children = &[_]ObjectDiff{},
         });
     }
@@ -562,5 +572,97 @@ test "tree: component whose m_GameObject resolves to a non-GameObject document b
     // Component 999 is unchanged (collapsed); component 7 is loose, not dropped.
     try testing.expectEqual(@as(usize, 1), res.loose.len);
     try testing.expectEqual(@as(i64, 7), res.loose[0].file_id);
+    try testing.expectEqual(model.Status.modified, res.loose[0].status);
+}
+
+test "tree: component of a stripped GameObject attaches to the owning prefab instance" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    // A component added to a prefab instance's placed GameObject: the
+    // instance's root GameObject is `stripped` in the outer document, and
+    // the real MonoBehaviour doc points m_GameObject at it.
+    const before =
+        \\--- !u!1001 &1001
+        \\PrefabInstance:
+        \\  m_Modification:
+        \\    m_TransformParent: {fileID: 0}
+        \\    m_Modifications:
+        \\    - target: {fileID: 8, guid: aaa, type: 3}
+        \\      propertyPath: m_Name
+        \\      value: Outer
+        \\  m_SourcePrefab: {fileID: 100100000, guid: aaa, type: 3}
+        \\--- !u!1 &2 stripped
+        \\GameObject:
+        \\  m_PrefabInstance: {fileID: 1001}
+        \\--- !u!114 &3
+        \\MonoBehaviour:
+        \\  m_GameObject: {fileID: 2}
+        \\  m_Script: {fileID: 0, guid: abc, type: 3}
+        \\  hp: 1
+    ;
+    const after =
+        \\--- !u!1001 &1001
+        \\PrefabInstance:
+        \\  m_Modification:
+        \\    m_TransformParent: {fileID: 0}
+        \\    m_Modifications:
+        \\    - target: {fileID: 8, guid: aaa, type: 3}
+        \\      propertyPath: m_Name
+        \\      value: Outer
+        \\  m_SourcePrefab: {fileID: 100100000, guid: aaa, type: 3}
+        \\--- !u!1 &2 stripped
+        \\GameObject:
+        \\  m_PrefabInstance: {fileID: 1001}
+        \\--- !u!114 &3
+        \\MonoBehaviour:
+        \\  m_GameObject: {fileID: 2}
+        \\  m_Script: {fileID: 0, guid: abc, type: 3}
+        \\  hp: 2
+    ;
+    const res = try root.diffBytes(arena, before, after);
+    try testing.expectEqual(@as(usize, 1), res.roots.len);
+    try testing.expectEqual(@as(usize, 0), res.loose.len);
+    const inst = res.roots[0];
+    try testing.expectEqual(model.ObjectKind.prefab_instance, inst.kind);
+    try testing.expectEqual(@as(usize, 1), inst.components.len);
+    try testing.expectEqual(model.Status.modified, inst.components[0].status);
+    var saw_hp = false;
+    for (inst.components[0].fields) |f| {
+        if (std.mem.eql(u8, f.path, "Hp")) saw_hp = true;
+    }
+    try testing.expect(saw_hp);
+}
+
+test "tree: component of a stripped GameObject with unresolvable m_PrefabInstance becomes loose" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    // The stripped GameObject's m_PrefabInstance points nowhere resolvable
+    // (fileID 9999 doesn't exist): the component must not be dropped.
+    const before =
+        \\--- !u!1 &2 stripped
+        \\GameObject:
+        \\  m_PrefabInstance: {fileID: 9999}
+        \\--- !u!114 &3
+        \\MonoBehaviour:
+        \\  m_GameObject: {fileID: 2}
+        \\  m_Script: {fileID: 0, guid: abc, type: 3}
+        \\  hp: 1
+    ;
+    const after =
+        \\--- !u!1 &2 stripped
+        \\GameObject:
+        \\  m_PrefabInstance: {fileID: 9999}
+        \\--- !u!114 &3
+        \\MonoBehaviour:
+        \\  m_GameObject: {fileID: 2}
+        \\  m_Script: {fileID: 0, guid: abc, type: 3}
+        \\  hp: 2
+    ;
+    const res = try root.diffBytes(arena, before, after);
+    try testing.expectEqual(@as(usize, 0), res.roots.len);
+    try testing.expectEqual(@as(usize, 1), res.loose.len);
+    try testing.expectEqual(@as(i64, 3), res.loose[0].file_id);
     try testing.expectEqual(model.Status.modified, res.loose[0].status);
 }

@@ -58,8 +58,10 @@ export function runCli(cliPath: string, args: string[], cwd: string): Promise<Cl
     const child = spawn(cliPath, args, { cwd });
     let stdout = '';
     let stderr = '';
-    child.stdout.on('data', (c: Buffer) => { stdout += c; });
-    child.stderr.on('data', (c: Buffer) => { stderr += c; });
+    child.stdout.setEncoding('utf8');
+    child.stderr.setEncoding('utf8');
+    child.stdout.on('data', (c: string) => { stdout += c; });
+    child.stderr.on('data', (c: string) => { stderr += c; });
     child.on('error', reject);
     child.on('close', (code) => resolve({ code: code ?? -1, stdout, stderr }));
   });

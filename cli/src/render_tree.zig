@@ -97,6 +97,46 @@ test "render: components label separates object and component dimensions" {
     try testing.expect(std.mem.indexOf(u8, text, "\n      ~ MonoBehaviour\n") != null);
 }
 
+test "render: mixed-status override group gets a modified heading" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const before =
+        \\--- !u!1001 &1001
+        \\PrefabInstance:
+        \\  m_Modification:
+        \\    m_Modifications:
+        \\    - target: {fileID: 7, guid: aaa, type: 3}
+        \\      propertyPath: m_LocalPosition.x
+        \\      value: 0
+        \\  m_SourcePrefab: {fileID: 100100000, guid: aaa, type: 3}
+    ;
+    // 追加された mod が先頭に来る順にして、見出しが先頭行の status に
+    // 引きずられないことを見る。
+    const after =
+        \\--- !u!1001 &1001
+        \\PrefabInstance:
+        \\  m_Modification:
+        \\    m_Modifications:
+        \\    - target: {fileID: 7, guid: aaa, type: 3}
+        \\      propertyPath: m_LocalScale.y
+        \\      value: 2
+        \\    - target: {fileID: 7, guid: aaa, type: 3}
+        \\      propertyPath: m_LocalPosition.x
+        \\      value: 1
+        \\  m_SourcePrefab: {fileID: 100100000, guid: aaa, type: 3}
+    ;
+    const res = try core.diffBytes(arena, before, after);
+    var out: std.ArrayList(u8) = .empty;
+    var aw = std.Io.Writer.Allocating.fromArrayList(arena, &out);
+    try render(arena, &aw.writer, res, null, false);
+    const text = aw.toArrayList().items;
+    try testing.expect(std.mem.indexOf(u8, text, "~ Transform\n") != null);
+    try testing.expect(std.mem.indexOf(u8, text, "+ Transform\n") == null);
+    try testing.expect(std.mem.indexOf(u8, text, "+ Scale.y: 2") != null);
+    try testing.expect(std.mem.indexOf(u8, text, "~ Position.x: 0 -> 1") != null);
+}
+
 test "render: structural summary row shows label only, no dangling value" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
@@ -224,13 +264,24 @@ fn renderObject(
     for (o.children) |child| try renderObject(arena, w, child, resolved, color, depth + 1);
 }
 
+/// 見出しの status: グループ内で一様ならその status、混在なら modified。
+fn groupHeadingStatus(overrides: []const model.OverrideDiff, start: usize) model.Status {
+    const first = overrides[start];
+    for (overrides[start + 1 ..]) |ov| {
+        if (!std.mem.eql(u8, ov.group, first.group)) break;
+        if (ov.status != first.status) return .modified;
+    }
+    return first.status;
+}
+
 fn renderOverrides(w: anytype, overrides: []const model.OverrideDiff, color: bool, depth: usize) !void {
     var current: []const u8 = "";
-    for (overrides) |ov| {
+    for (overrides, 0..) |ov, i| {
         if (!std.mem.eql(u8, current, ov.group)) {
             current = ov.group;
+            const hs = groupHeadingStatus(overrides, i);
             try indent(w, depth);
-            try paint(w, color, statusColor(ov.status), statusSign(ov.status));
+            try paint(w, color, statusColor(hs), statusSign(hs));
             try w.print(" {s}\n", .{ov.group});
         }
         try indent(w, depth + 1);

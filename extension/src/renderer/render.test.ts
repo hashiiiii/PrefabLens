@@ -154,6 +154,36 @@ describe('render', () => {
     expect(card.open).toBe(true);
   });
 
+  it('marks a mixed-status override group heading as modified', () => {
+    const diff: DiffV2 = {
+      schema: 'prefablens.diff.v2',
+      unresolvedGuids: [],
+      roots: [
+        {
+          kind: 'prefabInstance',
+          fileId: '1001',
+          name: 'Cylinder',
+          status: 'modified',
+          sourceGuid: null,
+          overrides: [
+            { group: 'Transform', label: 'Scale.y', status: 'added', before: null, after: '2' },
+            { group: 'Transform', label: 'Position.x', status: 'modified', before: '0', after: '1' },
+          ],
+          components: [],
+          children: [],
+        },
+      ],
+      loose: [],
+    };
+    const root = freshRoot();
+    render(root, diff);
+    const card = root.querySelector('.pl-components details') as HTMLDetailsElement;
+    expect(card.classList.contains('pl-modified')).toBe(true);
+    expect(card.querySelector('summary .pl-badge')?.textContent).toBe('~');
+    // 行自体は元の status のまま。
+    expect(card.querySelector('.pl-field.pl-added')?.textContent).toContain('Scale.y');
+  });
+
   it('renders structural summary rows as label only, without a value placeholder', () => {
     const diff: DiffV2 = {
       schema: 'prefablens.diff.v2',

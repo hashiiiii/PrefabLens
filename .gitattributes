@@ -1,0 +1,5 @@
+# Unity YAML fixtures are byte-exact test inputs (golden tests parse them as-is).
+# Keep them out of CRLF conversion on Windows checkouts.
+*.prefab -text
+*.unity -text
+*.asset -text

@@ -24,6 +24,14 @@ function firstText(res: { content?: unknown }): string {
   return content[0]?.text ?? '';
 }
 
+/** 親の環境を丸ごと引き継いで PREFABLENS_CLI だけ上書きする。置換式だと Windows で SystemRoot 等が欠落して子 node が壊れる。 */
+function envWith(cli: string): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const [k, v] of Object.entries(process.env)) if (v !== undefined) env[k] = v;
+  env['PREFABLENS_CLI'] = cli;
+  return env;
+}
+
 beforeAll(async () => {
   fixtureRepo = mkdtempSync(path.join(tmpdir(), 'prefablens-mcp-'));
   cpSync(path.join(testdata, 'plane_before.prefab'), path.join(fixtureRepo, 'Plane.prefab'));
@@ -36,7 +44,7 @@ beforeAll(async () => {
   await client.connect(new StdioClientTransport({
     command: process.execPath,
     args: [serverEntry],
-    env: { PREFABLENS_CLI: cliPath, PATH: process.env['PATH'] ?? '' },
+    env: envWith(cliPath),
   }));
 });
 
@@ -103,14 +111,15 @@ test('prefab_diff surfaces cli errors as tool errors', async () => {
   expect(firstText(res)).toContain("git show failed for 'nosuchref:Plane.prefab'");
 });
 
-test('prefab_diff falls back to the exit code when stderr is empty', async () => {
+// シェルスクリプトの fixture CLI は Windows では起動できない(検証対象の fallback 自体はプラットフォーム非依存の JS)。
+test.skipIf(process.platform === 'win32')('prefab_diff falls back to the exit code when stderr is empty', async () => {
   const silentCli = path.join(fixtureRepo, 'silent-fail.sh');
   writeFileSync(silentCli, '#!/bin/sh\nexit 3\n', { mode: 0o755 });
   const silent = new Client({ name: 'test', version: '0.0.0' });
   await silent.connect(new StdioClientTransport({
     command: process.execPath,
     args: [serverEntry],
-    env: { PREFABLENS_CLI: silentCli, PATH: process.env['PATH'] ?? '' },
+    env: envWith(silentCli),
   }));
   try {
     const res = await silent.callTool({

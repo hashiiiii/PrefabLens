@@ -49,7 +49,8 @@ test('installFromZip extracts the binary atomically and marks it executable', ()
   const dest = path.join(dir, 'v1', 'prefablens');
   installFromZip(zip, dest, 'linux');
   expect(readFileSync(dest, 'utf8')).toContain('echo ok');
-  expect(statSync(dest).mode & 0o111).not.toBe(0);
+  // Windows のファイルシステムに unix の実行ビットは無い(実装も win32 では chmod しない)。
+  if (process.platform !== 'win32') expect(statSync(dest).mode & 0o111).not.toBe(0);
 });
 
 test('installFromZip rejects a zip without the expected binary', () => {

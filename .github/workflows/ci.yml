@@ -54,7 +54,11 @@ jobs:
         run: npm run e2e
 
   mcp:
-    runs-on: ubuntu-latest
+    # npm パッケージは全 OS 向けに配布し、プロセス kill・タイムアウト・spawn はプラットフォーム差が出やすいので windows でも回す。
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     defaults:
       run:
         working-directory: mcp

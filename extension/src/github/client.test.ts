@@ -103,6 +103,34 @@ describe('GithubClient', () => {
     await expect(boom.getPrRefs('o', 'r', 1)).rejects.toBeInstanceOf(ApiError);
   });
 
+  it('searchMetaByGuid queries code search and strips .meta from the hit', async () => {
+    const { fn, calls } = fakeFetch({
+      '/search/code': () => json({ items: [{ path: 'Assets/Scripts/Player.cs.meta' }] }),
+    });
+    const client = new GithubClient('https://api.github.com', 'tok', fn);
+    expect(await client.searchMetaByGuid('o', 'r', 'abc123')).toBe('Assets/Scripts/Player.cs');
+    expect(calls[0]!.url).toContain(`/search/code?q=${encodeURIComponent('"abc123" repo:o/r extension:meta')}&per_page=1`);
+  });
+
+  it('searchMetaByGuid returns null on no hits, non-meta hits, and 422', async () => {
+    const empty = new GithubClient('https://api.github.com', 'tok', fakeFetch({ '/search/code': () => json({ items: [] }) }).fn);
+    expect(await empty.searchMetaByGuid('o', 'r', 'g')).toBeNull();
+    const odd = new GithubClient('https://api.github.com', 'tok', fakeFetch({ '/search/code': () => json({ items: [{ path: 'README.md' }] }) }).fn);
+    expect(await odd.searchMetaByGuid('o', 'r', 'g')).toBeNull();
+    // 422: リポジトリ未インデックス等。ApiError ではなく「未解決」として扱う
+    const unindexed = new GithubClient('https://api.github.com', 'tok', fakeFetch({ '/search/code': () => json({ message: 'Validation Failed' }, 422) }).fn);
+    expect(await unindexed.searchMetaByGuid('o', 'r', 'g')).toBeNull();
+  });
+
+  it('searchMetaByGuid propagates rate limiting', async () => {
+    const limited = new GithubClient(
+      'https://api.github.com',
+      'tok',
+      fakeFetch({ '/search/code': () => new Response('', { status: 403, headers: { 'retry-after': '60' } }) }).fn,
+    );
+    await expect(limited.searchMetaByGuid('o', 'r', 'g')).rejects.toBeInstanceOf(RateLimitError);
+  });
+
   it('maps rate-limit responses to RateLimitError, not AuthError', async () => {
     // GitHub の rate limit: primary は 403 + x-ratelimit-remaining: 0、
     // secondary は 403 + retry-after、新しめの API は 429。

@@ -177,6 +177,15 @@ describe('createHandler', () => {
     expect(res).toEqual({ ok: true, json: { ...twoGuids, resolved: { g1: 'Assets/First.cs' } } });
   });
 
+  it('does not treat Object.prototype members as cache hits (hostile guid)', async () => {
+    const proto: DiffV2 = { ...DIFF, unresolvedGuids: ['constructor'] };
+    const { deps, client } = makeDeps({ diff: () => proto, cached: { g9: 'Assets/X.cs' } });
+    const res = await createHandler(deps)(REQ);
+    // 'constructor' はキャッシュヒットではなく検索に回り、未ヒットで未解決のまま
+    expect(client.searchMetaByGuid).toHaveBeenCalledWith('o', 'r', 'constructor');
+    expect(res).toEqual({ ok: true, json: { ...proto, resolved: {} } });
+  });
+
   it('caps code searches at 10 per request', async () => {
     const many: DiffV2 = { ...DIFF, unresolvedGuids: Array.from({ length: 12 }, (_, i) => `g${i}`) };
     const { deps, client } = makeDeps({ diff: () => many });

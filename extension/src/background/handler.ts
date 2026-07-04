@@ -38,8 +38,9 @@ export function createHandler(deps: Deps): (req: SemanticDiffRequest) => Promise
     const found: Record<string, string> = {};
     let searches = 0;
     for (const g of pending) {
-      if (cached[g] !== undefined) {
-        resolved[g] = cached[g];
+      // hasOwn: guid は任意文字列なので 'constructor' 等で Object.prototype を拾わない
+      if (Object.hasOwn(cached, g)) {
+        resolved[g] = cached[g]!;
         continue;
       }
       if (searches++ >= MAX_SEARCHES) continue;

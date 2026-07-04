@@ -78,13 +78,34 @@ fn instanceName(idx: *Index, pi_id: i64) []const u8 {
     return "";
 }
 
+/// 入れ子チェーン歩行の hop 上限。壊れたファイルで stripped PrefabInstance
+/// 同士が循環参照しても停止する(実プロジェクトの入れ子深度は数段)。
+const max_instance_hops = 8;
+
+/// stripped な PrefabInstance の m_PrefabInstance チェーンを外側へ辿り、
+/// 実体(非 stripped)の PrefabInstance の file_id を返す。
+fn resolveInstanceChain(idx: *Index, start_id: i64) ?i64 {
+    var id = start_id;
+    var hops: usize = 0;
+    while (hops < max_instance_hops) : (hops += 1) {
+        const doc = idx.structuralDoc(id) orelse return null;
+        if (doc.class_id != 1001) return null;
+        if (!doc.stripped) return id;
+        id = refFileId(model.findValue(doc.body.map, "m_PrefabInstance")) orelse return null;
+    }
+    return null;
+}
+
 /// Transform の file_id から親ノード(GameObject または PrefabInstance)の id。
 /// stripped Transform は m_PrefabInstance を辿って所属インスタンスに橋渡し。
 fn ownerNodeIdOfTransform(idx: *Index, tr_id: i64) ?i64 {
     if (tr_id == 0) return null;
     const tr = idx.structuralDoc(tr_id) orelse return null;
     if (!isTransformClass(tr.class_id)) return null;
-    if (tr.stripped) return refFileId(model.findValue(tr.body.map, "m_PrefabInstance"));
+    if (tr.stripped) {
+        const pi_id = refFileId(model.findValue(tr.body.map, "m_PrefabInstance")) orelse return null;
+        return resolveInstanceChain(idx, pi_id);
+    }
     return gameObjectIdOfComponent(tr);
 }
 
@@ -160,11 +181,11 @@ pub fn build(arena: std.mem.Allocator, fd: diffmod.FlatDiff) !model.DiffResult {
             // stripped GameObject (nested prefab instance's root, placed in
             // the outer document) never becomes a node itself; bridge to its
             // owning PrefabInstance so the component isn't silently dropped.
+            // The owning instance may itself be stripped (nested prefab), so
+            // walk the chain out to the nearest materialized instance.
             const owner_id = if (go_doc.stripped) inner: {
                 const pi_id = refFileId(model.findValue(go_doc.body.map, "m_PrefabInstance")) orelse break :blk null;
-                const pi_doc = idx.structuralDoc(pi_id) orelse break :blk null;
-                if (pi_doc.class_id != 1001) break :blk null;
-                break :inner pi_id;
+                break :inner resolveInstanceChain(&idx, pi_id) orelse break :blk null;
             } else go_id;
             // Stripped docs are excluded from fd.docs and never become nodes;
             // only an owner that materializes may claim the component.
@@ -708,9 +729,9 @@ test "tree: component bridged to a stripped nested prefab instance becomes loose
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
-    // Component added to a NESTED instance's GameObject: the inner
-    // PrefabInstance itself is stripped in the outer document, so it never
-    // becomes a node; the component must fall back to loose, not vanish.
+    // Component bridged to a stripped nested PrefabInstance that carries NO
+    // m_PrefabInstance ref of its own: the chain out to the outer instance
+    // is broken, so the component must fall back to loose, not vanish.
     const before =
         \\--- !u!1001 &1001
         \\PrefabInstance:
@@ -765,4 +786,165 @@ test "tree: component bridged to a stripped nested prefab instance becomes loose
     try testing.expectEqual(@as(usize, 1), res.loose.len);
     try testing.expectEqual(@as(i64, 3), res.loose[0].file_id);
     try testing.expectEqual(model.Status.modified, res.loose[0].status);
+}
+
+test "tree: component of a nested stripped chain attaches to the outer prefab instance" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    // Component added to a GameObject inside a NESTED instance: the inner
+    // PrefabInstance is stripped in the outer document and carries its own
+    // m_PrefabInstance ref to the outer instance. Walking that chain must
+    // attach the component to the outer (materialized) instance node
+    // instead of dropping it to loose.
+    const before =
+        \\--- !u!1001 &1001
+        \\PrefabInstance:
+        \\  m_Modification:
+        \\    m_TransformParent: {fileID: 0}
+        \\    m_Modifications:
+        \\    - target: {fileID: 8, guid: aaa, type: 3}
+        \\      propertyPath: m_Name
+        \\      value: Outer
+        \\  m_SourcePrefab: {fileID: 100100000, guid: aaa, type: 3}
+        \\--- !u!1001 &2002 stripped
+        \\PrefabInstance:
+        \\  m_CorrespondingSourceObject: {fileID: 9, guid: bbb, type: 3}
+        \\  m_PrefabInstance: {fileID: 1001}
+        \\  m_PrefabAsset: {fileID: 0}
+        \\--- !u!1 &2 stripped
+        \\GameObject:
+        \\  m_CorrespondingSourceObject: {fileID: 10, guid: bbb, type: 3}
+        \\  m_PrefabInstance: {fileID: 2002}
+        \\  m_PrefabAsset: {fileID: 0}
+        \\--- !u!114 &3
+        \\MonoBehaviour:
+        \\  m_GameObject: {fileID: 2}
+        \\  m_Script: {fileID: 0, guid: abc, type: 3}
+        \\  hp: 1
+    ;
+    const after =
+        \\--- !u!1001 &1001
+        \\PrefabInstance:
+        \\  m_Modification:
+        \\    m_TransformParent: {fileID: 0}
+        \\    m_Modifications:
+        \\    - target: {fileID: 8, guid: aaa, type: 3}
+        \\      propertyPath: m_Name
+        \\      value: Outer
+        \\  m_SourcePrefab: {fileID: 100100000, guid: aaa, type: 3}
+        \\--- !u!1001 &2002 stripped
+        \\PrefabInstance:
+        \\  m_CorrespondingSourceObject: {fileID: 9, guid: bbb, type: 3}
+        \\  m_PrefabInstance: {fileID: 1001}
+        \\  m_PrefabAsset: {fileID: 0}
+        \\--- !u!1 &2 stripped
+        \\GameObject:
+        \\  m_CorrespondingSourceObject: {fileID: 10, guid: bbb, type: 3}
+        \\  m_PrefabInstance: {fileID: 2002}
+        \\  m_PrefabAsset: {fileID: 0}
+        \\--- !u!114 &3
+        \\MonoBehaviour:
+        \\  m_GameObject: {fileID: 2}
+        \\  m_Script: {fileID: 0, guid: abc, type: 3}
+        \\  hp: 2
+    ;
+    const res = try root.diffBytes(arena, before, after);
+    try testing.expectEqual(@as(usize, 1), res.roots.len);
+    try testing.expectEqual(@as(usize, 0), res.loose.len);
+    const inst = res.roots[0];
+    try testing.expectEqual(model.ObjectKind.prefab_instance, inst.kind);
+    try testing.expectEqual(@as(i64, 1001), inst.file_id);
+    try testing.expectEqual(@as(usize, 1), inst.components.len);
+    try testing.expectEqual(@as(i64, 3), inst.components[0].file_id);
+    try testing.expectEqual(model.Status.modified, inst.components[0].status);
+}
+
+test "tree: cyclic stripped instance chain falls back to loose, not an infinite loop" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    // Corrupt file: two stripped PrefabInstances reference each other. The
+    // hop cap must break the cycle and the component keeps the loose floor.
+    const before =
+        \\--- !u!1001 &2002 stripped
+        \\PrefabInstance:
+        \\  m_PrefabInstance: {fileID: 3003}
+        \\--- !u!1001 &3003 stripped
+        \\PrefabInstance:
+        \\  m_PrefabInstance: {fileID: 2002}
+        \\--- !u!1 &2 stripped
+        \\GameObject:
+        \\  m_PrefabInstance: {fileID: 2002}
+        \\--- !u!114 &3
+        \\MonoBehaviour:
+        \\  m_GameObject: {fileID: 2}
+        \\  m_Script: {fileID: 0, guid: abc, type: 3}
+        \\  hp: 1
+    ;
+    const after =
+        \\--- !u!1001 &2002 stripped
+        \\PrefabInstance:
+        \\  m_PrefabInstance: {fileID: 3003}
+        \\--- !u!1001 &3003 stripped
+        \\PrefabInstance:
+        \\  m_PrefabInstance: {fileID: 2002}
+        \\--- !u!1 &2 stripped
+        \\GameObject:
+        \\  m_PrefabInstance: {fileID: 2002}
+        \\--- !u!114 &3
+        \\MonoBehaviour:
+        \\  m_GameObject: {fileID: 2}
+        \\  m_Script: {fileID: 0, guid: abc, type: 3}
+        \\  hp: 2
+    ;
+    const res = try root.diffBytes(arena, before, after);
+    try testing.expectEqual(@as(usize, 0), res.roots.len);
+    try testing.expectEqual(@as(usize, 1), res.loose.len);
+    try testing.expectEqual(@as(i64, 3), res.loose[0].file_id);
+    try testing.expectEqual(model.Status.modified, res.loose[0].status);
+}
+
+test "tree: instance parented inside a nested instance nests under the outer instance" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    // A real PrefabInstance whose m_TransformParent is a stripped Transform
+    // belonging to a stripped NESTED instance: the chain walks out to the
+    // outer real instance instead of flattening the child to a root.
+    const after =
+        \\--- !u!1001 &1001
+        \\PrefabInstance:
+        \\  m_Modification:
+        \\    m_TransformParent: {fileID: 0}
+        \\    m_Modifications:
+        \\    - target: {fileID: 8, guid: aaa, type: 3}
+        \\      propertyPath: m_Name
+        \\      value: Outer
+        \\  m_SourcePrefab: {fileID: 100100000, guid: aaa, type: 3}
+        \\--- !u!1001 &2002 stripped
+        \\PrefabInstance:
+        \\  m_CorrespondingSourceObject: {fileID: 9, guid: bbb, type: 3}
+        \\  m_PrefabInstance: {fileID: 1001}
+        \\  m_PrefabAsset: {fileID: 0}
+        \\--- !u!4 &42 stripped
+        \\Transform:
+        \\  m_CorrespondingSourceObject: {fileID: 7, guid: bbb, type: 3}
+        \\  m_PrefabInstance: {fileID: 2002}
+        \\  m_PrefabAsset: {fileID: 0}
+        \\--- !u!1001 &3003
+        \\PrefabInstance:
+        \\  m_Modification:
+        \\    m_TransformParent: {fileID: 42}
+        \\    m_Modifications:
+        \\    - target: {fileID: 8, guid: ccc, type: 3}
+        \\      propertyPath: m_Name
+        \\      value: Inner
+        \\  m_SourcePrefab: {fileID: 100100000, guid: ccc, type: 3}
+    ;
+    const res = try root.diffBytes(arena, "", after);
+    try testing.expectEqual(@as(usize, 1), res.roots.len);
+    try testing.expectEqualStrings("Outer", res.roots[0].name);
+    try testing.expectEqual(@as(usize, 1), res.roots[0].children.len);
+    try testing.expectEqualStrings("Inner", res.roots[0].children[0].name);
 }

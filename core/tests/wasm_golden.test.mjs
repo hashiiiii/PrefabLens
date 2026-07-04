@@ -35,15 +35,15 @@ MonoBehaviour:
   m_Script: {fileID: 0, guid: def, type: 3}
   volume: 0.8`;
 
-const GOLDEN = '{"schema":"prefablens.diff.v1","unresolvedGuids":["def"],"roots":[],"loose":[{"kind":"component","fileId":"11400000","classId":114,"typeName":"MonoBehaviour","scriptGuid":"def","status":"modified","fields":[{"path":"volume","status":"modified","before":"0.5","after":"0.8"}]}]}';
+const GOLDEN = '{"schema":"prefablens.diff.v2","unresolvedGuids":["def"],"roots":[],"loose":[{"kind":"component","fileId":"11400000","classId":114,"typeName":"MonoBehaviour","scriptGuid":"def","className":null,"status":"modified","fields":[{"path":"Volume","status":"modified","before":"0.5","after":"0.8"}]}]}';
 
 test('wasm diff matches the native golden JSON', () => {
   assert.equal(callDiff(BEFORE, AFTER), GOLDEN);
 });
 
-test('empty before (added file) still yields a diff.v1 document', () => {
+test('empty before (added file) still yields a diff.v2 document', () => {
   const json = JSON.parse(callDiff('', AFTER));
-  assert.equal(json.schema, 'prefablens.diff.v1');
+  assert.equal(json.schema, 'prefablens.diff.v2');
 });
 
 test('hostile nesting returns a clean error.v1 payload, not a trap', () => {

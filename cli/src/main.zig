@@ -63,6 +63,21 @@ test "parseArgs: extra positional after --git operands is a parse error" {
     try testing.expectError(ArgError.TooManyArguments, parseArgs(&args));
 }
 
+test "parseArgs: --git with two operands means ref vs working tree" {
+    const args = [_][]const u8{ "--git", "HEAD", "Foo.prefab", "--json" };
+    const opt = try parseArgs(&args);
+    try testing.expect(opt.git_mode);
+    try testing.expectEqualStrings("HEAD", opt.git_ref_before);
+    try testing.expectEqualStrings("", opt.git_ref_after); // 空 = 作業ツリー側
+    try testing.expectEqualStrings("Foo.prefab", opt.git_path);
+    try testing.expectEqual(Format.json, opt.format);
+}
+
+test "parseArgs: --git with a single operand is missing operands" {
+    const args = [_][]const u8{ "--git", "HEAD" };
+    try testing.expectError(ArgError.MissingOperands, parseArgs(&args));
+}
+
 test "parseArgs: a third plain positional is too many arguments" {
     const args = [_][]const u8{ "a.prefab", "b.prefab", "c.prefab" };
     try testing.expectError(ArgError.TooManyArguments, parseArgs(&args));
@@ -401,14 +416,19 @@ pub fn parseArgs(args: []const []const u8) ArgError!Options {
             if (i >= args.len) return ArgError.MissingOperands;
             project_root = args[i];
         } else if (std.mem.eql(u8, a, "--git")) {
-            // Expect: --git <beforeRef> <afterRef> <path>, then keep parsing
-            // so flags following the operands (e.g. --json) still apply.
-            if (i + 3 >= args.len) return ArgError.MissingOperands;
+            // --git <beforeRef> [<afterRef>] <path>: 非フラグ operand を 2〜3 個消費し、
+            // 2 個なら after 側は作業ツリー(git_ref_after = "")。後続フラグは引き続き解釈する。
+            var ops: [3][]const u8 = undefined;
+            var n: usize = 0;
+            while (n < 3 and i + 1 < args.len and !std.mem.startsWith(u8, args[i + 1], "--")) : (n += 1) {
+                i += 1;
+                ops[n] = args[i];
+            }
+            if (n < 2) return ArgError.MissingOperands;
             git_mode = true;
-            git_ref_before = args[i + 1];
-            git_ref_after = args[i + 2];
-            git_path = args[i + 3];
-            i += 3;
+            git_ref_before = ops[0];
+            git_ref_after = if (n == 3) ops[1] else "";
+            git_path = ops[n - 1];
         } else if (std.mem.startsWith(u8, a, "--")) {
             return ArgError.UnknownFlag;
         } else if (git_mode) {
@@ -451,7 +471,7 @@ fn readFile(io: std.Io, arena: std.mem.Allocator, path: []const u8) ![]u8 {
 pub fn run(io: std.Io, arena: std.mem.Allocator, args: []const []const u8, stdout: *std.Io.Writer, stderr: *std.Io.Writer, color: bool) !u8 {
     const opt = parseArgs(args) catch |err| {
         switch (err) {
-            ArgError.MissingOperands => try stderr.writeAll("usage: prefablens [--json|--html] [--project DIR] [--no-color] (<before> <after> | --git <beforeRef> <afterRef> <path>)\n"),
+            ArgError.MissingOperands => try stderr.writeAll("usage: prefablens [--json|--html] [--project DIR] [--no-color] (<before> <after> | --git <beforeRef> [<afterRef>] <path>)\n"),
             ArgError.UnknownFlag => try stderr.writeAll("error: unknown flag\n"),
             ArgError.TooManyArguments => try stderr.writeAll("error: too many arguments\n"),
         }
@@ -468,7 +488,13 @@ pub fn run(io: std.Io, arena: std.mem.Allocator, args: []const []const u8, stdou
             try stderr.print("error: cannot read file '{s}'\n", .{opt.before});
             return 1;
         };
-    const after = if (opt.git_mode)
+    const after = if (opt.git_mode and opt.git_ref_after.len == 0)
+        // ref 1 個 = 作業ツリーとの比較(ファイル不在は削除 = 空側)
+        input.readWorktree(io, arena, ".", opt.git_path) catch {
+            try stderr.print("error: cannot read file '{s}'\n", .{opt.git_path});
+            return 1;
+        }
+    else if (opt.git_mode)
         input.showAtRef(io, arena, ".", opt.git_ref_after, opt.git_path) catch {
             try stderr.print("error: git show failed for '{s}:{s}'\n", .{ opt.git_ref_after, opt.git_path });
             return 1;

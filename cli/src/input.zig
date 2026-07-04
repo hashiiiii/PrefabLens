@@ -33,12 +33,36 @@ pub fn showAtRef(io: std.Io, arena: std.mem.Allocator, repo_dir: []const u8, ref
     }
 }
 
+/// 作業ツリー側(--git REF PATH の after)。ファイル不在は「削除済み」= 空側として扱う。
+pub fn readWorktree(io: std.Io, arena: std.mem.Allocator, repo_dir: []const u8, path: []const u8) ![]u8 {
+    const full = try std.fs.path.join(arena, &.{ repo_dir, path });
+    return std.Io.Dir.cwd().readFileAlloc(io, full, arena, .limited(max_input_bytes)) catch |err| switch (err) {
+        error.FileNotFound => try arena.alloc(u8, 0),
+        else => err,
+    };
+}
+
 fn git(io: std.Io, arena: std.mem.Allocator, dir: []const u8, argv: []const []const u8) !void {
     var full: std.ArrayList([]const u8) = .empty;
     try full.append(arena, "git");
     try full.appendSlice(arena, argv);
     const res = try std.process.run(arena, io, .{ .argv = full.items, .cwd = .{ .path = dir } });
     if (res.term != .exited or res.term.exited != 0) return error.GitFailed;
+}
+
+test "readWorktree reads the file and treats absence as an empty side" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const dir = try tmp.dir.realPathFileAlloc(testing.io, ".", arena);
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "Foo.prefab", .data = "v2\n" });
+
+    try testing.expectEqualStrings("v2\n", try readWorktree(testing.io, arena, dir, "Foo.prefab"));
+    // 作業ツリーで削除済み = 空側(エラーにしない)
+    try testing.expectEqual(@as(usize, 0), (try readWorktree(testing.io, arena, dir, "Gone.prefab")).len);
 }
 
 test "showAtRef returns file contents at a commit" {

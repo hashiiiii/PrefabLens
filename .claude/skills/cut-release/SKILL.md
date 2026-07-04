@@ -76,4 +76,4 @@ Run from a clean `main` that is up to date (`git switch main && git pull`).
 
 ## Verify the outcome, not the intent
 
-A release is done only when `gh release view vX.Y.Z` lists all four zips. If the workflow failed, read `gh run view --log-failed`, fix on `main`, delete the partial tag/release, and re-tag — do not assume a pushed tag means a published release.
+A release is done only when `gh release view vX.Y.Z` lists all four zips **and** `npm view @hashiiiii/prefablens-mcp version` prints `X.Y.Z`. If the workflow failed, read `gh run view --log-failed`, fix on `main`, delete the partial tag/release, and re-tag — do not assume a pushed tag means a published release.

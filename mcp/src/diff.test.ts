@@ -23,3 +23,11 @@ test('truncateTree truncates long text and appends a note', () => {
   expect(out.length).toBeLessThan(50_100);
   expect(out).toContain('[truncated: 60000 chars total]');
 });
+
+test('truncateTree keeps text exactly at the limit untouched', () => {
+  expect(truncateTree('x'.repeat(10), 10)).toBe('x'.repeat(10));
+});
+
+test('truncateTree cuts at the limit when one char over', () => {
+  expect(truncateTree('x'.repeat(11), 10)).toBe(`${'x'.repeat(10)}\n[truncated: 11 chars total]\n`);
+});

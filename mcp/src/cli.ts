@@ -34,7 +34,11 @@ export function installFromZip(zipBytes: Uint8Array, dest: string, platform: Nod
   renameSync(tmp, dest);
 }
 
-/** env PREFABLENS_CLI → キャッシュ → GitHub Releases の順で CLI を確保する。 */
+/**
+ * env PREFABLENS_CLI → キャッシュ → GitHub Releases の順で CLI を確保する。
+ * PREFABLENS_CLI が存在しないパスを指す場合はエラーにせず次の候補へフォールスルーする
+ * (設定ミスでもキャッシュ/ダウンロードで動き続けることを優先)。
+ */
 export async function ensureCli(version: string): Promise<string> {
   const manual = process.env['PREFABLENS_CLI'];
   if (manual !== undefined && manual !== '' && existsSync(manual)) return manual;

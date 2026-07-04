@@ -42,7 +42,7 @@ jobs:
             echo "mcp/package.json version $version does not match tag $GITHUB_REF_NAME" >&2
             exit 1
           fi
-          npm install -g npm@latest  # trusted publishing は npm >= 11.5.1 が必要(node 22 同梱は 10.x)
+          npm install -g 'npm@^11'  # trusted publishing は npm >= 11.5.1 が必要(node 22 同梱は 10.x)。将来 major の破壊的変更を避けて ^11 に固定
           npm ci
           npm run build
           npm publish --access public

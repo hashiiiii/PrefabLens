@@ -119,19 +119,22 @@ function renderNode(node: NodeDiff, diff: DiffV2): HTMLElement {
 }
 
 function renderOverrideGroups(overrides: OverrideDiff[], diff: DiffV2): HTMLElement[] {
-  const cards: HTMLElement[] = [];
-  let current: { name: string; el: HTMLDetailsElement } | null = null;
+  const groups: { name: string; rows: OverrideDiff[] }[] = [];
   for (const ov of overrides) {
-    if (!current || current.name !== ov.group) {
-      const el = openDetails('pl-comp', ov.status);
-      el.open = true; // override カードは常に開(spec: 縮約サマリのみで軽い)
-      el.append(summaryLine(ov.status, ov.group));
-      cards.push(el);
-      current = { name: ov.group, el };
-    }
-    current.el.append(fieldRow(ov.label, ov.status, ov.before, ov.after, diff));
+    const last = groups[groups.length - 1];
+    if (last && last.name === ov.group) last.rows.push(ov);
+    else groups.push({ name: ov.group, rows: [ov] });
   }
-  return cards;
+  return groups.map(({ name, rows }) => {
+    // 見出しの status: グループ内で一様ならその status、混在なら modified。
+    const [first] = rows;
+    const status = first && rows.every((r) => r.status === first.status) ? first.status : 'modified';
+    const el = openDetails('pl-comp', status);
+    el.open = true; // override カードは常に開(spec: 縮約サマリのみで軽い)
+    el.append(summaryLine(status, name));
+    for (const r of rows) el.append(fieldRow(r.label, r.status, r.before, r.after, diff));
+    return el;
+  });
 }
 
 function renderComponent(c: ComponentDiff, diff: DiffV2): HTMLElement {
@@ -158,6 +161,8 @@ function fieldRow(label: string, status: Status, before: FieldValue, after: Fiel
   path.className = 'pl-path';
   path.textContent = label;
   row.append(path);
+  // 構造サマリ行 (before=after=null) は件数がラベルに含まれ、値を持たない。
+  if (before === null && after === null) return row;
   if (status === 'modified') {
     row.append(valueSpan('pl-before', before, diff));
     const arrow = document.createElement('span');

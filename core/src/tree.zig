@@ -491,6 +491,40 @@ test "tree: prefab instance nests under parent GameObject with name from m_Name 
     try testing.expectEqual(@as(usize, 0), inst.components.len);
 }
 
+test "tree: component class name passes through to the tree" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const before =
+        \\--- !u!1 &1
+        \\GameObject:
+        \\  m_Name: Player
+        \\  m_Component:
+        \\  - component: {fileID: 5}
+        \\--- !u!114 &5
+        \\MonoBehaviour:
+        \\  m_GameObject: {fileID: 1}
+        \\  m_EditorClassIdentifier: Assembly-CSharp::Cylinder1
+        \\  hp: 1
+    ;
+    const after =
+        \\--- !u!1 &1
+        \\GameObject:
+        \\  m_Name: Player
+        \\  m_Component:
+        \\  - component: {fileID: 5}
+        \\--- !u!114 &5
+        \\MonoBehaviour:
+        \\  m_GameObject: {fileID: 1}
+        \\  m_EditorClassIdentifier: Assembly-CSharp::Cylinder1
+        \\  hp: 2
+    ;
+    const res = try root.diffBytes(arena, before, after);
+    try testing.expectEqual(@as(usize, 1), res.roots.len);
+    try testing.expectEqual(@as(usize, 1), res.roots[0].components.len);
+    try testing.expectEqualStrings("Cylinder1", res.roots[0].components[0].class_name.?);
+}
+
 test "tree: prefab instance with root transform parent becomes a root" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();

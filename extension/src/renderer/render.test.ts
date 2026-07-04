@@ -154,6 +154,61 @@ describe('render', () => {
     expect(card.open).toBe(true);
   });
 
+  it('marks a mixed-status override group heading as modified', () => {
+    const diff: DiffV2 = {
+      schema: 'prefablens.diff.v2',
+      unresolvedGuids: [],
+      roots: [
+        {
+          kind: 'prefabInstance',
+          fileId: '1001',
+          name: 'Cylinder',
+          status: 'modified',
+          sourceGuid: null,
+          overrides: [
+            { group: 'Transform', label: 'Scale.y', status: 'added', before: null, after: '2' },
+            { group: 'Transform', label: 'Position.x', status: 'modified', before: '0', after: '1' },
+          ],
+          components: [],
+          children: [],
+        },
+      ],
+      loose: [],
+    };
+    const root = freshRoot();
+    render(root, diff);
+    const card = root.querySelector('.pl-components details') as HTMLDetailsElement;
+    expect(card.classList.contains('pl-modified')).toBe(true);
+    expect(card.querySelector('summary .pl-badge')?.textContent).toBe('~');
+    // 行自体は元の status のまま。
+    expect(card.querySelector('.pl-field.pl-added')?.textContent).toContain('Scale.y');
+  });
+
+  it('renders structural summary rows as label only, without a value placeholder', () => {
+    const diff: DiffV2 = {
+      schema: 'prefablens.diff.v2',
+      unresolvedGuids: [],
+      roots: [
+        {
+          kind: 'prefabInstance',
+          fileId: '1001',
+          name: 'Cylinder',
+          status: 'modified',
+          sourceGuid: null,
+          overrides: [{ group: 'Overrides', label: 'Added Components (1)', status: 'added', before: null, after: null }],
+          components: [],
+          children: [],
+        },
+      ],
+      loose: [],
+    };
+    const root = freshRoot();
+    render(root, diff);
+    const row = root.querySelector('.pl-field');
+    expect(row?.textContent).toContain('Added Components (1)');
+    expect(row?.textContent).not.toContain('—');
+  });
+
   it('collapses added component cards but keeps modified ones open', () => {
     const root = freshRoot();
     const diff: DiffV2 = {
@@ -206,6 +261,44 @@ describe('render', () => {
     };
     render(root, diff);
     expect(root.textContent).toContain('Enemy');
+  });
+
+  it('falls back to generic instance name and badge when sourceGuid is unresolved', () => {
+    const root = freshRoot();
+    const diff: DiffV2 = {
+      schema: 'prefablens.diff.v2',
+      unresolvedGuids: ['zzz'],
+      roots: [
+        {
+          kind: 'prefabInstance', fileId: '1001', name: '', status: 'added',
+          sourceGuid: 'zzz', overrides: [], components: [], children: [],
+        },
+      ],
+      loose: [],
+    };
+    render(root, diff);
+    expect(root.textContent).toContain('Prefab Instance');
+    expect(root.textContent).toContain('‹Prefab›');
+  });
+
+  it('falls back component display to className when the script guid is unresolved', () => {
+    const root = freshRoot();
+    const diff: DiffV2 = {
+      schema: 'prefablens.diff.v2',
+      unresolvedGuids: ['xyz'],
+      roots: [],
+      loose: [
+        {
+          kind: 'component', fileId: '5', classId: 114, typeName: 'MonoBehaviour',
+          scriptGuid: 'xyz', className: 'Cylinder1', status: 'modified',
+          fields: [{ path: 'Hp', status: 'modified', before: '1', after: '2' }],
+        },
+      ],
+    };
+    render(root, diff);
+    const summary = root.querySelector('details > summary');
+    expect(summary?.textContent).toContain('Cylinder1');
+    expect(summary?.textContent).not.toContain('MonoBehaviour');
   });
 });
 

@@ -47,4 +47,6 @@ Example call:
 
 The server drives the `prefablens` CLI as a subprocess. On first use it downloads the CLI matching this package's version from [GitHub Releases](https://github.com/hashiiiii/PrefabLens/releases) and caches it under `~/.cache/prefablens/<version>/`.
 
+Downloads are verified against the release's `SHA256SUMS` asset before the binary is cached; a mismatch aborts the install. Releases that predate `SHA256SUMS` (v0.2.0 and earlier) skip verification with a note on stderr. Both the download and each CLI run are bounded by a 60 s timeout so a stalled network or hung subprocess cannot block the MCP call indefinitely.
+
 To use a pre-installed binary instead (offline or restricted environments), set `PREFABLENS_CLI` to its path in the server's environment.

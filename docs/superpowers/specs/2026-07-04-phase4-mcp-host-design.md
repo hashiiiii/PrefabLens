@@ -39,7 +39,7 @@ Claude Code などのコーディングエージェントが、作業中の Unit
 | `projectRoot` | string(省略可) | リポジトリルート。省略時はサーバプロセスの cwd |
 | `format` | `"tree"`(既定)\| `"json"` | tree = ANSI なしテキストツリー、json = diff.v2 |
 
-実行コマンド: `prefablens --no-color --git <before> [<after>] <path>`(cwd = projectRoot)。`format:"json"` 時は `--no-color` の代わりに `--json`。guid 解決は CLI のローカル `.meta` 走査がそのまま働く。
+実行コマンド: `prefablens --no-color --project . --git <before> [<after>] <path>`(cwd = projectRoot)。`format:"json"` 時は `--no-color` の代わりに `--json`。guid 解決は `--project .` によるローカル `.meta` 走査(cwd = projectRoot 起点)がそのまま働く。
 
 ツール説明文には「Unity YAML アセットの意味的 diff を返す。生の YAML diff を読む代わりに使う」旨をエージェント向けに書く(発見性がこのホストの UI に相当する)。
 

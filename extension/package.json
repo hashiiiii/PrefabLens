@@ -8,7 +8,7 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "size": "node scripts/check-wasm-size.mjs",
-    "e2e": "playwright test"
+    "e2e": "node build.mjs --e2e && playwright test"
   },
   "devDependencies": {
     "@playwright/test": "^1.61.1",

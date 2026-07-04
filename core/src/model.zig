@@ -71,6 +71,17 @@ pub const Document = struct {
 
 pub const Status = enum { added, removed, modified, unchanged };
 
+pub const ObjectKind = enum { game_object, prefab_instance };
+
+/// PrefabInstance の (target, propertyPath) 単位の override diff。
+pub const OverrideDiff = struct {
+    group: []const u8, // "Transform" | "GameObject" | "Overrides"
+    label: []const u8, // humanize 済み ("Position.x")
+    status: Status,
+    before: ?*const Node = null,
+    after: ?*const Node = null,
+};
+
 pub const FieldDiff = struct {
     path: []const u8, // dotted/indexed path, arena-built
     status: Status,
@@ -83,14 +94,21 @@ pub const ComponentDiff = struct {
     class_id: u32,
     type_name: []const u8,
     script_guid: ?[]const u8 = null,
+    /// m_EditorClassIdentifier 末尾のクラス名 ("Cylinder1")。guid 解決の第 2 候補。
+    class_name: ?[]const u8 = null,
     status: Status,
     fields: []FieldDiff,
 };
 
 pub const ObjectDiff = struct {
+    kind: ObjectKind = .game_object,
     file_id: i64,
     name: []const u8,
     status: Status,
+    /// prefab_instance のみ: m_SourcePrefab の guid。
+    source_guid: ?[]const u8 = null,
+    /// prefab_instance のみ: (target, propertyPath) キーの override diff。
+    overrides: []OverrideDiff = &.{},
     components: []ComponentDiff,
     children: []ObjectDiff,
 };

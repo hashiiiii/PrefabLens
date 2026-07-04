@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { applyResolved, buildGuidIndex, parseGuidFromMeta } from './guids';
 import { RateLimitError } from './client';
-import type { DiffV1 } from '../types';
+import type { DiffV2 } from '../types';
 
 const META = `fileFormatVersion: 2
 guid: 1234567890abcdef1234567890abcdef
@@ -76,8 +76,8 @@ describe('buildGuidIndex', () => {
 });
 
 describe('applyResolved', () => {
-  const diff: DiffV1 = {
-    schema: 'prefablens.diff.v1',
+  const diff: DiffV2 = {
+    schema: 'prefablens.diff.v2',
     unresolvedGuids: ['aaa', 'bbb'],
     roots: [],
     loose: [],

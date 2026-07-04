@@ -2,11 +2,11 @@ import { describe, expect, it, vi } from 'vitest';
 import { createHandler, type Deps } from './handler';
 import { AuthError, RateLimitError, type PrFile } from '../github/client';
 import { DiffError, type Differ } from '../wasm/differ';
-import type { DiffV1, SemanticDiffRequest } from '../types';
+import type { DiffV2, SemanticDiffRequest } from '../types';
 
 const REQ: SemanticDiffRequest = { type: 'semanticDiff', owner: 'o', repo: 'r', prNumber: 1, path: 'Assets/Foo.prefab' };
 
-const DIFF: DiffV1 = { schema: 'prefablens.diff.v1', unresolvedGuids: ['g1'], roots: [], loose: [] };
+const DIFF: DiffV2 = { schema: 'prefablens.diff.v2', unresolvedGuids: ['g1'], roots: [], loose: [] };
 
 function makeDeps(overrides?: {
   files?: PrFile[];

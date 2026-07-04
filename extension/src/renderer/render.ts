@@ -1,4 +1,4 @@
-import type { ComponentDiff, DiffV1, FieldValue, GameObjectDiff, Status } from '../types';
+import type { ComponentDiff, DiffV2, FieldValue, NodeDiff, OverrideDiff, Status } from '../types';
 
 const STYLES = `
   :host { all: initial; }
@@ -26,6 +26,8 @@ const STYLES = `
   .pl-arrow { color: var(--pl-muted); margin: 0 4px; }
   .pl-empty, .pl-error, .pl-loading { color: var(--pl-muted); margin: 0; }
   .pl-error { color: var(--pl-removed); }
+  .pl-components { border-left: 1px solid var(--pl-border); margin: 2px 0 2px 4px; padding-left: 8px; }
+  .pl-components-label { color: var(--pl-muted); font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; user-select: none; }
 `;
 
 const BADGE: Record<Status, string> = { added: '+', removed: '−', modified: '~', unchanged: ' ' };
@@ -37,9 +39,9 @@ export function detectTheme(doc: Document): 'light' | 'dark' {
   return doc.defaultView?.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
 }
 
-export function render(root: ShadowRoot, diff: DiffV1): void {
+export function render(root: ShadowRoot, diff: DiffV2): void {
   const container = mount(root);
-  for (const go of diff.roots) container.append(renderGameObject(go, diff));
+  for (const node of diff.roots) container.append(renderNode(node, diff));
   for (const c of diff.loose) container.append(renderComponent(c, diff));
   if (!diff.roots.length && !diff.loose.length) {
     container.append(note('pl-empty', 'No semantic changes'));
@@ -72,40 +74,103 @@ function note(className: string, text: string): HTMLElement {
   return p;
 }
 
-function renderGameObject(go: GameObjectDiff, diff: DiffV1): HTMLElement {
-  const details = openDetails('pl-go', go.status);
-  details.append(summaryLine(go.status, go.name));
-  for (const c of go.components) details.append(renderComponent(c, diff));
-  for (const child of go.children) details.append(renderGameObject(child, diff));
+function stem(path: string): string {
+  const base = path.split('/').pop() ?? path;
+  const dot = base.lastIndexOf('.');
+  return dot > 0 ? base.slice(0, dot) : base;
+}
+
+function nodeName(node: NodeDiff, diff: DiffV2): string {
+  if (node.name) return node.name;
+  if (node.kind === 'prefabInstance') {
+    const p = node.sourceGuid ? diff.resolved?.[node.sourceGuid] : undefined;
+    return p ? stem(p) : 'Prefab Instance';
+  }
+  return '(GameObject)';
+}
+
+function renderNode(node: NodeDiff, diff: DiffV2): HTMLElement {
+  const details = openDetails(node.kind === 'prefabInstance' ? 'pl-pi' : 'pl-go', node.status);
+  const summary = summaryLine(node.status, nodeName(node, diff));
+  if (node.kind === 'prefabInstance') {
+    const badge = document.createElement('span');
+    badge.className = 'pl-script';
+    const p = node.sourceGuid ? diff.resolved?.[node.sourceGuid] : undefined;
+    badge.textContent = p ? `‹Prefab: ${p}›` : '‹Prefab›';
+    summary.append(badge);
+  }
+  details.append(summary);
+
+  // 表示次元の規則: コンポーネント/override カードは components セクション配下のみ。
+  const cards: HTMLElement[] = [];
+  if (node.kind === 'prefabInstance') cards.push(...renderOverrideGroups(node.overrides, diff));
+  cards.push(...node.components.map((c) => renderComponent(c, diff)));
+  if (cards.length) {
+    const section = document.createElement('div');
+    section.className = 'pl-components';
+    const label = document.createElement('div');
+    label.className = 'pl-components-label';
+    label.textContent = 'components';
+    section.append(label, ...cards);
+    details.append(section);
+  }
+  for (const child of node.children) details.append(renderNode(child, diff));
   return details;
 }
 
-function renderComponent(c: ComponentDiff, diff: DiffV1): HTMLElement {
+function renderOverrideGroups(overrides: OverrideDiff[], diff: DiffV2): HTMLElement[] {
+  const cards: HTMLElement[] = [];
+  let current: { name: string; el: HTMLDetailsElement } | null = null;
+  for (const ov of overrides) {
+    if (!current || current.name !== ov.group) {
+      const el = openDetails('pl-comp', ov.status);
+      el.open = true; // override カードは常に開(spec: 縮約サマリのみで軽い)
+      el.append(summaryLine(ov.status, ov.group));
+      cards.push(el);
+      current = { name: ov.group, el };
+    }
+    current.el.append(fieldRow(ov.label, ov.status, ov.before, ov.after, diff));
+  }
+  return cards;
+}
+
+function renderComponent(c: ComponentDiff, diff: DiffV2): HTMLElement {
   const details = openDetails('pl-comp', c.status);
-  const summary = summaryLine(c.status, c.typeName);
+  details.open = c.status !== 'added'; // added(初期値の全列挙)は閉、それ以外は開
+  const resolved = c.scriptGuid ? diff.resolved?.[c.scriptGuid] : undefined;
+  const display = resolved ? stem(resolved) : (c.className ?? c.typeName);
+  const summary = summaryLine(c.status, display);
   if (c.scriptGuid) {
     const script = document.createElement('span');
     script.className = 'pl-script';
-    script.textContent = diff.resolved?.[c.scriptGuid] ?? `guid:${c.scriptGuid}`;
+    script.textContent = '‹Script›';
     summary.append(script);
   }
   details.append(summary);
-  for (const f of c.fields) {
-    const row = document.createElement('div');
-    row.className = `pl-field pl-${f.status}`;
-    const path = document.createElement('span');
-    path.className = 'pl-path';
-    path.textContent = f.path;
-    row.append(path);
-    row.append(valueSpan('pl-before', f.before, diff));
+  for (const f of c.fields) details.append(fieldRow(f.path, f.status, f.before, f.after, diff));
+  return details;
+}
+
+function fieldRow(label: string, status: Status, before: FieldValue, after: FieldValue, diff: DiffV2): HTMLElement {
+  const row = document.createElement('div');
+  row.className = `pl-field pl-${status}`;
+  const path = document.createElement('span');
+  path.className = 'pl-path';
+  path.textContent = label;
+  row.append(path);
+  if (status === 'modified') {
+    row.append(valueSpan('pl-before', before, diff));
     const arrow = document.createElement('span');
     arrow.className = 'pl-arrow';
     arrow.textContent = '→';
     row.append(arrow);
-    row.append(valueSpan('pl-after', f.after, diff));
-    details.append(row);
+    row.append(valueSpan('pl-after', after, diff));
+  } else if (status === 'added') {
+    row.append(valueSpan('pl-after', after, diff));
+  } else if (status === 'removed') {
+    row.append(valueSpan('pl-before', before, diff));
   }
-  return details;
+  return row;
 }
 
 function openDetails(kind: string, status: Status): HTMLDetailsElement {
@@ -126,14 +191,14 @@ function summaryLine(status: Status, text: string): HTMLElement {
   return summary;
 }
 
-function valueSpan(className: string, value: FieldValue, diff: DiffV1): HTMLElement {
+function valueSpan(className: string, value: FieldValue, diff: DiffV2): HTMLElement {
   const span = document.createElement('span');
   span.className = className;
   span.textContent = formatValue(value, diff);
   return span;
 }
 
-function formatValue(value: FieldValue, diff: DiffV1): string {
+function formatValue(value: FieldValue, diff: DiffV2): string {
   if (value === null) return '—';
   if (typeof value === 'string') return value;
   const { fileId, guid } = value.ref;

@@ -6,6 +6,7 @@ pub const parser = @import("parser.zig");
 pub const diff = @import("diff.zig");
 pub const tree = @import("tree.zig");
 pub const json = @import("json.zig");
+pub const inspector = @import("inspector.zig");
 pub const perf = @import("perf.zig");
 
 pub fn version() []const u8 {
@@ -28,4 +29,5 @@ test "core builds and version is reported" {
 
 test {
     std.testing.refAllDecls(@This());
+    _ = @import("fixture_test.zig");
 }

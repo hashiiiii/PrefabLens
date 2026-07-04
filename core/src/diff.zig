@@ -28,7 +28,7 @@ test "diff: modified scalar field is detected old->new" {
     try testing.expectEqual(model.Status.modified, d.status);
     try testing.expectEqualStrings("abc", d.script_guid.?);
     try testing.expectEqual(@as(usize, 1), d.fields.len);
-    try testing.expectEqualStrings("maxHp", d.fields[0].path);
+    try testing.expectEqualStrings("Max Hp", d.fields[0].path);
     try testing.expectEqual(model.Status.modified, d.fields[0].status);
     try testing.expectEqualStrings("100", d.fields[0].before.?.scalar);
     try testing.expectEqualStrings("150", d.fields[0].after.?.scalar);
@@ -81,13 +81,13 @@ test "diff: nested field path and added field" {
     var saw_y = false;
     var saw_added_scale = false;
     for (d.fields) |f| {
-        if (std.mem.eql(u8, f.path, "m_LocalPosition.y")) {
+        if (std.mem.eql(u8, f.path, "Position.y")) {
             saw_y = true;
             try testing.expectEqual(model.Status.modified, f.status);
             try testing.expectEqualStrings("0", f.before.?.scalar);
             try testing.expectEqualStrings("5", f.after.?.scalar);
         }
-        if (std.mem.startsWith(u8, f.path, "m_LocalScale")) {
+        if (std.mem.startsWith(u8, f.path, "Scale")) {
             saw_added_scale = true;
             try testing.expectEqual(model.Status.added, f.status);
         }
@@ -149,8 +149,348 @@ test "diff: unresolved guids collected from external refs" {
     try testing.expect(saw_a and saw_b);
 }
 
+test "diff: stripped documents are excluded from docs but kept in before/after" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const before =
+        \\--- !u!1 &1
+        \\GameObject:
+        \\  m_Name: A
+    ;
+    const after =
+        \\--- !u!1 &1
+        \\GameObject:
+        \\  m_Name: A
+        \\--- !u!4 &42 stripped
+        \\Transform:
+        \\  m_PrefabInstance: {fileID: 99}
+    ;
+    const fd = try compute(arena, before, after);
+    try testing.expect(findDoc(fd, 42) == null);
+    // 構造解決用に after 配列には残る。
+    var found = false;
+    for (fd.after) |d| if (d.file_id == 42) {
+        found = true;
+        try testing.expect(d.stripped);
+    };
+    try testing.expect(found);
+}
+
+test "diff: hidden fields are dropped and paths humanized" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const before =
+        \\--- !u!4 &4
+        \\Transform:
+        \\  m_GameObject: {fileID: 1}
+        \\  m_LocalPosition: {x: 0, y: 0, z: 0}
+    ;
+    const after =
+        \\--- !u!4 &4
+        \\Transform:
+        \\  m_GameObject: {fileID: 2}
+        \\  m_LocalPosition: {x: 1, y: 0, z: 0}
+    ;
+    const fd = try compute(arena, before, after);
+    const d = findDoc(fd, 4).?;
+    // m_GameObject の変更は非表示。m_LocalPosition.x は "Position.x" に。
+    try testing.expectEqual(@as(usize, 1), d.fields.len);
+    try testing.expectEqualStrings("Position.x", d.fields[0].path);
+}
+
+test "diff: hidden-only changes leave the document unchanged" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const before =
+        \\--- !u!4 &4
+        \\Transform:
+        \\  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+    ;
+    const after =
+        \\--- !u!4 &4
+        \\Transform:
+        \\  m_LocalEulerAnglesHint: {x: 0, y: 90, z: 0}
+    ;
+    const fd = try compute(arena, before, after);
+    try testing.expectEqual(model.Status.unchanged, findDoc(fd, 4).?.status);
+}
+
+test "diff: editor class identifier tail is extracted" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const src =
+        \\--- !u!114 &5
+        \\MonoBehaviour:
+        \\  m_EditorClassIdentifier: Assembly-CSharp::Cylinder1
+        \\  hp: 1
+    ;
+    const src2 =
+        \\--- !u!114 &5
+        \\MonoBehaviour:
+        \\  m_EditorClassIdentifier: Assembly-CSharp::Cylinder1
+        \\  hp: 2
+    ;
+    const fd = try compute(arena, src, src2);
+    try testing.expectEqualStrings("Cylinder1", findDoc(fd, 5).?.class_name.?);
+}
+
+test "diff: added document enumerates fields with vector collapse" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const before = "";
+    const after =
+        \\--- !u!4 &4
+        \\Transform:
+        \\  m_GameObject: {fileID: 1}
+        \\  m_LocalPosition: {x: 4, y: 0, z: 0}
+        \\  maxHp: 100
+    ;
+    const fd = try compute(arena, before, after);
+    const d = findDoc(fd, 4).?;
+    try testing.expectEqual(model.Status.added, d.status);
+    // m_GameObject は非表示。Position はベクトル 1 行、maxHp は Max Hp。
+    try testing.expectEqual(@as(usize, 2), d.fields.len);
+    try testing.expectEqualStrings("Position", d.fields[0].path);
+    try testing.expectEqualStrings("(4, 0, 0)", d.fields[0].after.?.scalar);
+    try testing.expectEqualStrings("Max Hp", d.fields[1].path);
+}
+
+test "diff: added map field inside a modified document is flattened" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const before =
+        \\--- !u!4 &4
+        \\Transform:
+        \\  m_LocalPosition: {x: 0, y: 0, z: 0}
+    ;
+    const after =
+        \\--- !u!4 &4
+        \\Transform:
+        \\  m_LocalPosition: {x: 0, y: 5, z: 0}
+        \\  m_LocalScale: {x: 1, y: 1, z: 1}
+    ;
+    const fd = try compute(arena, before, after);
+    const d = findDoc(fd, 4).?;
+    var saw_scale = false;
+    for (d.fields) |f| {
+        if (std.mem.eql(u8, f.path, "Scale")) {
+            saw_scale = true;
+            try testing.expectEqual(model.Status.added, f.status);
+            try testing.expectEqualStrings("(1, 1, 1)", f.after.?.scalar);
+        }
+    }
+    try testing.expect(saw_scale);
+}
+
+test "diff: prefab instance override keyed by target+propertyPath" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const before =
+        \\--- !u!1001 &1001
+        \\PrefabInstance:
+        \\  m_Modification:
+        \\    m_Modifications:
+        \\    - target: {fileID: 7, guid: aaa, type: 3}
+        \\      propertyPath: m_LocalPosition.x
+        \\      value: 0.41646004
+        \\      objectReference: {fileID: 0}
+        \\    - target: {fileID: 7, guid: aaa, type: 3}
+        \\      propertyPath: m_Name
+        \\      value: Cylinder
+        \\      objectReference: {fileID: 0}
+        \\  m_SourcePrefab: {fileID: 100100000, guid: aaa, type: 3}
+    ;
+    // 順序を入れ替えつつ x のみ変更: 順序入れ替えは diff にならない。
+    const after =
+        \\--- !u!1001 &1001
+        \\PrefabInstance:
+        \\  m_Modification:
+        \\    m_Modifications:
+        \\    - target: {fileID: 7, guid: aaa, type: 3}
+        \\      propertyPath: m_Name
+        \\      value: Cylinder
+        \\      objectReference: {fileID: 0}
+        \\    - target: {fileID: 7, guid: aaa, type: 3}
+        \\      propertyPath: m_LocalPosition.x
+        \\      value: 1
+        \\      objectReference: {fileID: 0}
+        \\  m_SourcePrefab: {fileID: 100100000, guid: aaa, type: 3}
+    ;
+    const fd = try compute(arena, before, after);
+    const d = findDoc(fd, 1001).?;
+    try testing.expectEqual(model.Status.modified, d.status);
+    try testing.expectEqual(@as(usize, 0), d.fields.len);
+    try testing.expectEqual(@as(usize, 1), d.overrides.len);
+    try testing.expectEqualStrings("Transform", d.overrides[0].group);
+    try testing.expectEqualStrings("Position.x", d.overrides[0].label);
+    try testing.expectEqualStrings("0.41646004", d.overrides[0].before.?.scalar);
+    try testing.expectEqualStrings("1", d.overrides[0].after.?.scalar);
+}
+
+test "diff: modified instance overrides are sorted group-contiguous, Transform first" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const before =
+        \\--- !u!1001 &1001
+        \\PrefabInstance:
+        \\  m_Modification:
+        \\    m_Modifications:
+        \\    - target: {fileID: 7, guid: aaa, type: 3}
+        \\      propertyPath: rangeMin
+        \\      value: 1
+        \\      objectReference: {fileID: 0}
+        \\    - target: {fileID: 7, guid: aaa, type: 3}
+        \\      propertyPath: m_LocalPosition.x
+        \\      value: 0
+        \\      objectReference: {fileID: 0}
+        \\    - target: {fileID: 7, guid: aaa, type: 3}
+        \\      propertyPath: maxHp
+        \\      value: 100
+        \\      objectReference: {fileID: 0}
+        \\  m_SourcePrefab: {fileID: 100100000, guid: aaa, type: 3}
+    ;
+    // 生の YAML 順は Overrides, Transform, Overrides: グループ非連続になる入力。
+    const after =
+        \\--- !u!1001 &1001
+        \\PrefabInstance:
+        \\  m_Modification:
+        \\    m_Modifications:
+        \\    - target: {fileID: 7, guid: aaa, type: 3}
+        \\      propertyPath: rangeMin
+        \\      value: 2
+        \\      objectReference: {fileID: 0}
+        \\    - target: {fileID: 7, guid: aaa, type: 3}
+        \\      propertyPath: m_LocalPosition.x
+        \\      value: 5
+        \\      objectReference: {fileID: 0}
+        \\    - target: {fileID: 7, guid: aaa, type: 3}
+        \\      propertyPath: maxHp
+        \\      value: 150
+        \\      objectReference: {fileID: 0}
+        \\  m_SourcePrefab: {fileID: 100100000, guid: aaa, type: 3}
+    ;
+    const fd = try compute(arena, before, after);
+    const d = findDoc(fd, 1001).?;
+    try testing.expectEqual(model.Status.modified, d.status);
+    try testing.expectEqual(@as(usize, 3), d.overrides.len);
+    try testing.expectEqualStrings("Transform", d.overrides[0].group);
+    try testing.expectEqualStrings("Overrides", d.overrides[1].group);
+    try testing.expectEqualStrings("Overrides", d.overrides[2].group);
+    // Overrides 内では元の相対順序(rangeMin が maxHp より先)を維持する。
+    try testing.expectEqualStrings("Range Min", d.overrides[1].label);
+    try testing.expectEqualStrings("Max Hp", d.overrides[2].label);
+}
+
+test "diff: added prefab instance collapses placement to summary" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const after =
+        \\--- !u!1001 &1001
+        \\PrefabInstance:
+        \\  m_Modification:
+        \\    m_Modifications:
+        \\    - target: {fileID: 7, guid: aaa, type: 3}
+        \\      propertyPath: m_LocalPosition.x
+        \\      value: 2.03
+        \\    - target: {fileID: 7, guid: aaa, type: 3}
+        \\      propertyPath: m_LocalPosition.y
+        \\      value: 3.63
+        \\    - target: {fileID: 7, guid: aaa, type: 3}
+        \\      propertyPath: m_LocalPosition.z
+        \\      value: 1.11797
+        \\    - target: {fileID: 7, guid: aaa, type: 3}
+        \\      propertyPath: m_LocalRotation.w
+        \\      value: 1
+        \\    - target: {fileID: 7, guid: aaa, type: 3}
+        \\      propertyPath: m_LocalRotation.x
+        \\      value: 0
+        \\    - target: {fileID: 7, guid: aaa, type: 3}
+        \\      propertyPath: m_LocalRotation.y
+        \\      value: 0
+        \\    - target: {fileID: 7, guid: aaa, type: 3}
+        \\      propertyPath: m_LocalRotation.z
+        \\      value: 0
+        \\    - target: {fileID: 7, guid: aaa, type: 3}
+        \\      propertyPath: m_LocalEulerAnglesHint.x
+        \\      value: 0
+        \\    - target: {fileID: 8, guid: aaa, type: 3}
+        \\      propertyPath: m_Name
+        \\      value: Cylinder Variant
+        \\  m_SourcePrefab: {fileID: 100100000, guid: aaa, type: 3}
+    ;
+    const fd = try compute(arena, "", after);
+    const d = findDoc(fd, 1001).?;
+    try testing.expectEqual(model.Status.added, d.status);
+    // Position のみ: 合成 1 行。identity Rotation・EulerAnglesHint・m_Name は省略。
+    try testing.expectEqual(@as(usize, 1), d.overrides.len);
+    try testing.expectEqualStrings("Transform", d.overrides[0].group);
+    try testing.expectEqualStrings("Position", d.overrides[0].label);
+    try testing.expectEqualStrings("(2.03, 3.63, 1.11797)", d.overrides[0].after.?.scalar);
+}
+
+test "diff: added prefab instance keeps partial scale override" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const after =
+        \\--- !u!1001 &1001
+        \\PrefabInstance:
+        \\  m_Modification:
+        \\    m_Modifications:
+        \\    - target: {fileID: 7, guid: aaa, type: 3}
+        \\      propertyPath: m_LocalScale.y
+        \\      value: 2
+        \\  m_SourcePrefab: {fileID: 100100000, guid: aaa, type: 3}
+    ;
+    const fd = try compute(arena, "", after);
+    const d = findDoc(fd, 1001).?;
+    try testing.expectEqual(@as(usize, 1), d.overrides.len);
+    try testing.expectEqualStrings("Scale.y", d.overrides[0].label);
+    try testing.expectEqualStrings("2", d.overrides[0].after.?.scalar);
+}
+
+test "diff: non-empty added components produce a summary row" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const before =
+        \\--- !u!1001 &1001
+        \\PrefabInstance:
+        \\  m_Modification:
+        \\    m_Modifications: []
+        \\    m_AddedComponents: []
+        \\  m_SourcePrefab: {fileID: 100100000, guid: aaa, type: 3}
+    ;
+    const after =
+        \\--- !u!1001 &1001
+        \\PrefabInstance:
+        \\  m_Modification:
+        \\    m_Modifications: []
+        \\    m_AddedComponents:
+        \\    - targetCorrespondingSourceObject: {fileID: 7, guid: aaa, type: 3}
+        \\      insertIndex: -1
+        \\      addedObject: {fileID: 55}
+        \\  m_SourcePrefab: {fileID: 100100000, guid: aaa, type: 3}
+    ;
+    const fd = try compute(arena, before, after);
+    const d = findDoc(fd, 1001).?;
+    try testing.expectEqual(@as(usize, 1), d.overrides.len);
+    try testing.expectEqualStrings("Overrides", d.overrides[0].group);
+    try testing.expectEqualStrings("Added Components (1)", d.overrides[0].label);
+}
+
 const parser = @import("parser.zig");
 const classid = @import("classid.zig");
+const inspector = @import("inspector.zig");
 const Node = model.Node;
 const Status = model.Status;
 const FieldDiff = model.FieldDiff;
@@ -160,8 +500,10 @@ pub const DocDiff = struct {
     class_id: u32,
     type_name: []const u8,
     script_guid: ?[]const u8 = null,
+    class_name: ?[]const u8 = null,
     status: Status,
     fields: []FieldDiff,
+    overrides: []model.OverrideDiff = &.{},
 };
 
 pub const FlatDiff = struct {
@@ -191,6 +533,30 @@ fn scriptGuid(doc: *const model.Document) ?[]const u8 {
     };
 }
 
+/// "Assembly-CSharp::Cylinder1" -> "Cylinder1"(最後の ':' より後)。
+fn editorClassName(doc: *const model.Document) ?[]const u8 {
+    const v = model.findValue(doc.body.map, "m_EditorClassIdentifier") orelse return null;
+    const s = switch (v.*) {
+        .scalar => |s| s,
+        else => return null,
+    };
+    const idx = std.mem.lastIndexOfScalar(u8, s, ':') orelse (if (s.len != 0) return s else return null);
+    const tail = s[idx + 1 ..];
+    return if (tail.len != 0) tail else null;
+}
+
+/// 生の field diff から Inspector 非表示を落とし、path を表示名に置換する。
+fn presentFields(arena: std.mem.Allocator, raw: []FieldDiff) ![]FieldDiff {
+    var kept: std.ArrayList(FieldDiff) = .empty;
+    for (raw) |f| {
+        if (inspector.isHidden(f.path)) continue;
+        var out = f;
+        out.path = try inspector.displayPath(arena, f.path);
+        try kept.append(arena, out);
+    }
+    return kept.toOwnedSlice(arena);
+}
+
 fn resolvedTypeName(doc: *const model.Document) ![]const u8 {
     if (classid.typeName(doc.class_id)) |n| return n;
     // Unknown classID: fall back to the document's own top key.
@@ -212,32 +578,64 @@ pub fn compute(arena: std.mem.Allocator, before_src: []const u8, after_src: []co
     // Walk the union of file_ids: iterate `after` first (preserves after order),
     // then `before`-only documents.
     for (after) |*ad| {
+        if (ad.stripped) continue;
         try collectGuids(&guids, ad.body);
         const bd = before_idx.get(ad.file_id);
         if (bd) |b| {
             try collectGuids(&guids, b.body);
-            var fields: std.ArrayList(FieldDiff) = .empty;
-            try diffNode(arena, &fields, "", b.body, ad.body);
-            try docs.append(arena, .{
-                .file_id = ad.file_id,
-                .class_id = ad.class_id,
-                .type_name = try resolvedTypeName(ad),
-                .script_guid = scriptGuid(ad),
-                .status = if (fields.items.len == 0) .unchanged else .modified,
-                .fields = try fields.toOwnedSlice(arena),
-            });
+            if (ad.class_id == 1001) {
+                const overrides = try diffOverrides(arena, b, ad);
+                try docs.append(arena, .{
+                    .file_id = ad.file_id,
+                    .class_id = ad.class_id,
+                    .type_name = try resolvedTypeName(ad),
+                    .script_guid = scriptGuid(ad),
+                    .status = if (overrides.len == 0) .unchanged else .modified,
+                    .fields = &[_]FieldDiff{},
+                    .overrides = overrides,
+                });
+            } else {
+                var raw: std.ArrayList(FieldDiff) = .empty;
+                try diffNode(arena, &raw, "", b.body, ad.body);
+                const fields = try presentFields(arena, try raw.toOwnedSlice(arena));
+                try docs.append(arena, .{
+                    .file_id = ad.file_id,
+                    .class_id = ad.class_id,
+                    .type_name = try resolvedTypeName(ad),
+                    .script_guid = scriptGuid(ad),
+                    .class_name = editorClassName(ad),
+                    .status = if (fields.len == 0) .unchanged else .modified,
+                    .fields = fields,
+                });
+            }
         } else {
-            try docs.append(arena, .{
-                .file_id = ad.file_id,
-                .class_id = ad.class_id,
-                .type_name = try resolvedTypeName(ad),
-                .script_guid = scriptGuid(ad),
-                .status = .added,
-                .fields = &[_]FieldDiff{},
-            });
+            if (ad.class_id == 1001) {
+                try docs.append(arena, .{
+                    .file_id = ad.file_id,
+                    .class_id = ad.class_id,
+                    .type_name = try resolvedTypeName(ad),
+                    .script_guid = scriptGuid(ad),
+                    .status = .added,
+                    .fields = &[_]FieldDiff{},
+                    .overrides = try addedInstanceOverrides(arena, ad),
+                });
+            } else {
+                var raw: std.ArrayList(FieldDiff) = .empty;
+                for (ad.body.map) |e| try flattenSubtree(arena, &raw, e.key, e.value, .added);
+                try docs.append(arena, .{
+                    .file_id = ad.file_id,
+                    .class_id = ad.class_id,
+                    .type_name = try resolvedTypeName(ad),
+                    .script_guid = scriptGuid(ad),
+                    .class_name = editorClassName(ad),
+                    .status = .added,
+                    .fields = try presentFields(arena, try raw.toOwnedSlice(arena)),
+                });
+            }
         }
     }
     for (before) |*bd| {
+        if (bd.stripped) continue;
         if (after_idx.contains(bd.file_id)) continue;
         try collectGuids(&guids, bd.body);
         try docs.append(arena, .{
@@ -245,6 +643,7 @@ pub fn compute(arena: std.mem.Allocator, before_src: []const u8, after_src: []co
             .class_id = bd.class_id,
             .type_name = try resolvedTypeName(bd),
             .script_guid = scriptGuid(bd),
+            .class_name = editorClassName(bd),
             .status = .removed,
             .fields = &[_]FieldDiff{},
         });
@@ -294,14 +693,14 @@ fn diffMap(
         if (model.findValue(b, ea.key)) |bv| {
             try diffNode(arena, out, path, ea.value, bv);
         } else {
-            try out.append(arena, .{ .path = path, .status = .removed, .before = ea.value, .after = null });
+            try flattenSubtree(arena, out, path, ea.value, .removed);
         }
     }
     // keys only in b: added
     for (b) |eb| {
         if (model.findValue(a, eb.key) == null) {
             const path = try joinKey(arena, prefix, eb.key);
-            try out.append(arena, .{ .path = path, .status = .added, .before = null, .after = eb.value });
+            try flattenSubtree(arena, out, path, eb.value, .added);
         }
     }
 }
@@ -321,17 +720,307 @@ fn diffSeq(
     }
     while (i < a.len) : (i += 1) {
         const path = try std.fmt.allocPrint(arena, "{s}[{d}]", .{ prefix, i });
-        try out.append(arena, .{ .path = path, .status = .removed, .before = a[i], .after = null });
+        try flattenSubtree(arena, out, path, a[i], .removed);
     }
     while (i < b.len) : (i += 1) {
         const path = try std.fmt.allocPrint(arena, "{s}[{d}]", .{ prefix, i });
-        try out.append(arena, .{ .path = path, .status = .added, .before = null, .after = b[i] });
+        try flattenSubtree(arena, out, path, b[i], .added);
     }
 }
 
 fn joinKey(arena: std.mem.Allocator, prefix: []const u8, key: []const u8) ![]const u8 {
     if (prefix.len == 0) return key;
     return std.fmt.allocPrint(arena, "{s}.{s}", .{ prefix, key });
+}
+
+fn isVectorMap(entries: []model.Entry) bool {
+    if (entries.len < 2 or entries.len > 4) return false;
+    for (entries) |e| {
+        if (e.value.* != .scalar) return false;
+        if (e.key.len != 1) return false;
+        if (std.mem.indexOfScalar(u8, "xyzwrgba", e.key[0]) == null) return false;
+    }
+    return true;
+}
+
+fn vectorNode(arena: std.mem.Allocator, entries: []model.Entry) !*Node {
+    var out: std.ArrayList(u8) = .empty;
+    try out.append(arena, '(');
+    for (entries, 0..) |e, i| {
+        if (i != 0) try out.appendSlice(arena, ", ");
+        try out.appendSlice(arena, e.value.scalar);
+    }
+    try out.append(arena, ')');
+    const n = try arena.create(Node);
+    n.* = .{ .scalar = try out.toOwnedSlice(arena) };
+    return n;
+}
+
+fn appendLeaf(arena: std.mem.Allocator, out: *std.ArrayList(FieldDiff), path: []const u8, status: Status, node: *const Node) !void {
+    try out.append(arena, switch (status) {
+        .added => .{ .path = path, .status = .added, .before = null, .after = node },
+        .removed => .{ .path = path, .status = .removed, .before = node, .after = null },
+        else => unreachable,
+    });
+}
+
+/// added/removed サブツリーを leaf 単位に展開する。ベクトル風 map は 1 行に縮約。
+fn flattenSubtree(
+    arena: std.mem.Allocator,
+    out: *std.ArrayList(FieldDiff),
+    prefix: []const u8,
+    node: *const Node,
+    status: Status,
+) anyerror!void {
+    switch (node.*) {
+        .map => |entries| {
+            if (isVectorMap(entries)) {
+                try appendLeaf(arena, out, prefix, status, try vectorNode(arena, entries));
+                return;
+            }
+            for (entries) |e| try flattenSubtree(arena, out, try joinKey(arena, prefix, e.key), e.value, status);
+        },
+        .seq => |items| for (items, 0..) |it, i| {
+            const path = try std.fmt.allocPrint(arena, "{s}[{d}]", .{ prefix, i });
+            try flattenSubtree(arena, out, path, it, status);
+        },
+        else => try appendLeaf(arena, out, prefix, status, node),
+    }
+}
+
+// ---- PrefabInstance override diff ----
+
+const Mod = struct { target: i64, path: []const u8, value: ?*Node, obj_ref: ?*Node };
+
+fn collectMods(arena: std.mem.Allocator, doc: *const model.Document) ![]Mod {
+    var mods: std.ArrayList(Mod) = .empty;
+    const m = model.findValue(doc.body.map, "m_Modification") orelse return mods.toOwnedSlice(arena);
+    if (m.* != .map) return mods.toOwnedSlice(arena);
+    const list = model.findValue(m.map, "m_Modifications") orelse return mods.toOwnedSlice(arena);
+    if (list.* != .seq) return mods.toOwnedSlice(arena);
+    for (list.seq) |item| {
+        if (item.* != .map) continue;
+        const pp = model.findValue(item.map, "propertyPath") orelse continue;
+        if (pp.* != .scalar) continue;
+        const target: i64 = blk: {
+            const t = model.findValue(item.map, "target") orelse break :blk 0;
+            break :blk switch (t.*) {
+                .ref => |r| r.file_id,
+                else => 0,
+            };
+        };
+        try mods.append(arena, .{
+            .target = target,
+            .path = pp.scalar,
+            .value = model.findValue(item.map, "value"),
+            .obj_ref = objRefIfSet(model.findValue(item.map, "objectReference")),
+        });
+    }
+    return mods.toOwnedSlice(arena);
+}
+
+fn objRefIfSet(n: ?*Node) ?*Node {
+    const node = n orelse return null;
+    return switch (node.*) {
+        .ref => |r| if (r.file_id != 0 or r.guid != null) node else null,
+        else => null,
+    };
+}
+
+/// objectReference が設定されていればそれ、なければ value。
+fn modValue(m: Mod) ?*Node {
+    return m.obj_ref orelse m.value;
+}
+
+fn modKey(arena: std.mem.Allocator, m: Mod) ![]const u8 {
+    return std.fmt.allocPrint(arena, "{d}:{s}", .{ m.target, m.path });
+}
+
+fn nodeEqlOpt(a: ?*const Node, b: ?*const Node) bool {
+    if (a == null and b == null) return true;
+    if (a == null or b == null) return false;
+    return Node.eql(a.?, b.?);
+}
+
+fn makeOverride(arena: std.mem.Allocator, property_path: []const u8, status: Status, before: ?*const Node, after: ?*const Node) !model.OverrideDiff {
+    return .{
+        .group = inspector.groupOf(property_path),
+        .label = try inspector.displayPath(arena, property_path),
+        .status = status,
+        .before = before,
+        .after = after,
+    };
+}
+
+fn diffOverrides(arena: std.mem.Allocator, before_doc: ?*const model.Document, after_doc: *const model.Document) ![]model.OverrideDiff {
+    var out: std.ArrayList(model.OverrideDiff) = .empty;
+    const after_mods = try collectMods(arena, after_doc);
+    const before_mods: []Mod = if (before_doc) |bd| try collectMods(arena, bd) else &.{};
+
+    var before_map = std.StringHashMap(Mod).init(arena);
+    for (before_mods) |m| try before_map.put(try modKey(arena, m), m);
+
+    var seen = std.StringHashMap(void).init(arena);
+    for (after_mods) |am| {
+        const key = try modKey(arena, am);
+        try seen.put(key, {});
+        if (inspector.isHidden(am.path)) continue;
+        const av: ?*const Node = modValue(am);
+        if (before_map.get(key)) |bm| {
+            const bv: ?*const Node = modValue(bm);
+            if (nodeEqlOpt(bv, av)) continue;
+            try out.append(arena, try makeOverride(arena, am.path, .modified, bv, av));
+        } else {
+            try out.append(arena, try makeOverride(arena, am.path, .added, null, av));
+        }
+    }
+    // removed: before 側の順序で決定的に。
+    for (before_mods) |bm| {
+        if (seen.contains(try modKey(arena, bm))) continue;
+        if (inspector.isHidden(bm.path)) continue;
+        try out.append(arena, try makeOverride(arena, bm.path, .removed, modValue(bm), null));
+    }
+    try appendStructuralSummaries(arena, &out, before_doc, after_doc);
+    sortByGroup(out.items);
+    return out.toOwnedSlice(arena);
+}
+
+/// group 単位で安定ソート(Transform → GameObject → Overrides)。
+/// レンダラは同一グループの行が連続することを前提に見出しを出すため、
+/// 生の m_Modifications 順を group ごとに束ね直す。
+fn groupRank(group: []const u8) u2 {
+    if (std.mem.eql(u8, group, "Transform")) return 0;
+    if (std.mem.eql(u8, group, "GameObject")) return 1;
+    return 2;
+}
+
+fn sortByGroup(overrides: []model.OverrideDiff) void {
+    const Ctx = struct {
+        fn lessThan(_: void, a: model.OverrideDiff, b: model.OverrideDiff) bool {
+            return groupRank(a.group) < groupRank(b.group);
+        }
+    };
+    std.sort.insertion(model.OverrideDiff, overrides, {}, Ctx.lessThan);
+}
+
+const Placement = struct { prefix: []const u8, label: []const u8, comps: []const []const u8 };
+const placements = [_]Placement{
+    .{ .prefix = "m_LocalPosition", .label = "Position", .comps = &.{ "x", "y", "z" } },
+    .{ .prefix = "m_LocalRotation", .label = "Rotation", .comps = &.{ "x", "y", "z", "w" } },
+    .{ .prefix = "m_LocalScale", .label = "Scale", .comps = &.{ "x", "y", "z" } },
+};
+
+fn scalarOf(n: ?*Node) ?[]const u8 {
+    const node = n orelse return null;
+    return switch (node.*) {
+        .scalar => |s| s,
+        else => null,
+    };
+}
+
+fn numEql(s: []const u8, want: f64) bool {
+    const v = std.fmt.parseFloat(f64, std.mem.trim(u8, s, " ")) catch return false;
+    return v == want;
+}
+
+fn findMod(mods: []Mod, path: []const u8) ?Mod {
+    for (mods) |m| if (std.mem.eql(u8, m.path, path)) return m;
+    return null;
+}
+
+fn addedInstanceOverrides(arena: std.mem.Allocator, doc: *const model.Document) ![]model.OverrideDiff {
+    const mods = try collectMods(arena, doc);
+    var out: std.ArrayList(model.OverrideDiff) = .empty;
+
+    // Placement サマリ: 全成分が揃っていれば合成 1 行(デフォルト値なら省略)。
+    var consumed = [_]bool{false} ** placements.len;
+    for (placements, 0..) |p, pi| {
+        var vals: [4][]const u8 = undefined;
+        var all = true;
+        var is_default = true;
+        for (p.comps, 0..) |c, i| {
+            const path = try std.fmt.allocPrint(arena, "{s}.{s}", .{ p.prefix, c });
+            const m = findMod(mods, path) orelse {
+                all = false;
+                break;
+            };
+            const v = scalarOf(m.value) orelse {
+                all = false;
+                break;
+            };
+            vals[i] = v;
+            // デフォルト: Position/Scale の各成分は 0/1、Rotation は (0,0,0,1)。
+            const want: f64 = if (std.mem.eql(u8, p.label, "Scale"))
+                1
+            else if (std.mem.eql(u8, p.label, "Rotation") and std.mem.eql(u8, c, "w"))
+                1
+            else
+                0;
+            if (!numEql(v, want)) is_default = false;
+        }
+        if (!all) continue;
+        consumed[pi] = true;
+        if (is_default) continue;
+        var buf: std.ArrayList(u8) = .empty;
+        try buf.append(arena, '(');
+        for (p.comps, 0..) |_, i| {
+            if (i != 0) try buf.appendSlice(arena, ", ");
+            try buf.appendSlice(arena, vals[i]);
+        }
+        try buf.append(arena, ')');
+        const n = try arena.create(Node);
+        n.* = .{ .scalar = try buf.toOwnedSlice(arena) };
+        try out.append(arena, .{ .group = "Transform", .label = p.label, .status = .added, .before = null, .after = n });
+    }
+
+    for (mods) |m| {
+        if (inspector.isHidden(m.path)) continue;
+        if (std.mem.eql(u8, m.path, "m_Name")) continue; // ノード名に吸収
+        const in_consumed = blk: {
+            for (placements, 0..) |p, pi| {
+                if (consumed[pi] and std.mem.startsWith(u8, m.path, p.prefix) and
+                    m.path.len > p.prefix.len and m.path[p.prefix.len] == '.') break :blk true;
+            }
+            break :blk false;
+        };
+        if (in_consumed) continue;
+        try out.append(arena, try makeOverride(arena, m.path, .added, null, modValue(m)));
+    }
+    try appendStructuralSummaries(arena, &out, null, doc);
+    sortByGroup(out.items);
+    return out.toOwnedSlice(arena);
+}
+
+fn modificationSeqLen(doc: *const model.Document, key: []const u8) usize {
+    const m = model.findValue(doc.body.map, "m_Modification") orelse return 0;
+    if (m.* != .map) return 0;
+    const v = model.findValue(m.map, key) orelse return 0;
+    return switch (v.*) {
+        .seq => |s| s.len,
+        else => 0,
+    };
+}
+
+/// m_Added*/m_Removed* の完全展開はスコープ外。件数の要約 1 行で情報が黙って消えるのを防ぐ。
+fn appendStructuralSummaries(arena: std.mem.Allocator, out: *std.ArrayList(model.OverrideDiff), before_doc: ?*const model.Document, after_doc: *const model.Document) !void {
+    const keys = [_]struct { key: []const u8, label: []const u8 }{
+        .{ .key = "m_AddedGameObjects", .label = "Added GameObjects" },
+        .{ .key = "m_AddedComponents", .label = "Added Components" },
+        .{ .key = "m_RemovedComponents", .label = "Removed Components" },
+        .{ .key = "m_RemovedGameObjects", .label = "Removed GameObjects" },
+    };
+    for (keys) |e| {
+        const alen = modificationSeqLen(after_doc, e.key);
+        const blen = if (before_doc) |bd| modificationSeqLen(bd, e.key) else 0;
+        if (alen == blen) continue;
+        try out.append(arena, .{
+            .group = "Overrides",
+            .label = try std.fmt.allocPrint(arena, "{s} ({d})", .{ e.label, alen }),
+            .status = if (alen > blen) .added else .removed,
+            .before = null,
+            .after = null,
+        });
+    }
 }
 
 // ---- guid collection ----

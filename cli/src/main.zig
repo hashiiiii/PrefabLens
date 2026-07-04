@@ -117,7 +117,7 @@ test "run: --json with two real files prints core JSON" {
     const code = try run(testing.io, arena, &.{ "--json", before_path, after_path }, &aw.writer, &aw_err.writer, false);
     const output = aw.toArrayList();
     try testing.expectEqual(@as(u8, 0), code);
-    try testing.expect(std.mem.indexOf(u8, output.items, "\"schema\":\"prefablens.diff.v1\"") != null);
+    try testing.expect(std.mem.indexOf(u8, output.items, "\"schema\":\"prefablens.diff.v2\"") != null);
     try testing.expect(std.mem.indexOf(u8, output.items, "\"after\":\"0.8\"") != null);
 }
 

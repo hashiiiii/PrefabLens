@@ -158,6 +158,8 @@ function fieldRow(label: string, status: Status, before: FieldValue, after: Fiel
   path.className = 'pl-path';
   path.textContent = label;
   row.append(path);
+  // 構造サマリ行 (before=after=null) は件数がラベルに含まれ、値を持たない。
+  if (before === null && after === null) return row;
   if (status === 'modified') {
     row.append(valueSpan('pl-before', before, diff));
     const arrow = document.createElement('span');

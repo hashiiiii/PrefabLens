@@ -154,6 +154,31 @@ describe('render', () => {
     expect(card.open).toBe(true);
   });
 
+  it('renders structural summary rows as label only, without a value placeholder', () => {
+    const diff: DiffV2 = {
+      schema: 'prefablens.diff.v2',
+      unresolvedGuids: [],
+      roots: [
+        {
+          kind: 'prefabInstance',
+          fileId: '1001',
+          name: 'Cylinder',
+          status: 'modified',
+          sourceGuid: null,
+          overrides: [{ group: 'Overrides', label: 'Added Components (1)', status: 'added', before: null, after: null }],
+          components: [],
+          children: [],
+        },
+      ],
+      loose: [],
+    };
+    const root = freshRoot();
+    render(root, diff);
+    const row = root.querySelector('.pl-field');
+    expect(row?.textContent).toContain('Added Components (1)');
+    expect(row?.textContent).not.toContain('—');
+  });
+
   it('collapses added component cards but keeps modified ones open', () => {
     const root = freshRoot();
     const diff: DiffV2 = {

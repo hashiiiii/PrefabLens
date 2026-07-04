@@ -97,6 +97,43 @@ test "render: components label separates object and component dimensions" {
     try testing.expect(std.mem.indexOf(u8, text, "\n      ~ MonoBehaviour\n") != null);
 }
 
+test "render: structural summary row shows label only, no dangling value" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const before =
+        \\--- !u!1001 &1001
+        \\PrefabInstance:
+        \\  m_Modification:
+        \\    m_Modifications:
+        \\    - target: {fileID: 7, guid: aaa, type: 3}
+        \\      propertyPath: m_LocalScale.y
+        \\      value: 2
+        \\  m_SourcePrefab: {fileID: 100100000, guid: aaa, type: 3}
+    ;
+    const after =
+        \\--- !u!1001 &1001
+        \\PrefabInstance:
+        \\  m_Modification:
+        \\    m_Modifications:
+        \\    - target: {fileID: 7, guid: aaa, type: 3}
+        \\      propertyPath: m_LocalScale.y
+        \\      value: 2
+        \\    m_AddedComponents:
+        \\    - targetCorrespondingSourceObject: {fileID: 4, guid: aaa, type: 3}
+        \\      addedObject: {fileID: 5}
+        \\  m_SourcePrefab: {fileID: 100100000, guid: aaa, type: 3}
+    ;
+    const res = try core.diffBytes(arena, before, after);
+    var out: std.ArrayList(u8) = .empty;
+    var aw = std.Io.Writer.Allocating.fromArrayList(arena, &out);
+    try render(arena, &aw.writer, res, null, false);
+    const text = aw.toArrayList().items;
+    // 件数はラベルに含まれるので、値なし行はラベルだけで終わる。
+    try testing.expect(std.mem.indexOf(u8, text, "+ Added Components (1)\n") != null);
+    try testing.expect(std.mem.indexOf(u8, text, "∅") == null);
+}
+
 const model = core.model;
 
 const Color = struct {
@@ -198,6 +235,11 @@ fn renderOverrides(w: anytype, overrides: []const model.OverrideDiff, color: boo
         }
         try indent(w, depth + 1);
         try paint(w, color, statusColor(ov.status), statusSign(ov.status));
+        // 構造サマリ行 (before=after=null) は件数がラベルに含まれ、値を持たない。
+        if (ov.before == null and ov.after == null) {
+            try w.print(" {s}\n", .{ov.label});
+            continue;
+        }
         try w.print(" {s}: ", .{ov.label});
         switch (ov.status) {
             .modified => {

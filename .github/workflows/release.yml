@@ -29,10 +29,12 @@ jobs:
           build x86_64-macos     macos-x64    prefablens
           build x86_64-linux-gnu linux-x64    prefablens
           build x86_64-windows   windows-x64  prefablens.exe
+          # ダウンロード側(mcp の ensureCli)が整合性検証に使う。sha256sum 形式で全 zip をカバーする。
+          (cd dist && sha256sum *.zip > SHA256SUMS)
       - name: Create release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" dist/*.zip --generate-notes
+        run: gh release create "$GITHUB_REF_NAME" dist/*.zip dist/SHA256SUMS --generate-notes
       # npm publish は保留中(npmjs.com の Trusted Publisher 未設定)。設定後に if 条件を外して再開する。
       - name: Publish MCP server to npm
         if: ${{ false }}

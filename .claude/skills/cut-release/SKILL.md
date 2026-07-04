@@ -1,6 +1,6 @@
 ---
 name: cut-release
-description: Use when cutting a new PrefabLens release, publishing a version, or pushing a vX.Y.Z tag. Bumps the five version sources in lockstep, tags main to trigger the release workflow, and verifies the GitHub Release with its four CLI zips. PrefabLens repo only. Explicit invocation only — pushes tags and publishes a public release.
+description: Use when cutting a new PrefabLens release, publishing a version, or pushing a vX.Y.Z tag. Bumps the five version sources in lockstep, tags main to trigger the release workflow, and verifies the GitHub Release with its four CLI zips plus SHA256SUMS. PrefabLens repo only. Explicit invocation only — pushes tags and publishes a public release.
 disable-model-invocation: true
 license: Proprietary
 metadata:
@@ -61,7 +61,7 @@ Run from a clean `main` that is up to date (`git switch main && git pull`).
    gh release view vX.Y.Z --json tagName,assets -q '.tagName + ": " + ([.assets[].name] | join(", "))'
    ```
 
-   Expect four assets: `prefablens-{macos-arm64,macos-x64,linux-x64,windows-x64}.zip`.
+   Expect five assets: `prefablens-{macos-arm64,macos-x64,linux-x64,windows-x64}.zip` and `SHA256SUMS` (the MCP server verifies downloads against it — a release without it silently skips verification).
 
    Also verify `npm view @hashiiiii/prefablens-mcp version` matches the tag (skip while npm publishing is paused).
 
@@ -76,4 +76,4 @@ Run from a clean `main` that is up to date (`git switch main && git pull`).
 
 ## Verify the outcome, not the intent
 
-A release is done only when `gh release view vX.Y.Z` lists all four zips **and**, once npm publishing is re-enabled, `npm view @hashiiiii/prefablens-mcp version` prints `X.Y.Z`. If the workflow failed, read `gh run view --log-failed`, fix on `main`, delete the partial tag/release, and re-tag — do not assume a pushed tag means a published release.
+A release is done only when `gh release view vX.Y.Z` lists all four zips plus `SHA256SUMS` **and**, once npm publishing is re-enabled, `npm view @hashiiiii/prefablens-mcp version` prints `X.Y.Z`. If the workflow failed, read `gh run view --log-failed`, fix on `main`, delete the partial tag/release, and re-tag — do not assume a pushed tag means a published release.

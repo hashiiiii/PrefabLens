@@ -127,7 +127,8 @@ function renderOverrideGroups(overrides: OverrideDiff[], diff: DiffV2): HTMLElem
   }
   return groups.map(({ name, rows }) => {
     // 見出しの status: グループ内で一様ならその status、混在なら modified。
-    const status = rows.every((r) => r.status === rows[0].status) ? rows[0].status : 'modified';
+    const [first] = rows;
+    const status = first && rows.every((r) => r.status === first.status) ? first.status : 'modified';
     const el = openDetails('pl-comp', status);
     el.open = true; // override カードは常に開(spec: 縮約サマリのみで軽い)
     el.append(summaryLine(status, name));

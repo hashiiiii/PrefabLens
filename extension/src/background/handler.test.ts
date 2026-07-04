@@ -201,6 +201,28 @@ describe('createHandler', () => {
     expect(await createHandler(net.deps)(REQ)).toEqual({ ok: false, error: 'fetch-failed' });
   });
 
+  it('returns too-large above 25MB unless forced', async () => {
+    const big = new Uint8Array(13 * 1024 * 1024); // base+head で 26MB
+    const diff = vi.fn(() => DIFF);
+    const { deps, client } = makeDeps({ diff });
+    client.getFileAtRef.mockResolvedValue(big);
+    const handle = createHandler(deps);
+    expect(await handle(REQ)).toEqual({ ok: false, error: 'too-large', bytes: big.length * 2 });
+    expect(diff).not.toHaveBeenCalled();
+    // force で描画に進む。blob は sha キャッシュに乗っており再フェッチもない
+    const fetches = client.getFileAtRef.mock.calls.length;
+    expect((await handle({ ...REQ, force: true })).ok).toBe(true);
+    expect(diff).toHaveBeenCalledTimes(1);
+    expect(client.getFileAtRef.mock.calls.length).toBe(fetches);
+  });
+
+  it('renders exactly 25MB without the gate', async () => {
+    const half = new Uint8Array((25 * 1024 * 1024) / 2);
+    const { deps, client } = makeDeps();
+    client.getFileAtRef.mockResolvedValue(half);
+    expect((await createHandler(deps)(REQ)).ok).toBe(true);
+  });
+
   it('maps RateLimitError to rate-limited', async () => {
     const limited = makeDeps();
     limited.client.getPrRefs.mockRejectedValue(new RateLimitError('x'));

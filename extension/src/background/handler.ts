@@ -18,6 +18,7 @@ const EMPTY = new Uint8Array(0);
 const MAX_SEARCHES = 10; // Code Search は認証済み 10 req/min — 1 応答で使い切らない
 const CONTEXT_TTL_MS = 60_000; // push で headSha が変わるため PR コンテキストは短命
 const BLOB_CACHE_MAX = 32;
+const TOO_LARGE_BYTES = 25 * 1024 * 1024; // 親仕様 §5.7: 25MB 超はクリックで描画
 
 export function createHandler(deps: Deps): (req: SemanticDiffRequest) => Promise<SemanticDiffResponse> {
   // PR 単位のコンテキストキャッシュ。SW はいつ殺されてもよく、その場合は再取得するだけ。
@@ -99,6 +100,10 @@ export function createHandler(deps: Deps): (req: SemanticDiffRequest) => Promise
         status === 'added' ? EMPTY : ((await fetchBlob(client, req.owner, req.repo, beforePath, refs.baseSha)) ?? EMPTY);
       const after =
         status === 'removed' ? EMPTY : ((await fetchBlob(client, req.owner, req.repo, req.path, refs.headSha)) ?? EMPTY);
+
+      if (!req.force && before.length + after.length > TOO_LARGE_BYTES) {
+        return { ok: false, error: 'too-large', bytes: before.length + after.length };
+      }
 
       const differ = await deps.getDiffer();
       const json = differ.diff(before, after);

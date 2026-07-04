@@ -5,7 +5,17 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { zipSync } from 'fflate';
 import { afterAll, expect, test } from 'vitest';
-import { binaryName, cachePath, download, downloadUrl, installFromZip, releaseAssetName, runCli } from './cli.js';
+import {
+  binaryName,
+  cachePath,
+  download,
+  downloadUrl,
+  expectedSha256,
+  installFromZip,
+  releaseAssetName,
+  runCli,
+  verifySha256,
+} from './cli.js';
 
 const dir = mkdtempSync(path.join(tmpdir(), 'prefablens-cli-test-'));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
@@ -45,6 +55,30 @@ test('installFromZip extracts the binary atomically and marks it executable', ()
 test('installFromZip rejects a zip without the expected binary', () => {
   const zip = zipSync({ other: new Uint8Array([1]) });
   expect(() => installFromZip(zip, path.join(dir, 'v2', 'prefablens'), 'linux')).toThrow('not found');
+});
+
+// sha256("hello") の既知値。ツール(sha256sum)出力との一致を固定するため文字列リテラルでピンする。
+const HELLO_SHA256 = '2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824';
+const HELLO = new TextEncoder().encode('hello');
+
+test('expectedSha256 parses sha256sum output lines', () => {
+  const sums = `${HELLO_SHA256}  prefablens-macos-arm64.zip\naaaa  garbage\n${'0'.repeat(64)}  prefablens-linux-x64.zip\n`;
+  expect(expectedSha256(sums, 'prefablens-macos-arm64.zip')).toBe(HELLO_SHA256);
+  expect(expectedSha256(sums, 'prefablens-linux-x64.zip')).toBe('0'.repeat(64));
+  expect(expectedSha256(sums, 'prefablens-windows-x64.zip')).toBeUndefined();
+});
+
+test('verifySha256 accepts a matching zip', () => {
+  expect(() => verifySha256(HELLO, `${HELLO_SHA256}  asset.zip`, 'asset.zip')).not.toThrow();
+});
+
+test('verifySha256 rejects a tampered zip', () => {
+  const tampered = new TextEncoder().encode('hellO');
+  expect(() => verifySha256(tampered, `${HELLO_SHA256}  asset.zip`, 'asset.zip')).toThrow('checksum mismatch');
+});
+
+test('verifySha256 rejects a checksum file without the asset entry', () => {
+  expect(() => verifySha256(HELLO, `${HELLO_SHA256}  other.zip`, 'asset.zip')).toThrow('no checksum entry');
 });
 
 test('runCli captures stdout and exit code', async () => {
@@ -112,7 +146,11 @@ test('download surfaces HTTP errors with status and url', async () => {
       res.end();
     },
     async (base) => {
-      await expect(download(`${base}/missing.zip`)).rejects.toThrow('download failed: HTTP 404');
+      // ensureCli が「404 = SHA256SUMS 未同梱の旧リリース」だけを skip 対象にできるよう status を載せる。
+      await expect(download(`${base}/missing.zip`)).rejects.toMatchObject({
+        message: expect.stringContaining('download failed: HTTP 404'),
+        status: 404,
+      });
     },
   );
 });

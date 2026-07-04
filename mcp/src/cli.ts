@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, renameSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
@@ -40,7 +41,8 @@ const TIMEOUT_MS = 60_000;
 export async function download(url: string, timeoutMs = TIMEOUT_MS): Promise<Uint8Array> {
   try {
     const res = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) });
-    if (!res.ok) throw new Error(`download failed: HTTP ${res.status} for ${url}`);
+    // status は呼び出し側の分岐用(404 = アセット不在)。message 文字列の解析に依存させない。
+    if (!res.ok) throw Object.assign(new Error(`download failed: HTTP ${res.status} for ${url}`), { status: res.status });
     return new Uint8Array(await res.arrayBuffer());
   } catch (e) {
     // AbortSignal.timeout の reason は DOMException(name: TimeoutError)。ヘッダー待ちと body 読み取り中のどちらの abort もこれで捕捉できる。
@@ -49,6 +51,23 @@ export async function download(url: string, timeoutMs = TIMEOUT_MS): Promise<Uin
     }
     throw e;
   }
+}
+
+/** sha256sum 形式(`‹64hex›  ‹filename›`、binary モードの `*` 前置も許容)から assetName の期待値を引く。 */
+export function expectedSha256(sums: string, assetName: string): string | undefined {
+  for (const line of sums.split('\n')) {
+    const m = /^([0-9a-f]{64})\s+\*?(.+)$/.exec(line.trim());
+    if (m !== null && m[2] === assetName) return m[1];
+  }
+  return undefined;
+}
+
+/** SHA256SUMS と照合する。エントリ欠落・ハッシュ不一致は throw(破損 zip を実行しない)。 */
+export function verifySha256(zipBytes: Uint8Array, sums: string, assetName: string): void {
+  const want = expectedSha256(sums, assetName);
+  if (want === undefined) throw new Error(`no checksum entry for ${assetName} in SHA256SUMS`);
+  const got = createHash('sha256').update(zipBytes).digest('hex');
+  if (got !== want) throw new Error(`checksum mismatch for ${assetName}: expected ${want}, got ${got}`);
 }
 
 /**
@@ -61,8 +80,19 @@ export async function ensureCli(version: string): Promise<string> {
   if (manual !== undefined && manual !== '' && existsSync(manual)) return manual;
   const dest = cachePath(version, process.platform, homedir());
   if (existsSync(dest)) return dest;
-  const url = downloadUrl(version, releaseAssetName(process.platform, process.arch));
-  installFromZip(await download(url), dest, process.platform);
+  const assetName = releaseAssetName(process.platform, process.arch);
+  const zip = await download(downloadUrl(version, assetName));
+  // SHA256SUMS を持たない旧リリース(v0.2.0 以前)= 404 のときだけ検証をスキップする。
+  // タイムアウトや 5xx で黙ってスキップすると、チェックサムだけ妨害された場合に検証が無効化されるため伝播させる。
+  let sums: string | undefined;
+  try {
+    sums = new TextDecoder().decode(await download(downloadUrl(version, 'SHA256SUMS')));
+  } catch (e) {
+    if ((e as { status?: unknown }).status !== 404) throw e;
+    console.error(`prefablens-mcp: no SHA256SUMS for v${version}, skipping checksum verification`);
+  }
+  if (sums !== undefined) verifySha256(zip, sums, assetName);
+  installFromZip(zip, dest, process.platform);
   return dest;
 }
 

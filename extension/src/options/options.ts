@@ -15,12 +15,14 @@ export const OPTIONS_BODY = `
   <span id="status" role="status"></span>
 `;
 
+import { applyGhes, type ChromeGhes } from './ghes';
+
 type StorageLike = {
   get(keys: string[]): Promise<Record<string, unknown>>;
   set(items: Record<string, unknown>): Promise<void>;
 };
 
-export async function initOptions(doc: Document, storage: StorageLike): Promise<void> {
+export async function initOptions(doc: Document, storage: StorageLike, ghes?: ChromeGhes): Promise<void> {
   const pat = doc.querySelector<HTMLInputElement>('#pat')!;
   const baseUrl = doc.querySelector<HTMLInputElement>('#baseUrl')!;
   const status = doc.querySelector<HTMLElement>('#status')!;
@@ -30,18 +32,19 @@ export async function initOptions(doc: Document, storage: StorageLike): Promise<
   baseUrl.value = (stored['baseUrl'] as string | undefined) ?? '';
 
   doc.querySelector<HTMLButtonElement>('#save')!.addEventListener('click', () => {
-    void storage.set({ pat: pat.value.trim(), baseUrl: baseUrl.value.trim() }).then(
-      () => {
-        status.textContent = 'Saved';
-      },
-      () => {
-        status.textContent = 'Save failed';
-      },
-    );
+    void (async () => {
+      // 保存が最優先: GHES 登録の失敗で設定(特に PAT)を捨てない
+      await storage.set({ pat: pat.value.trim(), baseUrl: baseUrl.value.trim() });
+      const grant = ghes ? await applyGhes(baseUrl.value.trim(), ghes).catch(() => 'failed' as const) : 'ok';
+      status.textContent =
+        grant === 'ok' ? 'Saved' : grant === 'declined' ? 'Saved (host permission declined)' : 'Saved (GHES setup failed)';
+    })().catch(() => {
+      status.textContent = 'Save failed'; // ここに来るのは storage 失敗のみ
+    });
   });
 }
 
 if (typeof chrome !== 'undefined' && chrome.storage) {
   document.body.innerHTML = OPTIONS_BODY;
-  void initOptions(document, chrome.storage.local);
+  void initOptions(document, chrome.storage.local, chrome);
 }

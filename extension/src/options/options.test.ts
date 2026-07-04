@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { OPTIONS_BODY, initOptions } from './options';
+import type { ChromeGhes } from './ghes';
 
 function fakeStorage(initial: Record<string, unknown> = {}) {
   const data = { ...initial };
@@ -32,6 +33,82 @@ describe('initOptions', () => {
     await new Promise((r) => setTimeout(r, 0));
     expect(storage.data['pat']).toBe('tok');
     expect(document.querySelector('#status')!.textContent).toBe('Saved');
+  });
+
+  it('applies ghes registration with the trimmed base url on save', async () => {
+    document.body.innerHTML = OPTIONS_BODY;
+    const ghes: ChromeGhes = {
+      permissions: { request: vi.fn(async () => true) },
+      scripting: {
+        registerContentScripts: vi.fn(async () => {}),
+        unregisterContentScripts: vi.fn(async () => {}),
+      },
+    };
+    await initOptions(document, fakeStorage(), ghes);
+    document.querySelector<HTMLInputElement>('#baseUrl')!.value = '  ghe.corp.com  ';
+    document.querySelector<HTMLButtonElement>('#save')!.click();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(ghes.permissions.request).toHaveBeenCalledWith({ origins: ['https://ghe.corp.com/*'] });
+    expect(document.querySelector('#status')!.textContent).toBe('Saved');
+  });
+
+  it('saves but reports when the host permission is declined', async () => {
+    document.body.innerHTML = OPTIONS_BODY;
+    const storage = fakeStorage();
+    const ghes: ChromeGhes = {
+      permissions: { request: vi.fn(async () => false) },
+      scripting: {
+        registerContentScripts: vi.fn(async () => {}),
+        unregisterContentScripts: vi.fn(async () => {}),
+      },
+    };
+    await initOptions(document, storage, ghes);
+    document.querySelector<HTMLInputElement>('#baseUrl')!.value = 'ghe.corp.com';
+    document.querySelector<HTMLButtonElement>('#save')!.click();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(storage.data['baseUrl']).toBe('ghe.corp.com');
+    expect(document.querySelector('#status')!.textContent).toBe('Saved (host permission declined)');
+  });
+
+  it('still saves settings when ghes setup itself fails', async () => {
+    document.body.innerHTML = OPTIONS_BODY;
+    const storage = fakeStorage();
+    const ghes: ChromeGhes = {
+      permissions: { request: vi.fn(async () => true) },
+      scripting: {
+        registerContentScripts: vi.fn(async () => {}),
+        unregisterContentScripts: vi.fn(async () => {}),
+      },
+    };
+    await initOptions(document, storage, ghes);
+    document.querySelector<HTMLInputElement>('#pat')!.value = 'tok';
+    document.querySelector<HTMLInputElement>('#baseUrl')!.value = 'https://'; // originOf が throw する不正 URL
+    document.querySelector<HTMLButtonElement>('#save')!.click();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(storage.data['pat']).toBe('tok'); // PAT は捨てない
+    expect(document.querySelector('#status')!.textContent).toBe('Saved (GHES setup failed)');
+  });
+
+  it('does not touch ghes registration when storage fails', async () => {
+    document.body.innerHTML = OPTIONS_BODY;
+    const storage = fakeStorage();
+    storage.set = async () => {
+      throw new Error('quota exceeded');
+    };
+    const ghes: ChromeGhes = {
+      permissions: { request: vi.fn(async () => true) },
+      scripting: {
+        registerContentScripts: vi.fn(async () => {}),
+        unregisterContentScripts: vi.fn(async () => {}),
+      },
+    };
+    await initOptions(document, storage, ghes);
+    document.querySelector<HTMLInputElement>('#baseUrl')!.value = 'ghe.corp.com';
+    document.querySelector<HTMLButtonElement>('#save')!.click();
+    await new Promise((r) => setTimeout(r, 0));
+    // 保存に失敗したのに登録だけ進む中途半端な状態を作らない
+    expect(ghes.scripting.registerContentScripts).not.toHaveBeenCalled();
+    expect(document.querySelector('#status')!.textContent).toBe('Save failed');
   });
 
   it('reports a failed save instead of staying silent', async () => {

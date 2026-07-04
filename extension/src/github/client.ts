@@ -9,12 +9,16 @@ export class ApiError extends Error {
 export type PrFile = { path: string; status: string; previousPath?: string };
 export type PrRefs = { baseSha: string; headSha: string };
 
+// Options フォームの入力はスキームなし("github.com")のことがある。
+// 素の new URL は throw し、握りつぶされて fetch-failed に化けるため補完する。
+export function originOf(baseUrl: string): string {
+  const withScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(baseUrl) ? baseUrl : `https://${baseUrl}`;
+  return new URL(withScheme).origin;
+}
+
 export function apiBase(baseUrl: string | undefined): string {
   if (!baseUrl) return 'https://api.github.com';
-  // Options フォームの入力はスキームなし("github.com")のことがある。
-  // 素の new URL は throw し、握りつぶされて fetch-failed に化けるため補完する。
-  const withScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(baseUrl) ? baseUrl : `https://${baseUrl}`;
-  const origin = new URL(withScheme).origin;
+  const origin = originOf(baseUrl);
   return origin === 'https://github.com' ? 'https://api.github.com' : `${origin}/api/v3`;
 }
 

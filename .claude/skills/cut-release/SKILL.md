@@ -30,7 +30,7 @@ Run from a clean `main` that is up to date (`git switch main && git pull`).
 
 1. **Pick the version** `X.Y.Z` (semver; bump patch for fixes, minor for features).
 
-2. **Bump all four sources to `X.Y.Z`** on a branch:
+2. **Bump all five sources to `X.Y.Z`** on a branch:
    - `editor/Editor/Cli.cs` → `public const string Version = "X.Y.Z";`
    - `editor/package.json` → `"version": "X.Y.Z"`
    - `extension/package.json` → `"version": "X.Y.Z"`
@@ -71,7 +71,7 @@ Run from a clean `main` that is up to date (`git switch main && git pull`).
 |---|---|---|
 | Running `gh release create` yourself | The workflow's own `gh release create` then fails with "already exists" | Only push the tag; let the workflow publish |
 | Tagging before the version bump is on `main` | The released binary and package versions disagree; Editor downloads a version with no matching package | Merge the bump to `main`, then tag that commit |
-| `Cli.Version` ≠ the tag version | Editor requests `releases/download/v<Cli.Version>/…` → 404 | Keep all four sources and the tag identical (step 3 enforces this) |
+| `Cli.Version` ≠ the tag version | Editor requests `releases/download/v<Cli.Version>/…` → 404 | Keep all five sources and the tag identical (step 3 enforces this) |
 | Re-pushing / moving an existing tag to "redo" a release | Consumers cache the old asset; history becomes ambiguous | Delete the release **and** tag, or bump to the next patch and tag that |
 
 ## Verify the outcome, not the intent

@@ -83,6 +83,17 @@ export class GithubClient {
     }
   }
 
+  /** Code Search で guid → asset path(.meta を剥いだもの)を引く。未ヒット・未インデックス(422)は null。
+   *  legacy 構文(extension:meta)= GHES 互換。索引はデフォルトブランチのみ・認証済み 10 req/min。 */
+  async searchMetaByGuid(owner: string, repo: string, guid: string): Promise<string | null> {
+    const q = encodeURIComponent(`"${guid}" repo:${owner}/${repo} extension:meta`);
+    const res = await this.request(`/search/code?q=${q}&per_page=1`, 'application/vnd.github+json');
+    if (!res.ok) return null;
+    const body = (await res.json()) as { items?: Array<{ path?: string }> };
+    const path = body.items?.[0]?.path;
+    return path?.endsWith('.meta') ? path.slice(0, -'.meta'.length) : null;
+  }
+
   /** ref 時点の生バイト列。その側にファイルが無ければ null。 */
   async getFileAtRef(owner: string, repo: string, path: string, ref: string): Promise<Uint8Array | null> {
     const encoded = path.split('/').map(encodeURIComponent).join('/');

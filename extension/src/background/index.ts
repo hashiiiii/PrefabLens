@@ -18,6 +18,18 @@ const handle = createHandler({
       .then(createDiffer);
     return differ;
   },
+  guidCache: {
+    async load(repo) {
+      const key = `guids:${repo}`;
+      const stored = await chrome.storage.local.get([key]);
+      return (stored[key] as Record<string, string> | undefined) ?? {};
+    },
+    async save(repo, entries) {
+      const key = `guids:${repo}`;
+      const stored = await chrome.storage.local.get([key]);
+      await chrome.storage.local.set({ [key]: { ...(stored[key] as Record<string, string> | undefined), ...entries } });
+    },
+  },
 });
 
 chrome.runtime.onMessage.addListener((msg: SemanticDiffRequest, _sender, sendResponse) => {

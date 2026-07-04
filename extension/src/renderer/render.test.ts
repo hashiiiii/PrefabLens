@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
-import { beforeEach, describe, expect, it } from 'vitest';
-import { detectTheme, render, renderError } from './render';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { detectTheme, render, renderError, renderTooLarge } from './render';
 import type { DiffV2 } from '../types';
 
 const DIFF: DiffV2 = {
@@ -132,6 +132,17 @@ describe('render', () => {
     render(root, { schema: 'prefablens.diff.v2', unresolvedGuids: [], roots: [], loose: [] });
     expect(root.querySelectorAll('details')).toHaveLength(0);
     expect(root.textContent).toContain('No semantic changes');
+  });
+
+  it('renderTooLarge shows the size and renders on click', () => {
+    const root = freshRoot();
+    const onRender = vi.fn();
+    renderTooLarge(root, 26 * 1024 * 1024, onRender);
+    expect(root.textContent).toContain('Large file (26 MB)');
+    const button = root.querySelector<HTMLButtonElement>('button.pl-render')!;
+    expect(button.textContent).toBe('Render anyway');
+    button.click();
+    expect(onRender).toHaveBeenCalledTimes(1);
   });
 
   it('renderError shows a clean one-line message', () => {

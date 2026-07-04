@@ -64,8 +64,12 @@ export type SemanticDiffRequest = {
   repo: string;
   prNumber: number;
   path: string;
+  force?: boolean; // 25MB ガードを越えて描画する(「Render anyway」クリック)
 };
 
 export type BackgroundError = 'pat-missing' | 'auth-failed' | 'rate-limited' | 'fetch-failed' | 'diff-failed';
 
-export type SemanticDiffResponse = { ok: true; json: DiffV2 } | { ok: false; error: BackgroundError };
+export type SemanticDiffResponse =
+  | { ok: true; json: DiffV2 }
+  | { ok: false; error: BackgroundError }
+  | { ok: false; error: 'too-large'; bytes: number };

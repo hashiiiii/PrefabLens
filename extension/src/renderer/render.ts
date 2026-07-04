@@ -26,6 +26,7 @@ const STYLES = `
   .pl-arrow { color: var(--pl-muted); margin: 0 4px; }
   .pl-empty, .pl-error, .pl-loading { color: var(--pl-muted); margin: 0; }
   .pl-error { color: var(--pl-removed); }
+  .pl-render { font: inherit; margin-top: 4px; padding: 1px 8px; border: 1px solid var(--pl-border); background: transparent; color: inherit; cursor: pointer; }
   .pl-components { border-left: 1px solid var(--pl-border); margin: 2px 0 2px 4px; padding-left: 8px; }
   .pl-components-label { color: var(--pl-muted); font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; user-select: none; }
 `;
@@ -54,6 +55,17 @@ export function renderError(root: ShadowRoot, message: string): void {
 
 export function renderLoading(root: ShadowRoot): void {
   mount(root).append(note('pl-loading', 'Computing semantic diff…'));
+}
+
+/** 25MB 超ガード(親仕様 §5.7): 自動描画せず明示クリックを待つ。 */
+export function renderTooLarge(root: ShadowRoot, bytes: number, onRender: () => void): void {
+  const container = mount(root);
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'pl-render';
+  button.textContent = 'Render anyway';
+  button.addEventListener('click', onRender);
+  container.append(note('pl-empty', `Large file (${Math.round(bytes / 1048576)} MB).`), button);
 }
 
 function mount(root: ShadowRoot): HTMLElement {

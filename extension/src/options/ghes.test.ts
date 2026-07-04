@@ -48,6 +48,22 @@ describe('applyGhes', () => {
     const c = fakeChrome(false);
     expect(await applyGhes('ghe.corp.com', c)).toBe('declined');
     expect(c.scripting.registerContentScripts).not.toHaveBeenCalled();
+    // 拒否でも旧 GHES 向けの stale な登録は掃除する
+    expect(c.scripting.unregisterContentScripts).toHaveBeenCalledWith({ ids: ['prefablens-ghes'] });
+  });
+
+  it('requests permission before any other async chrome call (user gesture)', async () => {
+    const calls: string[] = [];
+    const c = fakeChrome();
+    c.permissions.request.mockImplementation(async () => {
+      calls.push('request');
+      return true;
+    });
+    c.scripting.unregisterContentScripts.mockImplementation(async () => {
+      calls.push('unregister');
+    });
+    await applyGhes('ghe.corp.com', c);
+    expect(calls[0]).toBe('request');
   });
 
   it('survives unregister rejection (no stale registration)', async () => {

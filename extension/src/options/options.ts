@@ -32,13 +32,14 @@ export async function initOptions(doc: Document, storage: StorageLike, ghes?: Ch
   baseUrl.value = (stored['baseUrl'] as string | undefined) ?? '';
 
   doc.querySelector<HTMLButtonElement>('#save')!.addEventListener('click', () => {
-    // 権限要求はクリック(user gesture)に一番近い位置で先に行う
     void (async () => {
-      const grant = ghes ? await applyGhes(baseUrl.value.trim(), ghes) : 'ok';
+      // 保存が最優先: GHES 登録の失敗で設定(特に PAT)を捨てない
       await storage.set({ pat: pat.value.trim(), baseUrl: baseUrl.value.trim() });
-      status.textContent = grant === 'declined' ? 'Saved (host permission declined)' : 'Saved';
+      const grant = ghes ? await applyGhes(baseUrl.value.trim(), ghes).catch(() => 'failed' as const) : 'ok';
+      status.textContent =
+        grant === 'ok' ? 'Saved' : grant === 'declined' ? 'Saved (host permission declined)' : 'Saved (GHES setup failed)';
     })().catch(() => {
-      status.textContent = 'Save failed';
+      status.textContent = 'Save failed'; // ここに来るのは storage 失敗のみ
     });
   });
 }

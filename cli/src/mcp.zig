@@ -4,12 +4,14 @@ const core = @import("core");
 const main = @import("main.zig");
 
 pub const default_protocol_version = "2025-06-18";
-const supported_versions = [_][]const u8{ "2025-06-18", "2025-03-26", "2024-11-05" };
+// 2025-03-26 はバッチ要求を MUST とするが、主要クライアントは送らないため非対応のまま受理する。
+// 2024-10-07 はプレリリース版だが旧 TS SDK が受理していたためパリティで残す。
+const supported_versions = [_][]const u8{ "2025-06-18", "2025-03-26", "2024-11-05", "2024-10-07" };
 
 /// tools/list の result ペイロード。description と inputSchema は旧 TS ホスト
 /// (mcp/src/index.ts の zod 定義)の忠実な変換。build.zig の smoke golden と一字一句一致させること。
 pub const tools_list_result: []const u8 =
-    "{\"tools\":[{\"name\":\"prefab_diff\",\"description\":\"Semantic diff for Unity YAML assets (.prefab/.unity/.asset) between two git versions. Use this instead of reading raw YAML diffs: it matches objects by fileID and reports added/removed/modified GameObjects, components, fields, and prefab overrides with resolved names.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\",\"minLength\":1,\"description\":\"Asset path (.prefab/.unity/.asset), relative to projectRoot\"},\"before\":{\"type\":\"string\",\"default\":\"HEAD\",\"description\":\"Base git ref\"},\"after\":{\"type\":\"string\",\"description\":\"Target git ref; omit to compare against the working tree\"},\"projectRoot\":{\"type\":\"string\",\"minLength\":1,\"description\":\"Repository root; defaults to the server cwd\"},\"format\":{\"type\":\"string\",\"enum\":[\"tree\",\"json\"],\"default\":\"tree\",\"description\":\"tree = readable text, json = prefablens.diff.v2\"}},\"required\":[\"path\"]}}]}";
+    "{\"tools\":[{\"name\":\"prefab_diff\",\"description\":\"Semantic diff for Unity YAML assets (.prefab/.unity/.asset) between two git versions. Use this instead of reading raw YAML diffs: it matches objects by fileID and reports added/removed/modified GameObjects, components, fields, and prefab overrides with resolved names.\",\"inputSchema\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\",\"minLength\":1,\"description\":\"Asset path (.prefab/.unity/.asset), relative to projectRoot\"},\"before\":{\"type\":\"string\",\"default\":\"HEAD\",\"description\":\"Base git ref\"},\"after\":{\"type\":\"string\",\"description\":\"Target git ref; omit to compare against the working tree\"},\"projectRoot\":{\"type\":\"string\",\"minLength\":1,\"description\":\"Repository root; defaults to the server cwd\"},\"format\":{\"type\":\"string\",\"enum\":[\"tree\",\"json\"],\"default\":\"tree\",\"description\":\"tree = readable text, json = prefablens.diff.v2\"}},\"required\":[\"path\"]}}]}";
 
 /// MCP stdio transport: 改行区切り JSON-RPC 2.0。stdin EOF で正常終了。
 /// stdout はプロトコル専用(診断は stderr へ)。リクエストごとに arena を張る。
@@ -19,7 +21,13 @@ pub fn serve(io: std.Io, gpa: std.mem.Allocator, reader: *std.Io.Reader, writer:
         // 空スライスを返し続けるため、ここでは使えない)。
         const raw = reader.takeDelimiterInclusive('\n') catch |err| switch (err) {
             error.EndOfStream => return,
-            // 1 行が読み取りバッファを超えた(仕様外の巨大リクエスト)。応答不能として終了する。
+            // 1 行が読み取りバッファを超えた。行の残りを読み捨てて再同期はできない
+            // (バッファが行の途中で詰まっている)ため、エラー応答を書いてから閉じる。
+            error.StreamTooLong => {
+                try writer.writeAll("{\"jsonrpc\":\"2.0\",\"id\":null,\"error\":{\"code\":-32600,\"message\":\"Request too large\"}}\n");
+                try writer.flush();
+                return;
+            },
             else => return err,
         };
         const line = std.mem.trimEnd(u8, raw, "\r\n");
@@ -73,10 +81,14 @@ fn handleLine(io: std.Io, arena: std.mem.Allocator, line: []const u8, w: *std.Io
 
 pub const tree_char_limit: usize = 50_000;
 
-/// LLM コンテキスト保護(旧 diff.ts の truncateTree と同一挙動、単位はバイト)。
+/// LLM コンテキスト保護(旧 diff.ts の truncateTree 相当、単位はバイト)。
+/// マルチバイト文字の途中で切ると応答が不正な UTF-8 になり strict なクライアントが
+/// セッションごと落ちるため、コードポイント境界まで戻してから切る。
 pub fn truncateTree(arena: std.mem.Allocator, text: []const u8) ![]const u8 {
     if (text.len <= tree_char_limit) return text;
-    return std.fmt.allocPrint(arena, "{s}\n[truncated: {d} chars total]\n", .{ text[0..tree_char_limit], text.len });
+    var end = tree_char_limit;
+    while (end > 0 and text[end] & 0xC0 == 0x80) end -= 1;
+    return std.fmt.allocPrint(arena, "{s}\n[truncated: {d} chars total]\n", .{ text[0..end], text.len });
 }
 
 fn validationError(w: *std.Io.Writer, id: std.json.Value, msg: []const u8) !void {
@@ -169,6 +181,9 @@ fn writeEnvelopePrefix(w: *std.Io.Writer, id: std.json.Value) !void {
     try w.writeAll("{\"jsonrpc\":\"2.0\",\"id\":");
     switch (id) {
         .integer => |n| try w.print("{d}", .{n}),
+        // 小数・i64 超の整数も JSON-RPC では合法な id。素通しで相関を保つ。
+        .float => |f| try w.print("{d}", .{f}),
+        .number_string => |s| try w.writeAll(s),
         .string => |s| try core.json.writeJsonString(w, s),
         else => try w.writeAll("null"),
     }
@@ -383,6 +398,66 @@ test "mcp: truncateTree caps tree output like the ts host" {
     const cut = try truncateTree(arena, big);
     try testing.expect(std.mem.endsWith(u8, cut, "\n[truncated: 50001 chars total]\n"));
     try testing.expectEqual(tree_char_limit, std.mem.indexOf(u8, cut, "\n[truncated").?);
+}
+
+test "mcp: initialize echoes the legacy 2024-10-07 version like the ts sdk" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const res = try roundtrip(arena,
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2024-10-07\"}}\n");
+    try testing.expect(std.mem.indexOf(u8, res, "\"protocolVersion\":\"2024-10-07\"") != null);
+}
+
+test "mcp: float and oversized integer ids are echoed verbatim" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    // JSON-RPC 2.0 は応答 id が要求 id と等しいことを要求する(小数も i64 超の整数も合法)。
+    const res = try roundtrip(arena,
+        "{\"jsonrpc\":\"2.0\",\"id\":1.5,\"method\":\"ping\"}\n" ++
+        "{\"jsonrpc\":\"2.0\",\"id\":92233720368547758080,\"method\":\"ping\"}\n");
+    try testing.expectEqualStrings(
+        "{\"jsonrpc\":\"2.0\",\"id\":1.5,\"result\":{}}\n" ++
+        "{\"jsonrpc\":\"2.0\",\"id\":92233720368547758080,\"result\":{}}\n", res);
+}
+
+test "mcp: truncateTree never splits a multibyte utf-8 character" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    // 50,000 バイト目が「あ」(3 バイト) の途中に落ちる入力を作る。
+    var big: std.ArrayList(u8) = .empty;
+    try big.appendNTimes(arena, 'x', tree_char_limit - 1);
+    try big.appendSlice(arena, "あああ");
+    const cut = try truncateTree(arena, big.items);
+    // 分断された lead バイトが混じらず、全体が有効な UTF-8 であること。
+    try testing.expect(std.unicode.utf8ValidateSlice(cut));
+    try testing.expect(std.mem.endsWith(u8, cut, "\n[truncated: 50008 chars total]\n"));
+    // カットは「あ」の手前(49,999 バイト)で止まる。
+    try testing.expectEqual(@as(usize, tree_char_limit - 1), std.mem.indexOf(u8, cut, "\n[truncated").?);
+}
+
+test "mcp: oversized request line responds with an error before closing" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    // 読み取りバッファ(テストでは 32 バイト)を超える 1 行 → プロセスを殺さず
+    // エラー応答を書いてから閉じる。
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const big_line = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\",\"padding\":\"" ++ ("x" ** 100) ++ "\"}\n";
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "input.jsonl", .data = big_line });
+    var file = try tmp.dir.openFile(testing.io, "input.jsonl", .{});
+    defer file.close(testing.io);
+    var buf: [32]u8 = undefined;
+    var fr: std.Io.File.Reader = .init(file, testing.io, &buf);
+    var out: std.ArrayList(u8) = .empty;
+    var aw = std.Io.Writer.Allocating.fromArrayList(arena, &out);
+    try serve(testing.io, arena, &fr.interface, &aw.writer);
+    try testing.expectEqualStrings(
+        "{\"jsonrpc\":\"2.0\",\"id\":null,\"error\":{\"code\":-32600,\"message\":\"Request too large\"}}\n",
+        aw.toArrayList().items);
 }
 
 test "mcp: blank lines and trailing CR are tolerated" {

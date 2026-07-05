@@ -642,8 +642,12 @@ pub fn main(init: std.process.Init) !u8 {
     if (user_args.len >= 1 and std.mem.eql(u8, user_args[0], "mcp")) {
         var stdin_buffer: [64 * 1024]u8 = undefined;
         var stdin_reader: std.Io.File.Reader = .init(.stdin(), init.io, &stdin_buffer);
-        try mcp.serve(init.io, std.heap.page_allocator, &stdin_reader.interface, stdout);
-        try stdout.flush();
+        // クライアント切断(broken pipe 等)は常態。スタックトレースを吐かず静かに終了する。
+        mcp.serve(init.io, std.heap.page_allocator, &stdin_reader.interface, stdout) catch {
+            stdout.flush() catch {};
+            return 1;
+        };
+        stdout.flush() catch {};
         return 0;
     }
 

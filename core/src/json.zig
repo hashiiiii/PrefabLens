@@ -88,7 +88,7 @@ fn writeObject(w: *std.Io.Writer, o: model.ObjectDiff, resolved: ?*const Resolve
     try w.writeAll("]}");
 }
 
-fn writeOverride(w: anytype, ov: model.OverrideDiff) !void {
+fn writeOverride(w: *std.Io.Writer, ov: model.OverrideDiff) !void {
     try w.writeAll("{\"group\":");
     try writeJsonString(w, ov.group);
     try w.writeAll(",\"label\":");
@@ -102,7 +102,7 @@ fn writeOverride(w: anytype, ov: model.OverrideDiff) !void {
     try w.writeByte('}');
 }
 
-fn writeComponent(w: anytype, c: model.ComponentDiff, resolved: ?*const Resolver) !void {
+fn writeComponent(w: *std.Io.Writer, c: model.ComponentDiff, resolved: ?*const Resolver) !void {
     try w.writeAll("{\"kind\":\"component\",\"fileId\":");
     try writeI64String(w, c.file_id);
     try w.print(",\"classId\":{d},\"typeName\":", .{c.class_id});
@@ -129,7 +129,7 @@ fn writeComponent(w: anytype, c: model.ComponentDiff, resolved: ?*const Resolver
     try w.writeAll("]}");
 }
 
-fn writeField(w: anytype, f: model.FieldDiff) !void {
+fn writeField(w: *std.Io.Writer, f: model.FieldDiff) !void {
     try w.writeAll("{\"path\":");
     try writeJsonString(w, f.path);
     try w.writeAll(",\"status\":");
@@ -141,7 +141,7 @@ fn writeField(w: anytype, f: model.FieldDiff) !void {
     try w.writeByte('}');
 }
 
-fn writeValue(w: anytype, node: ?*const Node) !void {
+fn writeValue(w: *std.Io.Writer, node: ?*const Node) !void {
     const n = node orelse {
         try w.writeAll("null");
         return;
@@ -163,7 +163,7 @@ fn writeValue(w: anytype, node: ?*const Node) !void {
     }
 }
 
-fn writeStatus(w: anytype, s: Status) !void {
+fn writeStatus(w: *std.Io.Writer, s: Status) !void {
     const text = switch (s) {
         .added => "\"added\"",
         .removed => "\"removed\"",
@@ -173,11 +173,11 @@ fn writeStatus(w: anytype, s: Status) !void {
     try w.writeAll(text);
 }
 
-fn writeI64String(w: anytype, v: i64) !void {
+fn writeI64String(w: *std.Io.Writer, v: i64) !void {
     try w.print("\"{d}\"", .{v});
 }
 
-pub fn writeJsonString(w: anytype, s: []const u8) !void {
+pub fn writeJsonString(w: *std.Io.Writer, s: []const u8) !void {
     try w.writeByte('"');
     for (s) |c| {
         switch (c) {

@@ -9,9 +9,9 @@ pub const default_protocol_version = "2025-06-18";
 const supported_versions = [_][]const u8{ "2025-06-18", "2025-03-26", "2024-11-05", "2024-10-07" };
 
 /// tools/list の result ペイロード。description と inputSchema は旧 TS ホスト
-/// (mcp/src/index.ts の zod 定義)の忠実な変換。build.zig の smoke golden と一字一句一致させること。
-pub const tools_list_result: []const u8 =
-    "{\"tools\":[{\"name\":\"prefab_diff\",\"description\":\"Semantic diff for Unity YAML assets (.prefab/.unity/.asset) between two git versions. Use this instead of reading raw YAML diffs: it matches objects by fileID and reports added/removed/modified GameObjects, components, fields, and prefab overrides with resolved names.\",\"inputSchema\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\",\"minLength\":1,\"description\":\"Asset path (.prefab/.unity/.asset), relative to projectRoot\"},\"before\":{\"type\":\"string\",\"default\":\"HEAD\",\"description\":\"Base git ref\"},\"after\":{\"type\":\"string\",\"description\":\"Target git ref; omit to compare against the working tree\"},\"projectRoot\":{\"type\":\"string\",\"minLength\":1,\"description\":\"Repository root; defaults to the server cwd\"},\"format\":{\"type\":\"string\",\"enum\":[\"tree\",\"json\"],\"default\":\"tree\",\"description\":\"tree = readable text, json = prefablens.diff.v2\"}},\"required\":[\"path\"]}}]}";
+/// (mcp/src/index.ts の zod 定義)の忠実な変換。build.zig の smoke golden も同じ
+/// tools_list.json を @embedFile するので、編集はそのファイル 1 箇所で済む。
+pub const tools_list_result: []const u8 = std.mem.trimEnd(u8, @embedFile("tools_list.json"), "\r\n");
 
 /// MCP stdio transport: 改行区切り JSON-RPC 2.0。stdin EOF で正常終了。
 /// stdout はプロトコル専用(診断は stderr へ)。リクエストごとに arena を張る。

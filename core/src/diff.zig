@@ -596,7 +596,7 @@ fn presentFields(arena: std.mem.Allocator, raw: []FieldDiff) ![]FieldDiff {
     return kept.toOwnedSlice(arena);
 }
 
-fn resolvedTypeName(doc: *const model.Document) ![]const u8 {
+fn resolvedTypeName(doc: *const model.Document) []const u8 {
     if (classid.typeName(doc.class_id)) |n| return n;
     // Unknown classID: fall back to the document's own top key.
     return doc.type_name;
@@ -627,7 +627,7 @@ pub fn compute(arena: std.mem.Allocator, before_src: []const u8, after_src: []co
                 try docs.append(arena, .{
                     .file_id = ad.file_id,
                     .class_id = ad.class_id,
-                    .type_name = try resolvedTypeName(ad),
+                    .type_name = resolvedTypeName(ad),
                     .script_guid = scriptGuid(ad),
                     .status = if (overrides.len == 0) .unchanged else .modified,
                     .fields = &[_]FieldDiff{},
@@ -640,7 +640,7 @@ pub fn compute(arena: std.mem.Allocator, before_src: []const u8, after_src: []co
                 try docs.append(arena, .{
                     .file_id = ad.file_id,
                     .class_id = ad.class_id,
-                    .type_name = try resolvedTypeName(ad),
+                    .type_name = resolvedTypeName(ad),
                     .script_guid = scriptGuid(ad),
                     .class_name = editorClassName(ad),
                     .status = if (fields.len == 0) .unchanged else .modified,
@@ -652,7 +652,7 @@ pub fn compute(arena: std.mem.Allocator, before_src: []const u8, after_src: []co
                 try docs.append(arena, .{
                     .file_id = ad.file_id,
                     .class_id = ad.class_id,
-                    .type_name = try resolvedTypeName(ad),
+                    .type_name = resolvedTypeName(ad),
                     .script_guid = scriptGuid(ad),
                     .status = .added,
                     .fields = &[_]FieldDiff{},
@@ -664,7 +664,7 @@ pub fn compute(arena: std.mem.Allocator, before_src: []const u8, after_src: []co
                 try docs.append(arena, .{
                     .file_id = ad.file_id,
                     .class_id = ad.class_id,
-                    .type_name = try resolvedTypeName(ad),
+                    .type_name = resolvedTypeName(ad),
                     .script_guid = scriptGuid(ad),
                     .class_name = editorClassName(ad),
                     .status = .added,
@@ -680,7 +680,7 @@ pub fn compute(arena: std.mem.Allocator, before_src: []const u8, after_src: []co
         try docs.append(arena, .{
             .file_id = bd.file_id,
             .class_id = bd.class_id,
-            .type_name = try resolvedTypeName(bd),
+            .type_name = resolvedTypeName(bd),
             .script_guid = scriptGuid(bd),
             .class_name = editorClassName(bd),
             .status = .removed,
@@ -782,17 +782,24 @@ fn isVectorMap(entries: []model.Entry) bool {
     return true;
 }
 
-fn vectorNode(arena: std.mem.Allocator, entries: []model.Entry) !*Node {
+/// "(a, b, c)" 形の合成スカラー Node("Position: (2, 3, 1)" 等の 1 行表示用)。
+fn parenJoinNode(arena: std.mem.Allocator, vals: []const []const u8) !*Node {
     var out: std.ArrayList(u8) = .empty;
     try out.append(arena, '(');
-    for (entries, 0..) |e, i| {
+    for (vals, 0..) |v, i| {
         if (i != 0) try out.appendSlice(arena, ", ");
-        try out.appendSlice(arena, e.value.scalar);
+        try out.appendSlice(arena, v);
     }
     try out.append(arena, ')');
     const n = try arena.create(Node);
     n.* = .{ .scalar = try out.toOwnedSlice(arena) };
     return n;
+}
+
+fn vectorNode(arena: std.mem.Allocator, entries: []model.Entry) !*Node {
+    var vals: [4][]const u8 = undefined;
+    for (entries, 0..) |e, i| vals[i] = e.value.scalar;
+    return parenJoinNode(arena, vals[0..entries.len]);
 }
 
 fn appendLeaf(arena: std.mem.Allocator, out: *std.ArrayList(FieldDiff), path: []const u8, status: Status, node: *const Node) !void {
@@ -1005,15 +1012,7 @@ fn addedInstanceOverrides(arena: std.mem.Allocator, doc: *const model.Document) 
         if (!all) continue;
         consumed[pi] = true;
         if (is_default) continue;
-        var buf: std.ArrayList(u8) = .empty;
-        try buf.append(arena, '(');
-        for (p.comps, 0..) |_, i| {
-            if (i != 0) try buf.appendSlice(arena, ", ");
-            try buf.appendSlice(arena, vals[i]);
-        }
-        try buf.append(arena, ')');
-        const n = try arena.create(Node);
-        n.* = .{ .scalar = try buf.toOwnedSlice(arena) };
+        const n = try parenJoinNode(arena, vals[0..p.comps.len]);
         try out.append(arena, .{ .group = "Transform", .label = p.label, .status = .added, .before = null, .after = n });
     }
 

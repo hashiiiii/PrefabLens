@@ -4,6 +4,7 @@ const testing = std.testing;
 
 pub const resolve = @import("resolve.zig");
 pub const input = @import("input.zig");
+pub const display = @import("display.zig");
 pub const render_tree = @import("render_tree.zig");
 pub const render_html = @import("render_html.zig");
 pub const mcp = @import("mcp.zig");
@@ -12,6 +13,7 @@ test {
     std.testing.refAllDecls(@This());
     _ = resolve;
     _ = input;
+    _ = display;
     _ = render_tree;
     _ = render_html;
     _ = mcp;
@@ -567,68 +569,31 @@ pub fn run(io: std.Io, arena: std.mem.Allocator, args: []const []const u8, stdou
             return 1;
         };
 
+    const res = core.diffBytes(arena, before, after) catch |err| {
+        if (err == error.NestingTooDeep) {
+            try stderr.writeAll("error: input nested too deeply\n");
+            return 1;
+        }
+        return err;
+    };
+    var resolver_ptr: ?*const core.json.Resolver = null;
+    var idx: core.json.Resolver = undefined;
+    if (opt.project_root) |proj| {
+        idx = resolve.buildIndex(io, arena, proj) catch {
+            try stderr.print("error: cannot read project directory '{s}'\n", .{proj});
+            return 1;
+        };
+        resolver_ptr = &idx;
+    }
     switch (opt.format) {
         .json => {
-            const res = core.diffBytes(arena, before, after) catch |err| {
-                if (err == error.NestingTooDeep) {
-                    try stderr.writeAll("error: input nested too deeply\n");
-                    return 1;
-                }
-                return err;
-            };
-            var resolver_ptr: ?*const core.json.Resolver = null;
-            var idx: core.json.Resolver = undefined;
-            if (opt.project_root) |proj| {
-                const built = resolve.buildIndex(io, arena, proj) catch {
-                    try stderr.print("error: cannot read project directory '{s}'\n", .{proj});
-                    return 1;
-                };
-                idx = built; // Index and Resolver are both StringHashMap([]const u8)
-                resolver_ptr = &idx;
-            }
             const out = try core.json.serialize(arena, res, resolver_ptr);
             try stdout.writeAll(out);
             try stdout.writeByte('\n');
         },
-        .tree => {
-            const res = core.diffBytes(arena, before, after) catch |err| {
-                if (err == error.NestingTooDeep) {
-                    try stderr.writeAll("error: input nested too deeply\n");
-                    return 1;
-                }
-                return err;
-            };
-            var resolver_ptr: ?*const core.json.Resolver = null;
-            var idx: core.json.Resolver = undefined;
-            if (opt.project_root) |proj| {
-                idx = resolve.buildIndex(io, arena, proj) catch {
-                    try stderr.print("error: cannot read project directory '{s}'\n", .{proj});
-                    return 1;
-                };
-                resolver_ptr = &idx;
-            }
-            // Color when stdout is a TTY is decided in main(); --no-color forces it off.
-            try render_tree.render(arena, stdout, res, resolver_ptr, color and !opt.no_color);
-        },
-        .html => {
-            const res = core.diffBytes(arena, before, after) catch |err| {
-                if (err == error.NestingTooDeep) {
-                    try stderr.writeAll("error: input nested too deeply\n");
-                    return 1;
-                }
-                return err;
-            };
-            var resolver_ptr: ?*const core.json.Resolver = null;
-            var idx: core.json.Resolver = undefined;
-            if (opt.project_root) |proj| {
-                idx = resolve.buildIndex(io, arena, proj) catch {
-                    try stderr.print("error: cannot read project directory '{s}'\n", .{proj});
-                    return 1;
-                };
-                resolver_ptr = &idx;
-            }
-            try render_html.render(arena, stdout, res, resolver_ptr);
-        },
+        // Color when stdout is a TTY is decided in main(); --no-color forces it off.
+        .tree => try render_tree.render(stdout, res, resolver_ptr, color and !opt.no_color),
+        .html => try render_html.render(stdout, res, resolver_ptr),
     }
     return 0;
 }

@@ -375,6 +375,58 @@ test "run: color=true colors tree output, --no-color forces it back off" {
     try testing.expect(std.mem.indexOf(u8, output2.items, "\x1b[") == null);
 }
 
+/// リリースタグ v<version> と lockstep(cut-release の 5 ソースの一員)。
+pub const version = "0.2.0";
+
+test "run: --project points git mode at a repo outside the cwd" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    // cwd の外に実 git リポジトリを作る。--project がその repo を指せば
+    // git show は成功する(cwd 固定 "." のままだと失敗する)。
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const dir = try tmp.dir.realPathFileAlloc(testing.io, ".", arena);
+    const gitc = struct {
+        fn call(io: std.Io, a: std.mem.Allocator, d: []const u8, argv: []const []const u8) !void {
+            var full: std.ArrayList([]const u8) = .empty;
+            try full.append(a, "git");
+            try full.appendSlice(a, argv);
+            const r = try std.process.run(a, io, .{ .argv = full.items, .cwd = .{ .path = d } });
+            if (r.term != .exited or r.term.exited != 0) return error.GitFailed;
+        }
+    }.call;
+    try gitc(testing.io, arena, dir, &.{ "init", "-q" });
+    try gitc(testing.io, arena, dir, &.{ "config", "user.email", "t@t.t" });
+    try gitc(testing.io, arena, dir, &.{ "config", "user.name", "t" });
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "Foo.asset", .data =
+        \\--- !u!114 &1
+        \\MonoBehaviour:
+        \\  hp: 1
+    });
+    try gitc(testing.io, arena, dir, &.{ "add", "Foo.asset" });
+    try gitc(testing.io, arena, dir, &.{ "commit", "-q", "-m", "first" });
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "Foo.asset", .data =
+        \\--- !u!114 &1
+        \\MonoBehaviour:
+        \\  hp: 2
+    });
+
+    var out: std.ArrayList(u8) = .empty;
+    var aw = std.Io.Writer.Allocating.fromArrayList(arena, &out);
+    var errbuf: std.ArrayList(u8) = .empty;
+    var aw_err = std.Io.Writer.Allocating.fromArrayList(arena, &errbuf);
+    const code = try run(testing.io, arena, &.{ "--json", "--project", dir, "--git", "HEAD", "Foo.asset" }, &aw.writer, &aw_err.writer, false);
+    const output = aw.toArrayList();
+    try testing.expectEqual(@as(u8, 0), code);
+    try testing.expect(std.mem.indexOf(u8, output.items, "\"after\":\"2\"") != null);
+}
+
+test "version constant exists for serverInfo and release lockstep" {
+    try testing.expectEqualStrings("0.2.0", version);
+}
+
 pub const Format = enum { tree, json, html };
 
 pub const Options = struct {
@@ -478,8 +530,10 @@ pub fn run(io: std.Io, arena: std.mem.Allocator, args: []const []const u8, stdou
         return 2;
     };
 
+    // --project は guid 解決の基点と git repo dir を兼ねる(未指定は従来どおり cwd)。
+    const repo_dir = opt.project_root orelse ".";
     const before = if (opt.git_mode)
-        input.showAtRef(io, arena, ".", opt.git_ref_before, opt.git_path) catch {
+        input.showAtRef(io, arena, repo_dir, opt.git_ref_before, opt.git_path) catch {
             try stderr.print("error: git show failed for '{s}:{s}'\n", .{ opt.git_ref_before, opt.git_path });
             return 1;
         }
@@ -490,12 +544,12 @@ pub fn run(io: std.Io, arena: std.mem.Allocator, args: []const []const u8, stdou
         };
     const after = if (opt.git_mode and opt.git_ref_after.len == 0)
         // ref 1 個 = 作業ツリーとの比較(ファイル不在は削除 = 空側)
-        input.readWorktree(io, arena, ".", opt.git_path) catch {
+        input.readWorktree(io, arena, repo_dir, opt.git_path) catch {
             try stderr.print("error: cannot read file '{s}'\n", .{opt.git_path});
             return 1;
         }
     else if (opt.git_mode)
-        input.showAtRef(io, arena, ".", opt.git_ref_after, opt.git_path) catch {
+        input.showAtRef(io, arena, repo_dir, opt.git_ref_after, opt.git_path) catch {
             try stderr.print("error: git show failed for '{s}:{s}'\n", .{ opt.git_ref_after, opt.git_path });
             return 1;
         }

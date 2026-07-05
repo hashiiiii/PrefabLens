@@ -53,27 +53,15 @@ jobs:
       - name: E2E smoke
         run: npm run e2e
 
-  mcp:
-    # npm パッケージは全 OS 向けに配布し、プロセス kill・タイムアウト・spawn はプラットフォーム差が出やすいので windows でも回す。
-    strategy:
-      matrix:
-        os: [ubuntu-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
-    defaults:
-      run:
-        working-directory: mcp
+  windows:
+    # 旧 mcp(TS ホスト)ジョブの後継。プロセス spawn・パス・改行のプラットフォーム差を
+    # zig 側テスト(mcp サブコマンド含む)で押さえる。
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7
       - name: Install tools
         uses: jdx/mise-action@v4
-      - name: Build CLI
-        run: zig build
-        working-directory: ${{ github.workspace }}
-      - name: Install deps
-        run: npm ci
-      - name: Typecheck
-        run: npm run typecheck
+      - name: Test
+        run: zig build test
       - name: Build
-        run: npm run build
-      - name: Tests
-        run: npm test
+        run: zig build

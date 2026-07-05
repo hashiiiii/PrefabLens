@@ -5,7 +5,6 @@ on:
 
 permissions:
   contents: write
-  id-token: write
 
 jobs:
   release:
@@ -29,24 +28,9 @@ jobs:
           build x86_64-macos     macos-x64    prefablens
           build x86_64-linux-gnu linux-x64    prefablens
           build x86_64-windows   windows-x64  prefablens.exe
-          # ダウンロード側(mcp の ensureCli)が整合性検証に使う。sha256sum 形式で全 zip をカバーする。
+          # ダウンロード側(Editor 等)が整合性検証に使える。sha256sum 形式で全 zip をカバーする。
           (cd dist && sha256sum *.zip > SHA256SUMS)
       - name: Create release
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh release create "$GITHUB_REF_NAME" dist/*.zip dist/SHA256SUMS --generate-notes
-      # npm publish は保留中(npmjs.com の Trusted Publisher 未設定)。設定後に if 条件を外して再開する。
-      - name: Publish MCP server to npm
-        if: ${{ false }}
-        working-directory: mcp
-        run: |
-          set -euo pipefail
-          version=$(node -p "require('./package.json').version")
-          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
-            echo "mcp/package.json version $version does not match tag $GITHUB_REF_NAME" >&2
-            exit 1
-          fi
-          npm install -g 'npm@^11'  # trusted publishing は npm >= 11.5.1 が必要(node 22 同梱は 10.x)。将来 major の破壊的変更を避けて ^11 に固定
-          npm ci
-          npm run build
-          npm publish --access public

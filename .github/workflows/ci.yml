@@ -28,8 +28,8 @@ jobs:
           path: |
             .zig-cache
             .zig-cache-global
-          key: zig-${{ runner.os }}-${{ hashFiles('mise.toml') }}-${{ github.sha }}
-          restore-keys: zig-${{ runner.os }}-${{ hashFiles('mise.toml') }}-
+          key: zig-${{ github.job }}-${{ hashFiles('mise.toml') }}-${{ github.sha }}
+          restore-keys: zig-${{ github.job }}-${{ hashFiles('mise.toml') }}-
       - name: Test
         run: zig build test
       - name: Performance budget
@@ -40,12 +40,22 @@ jobs:
     defaults:
       run:
         working-directory: extension
+    env:
+      ZIG_GLOBAL_CACHE_DIR: ${{ github.workspace }}/.zig-cache-global
     steps:
       - uses: actions/checkout@v7
       - name: Install tools
         uses: jdx/mise-action@v4
         with:
           install_args: zig node
+      - name: Cache Zig artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            .zig-cache
+            .zig-cache-global
+          key: zig-${{ github.job }}-${{ hashFiles('mise.toml') }}-${{ github.sha }}
+          restore-keys: zig-${{ github.job }}-${{ hashFiles('mise.toml') }}-
       - name: Build WASM core
         run: zig build wasm
         working-directory: ${{ github.workspace }}
@@ -73,26 +83,3 @@ jobs:
         run: npx playwright install --with-deps chromium
       - name: E2E smoke
         run: npm run e2e
-
-  windows:
-    # 旧 mcp(TS ホスト)ジョブの後継。プロセス spawn・パス・改行のプラットフォーム差を
-    # zig 側テスト(mcp サブコマンド含む)で押さえる。
-    runs-on: windows-latest
-    env:
-      ZIG_GLOBAL_CACHE_DIR: ${{ github.workspace }}/.zig-cache-global
-    steps:
-      - uses: actions/checkout@v7
-      - name: Install tools
-        uses: jdx/mise-action@v4
-        with:
-          install_args: zig
-      - name: Cache Zig artifacts
-        uses: actions/cache@v4
-        with:
-          path: |
-            .zig-cache
-            .zig-cache-global
-          key: zig-${{ runner.os }}-${{ hashFiles('mise.toml') }}-${{ github.sha }}
-          restore-keys: zig-${{ runner.os }}-${{ hashFiles('mise.toml') }}-
-      - name: Test
-        run: zig build test

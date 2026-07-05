@@ -1,0 +1,33 @@
+name: Windows
+# 旧 mcp(TS ホスト)ジョブの後継。プロセス spawn・パス・改行のプラットフォーム差を
+# zig 側テスト(mcp サブコマンド含む)で押さえる。
+# Windows ランナーは tool 展開とファイル I/O が遅く 1 分を切れないため、
+# zig 側に影響し得る変更(ソース・埋め込みファイル・toolchain)の PR だけで走らせる。
+# main への push では無条件に走らせて、フィルタ漏れの安全網とする。
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths:
+      - '**/*.zig'
+      - 'build.zig.zon'
+      - 'mise.toml'
+      - 'core/src/testdata/**'
+      - 'cli/src/tools_list.json'
+      - '.github/workflows/windows.yml'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install tools
+        uses: jdx/mise-action@v4
+        with:
+          install_args: zig
+      - name: Test
+        run: zig build test

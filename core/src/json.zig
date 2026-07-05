@@ -177,7 +177,7 @@ fn writeI64String(w: anytype, v: i64) !void {
     try w.print("\"{d}\"", .{v});
 }
 
-fn writeJsonString(w: anytype, s: []const u8) !void {
+pub fn writeJsonString(w: anytype, s: []const u8) !void {
     try w.writeByte('"');
     for (s) |c| {
         switch (c) {

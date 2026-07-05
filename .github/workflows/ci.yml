@@ -23,7 +23,7 @@ jobs:
         with:
           install_args: zig
       - name: Cache Zig artifacts
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             .zig-cache
@@ -49,7 +49,7 @@ jobs:
         with:
           install_args: zig node
       - name: Cache Zig artifacts
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             .zig-cache
@@ -74,7 +74,7 @@ jobs:
         run: npm run build
       - name: Cache Playwright browser
         id: playwright-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ hashFiles('extension/package-lock.json') }}

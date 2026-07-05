@@ -6,6 +6,11 @@ const main = @import("main.zig");
 pub const default_protocol_version = "2025-06-18";
 const supported_versions = [_][]const u8{ "2025-06-18", "2025-03-26", "2024-11-05" };
 
+/// tools/list の result ペイロード。description と inputSchema は旧 TS ホスト
+/// (mcp/src/index.ts の zod 定義)の忠実な変換。build.zig の smoke golden と一字一句一致させること。
+pub const tools_list_result: []const u8 =
+    "{\"tools\":[{\"name\":\"prefab_diff\",\"description\":\"Semantic diff for Unity YAML assets (.prefab/.unity/.asset) between two git versions. Use this instead of reading raw YAML diffs: it matches objects by fileID and reports added/removed/modified GameObjects, components, fields, and prefab overrides with resolved names.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\",\"minLength\":1,\"description\":\"Asset path (.prefab/.unity/.asset), relative to projectRoot\"},\"before\":{\"type\":\"string\",\"default\":\"HEAD\",\"description\":\"Base git ref\"},\"after\":{\"type\":\"string\",\"description\":\"Target git ref; omit to compare against the working tree\"},\"projectRoot\":{\"type\":\"string\",\"minLength\":1,\"description\":\"Repository root; defaults to the server cwd\"},\"format\":{\"type\":\"string\",\"enum\":[\"tree\",\"json\"],\"default\":\"tree\",\"description\":\"tree = readable text, json = prefablens.diff.v2\"}},\"required\":[\"path\"]}}]}";
+
 /// MCP stdio transport: 改行区切り JSON-RPC 2.0。stdin EOF で正常終了。
 /// stdout はプロトコル専用(診断は stderr へ)。リクエストごとに arena を張る。
 pub fn serve(io: std.Io, gpa: std.mem.Allocator, reader: *std.Io.Reader, writer: *std.Io.Writer) !void {
@@ -56,6 +61,9 @@ fn handleLine(io: std.Io, arena: std.mem.Allocator, line: []const u8, w: *std.Io
     } else if (std.mem.eql(u8, method, "ping")) {
         try writeEnvelopePrefix(w, id);
         try w.writeAll("\"result\":{}}\n");
+    } else if (std.mem.eql(u8, method, "tools/list")) {
+        try writeEnvelopePrefix(w, id);
+        try w.print("\"result\":{s}}}\n", .{tools_list_result});
     } else {
         try writeError(w, id, -32601, "Method not found");
     }
@@ -162,6 +170,20 @@ test "mcp: non-object or method-less request is -32600" {
     try testing.expectEqualStrings(
         "{\"jsonrpc\":\"2.0\",\"id\":null,\"error\":{\"code\":-32600,\"message\":\"Invalid Request\"}}\n" ++
         "{\"jsonrpc\":\"2.0\",\"id\":9,\"error\":{\"code\":-32600,\"message\":\"Invalid Request\"}}\n", res);
+}
+
+test "mcp: tools/list returns the single prefab_diff tool" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const res = try roundtrip(arena, "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\"}\n");
+    // golden: 実装の tools_list_result と envelope の結合そのもの
+    try testing.expectEqualStrings(
+        "{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":" ++ tools_list_result ++ "}\n", res);
+    // スキーマの要点が入っていること(golden の自己一致だけにしない)
+    try testing.expect(std.mem.indexOf(u8, res, "\"name\":\"prefab_diff\"") != null);
+    try testing.expect(std.mem.indexOf(u8, res, "\"required\":[\"path\"]") != null);
+    try testing.expect(std.mem.indexOf(u8, res, "\"enum\":[\"tree\",\"json\"]") != null);
 }
 
 test "mcp: blank lines and trailing CR are tolerated" {

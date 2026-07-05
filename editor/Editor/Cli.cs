@@ -2,8 +2,11 @@ using System;
 using System.Diagnostics;
 using System.IO;
 using System.IO.Compression;
+using System.Net;
 using System.Net.Http;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
+using System.Text;
 using UnityEditor;
 
 namespace PrefabLens
@@ -14,6 +17,10 @@ namespace PrefabLens
         /// ダウンロードする CLI のバージョン(GitHub Releases のタグ v{Version} と一致させる)。
         public const string Version = "0.2.0";
         public const string CliPathPref = "PrefabLens.CliPath";
+
+        /// CLI 実行の上限。CLI 内部の git タイムアウト(60 秒)より長く取り、git ハング時は
+        /// CLI 自身の具体的なエラーを先に出させる。ここは Unity メインスレッド凍結の最終安全網。
+        public const int RunTimeoutMs = 90_000;
 
         // ---- 純関数(EditMode テスト対象) ----
 
@@ -37,6 +44,31 @@ namespace PrefabLens
             for (var i = 0; i < args.Length; i++)
                 quoted[i] = "\"" + args[i].Replace("\"", "\\\"") + "\"";
             return string.Join(" ", quoted);
+        }
+
+        /// `sha256sum` 形式("<hex>  <name>"、バイナリモードは "<hex> *<name>")から
+        /// assetName の行のハッシュを取り出す。見つからなければ null。
+        public static string ParseSha256Sums(string sums, string assetName)
+        {
+            foreach (var raw in sums.Split('\n'))
+            {
+                var line = raw.Trim();
+                var sep = line.IndexOf(' ');
+                if (sep <= 0) continue;
+                var name = line.Substring(sep).Trim().TrimStart('*');
+                if (name == assetName) return line.Substring(0, sep);
+            }
+            return null;
+        }
+
+        public static string Sha256Hex(byte[] bytes)
+        {
+            using (var sha = SHA256.Create())
+            {
+                var sb = new StringBuilder();
+                foreach (var b in sha.ComputeHash(bytes)) sb.Append(b.ToString("x2"));
+                return sb.ToString();
+            }
         }
 
         // ---- Editor 連携 ----
@@ -70,15 +102,19 @@ namespace PrefabLens
             {
                 EditorUtility.DisplayProgressBar("PrefabLens", $"Downloading {asset}…", 0.3f);
                 using (var http = new HttpClient())
-                using (var zip = new ZipArchive(new MemoryStream(http.GetByteArrayAsync(url).Result)))
                 {
-                    foreach (var entry in zip.Entries)
+                    var bytes = http.GetByteArrayAsync(url).Result;
+                    VerifyChecksum(http, asset, bytes);
+                    using (var zip = new ZipArchive(new MemoryStream(bytes)))
                     {
-                        // ZipFileExtensions(ExtractToFile)は netstandard で参照できないため手動コピー
-                        var dest = Path.Combine(dir, entry.Name);
-                        using (var src = entry.Open())
-                        using (var dst = File.Create(dest))
-                            src.CopyTo(dst);
+                        foreach (var entry in zip.Entries)
+                        {
+                            // ZipFileExtensions(ExtractToFile)は netstandard で参照できないため手動コピー
+                            var dest = Path.Combine(dir, entry.Name);
+                            using (var src = entry.Open())
+                            using (var dst = File.Create(dest))
+                                src.CopyTo(dst);
+                        }
                     }
                 }
             }
@@ -88,8 +124,23 @@ namespace PrefabLens
             }
 
             if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
-                RunProcess("chmod", "+x \"" + DefaultPath + "\"", ".");
+                RunProcess("chmod", "+x \"" + DefaultPath + "\"", ".", RunTimeoutMs);
             return DefaultPath;
+        }
+
+        /// リリースの SHA256SUMS と zip を照合する。SHA256SUMS が無い(404 = v0.2.0 以前の
+        /// リリース)場合のみスキップし、それ以外の取得失敗と不一致は throw。
+        static void VerifyChecksum(HttpClient http, string assetName, byte[] zipBytes)
+        {
+            var res = http.GetAsync(DownloadUrl(Version, "SHA256SUMS")).Result;
+            if (res.StatusCode == HttpStatusCode.NotFound) return;
+            res.EnsureSuccessStatusCode();
+            var want = ParseSha256Sums(res.Content.ReadAsStringAsync().Result, assetName);
+            if (want == null)
+                throw new InvalidOperationException($"SHA256SUMS has no entry for {assetName}");
+            var got = Sha256Hex(zipBytes);
+            if (!string.Equals(want, got, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException($"SHA256 mismatch for {assetName}: expected {want}, got {got}");
         }
 
         public struct Result
@@ -97,15 +148,16 @@ namespace PrefabLens
             public int ExitCode;
             public string Stdout;
             public string Stderr;
+            public bool TimedOut;
         }
 
         /// プロジェクトルートを cwd に CLI を実行する(--git は cwd のリポジトリを見る)。
         public static Result Run(string cliPath, string assetPath)
         {
-            return RunProcess(cliPath, QuoteArgs(BuildArgs(assetPath)), Directory.GetCurrentDirectory());
+            return RunProcess(cliPath, QuoteArgs(BuildArgs(assetPath)), Directory.GetCurrentDirectory(), RunTimeoutMs);
         }
 
-        static Result RunProcess(string file, string arguments, string workDir)
+        public static Result RunProcess(string file, string arguments, string workDir, int timeoutMs)
         {
             var psi = new ProcessStartInfo(file, arguments)
             {
@@ -120,7 +172,21 @@ namespace PrefabLens
                 // 双方向 ReadToEnd のデッドロックを避ける: 片方は async で読む
                 var stdout = p.StandardOutput.ReadToEndAsync();
                 var stderr = p.StandardError.ReadToEndAsync();
-                p.WaitForExit();
+                if (!p.WaitForExit(timeoutMs))
+                {
+                    // ハングした CLI から Unity メインスレッドを守る。Kill 後も stdio を掴む
+                    // 孫プロセスが残ると Read タスクは完了しないため、読み残しは待たない。
+                    try { p.Kill(); }
+                    catch (InvalidOperationException) { /* タイムアウトと終了の競合 */ }
+                    catch (System.ComponentModel.Win32Exception) { /* 既に終了処理中 */ }
+                    return new Result
+                    {
+                        ExitCode = -1,
+                        Stdout = "",
+                        Stderr = $"prefablens timed out after {timeoutMs / 1000}s and was killed",
+                        TimedOut = true,
+                    };
+                }
                 return new Result { ExitCode = p.ExitCode, Stdout = stdout.Result, Stderr = stderr.Result };
             }
         }

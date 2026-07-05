@@ -64,10 +64,93 @@ fn handleLine(io: std.Io, arena: std.mem.Allocator, line: []const u8, w: *std.Io
     } else if (std.mem.eql(u8, method, "tools/list")) {
         try writeEnvelopePrefix(w, id);
         try w.print("\"result\":{s}}}\n", .{tools_list_result});
+    } else if (std.mem.eql(u8, method, "tools/call")) {
+        try handleToolsCall(io, arena, w, id, obj.get("params"));
     } else {
         try writeError(w, id, -32601, "Method not found");
     }
-    _ = io;
+}
+
+pub const tree_char_limit: usize = 50_000;
+
+/// LLM コンテキスト保護(旧 diff.ts の truncateTree と同一挙動、単位はバイト)。
+pub fn truncateTree(arena: std.mem.Allocator, text: []const u8) ![]const u8 {
+    if (text.len <= tree_char_limit) return text;
+    return std.fmt.allocPrint(arena, "{s}\n[truncated: {d} chars total]\n", .{ text[0..tree_char_limit], text.len });
+}
+
+fn validationError(w: *std.Io.Writer, id: std.json.Value, msg: []const u8) !void {
+    try writeEnvelopePrefix(w, id);
+    try w.writeAll("\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"Input validation error: ");
+    try w.writeAll(msg); // msg は静的文字列のみ(必要なエスケープは呼び出し側リテラルで済ませる)
+    try w.writeAll("\"}],\"isError\":true}}\n");
+}
+
+/// arguments から文字列を取り出す。キー欠落は null、型違いは error.Invalid。
+fn getString(args: ?std.json.Value, key: []const u8) error{Invalid}!?[]const u8 {
+    const a = args orelse return null;
+    if (a != .object) return error.Invalid;
+    const v = a.object.get(key) orelse return null;
+    if (v != .string) return error.Invalid;
+    return v.string;
+}
+
+fn writeToolText(w: *std.Io.Writer, id: std.json.Value, text: []const u8, is_error: bool) !void {
+    try writeEnvelopePrefix(w, id);
+    try w.writeAll("\"result\":{\"content\":[{\"type\":\"text\",\"text\":");
+    try core.json.writeJsonString(w, text);
+    if (is_error) {
+        try w.writeAll("}],\"isError\":true}}\n");
+    } else {
+        try w.writeAll("}]}}\n");
+    }
+}
+
+fn handleToolsCall(io: std.Io, arena: std.mem.Allocator, w: *std.Io.Writer, id: std.json.Value, params: ?std.json.Value) !void {
+    const p: std.json.Value = params orelse .null;
+    const name = (getString(p, "name") catch null) orelse "";
+    if (!std.mem.eql(u8, name, "prefab_diff")) {
+        try writeError(w, id, -32602, "Unknown tool");
+        return;
+    }
+    const args: ?std.json.Value = if (p == .object) p.object.get("arguments") else null;
+    const path = getString(args, "path") catch return validationError(w, id, "path must be a non-empty string");
+    if (path == null or path.?.len == 0) return validationError(w, id, "path must be a non-empty string");
+    const before = (getString(args, "before") catch return validationError(w, id, "before must be a string")) orelse "HEAD";
+    const after = getString(args, "after") catch return validationError(w, id, "after must be a string");
+    const project_root = getString(args, "projectRoot") catch return validationError(w, id, "projectRoot must be a non-empty string");
+    if (project_root != null and project_root.?.len == 0) return validationError(w, id, "projectRoot must be a non-empty string");
+    const format = (getString(args, "format") catch return validationError(w, id, "format must be \\\"tree\\\" or \\\"json\\\"")) orelse "tree";
+    const is_json = std.mem.eql(u8, format, "json");
+    if (!is_json and !std.mem.eql(u8, format, "tree"))
+        return validationError(w, id, "format must be \\\"tree\\\" or \\\"json\\\"");
+
+    // 旧 TS ホストの buildArgs + cwd=projectRoot と同じ argv(--project が git repo dir を兼ねる)。
+    var argv: std.ArrayList([]const u8) = .empty;
+    try argv.append(arena, if (is_json) "--json" else "--no-color");
+    try argv.appendSlice(arena, &.{ "--project", project_root orelse "." });
+    try argv.appendSlice(arena, &.{ "--git", before });
+    if (after) |a| try argv.append(arena, a);
+    try argv.append(arena, path.?);
+
+    var out: std.ArrayList(u8) = .empty;
+    var aw = std.Io.Writer.Allocating.fromArrayList(arena, &out);
+    var errbuf: std.ArrayList(u8) = .empty;
+    var aw_err = std.Io.Writer.Allocating.fromArrayList(arena, &errbuf);
+    const code = main.run(io, arena, argv.items, &aw.writer, &aw_err.writer, false) catch |err| {
+        const msg = try std.fmt.allocPrint(arena, "prefablens failed: {s}", .{@errorName(err)});
+        try writeToolText(w, id, msg, true);
+        return;
+    };
+    if (code != 0) {
+        const stderr_text = std.mem.trim(u8, aw_err.toArrayList().items, " \t\r\n");
+        const text = if (stderr_text.len > 0) stderr_text else try std.fmt.allocPrint(arena, "prefablens exited with code {d}", .{code});
+        try writeToolText(w, id, text, true);
+        return;
+    }
+    const stdout_text = aw.toArrayList().items;
+    const text = if (is_json) stdout_text else try truncateTree(arena, stdout_text);
+    try writeToolText(w, id, text, false);
 }
 
 fn writeInitialize(w: *std.Io.Writer, id: std.json.Value, params: ?std.json.Value) !void {
@@ -95,6 +178,29 @@ fn writeEnvelopePrefix(w: *std.Io.Writer, id: std.json.Value) !void {
 fn writeError(w: *std.Io.Writer, id: std.json.Value, code: i32, msg: []const u8) !void {
     try writeEnvelopePrefix(w, id);
     try w.print("\"error\":{{\"code\":{d},\"message\":\"{s}\"}}}}\n", .{ code, msg });
+}
+
+/// テストヘルパー: 実 git を叩く(モックなし方針)。
+fn gitc(io: std.Io, a: std.mem.Allocator, d: []const u8, argv: []const []const u8) !void {
+    var full: std.ArrayList([]const u8) = .empty;
+    try full.append(a, "git");
+    try full.appendSlice(a, argv);
+    const r = try std.process.run(a, io, .{ .argv = full.items, .cwd = .{ .path = d } });
+    if (r.term != .exited or r.term.exited != 0) return error.GitFailed;
+}
+
+/// テストヘルパー: plane fixture の git リポジトリを組み、その絶対パスを返す。
+/// server.test.ts の beforeAll と同じ形(before をコミット、after を作業ツリーに)。
+fn setupPlaneRepo(io: std.Io, arena: std.mem.Allocator, tmp: *std.testing.TmpDir) ![]const u8 {
+    const dir = try tmp.dir.realPathFileAlloc(io, ".", arena);
+    try tmp.dir.writeFile(io, .{ .sub_path = "Plane.prefab", .data = @embedFile("testdata_plane_before") });
+    try gitc(io, arena, dir, &.{ "init", "-q" });
+    try gitc(io, arena, dir, &.{ "config", "user.email", "t@t.t" });
+    try gitc(io, arena, dir, &.{ "config", "user.name", "t" });
+    try gitc(io, arena, dir, &.{ "add", "." });
+    try gitc(io, arena, dir, &.{ "commit", "-q", "-m", "init" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "Plane.prefab", .data = @embedFile("testdata_plane_after") });
+    return dir;
 }
 
 /// テストヘルパー: 入力行をまとめて食わせ、応答全文を返す。
@@ -184,6 +290,99 @@ test "mcp: tools/list returns the single prefab_diff tool" {
     try testing.expect(std.mem.indexOf(u8, res, "\"name\":\"prefab_diff\"") != null);
     try testing.expect(std.mem.indexOf(u8, res, "\"required\":[\"path\"]") != null);
     try testing.expect(std.mem.indexOf(u8, res, "\"enum\":[\"tree\",\"json\"]") != null);
+}
+
+test "mcp: tools/call validation errors match the ts host contract" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    // 空 path / 空 projectRoot / 不正 format / arguments 欠落 / 未知ツール
+    const res = try roundtrip(arena,
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"prefab_diff\",\"arguments\":{\"path\":\"\"}}}\n" ++
+        "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"prefab_diff\",\"arguments\":{\"path\":\"a.prefab\",\"projectRoot\":\"\"}}}\n" ++
+        "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"prefab_diff\",\"arguments\":{\"path\":\"a.prefab\",\"format\":\"xml\"}}}\n" ++
+        "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tools/call\",\"params\":{\"name\":\"prefab_diff\"}}\n" ++
+        "{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"tools/call\",\"params\":{\"name\":\"nope\",\"arguments\":{}}}\n");
+    var lines = std.mem.splitScalar(u8, std.mem.trimEnd(u8, res, "\n"), '\n');
+    const l1 = lines.next().?;
+    try testing.expectEqualStrings(
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"Input validation error: path must be a non-empty string\"}],\"isError\":true}}", l1);
+    try testing.expect(std.mem.indexOf(u8, lines.next().?, "projectRoot must be a non-empty string") != null);
+    try testing.expect(std.mem.indexOf(u8, lines.next().?, "format must be \\\"tree\\\" or \\\"json\\\"") != null);
+    try testing.expect(std.mem.indexOf(u8, lines.next().?, "path must be a non-empty string") != null);
+    try testing.expect(std.mem.indexOf(u8, lines.next().?, "-32602") != null);
+}
+
+test "mcp: tools/call diffs a real git fixture with the ts host golden" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const dir = try setupPlaneRepo(testing.io, arena, &tmp);
+
+    // projectRoot は Windows パスを含み得るので JSON エスケープして埋め込む。
+    var req: std.ArrayList(u8) = .empty;
+    var req_w = std.Io.Writer.Allocating.fromArrayList(arena, &req);
+    try req_w.writer.writeAll("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"prefab_diff\",\"arguments\":{\"path\":\"Plane.prefab\",\"projectRoot\":");
+    try core.json.writeJsonString(&req_w.writer, dir);
+    try req_w.writer.writeAll("}}}\n");
+    const res = try roundtrip(arena, req_w.toArrayList().items);
+
+    // 応答をパースして text を server.test.ts の golden と一致比較する。
+    const parsed = try std.json.parseFromSliceLeaky(std.json.Value, arena, std.mem.trimEnd(u8, res, "\n"), .{});
+    const result = parsed.object.get("result").?.object;
+    try testing.expect(result.get("isError") == null);
+    const text = result.get("content").?.array.items[0].object.get("text").?.string;
+    try testing.expectEqualStrings(
+        "  Plane\n" ++
+        "  ~ Cylinder  <Prefab>\n" ++
+        "      components\n" ++
+        "        ~ Transform\n" ++
+        "          ~ Position.x: 0.41646004 -> 1\n" ++
+        "  + Cylinder Variant  <Prefab>\n" ++
+        "      components\n" ++
+        "        + Transform\n" ++
+        "          + Position: (2.03, 3.63, 1.11797)\n", text);
+}
+
+test "mcp: tools/call format json returns diff v2 and bad refs surface as isError" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const dir = try setupPlaneRepo(testing.io, arena, &tmp);
+
+    var req: std.ArrayList(u8) = .empty;
+    var req_w = std.Io.Writer.Allocating.fromArrayList(arena, &req);
+    try req_w.writer.writeAll("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"prefab_diff\",\"arguments\":{\"path\":\"Plane.prefab\",\"format\":\"json\",\"projectRoot\":");
+    try core.json.writeJsonString(&req_w.writer, dir);
+    try req_w.writer.writeAll("}}}\n{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"prefab_diff\",\"arguments\":{\"path\":\"Plane.prefab\",\"before\":\"nosuchref\",\"after\":\"HEAD\",\"projectRoot\":");
+    try core.json.writeJsonString(&req_w.writer, dir);
+    try req_w.writer.writeAll("}}}\n");
+    const res = try roundtrip(arena, req_w.toArrayList().items);
+    var lines = std.mem.splitScalar(u8, std.mem.trimEnd(u8, res, "\n"), '\n');
+    const l1 = lines.next().?;
+    try testing.expect(std.mem.indexOf(u8, l1, "prefablens.diff.v2") != null);
+    const l2 = lines.next().?;
+    // server.test.ts: "git show failed for 'nosuchref:Plane.prefab'" + isError
+    try testing.expect(std.mem.indexOf(u8, l2, "git show failed for 'nosuchref:Plane.prefab'") != null);
+    try testing.expect(std.mem.indexOf(u8, l2, "\"isError\":true") != null);
+}
+
+test "mcp: truncateTree caps tree output like the ts host" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const short = try truncateTree(arena, "abc");
+    try testing.expectEqualStrings("abc", short);
+    const big = try arena.alloc(u8, tree_char_limit + 1);
+    @memset(big, 'x');
+    const cut = try truncateTree(arena, big);
+    try testing.expect(std.mem.endsWith(u8, cut, "\n[truncated: 50001 chars total]\n"));
+    try testing.expectEqual(tree_char_limit, std.mem.indexOf(u8, cut, "\n[truncated").?);
 }
 
 test "mcp: blank lines and trailing CR are tolerated" {

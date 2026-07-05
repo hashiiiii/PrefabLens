@@ -9,6 +9,10 @@ pub fn build(b: *std.Build) void {
         .target = target,
     });
 
+    // mcp のパリティテストが server.test.ts と同じ plane fixture を @embedFile するための配線。
+    const plane_before = b.createModule(.{ .root_source_file = b.path("core/src/testdata/plane_before.prefab") });
+    const plane_after = b.createModule(.{ .root_source_file = b.path("core/src/testdata/plane_after.prefab") });
+
     const exe = b.addExecutable(.{
         .name = "prefablens",
         .root_module = b.createModule(.{
@@ -17,6 +21,8 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
             .imports = &.{
                 .{ .name = "core", .module = core_mod },
+                .{ .name = "testdata_plane_before", .module = plane_before },
+                .{ .name = "testdata_plane_after", .module = plane_after },
             },
         }),
     });
@@ -38,6 +44,8 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
             .imports = &.{
                 .{ .name = "core", .module = core_mod },
+                .{ .name = "testdata_plane_before", .module = plane_before },
+                .{ .name = "testdata_plane_after", .module = plane_after },
             },
         }),
     });

@@ -23,3 +23,4 @@ claude mcp add --scope user prefablens -- /path/to/prefablens mcp
 | `format` | `tree` | `tree` = readable text (truncated at 50k chars), `json` = `prefablens.diff.v2` |
 
 git ロジック・出力は CLI と共通(`--project <projectRoot> --git <before> [<after>] <path>` と等価)。
+git 実行は 60 秒で打ち切られる(ハングした git が常駐サーバーを道連れにしない)。

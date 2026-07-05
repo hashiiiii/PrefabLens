@@ -535,8 +535,11 @@ pub fn run(io: std.Io, arena: std.mem.Allocator, args: []const []const u8, stdou
     // --project は guid 解決の基点と git repo dir を兼ねる(未指定は従来どおり cwd)。
     const repo_dir = opt.project_root orelse ".";
     const before = if (opt.git_mode)
-        input.showAtRef(io, arena, repo_dir, opt.git_ref_before, opt.git_path) catch {
-            try stderr.print("error: git show failed for '{s}:{s}'\n", .{ opt.git_ref_before, opt.git_path });
+        input.showAtRef(io, arena, repo_dir, opt.git_ref_before, opt.git_path, input.default_git_timeout) catch |err| {
+            if (err == error.GitTimeout)
+                try stderr.print("error: git timed out for '{s}:{s}'\n", .{ opt.git_ref_before, opt.git_path })
+            else
+                try stderr.print("error: git show failed for '{s}:{s}'\n", .{ opt.git_ref_before, opt.git_path });
             return 1;
         }
     else
@@ -551,8 +554,11 @@ pub fn run(io: std.Io, arena: std.mem.Allocator, args: []const []const u8, stdou
             return 1;
         }
     else if (opt.git_mode)
-        input.showAtRef(io, arena, repo_dir, opt.git_ref_after, opt.git_path) catch {
-            try stderr.print("error: git show failed for '{s}:{s}'\n", .{ opt.git_ref_after, opt.git_path });
+        input.showAtRef(io, arena, repo_dir, opt.git_ref_after, opt.git_path, input.default_git_timeout) catch |err| {
+            if (err == error.GitTimeout)
+                try stderr.print("error: git timed out for '{s}:{s}'\n", .{ opt.git_ref_after, opt.git_path })
+            else
+                try stderr.print("error: git show failed for '{s}:{s}'\n", .{ opt.git_ref_after, opt.git_path });
             return 1;
         }
     else

@@ -6,19 +6,28 @@ const testing = std.testing;
 /// same way instead of diverging on an arbitrary limit.
 pub const max_input_bytes: usize = 64 * 1024 * 1024; // 64 MiB guard
 
-pub fn showAtRef(io: std.Io, arena: std.mem.Allocator, repo_dir: []const u8, ref: []const u8, path: []const u8) ![]u8 {
+/// git 実行の既定タイムアウト。CLI 直叩きだけでなく、常駐 MCP サーバーと Unity Editor
+/// (WaitForExit で待つ)がハングした git に道連れにされないための上限。
+pub const default_git_timeout: std.Io.Timeout = .{ .duration = .{ .clock = .awake, .raw = .fromSeconds(60) } };
+
+pub fn showAtRef(io: std.Io, arena: std.mem.Allocator, repo_dir: []const u8, ref: []const u8, path: []const u8, timeout: std.Io.Timeout) ![]u8 {
     const spec = try std.fmt.allocPrint(arena, "{s}:{s}", .{ ref, path });
     // Force the C locale so the stderr substrings matched below are always
     // English, regardless of the caller's own LC_ALL/LANG.
     var env = std.process.Environ.Map.init(arena);
     try env.put("LC_ALL", "C");
     try env.put("LANG", "C");
-    const res = try std.process.run(arena, io, .{
+    const res = std.process.run(arena, io, .{
         .argv = &.{ "git", "show", "--end-of-options", spec },
         .cwd = .{ .path = repo_dir },
         .stdout_limit = .limited(max_input_bytes),
         .environ_map = &env,
-    });
+        .timeout = timeout,
+    }) catch |err| switch (err) {
+        // std.process.run は deadline 超過で子プロセスを kill して error.Timeout を返す。
+        error.Timeout => return error.GitTimeout,
+        else => return err,
+    };
     switch (res.term) {
         .exited => |c| {
             if (c == 0) return res.stdout;
@@ -81,15 +90,37 @@ test "showAtRef returns file contents at a commit" {
     try git(testing.io, arena, dir, &.{ "add", "Foo.prefab" });
     try git(testing.io, arena, dir, &.{ "commit", "-q", "-m", "first" });
 
-    const content = try showAtRef(testing.io, arena, dir, "HEAD", "Foo.prefab");
+    const content = try showAtRef(testing.io, arena, dir, "HEAD", "Foo.prefab", .none);
     try testing.expectEqualStrings("v1\n", content);
 
     // A path absent at the ref yields empty bytes, not an error.
-    const missing = try showAtRef(testing.io, arena, dir, "HEAD", "Nope.prefab");
+    const missing = try showAtRef(testing.io, arena, dir, "HEAD", "Nope.prefab", .none);
     try testing.expectEqual(@as(usize, 0), missing.len);
 
     // A bad ref is a real failure, not an absent side.
-    try testing.expectError(error.GitShowFailed, showAtRef(testing.io, arena, dir, "bogus-ref", "Foo.prefab"));
+    try testing.expectError(error.GitShowFailed, showAtRef(testing.io, arena, dir, "bogus-ref", "Foo.prefab", .none));
+}
+
+test "showAtRef kills git and errors when the timeout passes" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const dir = try tmp.dir.realPathFileAlloc(testing.io, ".", arena);
+
+    try git(testing.io, arena, dir, &.{ "init", "-q" });
+    try git(testing.io, arena, dir, &.{ "config", "user.email", "t@t.t" });
+    try git(testing.io, arena, dir, &.{ "config", "user.name", "t" });
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "Foo.prefab", .data = "v1\n" });
+    try git(testing.io, arena, dir, &.{ "add", "Foo.prefab" });
+    try git(testing.io, arena, dir, &.{ "commit", "-q", "-m", "first" });
+
+    // 実 git でも 1µs では完了できない(spawn だけで ms かかる)。常駐 MCP セッションを
+    // ハングした git から守る打ち切りが、明確なエラーとして返ることを確認する。
+    const tiny: std.Io.Timeout = .{ .duration = .{ .clock = .awake, .raw = .fromMicroseconds(1) } };
+    try testing.expectError(error.GitTimeout, showAtRef(testing.io, arena, dir, "HEAD", "Foo.prefab", tiny));
 }
 
 test "showAtRef does not let a dash-prefixed ref be parsed as a git option" {
@@ -114,7 +145,7 @@ test "showAtRef does not let a dash-prefixed ref be parsed as a git option" {
     // of writing the target file.
     const poc_path = try std.fs.path.join(arena, &.{ dir, "prefablens_pwn_test" });
     const malicious_ref = try std.fmt.allocPrint(arena, "--output={s}", .{poc_path});
-    try testing.expectError(error.GitShowFailed, showAtRef(testing.io, arena, dir, malicious_ref, "Foo.prefab"));
+    try testing.expectError(error.GitShowFailed, showAtRef(testing.io, arena, dir, malicious_ref, "Foo.prefab", .none));
 
     // The PoC file must not have been created.
     tmp.dir.access(testing.io, "prefablens_pwn_test", .{}) catch |err| {

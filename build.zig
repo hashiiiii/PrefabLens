@@ -55,9 +55,8 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&b.addRunArtifact(cli_tests).step);
 
     // 実バイナリでの MCP プロトコル smoke。git 不要な静的応答のみを exact match する。
-    // tools/list の行は cli/src/mcp.zig の tools_list_result と一字一句一致させること。
-    const tools_list_json =
-        "{\"tools\":[{\"name\":\"prefab_diff\",\"description\":\"Semantic diff for Unity YAML assets (.prefab/.unity/.asset) between two git versions. Use this instead of reading raw YAML diffs: it matches objects by fileID and reports added/removed/modified GameObjects, components, fields, and prefab overrides with resolved names.\",\"inputSchema\":{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\",\"minLength\":1,\"description\":\"Asset path (.prefab/.unity/.asset), relative to projectRoot\"},\"before\":{\"type\":\"string\",\"default\":\"HEAD\",\"description\":\"Base git ref\"},\"after\":{\"type\":\"string\",\"description\":\"Target git ref; omit to compare against the working tree\"},\"projectRoot\":{\"type\":\"string\",\"minLength\":1,\"description\":\"Repository root; defaults to the server cwd\"},\"format\":{\"type\":\"string\",\"enum\":[\"tree\",\"json\"],\"default\":\"tree\",\"description\":\"tree = readable text, json = prefablens.diff.v2\"}},\"required\":[\"path\"]}}]}";
+    // tools/list の期待値は cli/src/mcp.zig と同じ tools_list.json を埋め込む。
+    const tools_list_json = comptime std.mem.trimEnd(u8, @embedFile("cli/src/tools_list.json"), "\r\n");
     const mcp_smoke = b.addRunArtifact(exe);
     mcp_smoke.addArg("mcp");
     mcp_smoke.setStdIn(.{ .bytes = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}\n" ++

@@ -21,7 +21,7 @@ test "render: modified field shown old -> new without color" {
     const res = try core.diffBytes(arena, before, after);
     var out: std.ArrayList(u8) = .empty;
     var aw = std.Io.Writer.Allocating.fromArrayList(arena, &out);
-    try render(arena, &aw.writer, res, null, false);
+    try render(&aw.writer, res, null, false);
     const text = aw.toArrayList().items;
     try testing.expect(std.mem.indexOf(u8, text, "MonoBehaviour") != null);
     try testing.expect(std.mem.indexOf(u8, text, "Volume") != null);
@@ -53,7 +53,7 @@ test "render: prefab instance shows name, components label and grouped overrides
     const res = try core.diffBytes(arena, "", after);
     var out: std.ArrayList(u8) = .empty;
     var aw = std.Io.Writer.Allocating.fromArrayList(arena, &out);
-    try render(arena, &aw.writer, res, null, false);
+    try render(&aw.writer, res, null, false);
     const text = aw.toArrayList().items;
     try testing.expect(std.mem.indexOf(u8, text, "+ Cylinder Variant  <Prefab>") != null);
     try testing.expect(std.mem.indexOf(u8, text, "components") != null);
@@ -90,7 +90,7 @@ test "render: components label separates object and component dimensions" {
     const res = try core.diffBytes(arena, before, after);
     var out: std.ArrayList(u8) = .empty;
     var aw = std.Io.Writer.Allocating.fromArrayList(arena, &out);
-    try render(arena, &aw.writer, res, null, false);
+    try render(&aw.writer, res, null, false);
     const text = aw.toArrayList().items;
     // "  Player" → "    components" → "      ~ MonoBehaviour" の深度になる。
     try testing.expect(std.mem.indexOf(u8, text, "\n    components\n") != null);
@@ -119,7 +119,7 @@ test "render: component shows editor class name when script is unresolved" {
     var out: std.ArrayList(u8) = .empty;
     var aw = std.Io.Writer.Allocating.fromArrayList(arena, &out);
     // resolver なし → guid は解決できないが、クラス名で MonoBehaviour より具体的に。
-    try render(arena, &aw.writer, res, null, false);
+    try render(&aw.writer, res, null, false);
     const text = aw.toArrayList().items;
     try testing.expect(std.mem.indexOf(u8, text, "~ Cylinder1\n") != null);
     try testing.expect(std.mem.indexOf(u8, text, "MonoBehaviour") == null);
@@ -157,7 +157,7 @@ test "render: mixed-status override group gets a modified heading" {
     const res = try core.diffBytes(arena, before, after);
     var out: std.ArrayList(u8) = .empty;
     var aw = std.Io.Writer.Allocating.fromArrayList(arena, &out);
-    try render(arena, &aw.writer, res, null, false);
+    try render(&aw.writer, res, null, false);
     const text = aw.toArrayList().items;
     try testing.expect(std.mem.indexOf(u8, text, "~ Transform\n") != null);
     try testing.expect(std.mem.indexOf(u8, text, "+ Transform\n") == null);
@@ -195,7 +195,7 @@ test "render: structural summary row shows label only, no dangling value" {
     const res = try core.diffBytes(arena, before, after);
     var out: std.ArrayList(u8) = .empty;
     var aw = std.Io.Writer.Allocating.fromArrayList(arena, &out);
-    try render(arena, &aw.writer, res, null, false);
+    try render(&aw.writer, res, null, false);
     const text = aw.toArrayList().items;
     // 件数はラベルに含まれるので、値なし行はラベルだけで終わる。
     try testing.expect(std.mem.indexOf(u8, text, "+ Added Components (1)\n") != null);
@@ -203,6 +203,7 @@ test "render: structural summary row shows label only, no dangling value" {
 }
 
 const model = core.model;
+const display = @import("display.zig");
 
 const Color = struct {
     const reset = "\x1b[0m";
@@ -231,52 +232,39 @@ fn statusSign(s: model.Status) []const u8 {
 }
 
 pub fn render(
-    arena: std.mem.Allocator,
-    w: anytype,
+    w: *std.Io.Writer,
     res: model.DiffResult,
     resolved: ?*const core.json.Resolver,
     color: bool,
 ) !void {
-    for (res.roots) |o| try renderObject(arena, w, o, resolved, color, 0);
-    for (res.loose) |c| try renderComponent(arena, w, c, resolved, color, 0);
+    for (res.roots) |o| try renderObject(w, o, resolved, color, 0);
+    for (res.loose) |c| try renderComponent(w, c, resolved, color, 0);
     if (res.unresolved_guids.len != 0 and resolved == null) {
         try w.print("\n({d} unresolved guid reference(s); pass --project DIR to resolve)\n", .{res.unresolved_guids.len});
     }
 }
 
-fn indent(w: anytype, depth: usize) !void {
+fn indent(w: *std.Io.Writer, depth: usize) !void {
     var i: usize = 0;
     while (i < depth) : (i += 1) try w.writeAll("  ");
 }
 
-fn paint(w: anytype, color: bool, code: []const u8, text: []const u8) !void {
+fn paint(w: *std.Io.Writer, color: bool, code: []const u8, text: []const u8) !void {
     if (color) try w.writeAll(code);
     try w.writeAll(text);
     if (color) try w.writeAll(Color.reset);
 }
 
-fn displayObjectName(o: model.ObjectDiff, resolved: ?*const core.json.Resolver) []const u8 {
-    if (o.name.len != 0) return o.name;
-    if (o.kind == .prefab_instance) {
-        if (o.source_guid) |g| if (resolved) |r| if (r.get(g)) |p| {
-            return std.fs.path.stem(p);
-        };
-        return "Prefab Instance";
-    }
-    return "(GameObject)";
-}
-
 fn renderObject(
-    arena: std.mem.Allocator,
-    w: anytype,
+    w: *std.Io.Writer,
     o: model.ObjectDiff,
     resolved: ?*const core.json.Resolver,
     color: bool,
     depth: usize,
-) !void {
+) anyerror!void {
     try indent(w, depth);
     try paint(w, color, statusColor(o.status), statusSign(o.status));
-    try w.print(" {s}", .{displayObjectName(o, resolved)});
+    try w.print(" {s}", .{display.objectName(o, resolved)});
     if (o.kind == .prefab_instance) try w.writeAll("  <Prefab>");
     try w.writeByte('\n');
     // 表示次元の規則: コンポーネント/override は必ず components セクション配下。
@@ -287,9 +275,9 @@ fn renderObject(
         try paint(w, color, Color.dim, "components");
         try w.writeByte('\n');
         try renderOverrides(w, o.overrides, color, depth + 3);
-        for (o.components) |c| try renderComponent(arena, w, c, resolved, color, depth + 3);
+        for (o.components) |c| try renderComponent(w, c, resolved, color, depth + 3);
     }
-    for (o.children) |child| try renderObject(arena, w, child, resolved, color, depth + 1);
+    for (o.children) |child| try renderObject(w, child, resolved, color, depth + 1);
 }
 
 /// 見出しの status: グループ内で一様ならその status、混在なら modified。
@@ -302,7 +290,7 @@ fn groupHeadingStatus(overrides: []const model.OverrideDiff, start: usize) model
     return first.status;
 }
 
-fn renderOverrides(w: anytype, overrides: []const model.OverrideDiff, color: bool, depth: usize) !void {
+fn renderOverrides(w: *std.Io.Writer, overrides: []const model.OverrideDiff, color: bool, depth: usize) !void {
     var current: []const u8 = "";
     for (overrides, 0..) |ov, i| {
         if (!std.mem.eql(u8, current, ov.group)) {
@@ -335,8 +323,7 @@ fn renderOverrides(w: anytype, overrides: []const model.OverrideDiff, color: boo
 }
 
 fn renderComponent(
-    arena: std.mem.Allocator,
-    w: anytype,
+    w: *std.Io.Writer,
     c: model.ComponentDiff,
     resolved: ?*const core.json.Resolver,
     color: bool,
@@ -344,17 +331,11 @@ fn renderComponent(
 ) !void {
     try indent(w, depth);
     try paint(w, color, statusColor(c.status), statusSign(c.status));
-    var display = c.type_name;
-    if (c.class_name) |n| display = n;
-    if (c.script_guid) |g| if (resolved) |r| if (r.get(g)) |p| {
-        display = std.fs.path.stem(p);
-    };
-    try w.print(" {s}\n", .{display});
-    for (c.fields) |f| try renderField(arena, w, f, color, depth + 1);
+    try w.print(" {s}\n", .{display.componentName(c, resolved)});
+    for (c.fields) |f| try renderField(w, f, color, depth + 1);
 }
 
-fn renderField(arena: std.mem.Allocator, w: anytype, f: model.FieldDiff, color: bool, depth: usize) !void {
-    _ = arena;
+fn renderField(w: *std.Io.Writer, f: model.FieldDiff, color: bool, depth: usize) !void {
     try indent(w, depth);
     try paint(w, color, statusColor(f.status), statusSign(f.status));
     try w.print(" {s}: ", .{f.path});
@@ -371,7 +352,7 @@ fn renderField(arena: std.mem.Allocator, w: anytype, f: model.FieldDiff, color: 
     try w.writeByte('\n');
 }
 
-fn writeValueText(w: anytype, node: ?*const model.Node) !void {
+fn writeValueText(w: *std.Io.Writer, node: ?*const model.Node) !void {
     const n = node orelse {
         try w.writeAll("∅");
         return;

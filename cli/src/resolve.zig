@@ -1,7 +1,9 @@
 const std = @import("std");
+const core = @import("core");
 const testing = std.testing;
 
-pub const Index = std.StringHashMap([]const u8);
+/// guid -> asset path。core.json.Resolver と同一型なのでそのまま渡せる。
+pub const Index = core.json.Resolver;
 
 pub fn buildIndex(io: std.Io, arena: std.mem.Allocator, project_root: []const u8) !Index {
     var index = Index.init(arena);

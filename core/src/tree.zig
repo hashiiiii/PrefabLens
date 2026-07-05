@@ -234,28 +234,10 @@ pub fn build(arena: std.mem.Allocator, fd: diffmod.FlatDiff) !model.DiffResult {
     // Assemble parent/child links.
     var children_of = std.AutoHashMap(i64, std.ArrayList(i64)).init(arena);
     var roots_ids: std.ArrayList(i64) = .empty;
-    for (go_ids.items) |go_id| {
-        if (parentGoId(&idx, go_id)) |pid| {
-            if (obj_by_id.contains(pid)) {
-                const e = try children_of.getOrPut(pid);
-                if (!e.found_existing) e.value_ptr.* = .empty;
-                try e.value_ptr.append(arena, go_id);
-                continue;
-            }
-        }
-        try roots_ids.append(arena, go_id);
-    }
-    for (pi_ids.items) |pi_id| {
-        if (instanceParentId(&idx, pi_id)) |pid| {
-            if (obj_by_id.contains(pid)) {
-                const e = try children_of.getOrPut(pid);
-                if (!e.found_existing) e.value_ptr.* = .empty;
-                try e.value_ptr.append(arena, pi_id);
-                continue;
-            }
-        }
-        try roots_ids.append(arena, pi_id);
-    }
+    for (go_ids.items) |go_id|
+        try linkToParent(arena, &obj_by_id, &children_of, &roots_ids, parentGoId(&idx, go_id), go_id);
+    for (pi_ids.items) |pi_id|
+        try linkToParent(arena, &obj_by_id, &children_of, &roots_ids, instanceParentId(&idx, pi_id), pi_id);
 
     // Recursively materialize, pruning unchanged subtrees with no changed descendants.
     var roots: std.ArrayList(ObjectDiff) = .empty;
@@ -270,6 +252,26 @@ pub fn build(arena: std.mem.Allocator, fd: diffmod.FlatDiff) !model.DiffResult {
         .loose = try loose.toOwnedSlice(arena),
         .unresolved_guids = fd.unresolved_guids,
     };
+}
+
+/// 親が実在ノードなら children_of へ、そうでなければ root へ振り分ける。
+fn linkToParent(
+    arena: std.mem.Allocator,
+    obj_by_id: *std.AutoHashMap(i64, ObjectDiff),
+    children_of: *std.AutoHashMap(i64, std.ArrayList(i64)),
+    roots_ids: *std.ArrayList(i64),
+    parent_id: ?i64,
+    id: i64,
+) !void {
+    if (parent_id) |pid| {
+        if (obj_by_id.contains(pid)) {
+            const e = try children_of.getOrPut(pid);
+            if (!e.found_existing) e.value_ptr.* = .empty;
+            try e.value_ptr.append(arena, id);
+            return;
+        }
+    }
+    try roots_ids.append(arena, id);
 }
 
 /// Build the ObjectDiff for `go_id` with its kept children. Returns null if the

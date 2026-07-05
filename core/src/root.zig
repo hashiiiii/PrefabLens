@@ -9,10 +9,6 @@ pub const json = @import("json.zig");
 pub const inspector = @import("inspector.zig");
 pub const perf = @import("perf.zig");
 
-pub fn version() []const u8 {
-    return "0.1.0-dev";
-}
-
 pub fn diffBytes(arena: std.mem.Allocator, before_src: []const u8, after_src: []const u8) !model.DiffResult {
     const fd = try diff.compute(arena, before_src, after_src);
     return tree.build(arena, fd);
@@ -21,10 +17,6 @@ pub fn diffBytes(arena: std.mem.Allocator, before_src: []const u8, after_src: []
 pub fn diffToJson(arena: std.mem.Allocator, before_src: []const u8, after_src: []const u8) ![]u8 {
     const res = try diffBytes(arena, before_src, after_src);
     return json.serialize(arena, res, null);
-}
-
-test "core builds and version is reported" {
-    try std.testing.expectEqualStrings("0.1.0-dev", version());
 }
 
 test {

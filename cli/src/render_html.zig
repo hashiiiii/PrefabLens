@@ -31,7 +31,7 @@ test "html: self-contained document with escaped content" {
     const res = try core.diffBytes(arena, before, after);
     var out: std.ArrayList(u8) = .empty;
     var aw = std.Io.Writer.Allocating.fromArrayList(arena, &out);
-    try render(arena, &aw.writer, res, null);
+    try render(&aw.writer, res, null);
     const html = aw.toArrayList().items;
     try testing.expect(std.mem.startsWith(u8, html, "<!DOCTYPE html>"));
     try testing.expect(std.mem.indexOf(u8, html, "<style>") != null);
@@ -60,7 +60,7 @@ test "html: ref guid with markup is escaped" {
     const res = try core.diffBytes(arena, before, after);
     var out: std.ArrayList(u8) = .empty;
     var aw = std.Io.Writer.Allocating.fromArrayList(arena, &out);
-    try render(arena, &aw.writer, res, null);
+    try render(&aw.writer, res, null);
     const html = aw.toArrayList().items;
     try testing.expect(std.mem.indexOf(u8, html, "<img") == null);
     try testing.expect(std.mem.indexOf(u8, html, "&lt;img") != null);
@@ -87,7 +87,7 @@ test "html: resolved script guid renders the resolved script name, not the raw t
     try resolver.put("abc123", "Assets/Scripts/PlayerController.cs");
     var out: std.ArrayList(u8) = .empty;
     var aw = std.Io.Writer.Allocating.fromArrayList(arena, &out);
-    try render(arena, &aw.writer, res, &resolver);
+    try render(&aw.writer, res, &resolver);
     const html = aw.toArrayList().items;
     // The resolved stem (extension-less basename) replaces the raw type name entirely.
     try testing.expect(std.mem.indexOf(u8, html, "PlayerController") != null);
@@ -142,7 +142,7 @@ test "html: nested child GameObject renders indented one level under its parent"
     const res = try core.diffBytes(arena, before, after);
     var out: std.ArrayList(u8) = .empty;
     var aw = std.Io.Writer.Allocating.fromArrayList(arena, &out);
-    try render(arena, &aw.writer, res, null);
+    try render(&aw.writer, res, null);
     const html = aw.toArrayList().items;
     // Parent (depth 0, unchanged) has no leading pad before its span.
     try testing.expect(std.mem.indexOf(u8, html, "<span class=\"unchanged go\">  Parent</span>") != null);
@@ -169,7 +169,7 @@ test "html: loose component renders without a GameObject wrapper" {
     const res = try core.diffBytes(arena, before, after);
     var out: std.ArrayList(u8) = .empty;
     var aw = std.Io.Writer.Allocating.fromArrayList(arena, &out);
-    try render(arena, &aw.writer, res, null);
+    try render(&aw.writer, res, null);
     const html = aw.toArrayList().items;
     try testing.expect(std.mem.indexOf(u8, html, "Volume") != null);
     // Loose components render at depth 0 with a plain (non-"go") span class.
@@ -196,7 +196,7 @@ test "html: added and removed fields render only their one side" {
     const res = try core.diffBytes(arena, before, after);
     var out: std.ArrayList(u8) = .empty;
     var aw = std.Io.Writer.Allocating.fromArrayList(arena, &out);
-    try render(arena, &aw.writer, res, null);
+    try render(&aw.writer, res, null);
     const html = aw.toArrayList().items;
     // Added field: only the "new" span, no paired "old" value.
     try testing.expect(std.mem.indexOf(u8, html, "New Field") != null);
@@ -207,6 +207,7 @@ test "html: added and removed fields render only their one side" {
 }
 
 const model = core.model;
+const display = @import("display.zig");
 
 const head =
     \\<!DOCTYPE html>
@@ -229,14 +230,13 @@ const tail =
 ;
 
 pub fn render(
-    arena: std.mem.Allocator,
-    w: anytype,
+    w: *std.Io.Writer,
     res: model.DiffResult,
     resolved: ?*const core.json.Resolver,
 ) !void {
     try w.writeAll(head);
-    for (res.roots) |o| try renderObject(arena, w, o, resolved, 0);
-    for (res.loose) |c| try renderComponent(arena, w, c, resolved, 0);
+    for (res.roots) |o| try renderObject(w, o, resolved, 0);
+    for (res.loose) |c| try renderComponent(w, c, resolved, 0);
     try w.writeAll(tail);
 }
 
@@ -258,26 +258,15 @@ fn sign(s: model.Status) []const u8 {
     };
 }
 
-fn pad(w: anytype, depth: usize) !void {
+fn pad(w: *std.Io.Writer, depth: usize) !void {
     var i: usize = 0;
     while (i < depth) : (i += 1) try w.writeAll("  ");
 }
 
-fn displayObjectName(o: model.ObjectDiff, resolved: ?*const core.json.Resolver) []const u8 {
-    if (o.name.len != 0) return o.name;
-    if (o.kind == .prefab_instance) {
-        if (o.source_guid) |g| if (resolved) |r| if (r.get(g)) |p| {
-            return std.fs.path.stem(p);
-        };
-        return "Prefab Instance";
-    }
-    return "(GameObject)";
-}
-
-fn renderObject(arena: std.mem.Allocator, w: anytype, o: model.ObjectDiff, resolved: ?*const core.json.Resolver, depth: usize) !void {
+fn renderObject(w: *std.Io.Writer, o: model.ObjectDiff, resolved: ?*const core.json.Resolver, depth: usize) anyerror!void {
     try pad(w, depth);
     try w.print("<span class=\"{s} go\">{s} ", .{ cls(o.status), sign(o.status) });
-    try writeEscaped(w, displayObjectName(o, resolved));
+    try writeEscaped(w, display.objectName(o, resolved));
     if (o.kind == .prefab_instance) try w.writeAll(" &lt;Prefab&gt;");
     try w.writeAll("</span>\n");
     // 表示次元の規則: コンポーネント/override は必ず components セクション配下。
@@ -287,12 +276,12 @@ fn renderObject(arena: std.mem.Allocator, w: anytype, o: model.ObjectDiff, resol
         try pad(w, depth + 2);
         try w.writeAll("<span class=\"unchanged\">components</span>\n");
         try renderOverrides(w, o.overrides, depth + 3);
-        for (o.components) |c| try renderComponent(arena, w, c, resolved, depth + 3);
+        for (o.components) |c| try renderComponent(w, c, resolved, depth + 3);
     }
-    for (o.children) |child| try renderObject(arena, w, child, resolved, depth + 1);
+    for (o.children) |child| try renderObject(w, child, resolved, depth + 1);
 }
 
-fn renderOverrides(w: anytype, overrides: []const model.OverrideDiff, depth: usize) !void {
+fn renderOverrides(w: *std.Io.Writer, overrides: []const model.OverrideDiff, depth: usize) !void {
     var current: []const u8 = "";
     for (overrides) |ov| {
         if (!std.mem.eql(u8, current, ov.group)) {
@@ -306,21 +295,15 @@ fn renderOverrides(w: anytype, overrides: []const model.OverrideDiff, depth: usi
     }
 }
 
-fn renderComponent(arena: std.mem.Allocator, w: anytype, c: model.ComponentDiff, resolved: ?*const core.json.Resolver, depth: usize) !void {
-    _ = arena;
+fn renderComponent(w: *std.Io.Writer, c: model.ComponentDiff, resolved: ?*const core.json.Resolver, depth: usize) !void {
     try pad(w, depth);
-    var display = c.type_name;
-    if (c.class_name) |n| display = n;
-    if (c.script_guid) |g| if (resolved) |r| if (r.get(g)) |p| {
-        display = std.fs.path.stem(p);
-    };
     try w.print("<span class=\"{s}\">{s} ", .{ cls(c.status), sign(c.status) });
-    try writeEscaped(w, display);
+    try writeEscaped(w, display.componentName(c, resolved));
     try w.writeAll("</span>\n");
     for (c.fields) |f| try renderField(w, f, depth + 1);
 }
 
-fn renderField(w: anytype, f: model.FieldDiff, depth: usize) !void {
+fn renderField(w: *std.Io.Writer, f: model.FieldDiff, depth: usize) !void {
     try pad(w, depth);
     try w.print("<span class=\"{s} field\">{s} ", .{ cls(f.status), sign(f.status) });
     try writeEscaped(w, f.path);
@@ -348,7 +331,7 @@ fn renderField(w: anytype, f: model.FieldDiff, depth: usize) !void {
     try w.writeAll("</span>\n");
 }
 
-fn writeValueEscaped(w: anytype, node: ?*const model.Node) !void {
+fn writeValueEscaped(w: *std.Io.Writer, node: ?*const model.Node) !void {
     const n = node orelse {
         try w.writeAll("∅");
         return;
@@ -369,7 +352,7 @@ fn writeValueEscaped(w: anytype, node: ?*const model.Node) !void {
     }
 }
 
-fn writeEscaped(w: anytype, s: []const u8) !void {
+fn writeEscaped(w: *std.Io.Writer, s: []const u8) !void {
     for (s) |c| switch (c) {
         '&' => try w.writeAll("&amp;"),
         '<' => try w.writeAll("&lt;"),

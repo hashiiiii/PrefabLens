@@ -380,7 +380,7 @@ test "run: color=true colors tree output, --no-color forces it back off" {
 }
 
 /// リリースタグ v<version> と lockstep(cut-release の 5 ソースの一員)。
-pub const version = "0.2.0";
+pub const version = "0.3.0";
 
 test "run: --project points git mode at a repo outside the cwd" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
@@ -428,7 +428,7 @@ test "run: --project points git mode at a repo outside the cwd" {
 }
 
 test "version constant exists for serverInfo and release lockstep" {
-    try testing.expectEqualStrings("0.2.0", version);
+    try testing.expectEqualStrings("0.3.0", version);
 }
 
 pub const Format = enum { tree, json, html };

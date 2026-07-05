@@ -15,7 +15,7 @@ namespace PrefabLens
     public static class Cli
     {
         /// ダウンロードする CLI のバージョン(GitHub Releases のタグ v{Version} と一致させる)。
-        public const string Version = "0.2.0";
+        public const string Version = "0.3.0";
         public const string CliPathPref = "PrefabLens.CliPath";
 
         /// CLI 実行の上限。CLI 内部の git タイムアウト(60 秒)より長く取り、git ハング時は

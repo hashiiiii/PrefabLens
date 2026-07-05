@@ -6,6 +6,7 @@ pub const resolve = @import("resolve.zig");
 pub const input = @import("input.zig");
 pub const render_tree = @import("render_tree.zig");
 pub const render_html = @import("render_html.zig");
+pub const mcp = @import("mcp.zig");
 
 test {
     std.testing.refAllDecls(@This());
@@ -13,6 +14,7 @@ test {
     _ = input;
     _ = render_tree;
     _ = render_html;
+    _ = mcp;
 }
 
 test "parseArgs: two paths default to tree format" {

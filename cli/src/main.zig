@@ -639,6 +639,14 @@ pub fn main(init: std.process.Init) !u8 {
     var stdout_file_writer: std.Io.File.Writer = .init(.stdout(), init.io, &stdout_buffer);
     const stdout = &stdout_file_writer.interface;
 
+    if (user_args.len >= 1 and std.mem.eql(u8, user_args[0], "mcp")) {
+        var stdin_buffer: [64 * 1024]u8 = undefined;
+        var stdin_reader: std.Io.File.Reader = .init(.stdin(), init.io, &stdin_buffer);
+        try mcp.serve(init.io, std.heap.page_allocator, &stdin_reader.interface, stdout);
+        try stdout.flush();
+        return 0;
+    }
+
     var stderr_buffer: [4096]u8 = undefined;
     var stderr_file_writer: std.Io.File.Writer = .init(.stderr(), init.io, &stderr_buffer);
     const stderr = &stderr_file_writer.interface;

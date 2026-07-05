@@ -54,6 +54,22 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&b.addRunArtifact(core_tests).step);
     test_step.dependOn(&b.addRunArtifact(cli_tests).step);
 
+    // 実バイナリでの MCP プロトコル smoke。git 不要な静的応答のみを exact match する。
+    // tools/list の行は cli/src/mcp.zig の tools_list_result と一字一句一致させること。
+    const tools_list_json =
+        "{\"tools\":[{\"name\":\"prefab_diff\",\"description\":\"Semantic diff for Unity YAML assets (.prefab/.unity/.asset) between two git versions. Use this instead of reading raw YAML diffs: it matches objects by fileID and reports added/removed/modified GameObjects, components, fields, and prefab overrides with resolved names.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\",\"minLength\":1,\"description\":\"Asset path (.prefab/.unity/.asset), relative to projectRoot\"},\"before\":{\"type\":\"string\",\"default\":\"HEAD\",\"description\":\"Base git ref\"},\"after\":{\"type\":\"string\",\"description\":\"Target git ref; omit to compare against the working tree\"},\"projectRoot\":{\"type\":\"string\",\"minLength\":1,\"description\":\"Repository root; defaults to the server cwd\"},\"format\":{\"type\":\"string\",\"enum\":[\"tree\",\"json\"],\"default\":\"tree\",\"description\":\"tree = readable text, json = prefablens.diff.v2\"}},\"required\":[\"path\"]}}]}";
+    const mcp_smoke = b.addRunArtifact(exe);
+    mcp_smoke.addArg("mcp");
+    mcp_smoke.setStdIn(.{ .bytes = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}\n" ++
+        "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\"}\n" ++
+        "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"prefab_diff\",\"arguments\":{\"path\":\"\"}}}\n" ++
+        "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"nope\"}\n" });
+    mcp_smoke.expectStdOutEqual("{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{}}\n" ++
+        "{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":" ++ tools_list_json ++ "}\n" ++
+        "{\"jsonrpc\":\"2.0\",\"id\":3,\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"Input validation error: path must be a non-empty string\"}],\"isError\":true}}\n" ++
+        "{\"jsonrpc\":\"2.0\",\"id\":4,\"error\":{\"code\":-32601,\"message\":\"Method not found\"}}\n");
+    test_step.dependOn(&mcp_smoke.step);
+
     const perf_exe = b.addExecutable(.{
         .name = "perf",
         .root_module = b.createModule(.{

@@ -11,7 +11,7 @@ metadata:
 
 ## Overview
 
-PrefabLens ships four components on one version line: the Zig CLI, the Chrome extension, the Unity Editor package, and the MCP server (npm). A release is triggered by **pushing a `vX.Y.Z` git tag** — `.github/workflows/release.yml` then cross-compiles the CLI for four targets, zips them, and runs `gh release create` automatically. The release workflow can also publish `@hashiiiii/prefablens-mcp` to npm after the zip assets go live, but **npm publishing is currently paused** (`if: ${{ false }}` on the publish step — Trusted Publishing on npmjs.com is not configured yet; remove the condition to re-enable).
+PrefabLens ships four components on one version line: the Zig CLI (which is also the MCP server via `prefablens mcp`), the Chrome extension, and the Unity Editor package. A release is triggered by **pushing a `vX.Y.Z` git tag** — `.github/workflows/release.yml` then cross-compiles the CLI for four targets, zips them, and runs `gh release create` automatically. The MCP server has no separate distribution: the release zips are the distribution.
 
 **Core principle: the human pushes exactly one thing — the tag. Everything downstream is automated. Never create the release by hand.**
 
@@ -35,7 +35,7 @@ Run from a clean `main` that is up to date (`git switch main && git pull`).
    - `editor/package.json` → `"version": "X.Y.Z"`
    - `extension/package.json` → `"version": "X.Y.Z"`
    - `extension/manifest.json` → `"version": "X.Y.Z"`
-   - `mcp/package.json` → `"version": "X.Y.Z"`
+   - `cli/src/main.zig` → `pub const version = "X.Y.Z";`
 
 3. **Verify they agree** (this is the #1 failure mode):
 
@@ -61,9 +61,7 @@ Run from a clean `main` that is up to date (`git switch main && git pull`).
    gh release view vX.Y.Z --json tagName,assets -q '.tagName + ": " + ([.assets[].name] | join(", "))'
    ```
 
-   Expect five assets: `prefablens-{macos-arm64,macos-x64,linux-x64,windows-x64}.zip` and `SHA256SUMS` (the MCP server verifies downloads against it — a release without it silently skips verification).
-
-   Also verify `npm view @hashiiiii/prefablens-mcp version` matches the tag (skip while npm publishing is paused).
+   Expect five assets: `prefablens-{macos-arm64,macos-x64,linux-x64,windows-x64}.zip` and `SHA256SUMS` (downloaders can verify zips against it).
 
 ## Red flags — stop and reconsider
 
@@ -76,4 +74,4 @@ Run from a clean `main` that is up to date (`git switch main && git pull`).
 
 ## Verify the outcome, not the intent
 
-A release is done only when `gh release view vX.Y.Z` lists all four zips plus `SHA256SUMS` **and**, once npm publishing is re-enabled, `npm view @hashiiiii/prefablens-mcp version` prints `X.Y.Z`. If the workflow failed, read `gh run view --log-failed`, fix on `main`, delete the partial tag/release, and re-tag — do not assume a pushed tag means a published release.
+A release is done only when `gh release view vX.Y.Z` lists all four zips plus `SHA256SUMS`. If the workflow failed, read `gh run view --log-failed`, fix on `main`, delete the partial tag/release, and re-tag — do not assume a pushed tag means a published release.

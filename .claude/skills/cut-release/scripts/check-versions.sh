@@ -17,7 +17,7 @@ cli=$(sed -n 's/.*public const string Version = "\([^"]*\)".*/\1/p' editor/Edito
 epkg=$(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' editor/package.json | head -1)
 xpkg=$(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' extension/package.json | head -1)
 xman=$(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' extension/manifest.json | head -1)
-mpkg=$(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' mcp/package.json | head -1)
+zver=$(sed -n 's/.*pub const version = "\([^"]*\)".*/\1/p' cli/src/main.zig | head -1)
 
 fail=0
 check() {
@@ -34,7 +34,7 @@ check "editor/Editor/Cli.cs"      "$cli"
 check "editor/package.json"       "$epkg"
 check "extension/package.json"    "$xpkg"
 check "extension/manifest.json"   "$xman"
-check "mcp/package.json"          "$mpkg"
+check "cli/src/main.zig"          "$zver"
 
 if [[ "$fail" -ne 0 ]]; then
   echo "version mismatch: bump every source to $want before tagging v$want" >&2

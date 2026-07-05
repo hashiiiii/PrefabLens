@@ -56,5 +56,7 @@ test "buildIndex maps guid to asset path from .meta files" {
     const root = try tmp.dir.realPathFileAlloc(testing.io, ".", arena);
     var index = try buildIndex(testing.io, arena, root);
     const path = index.get("1234567890abcdef1234567890abcdef").?;
-    try testing.expect(std.mem.endsWith(u8, path, "Assets/Scripts/Player.cs"));
+    // Windows の walker/join は `\` 区切りを返すため、期待値もネイティブ区切りで組む。
+    const want = try std.fs.path.join(arena, &.{ "Assets", "Scripts", "Player.cs" });
+    try testing.expect(std.mem.endsWith(u8, path, want));
 }

@@ -216,6 +216,36 @@ test "parse: deeply nested flow value is rejected instead of overflowing the sta
     try testing.expectError(error.NestingTooDeep, parse(arena, src.items));
 }
 
+test "parse: sequence document body degrades to an empty map instead of crashing" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    // Unity never writes a sequence as a document body, but hostile input can;
+    // downstream reads body.map unconditionally, so it must stay a map.
+    const src =
+        \\--- !u!1 &1
+        \\GameObject:
+        \\  - rogue
+    ;
+    const doc = try parseOne(arena, src);
+    try testing.expectEqual(@as(usize, 0), doc.body.map.len);
+}
+
+test "parse: non-scalar guid in a ref degrades to null instead of crashing" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const src =
+        \\--- !u!114 &1
+        \\MonoBehaviour:
+        \\  m_Script: {fileID: 1, guid: {x: 1}, type: 3}
+    ;
+    const doc = try parseOne(arena, src);
+    const script = model.findValue(doc.body.map, "m_Script").?;
+    try testing.expectEqual(@as(i64, 1), script.ref.file_id);
+    try testing.expect(script.ref.guid == null);
+}
+
 test "parse: CRLF line endings parse identically to LF" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
@@ -332,6 +362,9 @@ fn parseDocument(p: *Parser) !Document {
             _ = p.advance(); // the "TypeName:" line at indent 0
             type_name = stripTrailingColon(first.text);
             body = try parseBlock(p, indentOfNext(p, 2), 0);
+            // Downstream reads body.map unconditionally; a malformed body
+            // that parses as a sequence must not escape as a non-map node.
+            if (body.* != .map) body = try emptyMap(p.arena);
         } else {
             body = try emptyMap(p.arena);
         }
@@ -516,11 +549,18 @@ fn parseFlow(arena: std.mem.Allocator, s: []const u8, depth: usize) anyerror!*No
     if (model.findValue(es, "fileID")) |fid_node| {
         return makeNode(arena, .{ .ref = .{
             .file_id = scalarToInt(i64, fid_node) orelse 0,
-            .guid = if (model.findValue(es, "guid")) |g| g.scalar else null,
+            .guid = if (model.findValue(es, "guid")) |g| scalarString(g) else null,
             .type_id = if (model.findValue(es, "type")) |t| scalarToInt(i64, t) else null,
         } });
     }
     return makeNode(arena, .{ .map = es });
+}
+
+fn scalarString(n: *const Node) ?[]const u8 {
+    return switch (n.*) {
+        .scalar => |s| s,
+        else => null,
+    };
 }
 
 fn parseFlowSeq(arena: std.mem.Allocator, s: []const u8, depth: usize) anyerror!*Node {

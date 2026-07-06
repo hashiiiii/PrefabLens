@@ -78,7 +78,12 @@ test "diff: added and removed documents" {
     try testing.expectEqual(model.Status.added, findDoc(fd, 2).?.status);
 
     const fd2 = try compute(arena, after, before);
-    try testing.expectEqual(model.Status.removed, findDoc(fd2, 2).?.status);
+    const removed = findDoc(fd2, 2).?;
+    try testing.expectEqual(model.Status.removed, removed.status);
+    // 削除側も全列挙: hierarchy で見えていた Name が before 値で残る。
+    try testing.expectEqual(@as(usize, 1), removed.fields.len);
+    try testing.expectEqualStrings("Name", removed.fields[0].path);
+    try testing.expectEqualStrings("B", removed.fields[0].before.?.scalar);
 }
 
 test "diff: nested field path and added field" {
@@ -364,6 +369,30 @@ test "diff: added document enumerates fields with vector collapse" {
     try testing.expectEqualStrings("Max Hp", d.fields[1].path);
 }
 
+test "diff: removed document enumerates fields with vector collapse" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const before =
+        \\--- !u!4 &4
+        \\Transform:
+        \\  m_GameObject: {fileID: 1}
+        \\  m_LocalPosition: {x: 4, y: 0, z: 0}
+        \\  maxHp: 100
+    ;
+    const fd = try compute(arena, before, "");
+    const d = findDoc(fd, 4).?;
+    try testing.expectEqual(model.Status.removed, d.status);
+    // 追加側と対称: m_GameObject は非表示、Position はベクトル 1 行、値は before に載る。
+    try testing.expectEqual(@as(usize, 2), d.fields.len);
+    try testing.expectEqualStrings("Position", d.fields[0].path);
+    try testing.expectEqual(model.Status.removed, d.fields[0].status);
+    try testing.expectEqualStrings("(4, 0, 0)", d.fields[0].before.?.scalar);
+    try testing.expect(d.fields[0].after == null);
+    try testing.expectEqualStrings("Max Hp", d.fields[1].path);
+    try testing.expectEqualStrings("100", d.fields[1].before.?.scalar);
+}
+
 test "diff: prefab instance override keyed by target+propertyPath" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
@@ -465,7 +494,7 @@ test "diff: modified instance overrides are sorted group-contiguous, Transform f
     try testing.expectEqualStrings("Max Hp", d.overrides[2].label);
 }
 
-test "diff: added prefab instance collapses placement to summary" {
+test "diff: added prefab instance emits placement summary rows" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
@@ -506,11 +535,15 @@ test "diff: added prefab instance collapses placement to summary" {
     const fd = try compute(arena, "", after);
     const d = findDoc(fd, 1001).?;
     try testing.expectEqual(model.Status.added, d.status);
-    // Position のみ: 合成 1 行。identity Rotation・EulerAnglesHint・m_Name は省略。
-    try testing.expectEqual(@as(usize, 1), d.overrides.len);
+    // 記録済みの placement は default 値(identity Rotation)でも合成 1 行で出す。
+    // EulerAnglesHint(Inspector 非表示)と m_Name(ノード名に吸収)は出ない。
+    try testing.expectEqual(@as(usize, 2), d.overrides.len);
     try testing.expectEqualStrings("Transform", d.overrides[0].group);
     try testing.expectEqualStrings("Position", d.overrides[0].label);
     try testing.expectEqualStrings("(2.03, 3.63, 1.11797)", d.overrides[0].after.?.scalar);
+    try testing.expectEqualStrings("Transform", d.overrides[1].group);
+    try testing.expectEqualStrings("Rotation", d.overrides[1].label);
+    try testing.expectEqualStrings("(0, 0, 0, 1)", d.overrides[1].after.?.scalar);
 }
 
 test "diff: added prefab instance keeps partial scale override" {
@@ -532,6 +565,37 @@ test "diff: added prefab instance keeps partial scale override" {
     try testing.expectEqual(@as(usize, 1), d.overrides.len);
     try testing.expectEqualStrings("Scale.y", d.overrides[0].label);
     try testing.expectEqualStrings("2", d.overrides[0].after.?.scalar);
+}
+
+test "diff: removed prefab instance mirrors overrides to before" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const before =
+        \\--- !u!1001 &1001
+        \\PrefabInstance:
+        \\  m_Modification:
+        \\    m_Modifications:
+        \\    - target: {fileID: 7, guid: aaa, type: 3}
+        \\      propertyPath: m_LocalScale.y
+        \\      value: 2
+        \\    m_AddedComponents:
+        \\    - targetCorrespondingSourceObject: {fileID: 7, guid: aaa, type: 3}
+        \\      insertIndex: -1
+        \\      addedObject: {fileID: 55}
+        \\  m_SourcePrefab: {fileID: 100100000, guid: aaa, type: 3}
+    ;
+    const fd = try compute(arena, before, "");
+    const d = findDoc(fd, 1001).?;
+    try testing.expectEqual(model.Status.removed, d.status);
+    // added の鏡像: 値は before 側、構造サマリは before 側の件数で removed。
+    try testing.expectEqual(@as(usize, 2), d.overrides.len);
+    try testing.expectEqualStrings("Scale.y", d.overrides[0].label);
+    try testing.expectEqual(model.Status.removed, d.overrides[0].status);
+    try testing.expectEqualStrings("2", d.overrides[0].before.?.scalar);
+    try testing.expect(d.overrides[0].after == null);
+    try testing.expectEqualStrings("Added Components (1)", d.overrides[1].label);
+    try testing.expectEqual(model.Status.removed, d.overrides[1].status);
 }
 
 test "diff: non-empty added components produce a summary row" {
@@ -694,7 +758,7 @@ pub fn compute(arena: std.mem.Allocator, before_src: []const u8, after_src: []co
                     .script_guid = scriptGuid(ad),
                     .status = .added,
                     .fields = &.{},
-                    .overrides = try addedInstanceOverrides(arena, ad),
+                    .overrides = try soleInstanceOverrides(arena, ad, .added),
                 });
             } else {
                 var raw: std.ArrayList(FieldDiff) = .empty;
@@ -715,15 +779,31 @@ pub fn compute(arena: std.mem.Allocator, before_src: []const u8, after_src: []co
         if (bd.stripped) continue;
         if (after_idx.contains(bd.file_id)) continue;
         try collectGuids(arena, &guids, bd.body);
-        try docs.append(arena, .{
-            .file_id = bd.file_id,
-            .class_id = bd.class_id,
-            .type_name = resolvedTypeName(bd),
-            .script_guid = scriptGuid(bd),
-            .class_name = editorClassName(bd),
-            .status = .removed,
-            .fields = &.{},
-        });
+        if (bd.class_id == 1001) {
+            try docs.append(arena, .{
+                .file_id = bd.file_id,
+                .class_id = bd.class_id,
+                .type_name = resolvedTypeName(bd),
+                .script_guid = scriptGuid(bd),
+                .class_name = editorClassName(bd),
+                .status = .removed,
+                .fields = &.{},
+                .overrides = try soleInstanceOverrides(arena, bd, .removed),
+            });
+        } else {
+            // 追加側(flattenSubtree ~ presentFields)と対称の全列挙。
+            var raw: std.ArrayList(FieldDiff) = .empty;
+            for (bd.body.map) |e| try flattenSubtree(arena, &raw, e.key, e.value, .removed);
+            try docs.append(arena, .{
+                .file_id = bd.file_id,
+                .class_id = bd.class_id,
+                .type_name = resolvedTypeName(bd),
+                .script_guid = scriptGuid(bd),
+                .class_name = editorClassName(bd),
+                .status = .removed,
+                .fields = try presentFields(arena, raw.items),
+            });
+        }
     }
 
     return .{
@@ -1006,28 +1086,22 @@ fn scalarOf(n: ?*Node) ?[]const u8 {
     };
 }
 
-// 意図的な厳密一致: ほぼデフォルトに近い値も実在する override であり、
-// 表示され続けるべき(epsilon 比較は検討のうえ見送り済み)。
-fn numEql(s: []const u8, want: f64) bool {
-    const v = std.fmt.parseFloat(f64, std.mem.trim(u8, s, " ")) catch return false;
-    return v == want;
-}
-
 fn findMod(mods: []Mod, path: []const u8) ?Mod {
     for (mods) |m| if (std.mem.eql(u8, m.path, path)) return m;
     return null;
 }
 
-fn addedInstanceOverrides(arena: std.mem.Allocator, doc: *const model.Document) ![]model.OverrideDiff {
+// 片側にしか存在しない instance(added/removed)の override 全列挙。
+// 値は added なら after、removed なら before に載る。
+fn soleInstanceOverrides(arena: std.mem.Allocator, doc: *const model.Document, status: Status) ![]model.OverrideDiff {
     const mods = try collectMods(arena, doc);
     var out: std.ArrayList(model.OverrideDiff) = .empty;
 
-    // Placement サマリ: 全成分が揃っていれば合成 1 行(デフォルト値なら省略)。
+    // Placement サマリ: 全成分が揃っていれば合成 1 行。
     var consumed = [_]bool{false} ** placements.len;
     for (placements, 0..) |p, pi| {
         var vals: [4][]const u8 = undefined;
         var all = true;
-        var is_default = true;
         for (p.comps, 0..) |c, i| {
             const path = try std.fmt.allocPrint(arena, "{s}.{s}", .{ p.prefix, c });
             const m = findMod(mods, path) orelse {
@@ -1039,20 +1113,17 @@ fn addedInstanceOverrides(arena: std.mem.Allocator, doc: *const model.Document) 
                 break;
             };
             vals[i] = v;
-            // デフォルト: Position/Scale の各成分は 0/1、Rotation は (0,0,0,1)。
-            const want: f64 = if (std.mem.eql(u8, p.label, "Scale"))
-                1
-            else if (std.mem.eql(u8, p.label, "Rotation") and std.mem.eql(u8, c, "w"))
-                1
-            else
-                0;
-            if (!numEql(v, want)) is_default = false;
         }
         if (!all) continue;
         consumed[pi] = true;
-        if (is_default) continue;
         const n = try parenJoinNode(arena, vals[0..p.comps.len]);
-        try out.append(arena, .{ .group = "Transform", .label = p.label, .status = .added, .before = null, .after = n });
+        try out.append(arena, .{
+            .group = "Transform",
+            .label = p.label,
+            .status = status,
+            .before = if (status == .removed) n else null,
+            .after = if (status == .added) n else null,
+        });
     }
 
     for (mods) |m| {
@@ -1066,9 +1137,20 @@ fn addedInstanceOverrides(arena: std.mem.Allocator, doc: *const model.Document) 
             break :blk false;
         };
         if (in_consumed) continue;
-        try out.append(arena, try makeOverride(arena, m.path, .added, null, modValue(m)));
+        const v = modValue(m);
+        try out.append(arena, try makeOverride(
+            arena,
+            m.path,
+            status,
+            if (status == .removed) v else null,
+            if (status == .added) v else null,
+        ));
     }
-    try appendStructuralSummaries(arena, &out, null, doc);
+    if (status == .added) {
+        try appendStructuralSummaries(arena, &out, null, doc);
+    } else {
+        try appendStructuralSummaries(arena, &out, doc, null);
+    }
     sortByGroup(out.items);
     return out.toOwnedSlice(arena);
 }
@@ -1084,7 +1166,7 @@ fn modificationSeqLen(doc: *const model.Document, key: []const u8) usize {
 }
 
 // m_Added*/m_Removed* の完全展開はスコープ外。件数の要約 1 行で情報が黙って消えるのを防ぐ。
-fn appendStructuralSummaries(arena: std.mem.Allocator, out: *std.ArrayList(model.OverrideDiff), before_doc: ?*const model.Document, after_doc: *const model.Document) !void {
+fn appendStructuralSummaries(arena: std.mem.Allocator, out: *std.ArrayList(model.OverrideDiff), before_doc: ?*const model.Document, after_doc: ?*const model.Document) !void {
     const keys = [_]struct { key: []const u8, label: []const u8 }{
         .{ .key = "m_AddedGameObjects", .label = "Added GameObjects" },
         .{ .key = "m_AddedComponents", .label = "Added Components" },
@@ -1092,12 +1174,14 @@ fn appendStructuralSummaries(arena: std.mem.Allocator, out: *std.ArrayList(model
         .{ .key = "m_RemovedGameObjects", .label = "Removed GameObjects" },
     };
     for (keys) |e| {
-        const alen = modificationSeqLen(after_doc, e.key);
+        const alen = if (after_doc) |ad| modificationSeqLen(ad, e.key) else 0;
         const blen = if (before_doc) |bd| modificationSeqLen(bd, e.key) else 0;
         if (alen == blen) continue;
+        // 件数は生き残っている側: instance ごと削除なら before の件数を出す。
+        const count = if (after_doc != null) alen else blen;
         try out.append(arena, .{
             .group = "Overrides",
-            .label = try std.fmt.allocPrint(arena, "{s} ({d})", .{ e.label, alen }),
+            .label = try std.fmt.allocPrint(arena, "{s} ({d})", .{ e.label, count }),
             .status = if (alen > blen) .added else .removed,
             .before = null,
             .after = null,

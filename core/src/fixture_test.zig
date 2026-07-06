@@ -28,14 +28,16 @@ test "fixture: Plane.prefab shows both cylinder instances under Plane" {
     const plane = res.roots[0];
     try testing.expectEqualStrings("Plane", plane.name);
 
-    // 追加された Cylinder Variant: 配置サマリのみ(Position 合成 1 行)。
+    // 追加された Cylinder Variant: 記録済み placement を default 含め全表示。
     const variant = childByName(plane, "Cylinder Variant").?;
     try testing.expectEqual(model.ObjectKind.prefab_instance, variant.kind);
     try testing.expectEqual(model.Status.added, variant.status);
-    try testing.expectEqual(@as(usize, 1), variant.overrides.len);
+    try testing.expectEqual(@as(usize, 2), variant.overrides.len);
     try testing.expectEqualStrings("Transform", variant.overrides[0].group);
     try testing.expectEqualStrings("Position", variant.overrides[0].label);
     try testing.expectEqualStrings("(2.03, 3.63, 1.11797)", variant.overrides[0].after.?.scalar);
+    try testing.expectEqualStrings("Rotation", variant.overrides[1].label);
+    try testing.expectEqualStrings("(0, 0, 0, 1)", variant.overrides[1].after.?.scalar);
 
     // 変更された Cylinder: Position.x の 1 override のみ。
     const cylinder = childByName(plane, "Cylinder").?;
@@ -78,7 +80,7 @@ test "fixture: Cylinder.prefab shows added script and transform change" {
     try testing.expect(saw_script and saw_transform);
 }
 
-test "fixture: new Cylinder Variant.prefab is a single added instance with Scale.y" {
+test "fixture: new Cylinder Variant.prefab shows all recorded placement values" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
@@ -88,10 +90,15 @@ test "fixture: new Cylinder Variant.prefab is a single added instance with Scale
     try testing.expectEqual(model.ObjectKind.prefab_instance, inst.kind);
     try testing.expectEqualStrings("Cylinder Variant", inst.name);
     try testing.expectEqual(model.Status.added, inst.status);
-    // Position (0,0,0)・identity Rotation・EulerAnglesHint・m_Name は省略され Scale.y だけ残る。
-    try testing.expectEqual(@as(usize, 1), inst.overrides.len);
-    try testing.expectEqualStrings("Scale.y", inst.overrides[0].label);
-    try testing.expectEqualStrings("2", inst.overrides[0].after.?.scalar);
+    // ファイルに記録された placement は default でも全部出す。
+    // 出ないのは EulerAnglesHint(非表示)と m_Name(ノード名に吸収)のみ。
+    try testing.expectEqual(@as(usize, 3), inst.overrides.len);
+    try testing.expectEqualStrings("Position", inst.overrides[0].label);
+    try testing.expectEqualStrings("(0, 0, 0)", inst.overrides[0].after.?.scalar);
+    try testing.expectEqualStrings("Rotation", inst.overrides[1].label);
+    try testing.expectEqualStrings("(0, 0, 0, 1)", inst.overrides[1].after.?.scalar);
+    try testing.expectEqualStrings("Scale.y", inst.overrides[2].label);
+    try testing.expectEqualStrings("2", inst.overrides[2].after.?.scalar);
 }
 
 // ---- prefab/scene 以外の UnityYAML アセット(.mat / .controller)----

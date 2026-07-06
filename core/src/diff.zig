@@ -443,7 +443,7 @@ test "diff: modified instance overrides are sorted group-contiguous, Transform f
     try testing.expectEqualStrings("Max Hp", d.overrides[2].label);
 }
 
-test "diff: added prefab instance collapses placement to summary" {
+test "diff: added prefab instance emits placement summary rows" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
@@ -484,11 +484,15 @@ test "diff: added prefab instance collapses placement to summary" {
     const fd = try compute(arena, "", after);
     const d = findDoc(fd, 1001).?;
     try testing.expectEqual(model.Status.added, d.status);
-    // Position のみ: 合成 1 行。identity Rotation・EulerAnglesHint・m_Name は省略。
-    try testing.expectEqual(@as(usize, 1), d.overrides.len);
+    // 記録済みの placement は default 値(identity Rotation)でも合成 1 行で出す。
+    // EulerAnglesHint(Inspector 非表示)と m_Name(ノード名に吸収)は出ない。
+    try testing.expectEqual(@as(usize, 2), d.overrides.len);
     try testing.expectEqualStrings("Transform", d.overrides[0].group);
     try testing.expectEqualStrings("Position", d.overrides[0].label);
     try testing.expectEqualStrings("(2.03, 3.63, 1.11797)", d.overrides[0].after.?.scalar);
+    try testing.expectEqualStrings("Transform", d.overrides[1].group);
+    try testing.expectEqualStrings("Rotation", d.overrides[1].label);
+    try testing.expectEqualStrings("(0, 0, 0, 1)", d.overrides[1].after.?.scalar);
 }
 
 test "diff: added prefab instance keeps partial scale override" {
@@ -984,13 +988,6 @@ fn scalarOf(n: ?*Node) ?[]const u8 {
     };
 }
 
-// 意図的な厳密一致: ほぼデフォルトに近い値も実在する override であり、
-// 表示され続けるべき(epsilon 比較は検討のうえ見送り済み)。
-fn numEql(s: []const u8, want: f64) bool {
-    const v = std.fmt.parseFloat(f64, std.mem.trim(u8, s, " ")) catch return false;
-    return v == want;
-}
-
 fn findMod(mods: []Mod, path: []const u8) ?Mod {
     for (mods) |m| if (std.mem.eql(u8, m.path, path)) return m;
     return null;
@@ -1000,12 +997,11 @@ fn addedInstanceOverrides(arena: std.mem.Allocator, doc: *const model.Document) 
     const mods = try collectMods(arena, doc);
     var out: std.ArrayList(model.OverrideDiff) = .empty;
 
-    // Placement サマリ: 全成分が揃っていれば合成 1 行(デフォルト値なら省略)。
+    // Placement サマリ: 全成分が揃っていれば合成 1 行。
     var consumed = [_]bool{false} ** placements.len;
     for (placements, 0..) |p, pi| {
         var vals: [4][]const u8 = undefined;
         var all = true;
-        var is_default = true;
         for (p.comps, 0..) |c, i| {
             const path = try std.fmt.allocPrint(arena, "{s}.{s}", .{ p.prefix, c });
             const m = findMod(mods, path) orelse {
@@ -1017,18 +1013,9 @@ fn addedInstanceOverrides(arena: std.mem.Allocator, doc: *const model.Document) 
                 break;
             };
             vals[i] = v;
-            // デフォルト: Position/Scale の各成分は 0/1、Rotation は (0,0,0,1)。
-            const want: f64 = if (std.mem.eql(u8, p.label, "Scale"))
-                1
-            else if (std.mem.eql(u8, p.label, "Rotation") and std.mem.eql(u8, c, "w"))
-                1
-            else
-                0;
-            if (!numEql(v, want)) is_default = false;
         }
         if (!all) continue;
         consumed[pi] = true;
-        if (is_default) continue;
         const n = try parenJoinNode(arena, vals[0..p.comps.len]);
         try out.append(arena, .{ .group = "Transform", .label = p.label, .status = .added, .before = null, .after = n });
     }

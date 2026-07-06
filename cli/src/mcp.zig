@@ -359,7 +359,8 @@ test "mcp: tools/call diffs a real git fixture with the ts host golden" {
         "  + Cylinder Variant  <Prefab>\n" ++
         "      components\n" ++
         "        + Transform\n" ++
-        "          + Position: (2.03, 3.63, 1.11797)\n", text);
+        "          + Position: (2.03, 3.63, 1.11797)\n" ++
+        "          + Rotation: (0, 0, 0, 1)\n", text);
 }
 
 test "mcp: tools/call format json returns diff v2 and bad refs surface as isError" {

@@ -101,6 +101,26 @@ test "fixture: new Cylinder Variant.prefab shows all recorded placement values" 
     try testing.expectEqualStrings("2", inst.overrides[2].after.?.scalar);
 }
 
+test "fixture: deleted Cylinder Variant.prefab mirrors the added enumeration" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    // added(直前のテスト)の鏡像: 同じ 3 行が before 値・removed で出る。
+    const res = try root.diffBytes(arena, cylinder_variant_after, "");
+    try testing.expectEqual(@as(usize, 1), res.roots.len);
+    const inst = res.roots[0];
+    try testing.expectEqual(model.ObjectKind.prefab_instance, inst.kind);
+    try testing.expectEqualStrings("Cylinder Variant", inst.name);
+    try testing.expectEqual(model.Status.removed, inst.status);
+    try testing.expectEqual(@as(usize, 3), inst.overrides.len);
+    try testing.expectEqualStrings("Position", inst.overrides[0].label);
+    try testing.expectEqualStrings("(0, 0, 0)", inst.overrides[0].before.?.scalar);
+    try testing.expectEqualStrings("Rotation", inst.overrides[1].label);
+    try testing.expectEqualStrings("(0, 0, 0, 1)", inst.overrides[1].before.?.scalar);
+    try testing.expectEqualStrings("Scale.y", inst.overrides[2].label);
+    try testing.expectEqualStrings("2", inst.overrides[2].before.?.scalar);
+}
+
 // ---- prefab/scene 以外の UnityYAML アセット(.mat / .controller)----
 // core は拡張子を見ないので既に diff できる。ここはその保証を固定する回帰点。
 

@@ -545,6 +545,37 @@ test "diff: added prefab instance keeps partial scale override" {
     try testing.expectEqualStrings("2", d.overrides[0].after.?.scalar);
 }
 
+test "diff: removed prefab instance mirrors overrides to before" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const before =
+        \\--- !u!1001 &1001
+        \\PrefabInstance:
+        \\  m_Modification:
+        \\    m_Modifications:
+        \\    - target: {fileID: 7, guid: aaa, type: 3}
+        \\      propertyPath: m_LocalScale.y
+        \\      value: 2
+        \\    m_AddedComponents:
+        \\    - targetCorrespondingSourceObject: {fileID: 7, guid: aaa, type: 3}
+        \\      insertIndex: -1
+        \\      addedObject: {fileID: 55}
+        \\  m_SourcePrefab: {fileID: 100100000, guid: aaa, type: 3}
+    ;
+    const fd = try compute(arena, before, "");
+    const d = findDoc(fd, 1001).?;
+    try testing.expectEqual(model.Status.removed, d.status);
+    // added の鏡像: 値は before 側、構造サマリは before 側の件数で removed。
+    try testing.expectEqual(@as(usize, 2), d.overrides.len);
+    try testing.expectEqualStrings("Scale.y", d.overrides[0].label);
+    try testing.expectEqual(model.Status.removed, d.overrides[0].status);
+    try testing.expectEqualStrings("2", d.overrides[0].before.?.scalar);
+    try testing.expect(d.overrides[0].after == null);
+    try testing.expectEqualStrings("Added Components (1)", d.overrides[1].label);
+    try testing.expectEqual(model.Status.removed, d.overrides[1].status);
+}
+
 test "diff: non-empty added components produce a summary row" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
@@ -705,7 +736,7 @@ pub fn compute(arena: std.mem.Allocator, before_src: []const u8, after_src: []co
                     .script_guid = scriptGuid(ad),
                     .status = .added,
                     .fields = &.{},
-                    .overrides = try addedInstanceOverrides(arena, ad),
+                    .overrides = try soleInstanceOverrides(arena, ad, .added),
                 });
             } else {
                 var raw: std.ArrayList(FieldDiff) = .empty;
@@ -735,6 +766,7 @@ pub fn compute(arena: std.mem.Allocator, before_src: []const u8, after_src: []co
                 .class_name = editorClassName(bd),
                 .status = .removed,
                 .fields = &.{},
+                .overrides = try soleInstanceOverrides(arena, bd, .removed),
             });
         } else {
             // 追加側(flattenSubtree ~ presentFields)と対称の全列挙。
@@ -1037,7 +1069,9 @@ fn findMod(mods: []Mod, path: []const u8) ?Mod {
     return null;
 }
 
-fn addedInstanceOverrides(arena: std.mem.Allocator, doc: *const model.Document) ![]model.OverrideDiff {
+// 片側にしか存在しない instance(added/removed)の override 全列挙。
+// 値は added なら after、removed なら before に載る。
+fn soleInstanceOverrides(arena: std.mem.Allocator, doc: *const model.Document, status: Status) ![]model.OverrideDiff {
     const mods = try collectMods(arena, doc);
     var out: std.ArrayList(model.OverrideDiff) = .empty;
 
@@ -1061,7 +1095,13 @@ fn addedInstanceOverrides(arena: std.mem.Allocator, doc: *const model.Document) 
         if (!all) continue;
         consumed[pi] = true;
         const n = try parenJoinNode(arena, vals[0..p.comps.len]);
-        try out.append(arena, .{ .group = "Transform", .label = p.label, .status = .added, .before = null, .after = n });
+        try out.append(arena, .{
+            .group = "Transform",
+            .label = p.label,
+            .status = status,
+            .before = if (status == .removed) n else null,
+            .after = if (status == .added) n else null,
+        });
     }
 
     for (mods) |m| {
@@ -1075,9 +1115,20 @@ fn addedInstanceOverrides(arena: std.mem.Allocator, doc: *const model.Document) 
             break :blk false;
         };
         if (in_consumed) continue;
-        try out.append(arena, try makeOverride(arena, m.path, .added, null, modValue(m)));
+        const v = modValue(m);
+        try out.append(arena, try makeOverride(
+            arena,
+            m.path,
+            status,
+            if (status == .removed) v else null,
+            if (status == .added) v else null,
+        ));
     }
-    try appendStructuralSummaries(arena, &out, null, doc);
+    if (status == .added) {
+        try appendStructuralSummaries(arena, &out, null, doc);
+    } else {
+        try appendStructuralSummaries(arena, &out, doc, null);
+    }
     sortByGroup(out.items);
     return out.toOwnedSlice(arena);
 }
@@ -1093,7 +1144,7 @@ fn modificationSeqLen(doc: *const model.Document, key: []const u8) usize {
 }
 
 // m_Added*/m_Removed* の完全展開はスコープ外。件数の要約 1 行で情報が黙って消えるのを防ぐ。
-fn appendStructuralSummaries(arena: std.mem.Allocator, out: *std.ArrayList(model.OverrideDiff), before_doc: ?*const model.Document, after_doc: *const model.Document) !void {
+fn appendStructuralSummaries(arena: std.mem.Allocator, out: *std.ArrayList(model.OverrideDiff), before_doc: ?*const model.Document, after_doc: ?*const model.Document) !void {
     const keys = [_]struct { key: []const u8, label: []const u8 }{
         .{ .key = "m_AddedGameObjects", .label = "Added GameObjects" },
         .{ .key = "m_AddedComponents", .label = "Added Components" },
@@ -1101,12 +1152,14 @@ fn appendStructuralSummaries(arena: std.mem.Allocator, out: *std.ArrayList(model
         .{ .key = "m_RemovedGameObjects", .label = "Removed GameObjects" },
     };
     for (keys) |e| {
-        const alen = modificationSeqLen(after_doc, e.key);
+        const alen = if (after_doc) |ad| modificationSeqLen(ad, e.key) else 0;
         const blen = if (before_doc) |bd| modificationSeqLen(bd, e.key) else 0;
         if (alen == blen) continue;
+        // 件数は生き残っている側: instance ごと削除なら before の件数を出す。
+        const count = if (after_doc != null) alen else blen;
         try out.append(arena, .{
             .group = "Overrides",
-            .label = try std.fmt.allocPrint(arena, "{s} ({d})", .{ e.label, alen }),
+            .label = try std.fmt.allocPrint(arena, "{s} ({d})", .{ e.label, count }),
             .status = if (alen > blen) .added else .removed,
             .before = null,
             .after = null,

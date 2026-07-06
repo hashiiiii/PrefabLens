@@ -16,6 +16,7 @@ type PrContext = { refs: PrRefs; files: PrFile[]; guidIndex: Map<string, string>
 
 const EMPTY = new Uint8Array(0);
 const MAX_SEARCHES = 10; // Code Search は認証済み 10 req/min — 1 応答で使い切らない
+const MAX_SOURCE_ROUNDS = 3; // 入れ子ソースの再 diff 上限(core 側の深さ上限 8 とは独立)
 const CONTEXT_TTL_MS = 60_000; // push で headSha が変わるため PR コンテキストは短命
 const BLOB_CACHE_MAX = 32;
 const TOO_LARGE_BYTES = 25 * 1024 * 1024; // 親仕様 §5.7: 25MB 超はクリックで描画
@@ -66,6 +67,54 @@ export function createHandler(deps: Deps): (req: SemanticDiffRequest) => Promise
     return bytes;
   }
 
+  /** neededSources(added/removed instance のソース prefab)を resolved パス経由で
+   *  取得し、assets を添えて再 diff する。ソース guid は m_SourcePrefab 参照として
+   *  unresolvedGuids に載るため、パス解決は searchUnresolved が済ませている。
+   *  解決・取得・合成の失敗はその時点の diff で縮退する(全体は落とさない)。 */
+  async function mergeSources(
+    first: DiffV2,
+    differ: Differ,
+    before: Uint8Array,
+    after: Uint8Array,
+    ctx: PrContext,
+    client: ClientLike,
+    owner: string,
+    repo: string,
+    repoKey: string,
+  ): Promise<DiffV2> {
+    const assets = new Map<string, Uint8Array>();
+    let current = first;
+    for (let round = 0; round < MAX_SOURCE_ROUNDS; round++) {
+      const needed = (current.neededSources ?? []).filter((s) => !assets.has(s.guid));
+      if (!needed.length) break;
+      let progressed = false;
+      for (const s of needed) {
+        const path = current.resolved?.[s.guid];
+        if (path === undefined) continue;
+        const sha = s.side === 'before' ? ctx.refs.baseSha : ctx.refs.headSha;
+        let bytes: Uint8Array | null = null;
+        try {
+          bytes = await fetchBlob(client, owner, repo, path, sha);
+        } catch {
+          return current; // rate limit 等: phase 1 の結果で縮退表示
+        }
+        if (!bytes) continue;
+        assets.set(s.guid, bytes);
+        progressed = true;
+      }
+      if (!progressed) break;
+      let merged: DiffV2;
+      try {
+        merged = differ.diffWithAssets(before, after, assets);
+      } catch {
+        return current; // 合成失敗はその時点の結果で縮退
+      }
+      // 合成でソース内の外部参照(script/material)が新たに現れるので解決し直す。
+      current = await searchUnresolved(applyResolved(merged, ctx.guidIndex), client, owner, repo, repoKey);
+    }
+    return current;
+  }
+
   function loadContext(client: ClientLike, owner: string, repo: string, prNumber: number): Promise<PrContext> {
     const key = `${owner}/${repo}#${prNumber}`;
     const entry = contexts.get(key);
@@ -111,9 +160,12 @@ export function createHandler(deps: Deps): (req: SemanticDiffRequest) => Promise
       }
 
       const differ = await deps.getDiffer();
+      const repoKey = `${base}/${req.owner}/${req.repo}`;
       const json = differ.diff(before, after);
       const withPr = applyResolved(json, guidIndex);
-      return { ok: true, json: await searchUnresolved(withPr, client, req.owner, req.repo, `${base}/${req.owner}/${req.repo}`) };
+      const first = await searchUnresolved(withPr, client, req.owner, req.repo, repoKey);
+      const ctx = { refs, files, guidIndex };
+      return { ok: true, json: await mergeSources(first, differ, before, after, ctx, client, req.owner, req.repo, repoKey) };
     } catch (err) {
       if (err instanceof RateLimitError) return { ok: false, error: 'rate-limited' };
       if (err instanceof AuthError) return { ok: false, error: 'auth-failed' };

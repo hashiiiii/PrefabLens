@@ -12,6 +12,7 @@ function makeDeps(overrides?: {
   files?: PrFile[];
   contents?: Record<string, string>; // `${path}@${ref}` → text
   diff?: Differ['diff'];
+  diffWithAssets?: Differ['diffWithAssets'];
   pat?: string | undefined;
   search?: Record<string, string | null>; // guid → asset path(null = 未ヒット)
   cached?: Record<string, string>; // guidCache の初期内容
@@ -28,7 +29,10 @@ function makeDeps(overrides?: {
     getFileAtRef,
     searchMetaByGuid: vi.fn(async (_o: string, _r: string, guid: string) => overrides?.search?.[guid] ?? null),
   };
-  const differ: Differ = { diff: overrides?.diff ?? vi.fn(() => DIFF) };
+  const differ: Differ = {
+    diff: overrides?.diff ?? vi.fn(() => DIFF),
+    diffWithAssets: overrides?.diffWithAssets ?? vi.fn(() => DIFF),
+  };
   const cacheData: Record<string, Record<string, string>> = {};
   if (overrides?.cached) cacheData['https://api.github.com/o/r'] = { ...overrides.cached };
   const guidCache = {
@@ -290,5 +294,79 @@ describe('createHandler', () => {
     const limited = makeDeps();
     limited.client.getPrRefs.mockRejectedValue(new RateLimitError('x'));
     expect(await createHandler(limited.deps)(REQ)).toEqual({ ok: false, error: 'rate-limited' });
+  });
+
+  describe('source prefab merging', () => {
+    // phase 1 がソース供給を要求する diff。src1 のパスは Code Search で解決される。
+    const NEEDS: DiffV2 = {
+      ...DIFF,
+      unresolvedGuids: ['src1'],
+      neededSources: [{ guid: 'src1', side: 'after' }],
+    };
+    const MERGED: DiffV2 = { schema: 'prefablens.diff.v2', unresolvedGuids: ['src1'], roots: [], loose: [] };
+
+    it('fetches the resolved source at head and re-diffs with assets', async () => {
+      const diffWithAssets = vi.fn<Differ['diffWithAssets']>(() => MERGED);
+      const { deps, client } = makeDeps({
+        diff: () => NEEDS,
+        diffWithAssets,
+        search: { src1: 'Assets/Cyl.prefab' },
+        contents: {
+          'Assets/Foo.prefab@base-sha': 'b',
+          'Assets/Foo.prefab@head-sha': 'a',
+          'Assets/Cyl.prefab@head-sha': 'SRC',
+        },
+      });
+      const res = await createHandler(deps)(REQ);
+      // side=after なので head からソースを取り、その bytes が assets に載る。
+      expect(client.getFileAtRef).toHaveBeenCalledWith('o', 'r', 'Assets/Cyl.prefab', 'head-sha');
+      const assets = diffWithAssets.mock.calls[0]![2];
+      expect(new TextDecoder().decode(assets.get('src1')!)).toBe('SRC');
+      // 再 diff 後も resolved は guidCache から復元されて残る。
+      expect(res).toEqual({ ok: true, json: { ...MERGED, resolved: { src1: 'Assets/Cyl.prefab' } } });
+    });
+
+    it('fetches removed-instance sources from the base side', async () => {
+      const diffWithAssets = vi.fn<Differ['diffWithAssets']>(() => MERGED);
+      const { deps, client } = makeDeps({
+        diff: () => ({ ...NEEDS, neededSources: [{ guid: 'src1', side: 'before' }] }),
+        diffWithAssets,
+        search: { src1: 'Assets/Cyl.prefab' },
+        contents: {
+          'Assets/Foo.prefab@base-sha': 'b',
+          'Assets/Foo.prefab@head-sha': 'a',
+          'Assets/Cyl.prefab@base-sha': 'OLD',
+        },
+      });
+      await createHandler(deps)(REQ);
+      expect(client.getFileAtRef).toHaveBeenCalledWith('o', 'r', 'Assets/Cyl.prefab', 'base-sha');
+    });
+
+    it('keeps the phase-1 diff when the source path cannot be resolved', async () => {
+      const diffWithAssets = vi.fn<Differ['diffWithAssets']>(() => MERGED);
+      const { deps } = makeDeps({ diff: () => NEEDS, diffWithAssets }); // search 未ヒット
+      const res = await createHandler(deps)(REQ);
+      // パス不明のソースは諦め、縮退表示(phase 1 の json)のまま返す。
+      expect(diffWithAssets).not.toHaveBeenCalled();
+      expect(res).toEqual({ ok: true, json: { ...NEEDS, resolved: {} } });
+    });
+
+    it('does not loop when the merged output still needs the same source', async () => {
+      // 供給しても縮退したまま(壊れたソース等)の場合、同じ guid で無限に回らない。
+      const diffWithAssets = vi.fn<Differ['diffWithAssets']>(() => NEEDS);
+      const { deps } = makeDeps({
+        diff: () => NEEDS,
+        diffWithAssets,
+        search: { src1: 'Assets/Cyl.prefab' },
+        contents: {
+          'Assets/Foo.prefab@base-sha': 'b',
+          'Assets/Foo.prefab@head-sha': 'a',
+          'Assets/Cyl.prefab@head-sha': 'SRC',
+        },
+      });
+      const res = await createHandler(deps)(REQ);
+      expect(diffWithAssets).toHaveBeenCalledTimes(1);
+      expect(res.ok).toBe(true);
+    });
   });
 });

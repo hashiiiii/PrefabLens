@@ -16,7 +16,7 @@ claude mcp add --scope user prefablens -- /path/to/prefablens mcp
 
 | Parameter | Default | Description |
 |---|---|---|
-| `path` | (required) | Asset path (`.prefab`/`.unity`/`.asset`), relative to `projectRoot` |
+| `path` | (required) | UnityYAML asset path(`.prefab`/`.unity`/`.asset`/`.mat`/`.anim`/`.controller` など)、`projectRoot` 相対 |
 | `before` | `HEAD` | Base git ref |
 | `after` | working tree | Target git ref; omit to compare against the working tree |
 | `projectRoot` | server cwd | Repository root (also the base for `.meta` guid resolution) |

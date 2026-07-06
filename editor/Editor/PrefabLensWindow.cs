@@ -30,9 +30,7 @@ namespace PrefabLens
         static bool ValidateDiffSelected()
         {
             var p = Selection.activeObject == null ? "" : AssetDatabase.GetAssetPath(Selection.activeObject);
-            return p.EndsWith(".prefab", StringComparison.Ordinal)
-                || p.EndsWith(".unity", StringComparison.Ordinal)
-                || p.EndsWith(".asset", StringComparison.Ordinal);
+            return UnityYamlPaths.IsSupported(p);
         }
 
         public void CreateGUI()
@@ -53,7 +51,7 @@ namespace PrefabLens
             content.Clear();
             if (string.IsNullOrEmpty(assetPath))
             {
-                status.text = "Select a .prefab / .unity / .asset and run Assets → PrefabLens: Diff vs HEAD";
+                status.text = "Select a UnityYAML asset (.prefab / .unity / .asset / .mat / .anim / …) and run Assets → PrefabLens: Diff vs HEAD";
                 return;
             }
             status.text = assetPath;

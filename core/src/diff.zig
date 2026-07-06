@@ -34,6 +34,28 @@ test "diff: modified scalar field is detected old->new" {
     try testing.expectEqualStrings("150", d.fields[0].after.?.scalar);
 }
 
+test "diff: unknown classID falls back to the document top-level key" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    // 999999 は ClassIDReference に存在しない ID。テーブルで解決できない
+    // ドキュメントはトップレベルキーで命名される。
+    const before =
+        \\--- !u!999999 &7
+        \\MyCustomThing:
+        \\  value: 1
+    ;
+    const after =
+        \\--- !u!999999 &7
+        \\MyCustomThing:
+        \\  value: 2
+    ;
+    const fd = try compute(arena, before, after);
+    const d = findDoc(fd, 7).?;
+    try testing.expectEqualStrings("MyCustomThing", d.type_name);
+    try testing.expectEqual(model.Status.modified, d.status);
+}
+
 test "diff: added and removed documents" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();

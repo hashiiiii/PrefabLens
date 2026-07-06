@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import { ApiError, AuthError, GithubClient, RateLimitError, apiBase } from './client';
+import { describe, expect, it, vi } from 'vitest';
+import { ApiError, AuthError, GithubClient, RateLimitError, apiBase, graphqlUrl } from './client';
 
 // パス→レスポンスの固定表を返す fetch フェイク。呼び出しも記録する。
 // 照合は url.includes(key) なのでキーは一意な部分文字列にすること
@@ -147,5 +147,78 @@ describe('GithubClient', () => {
     await expect(
       at(403, { 'x-ratelimit-remaining': '4999' }, '{"message":"Resource not accessible by personal access token"}').getPrRefs('o', 'r', 1),
     ).rejects.toBeInstanceOf(AuthError);
+  });
+});
+
+describe('graphqlUrl', () => {
+  it('maps github.com and GHES api bases to their graphql endpoints', () => {
+    expect(graphqlUrl('https://api.github.com')).toBe('https://api.github.com/graphql');
+    expect(graphqlUrl('https://ghes.example.com/api/v3')).toBe('https://ghes.example.com/api/graphql');
+  });
+});
+
+describe('listMetaTree', () => {
+  it('returns only .meta blobs with the truncated flag', async () => {
+    const fetchFn = vi.fn(async (..._args: Parameters<typeof fetch>) =>
+      new Response(
+        JSON.stringify({
+          truncated: false,
+          tree: [
+            { path: 'Assets/S.cs.meta', type: 'blob', sha: 'sha1' },
+            { path: 'Assets/S.cs', type: 'blob', sha: 'sha2' },      // .meta 以外は除外
+            { path: 'Assets/Dir.meta', type: 'blob', sha: 'sha3' },
+            { path: 'Assets', type: 'tree', sha: 'sha4' },            // tree ノードは除外
+          ],
+        }),
+        { status: 200 },
+      ),
+    );
+    const client = new GithubClient('https://api.github.com', 'tok', fetchFn);
+    const res = await client.listMetaTree('o', 'r', 'H');
+    expect(fetchFn.mock.calls[0]?.[0]).toBe('https://api.github.com/repos/o/r/git/trees/H?recursive=1');
+    expect(res).toEqual({
+      truncated: false,
+      metas: [
+        { path: 'Assets/S.cs.meta', sha: 'sha1' },
+        { path: 'Assets/Dir.meta', sha: 'sha3' },
+      ],
+    });
+  });
+});
+
+describe('batchBlobTexts', () => {
+  it('posts an aliased graphql query and maps oids to texts', async () => {
+    const fetchFn = vi.fn(async (..._args: Parameters<typeof fetch>) =>
+      new Response(
+        JSON.stringify({ data: { repository: { b0: { text: 'guid: g1\n' }, b1: null } } }),
+        { status: 200 },
+      ),
+    );
+    const client = new GithubClient('https://ghes.example.com/api/v3', 'tok', fetchFn);
+    const res = await client.batchBlobTexts('o', 'r', ['sha1', 'sha2']);
+    expect(fetchFn.mock.calls[0]?.[0]).toBe('https://ghes.example.com/api/graphql'); // GHES は /api/graphql
+    const init = fetchFn.mock.calls[0]?.[1] as RequestInit;
+    expect(init.method).toBe('POST');
+    const body = JSON.parse(init.body as string) as { query: string };
+    expect(body.query).toContain('b0: object(oid: "sha1")');
+    expect(body.query).toContain('b1: object(oid: "sha2")');
+    expect(res).toEqual({ sha1: 'guid: g1\n', sha2: null }); // 取得不可の blob は null
+  });
+
+  it('maps graphql RATE_LIMITED errors to RateLimitError', async () => {
+    // GraphQL は HTTP 200 で errors 配列を返すことがある: ここを見逃すと索引が黙って空になる
+    const fetchFn = vi.fn(async () =>
+      new Response(JSON.stringify({ errors: [{ type: 'RATE_LIMITED' }] }), { status: 200 }),
+    );
+    const client = new GithubClient('https://api.github.com', 'tok', fetchFn);
+    await expect(client.batchBlobTexts('o', 'r', ['sha1'])).rejects.toBeInstanceOf(RateLimitError);
+  });
+
+  it('maps http 403 with retry-after to RateLimitError (shared classification)', async () => {
+    const fetchFn = vi.fn(async () =>
+      new Response('slow down', { status: 403, headers: { 'retry-after': '60' } }),
+    );
+    const client = new GithubClient('https://api.github.com', 'tok', fetchFn);
+    await expect(client.batchBlobTexts('o', 'r', ['sha1'])).rejects.toBeInstanceOf(RateLimitError);
   });
 });

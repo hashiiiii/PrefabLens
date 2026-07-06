@@ -22,6 +22,11 @@ export function apiBase(baseUrl: string | undefined): string {
   return origin === 'https://github.com' ? 'https://api.github.com' : `${origin}/api/v3`;
 }
 
+/** REST の apiBase から GraphQL エンドポイントを導く。GHES は /api/v3 → /api/graphql。 */
+export function graphqlUrl(apiBase: string): string {
+  return apiBase.endsWith('/api/v3') ? `${apiBase.slice(0, -'/api/v3'.length)}/api/graphql` : `${apiBase}/graphql`;
+}
+
 export class GithubClient {
   constructor(
     private readonly base: string,
@@ -31,14 +36,8 @@ export class GithubClient {
     private readonly fetchFn: typeof fetch = (input, init) => fetch(input, init),
   ) {}
 
-  private async request(path: string, accept: string): Promise<Response> {
-    const res = await this.fetchFn(`${this.base}${path}`, {
-      headers: {
-        accept,
-        authorization: `Bearer ${this.token}`,
-        'x-github-api-version': '2022-11-28',
-      },
-    });
+  private async rawRequest(url: string, init: RequestInit): Promise<Response> {
+    const res = await this.fetchFn(url, init);
     if (res.status === 403 || res.status === 429) {
       // primary は 403 + x-ratelimit-remaining: 0、secondary は 403 + retry-after または
       // ヘッダなし(ボディの message のみ)、新 API は 429。ボディは分類にだけ使い、保持しない。
@@ -53,6 +52,16 @@ export class GithubClient {
     }
     if (res.status === 401) throw new AuthError('GitHub authentication failed');
     return res;
+  }
+
+  private async request(path: string, accept: string): Promise<Response> {
+    return this.rawRequest(`${this.base}${path}`, {
+      headers: {
+        accept,
+        authorization: `Bearer ${this.token}`,
+        'x-github-api-version': '2022-11-28',
+      },
+    });
   }
 
   private async json<T>(path: string): Promise<T> {
@@ -104,5 +113,41 @@ export class GithubClient {
     if (res.status === 404) return null;
     if (!res.ok) throw new ApiError(res.status);
     return new Uint8Array(await res.arrayBuffer());
+  }
+
+  /** ref(commit SHA 可)時点の全 .meta の path + blob SHA。truncated は 10 万エントリ超の打ち切り。 */
+  async listMetaTree(owner: string, repo: string, ref: string): Promise<{ truncated: boolean; metas: Array<{ path: string; sha: string }> }> {
+    const body = await this.json<{ truncated: boolean; tree: Array<{ path: string; type: string; sha: string }> }>(
+      `/repos/${owner}/${repo}/git/trees/${ref}?recursive=1`,
+    );
+    const metas = body.tree
+      .filter((e) => e.type === 'blob' && e.path.endsWith('.meta'))
+      .map((e) => ({ path: e.path, sha: e.sha }));
+    return { truncated: body.truncated, metas };
+  }
+
+  /** GraphQL で blob text を一括取得(分割は呼び出し側)。GraphQL は 5,000 pt/h の独立枠。 */
+  async batchBlobTexts(owner: string, repo: string, oids: string[]): Promise<Record<string, string | null>> {
+    const aliases = oids.map((oid, i) => `b${i}: object(oid: ${JSON.stringify(oid)}) { ... on Blob { text } }`).join('\n');
+    const query = `query { repository(owner: ${JSON.stringify(owner)}, name: ${JSON.stringify(repo)}) {\n${aliases}\n} }`;
+    const res = await this.rawRequest(graphqlUrl(this.base), {
+      method: 'POST',
+      headers: {
+        accept: 'application/json',
+        authorization: `Bearer ${this.token}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ query }),
+    });
+    if (!res.ok) throw new ApiError(res.status);
+    const body = (await res.json()) as {
+      data?: { repository?: Record<string, { text?: string | null } | null> } | null;
+      errors?: Array<{ type?: string }>;
+    };
+    // GraphQL は HTTP 200 のまま errors を返す: RATE_LIMITED はここで拾う
+    if (body.errors?.some((e) => e.type === 'RATE_LIMITED')) throw new RateLimitError('GitHub rate limit exceeded');
+    const blobs = body.data?.repository;
+    if (!blobs) throw new ApiError(res.status);
+    return Object.fromEntries(oids.map((oid, i) => [oid, blobs[`b${i}`]?.text ?? null]));
   }
 }

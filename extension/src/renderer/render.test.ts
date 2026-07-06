@@ -320,4 +320,19 @@ describe('detectTheme', () => {
     document.documentElement.setAttribute('data-color-mode', 'light');
     expect(detectTheme(document)).toBe('light');
   });
+
+  it('follows the OS scheme via matchMedia when data-color-mode is auto', () => {
+    // GitHub の既定は auto: dark/light どちらでもない値は matchMedia に委ねる
+    document.documentElement.setAttribute('data-color-mode', 'auto');
+    expect(detectTheme(document)).toBe('light'); // jsdom に matchMedia は無い → light に倒す
+    const win = document.defaultView!;
+    win.matchMedia = ((query: string) => ({
+      matches: query === '(prefers-color-scheme: dark)',
+    })) as unknown as typeof win.matchMedia;
+    try {
+      expect(detectTheme(document)).toBe('dark');
+    } finally {
+      delete (win as { matchMedia?: unknown }).matchMedia;
+    }
+  });
 });

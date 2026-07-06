@@ -12,6 +12,10 @@ const FIXTURE = `
     <div class="js-file-content">raw diff</div>
   </div>
   <div class="file">
+    <div class="file-header" data-path="Assets/Data/Config.asset"></div>
+    <div class="js-file-content">raw diff</div>
+  </div>
+  <div class="file">
     <div class="file-header" data-path="src/main.cs"></div>
     <div class="js-file-content">raw diff</div>
   </div>
@@ -33,7 +37,7 @@ describe('scanUnityFiles', () => {
   it('finds .prefab/.unity/.asset containers and skips other files', () => {
     document.body.innerHTML = FIXTURE;
     const entries = scanUnityFiles(document);
-    expect(entries.map((e) => e.path)).toEqual(['Assets/Foo.prefab', 'Assets/Scenes/Main.unity']);
+    expect(entries.map((e) => e.path)).toEqual(['Assets/Foo.prefab', 'Assets/Scenes/Main.unity', 'Assets/Data/Config.asset']);
     expect(entries[0]!.content.classList.contains('js-file-content')).toBe(true);
   });
 

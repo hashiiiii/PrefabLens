@@ -58,6 +58,29 @@ test('detects a Unity file, toggles to Semantic, renders the tree', async ({ pag
   await expect(view).toBeHidden();
 });
 
+test('attaches toggles to files added after the initial scan (SPA lazy loading)', async ({ page }) => {
+  await page.route('**/pull/1/files', (route) => route.fulfill({ body: fixture, contentType: 'text/html' }));
+  await page.addInitScript((res) => {
+    (window as unknown as Record<string, unknown>)['chrome'] = {
+      runtime: { sendMessage: () => Promise.resolve(res) },
+    };
+  }, cannedResponse);
+
+  await page.goto('https://prefablens.test/owner/repo/pull/1/files');
+  await page.addScriptTag({ path: 'dist/content.js' });
+
+  // GitHub は Files changed をスクロールで遅延ロードする: 初回スキャン後の追加を MutationObserver が拾う
+  await page.evaluate(() => {
+    const file = document.createElement('div');
+    file.className = 'file';
+    file.innerHTML =
+      '<div class="file-header" data-path="Assets/Late.prefab"></div><div class="js-file-content">raw diff</div>';
+    document.body.append(file);
+  });
+  const lateHeader = page.locator('.file-header[data-path="Assets/Late.prefab"]');
+  await expect(lateHeader.getByRole('button', { name: 'Semantic' })).toBeVisible();
+});
+
 test('recovers after an error response', async ({ page }) => {
   await page.route('**/pull/1/files', (route) => route.fulfill({ body: fixture, contentType: 'text/html' }));
   // 1回目は pat-missing エラー、2回目以降は正常応答を返す(エラーはキャッシュされず再フェッチされることを確認)

@@ -41,6 +41,59 @@ describe('scanUnityFiles', () => {
     expect(entries[0]!.content.classList.contains('js-file-content')).toBe(true);
   });
 
+  it('finds every UnityYAML asset extension beyond the original trio', () => {
+    // unityyamlmerge が対象とするテキストシリアライズ済みアセット群。
+    // 大文字小文字は Unity の実出力(.overrideController 等の camelCase)に合わせる。
+    const paths = [
+      'Assets/M.mat',
+      'Assets/A.anim',
+      'Assets/C.controller',
+      'Assets/O.overrideController',
+      'Assets/P.physicMaterial',
+      'Assets/P2.physicsMaterial2D',
+      'Assets/T.playable',
+      'Assets/K.mask',
+      'Assets/B.brush',
+      'Assets/F.flare',
+      'Assets/F.fontsettings',
+      'Assets/G.guiskin',
+      'Assets/G.giparams',
+      'Assets/R.renderTexture',
+      'Assets/S.spriteatlas',
+      'Assets/S.spriteatlasv2',
+      'Assets/T.terrainlayer',
+      'Assets/X.mixer',
+      'Assets/V.shadervariants',
+      'Assets/P.preset',
+      'Assets/S.signal',
+      'Assets/L.lighting',
+      'Assets/S.scenetemplate',
+    ];
+    document.body.innerHTML = paths
+      .map(
+        (p) => `<div class="file">
+          <div class="file-header" data-path="${p}"></div>
+          <div class="js-file-content">raw diff</div>
+        </div>`,
+      )
+      .join('');
+    expect(scanUnityFiles(document).map((e) => e.path)).toEqual(paths);
+  });
+
+  it('skips YAML-but-not-UnityYAML and JSON assets', () => {
+    // .meta は !u! ドキュメント形式でなく、.asmdef/.shadergraph は JSON。
+    const paths = ['Assets/Foo.prefab.meta', 'Assets/Code.asmdef', 'Assets/S.shadergraph', 'Assets/T.png'];
+    document.body.innerHTML = paths
+      .map(
+        (p) => `<div class="file">
+          <div class="file-header" data-path="${p}"></div>
+          <div class="js-file-content">raw diff</div>
+        </div>`,
+      )
+      .join('');
+    expect(scanUnityFiles(document)).toEqual([]);
+  });
+
   it('is harmless when the expected structure is missing (defensive selectors)', () => {
     document.body.innerHTML = '<div>totally different markup</div>';
     expect(scanUnityFiles(document)).toEqual([]);

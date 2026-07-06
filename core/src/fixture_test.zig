@@ -93,3 +93,59 @@ test "fixture: new Cylinder Variant.prefab is a single added instance with Scale
     try testing.expectEqualStrings("Scale.y", inst.overrides[0].label);
     try testing.expectEqualStrings("2", inst.overrides[0].after.?.scalar);
 }
+
+// ---- prefab/scene 以外の UnityYAML アセット(.mat / .controller)----
+// core は拡張子を見ないので既に diff できる。ここはその保証を固定する回帰点。
+
+const material_before = @embedFile("testdata/material_before.mat");
+const material_after = @embedFile("testdata/material_after.mat");
+const animator_before = @embedFile("testdata/animator_before.controller");
+const animator_after = @embedFile("testdata/animator_after.controller");
+
+test "fixture: .mat diffs as a loose Material with nested property paths" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const res = try root.diffBytes(arena, material_before, material_after);
+
+    // GameObject 階層を持たないので roots は空、Material 本体は loose に 1 件。
+    try testing.expectEqual(@as(usize, 0), res.roots.len);
+    try testing.expectEqual(@as(usize, 1), res.loose.len);
+    const mat = res.loose[0];
+    try testing.expectEqual(@as(u32, 21), mat.class_id);
+    try testing.expectEqualStrings("Material", mat.type_name);
+    try testing.expectEqual(model.Status.modified, mat.status);
+
+    // m_SavedProperties 配下の変更 2 件が Inspector 風パスで出る。
+    try testing.expectEqual(@as(usize, 2), mat.fields.len);
+    try testing.expectEqualStrings("Saved Properties.Floats[1]._Metallic", mat.fields[0].path);
+    try testing.expectEqualStrings("0", mat.fields[0].before.?.scalar);
+    try testing.expectEqualStrings("0.75", mat.fields[0].after.?.scalar);
+    try testing.expectEqualStrings("Saved Properties.Colors[0]._Color.r", mat.fields[1].path);
+    try testing.expectEqualStrings("1", mat.fields[1].before.?.scalar);
+    try testing.expectEqualStrings("0.5", mat.fields[1].after.?.scalar);
+}
+
+test "fixture: .controller shows only the changed AnimatorState via type_name fallback" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const res = try root.diffBytes(arena, animator_before, animator_after);
+
+    // 3 ドキュメント(State / StateMachine / Controller)のうち変更は State のみ。
+    try testing.expectEqual(@as(usize, 0), res.roots.len);
+    try testing.expectEqual(@as(usize, 1), res.loose.len);
+    const state = res.loose[0];
+    // classid.zig のテーブルに 1102 は無く、トップレベルキーへの fallback で命名される。
+    try testing.expectEqual(@as(u32, 1102), state.class_id);
+    try testing.expectEqualStrings("AnimatorState", state.type_name);
+    try testing.expectEqual(model.Status.modified, state.status);
+
+    try testing.expectEqual(@as(usize, 2), state.fields.len);
+    try testing.expectEqualStrings("Name", state.fields[0].path);
+    try testing.expectEqualStrings("Idle", state.fields[0].before.?.scalar);
+    try testing.expectEqualStrings("Idle Fast", state.fields[0].after.?.scalar);
+    try testing.expectEqualStrings("Speed", state.fields[1].path);
+    try testing.expectEqualStrings("1", state.fields[1].before.?.scalar);
+    try testing.expectEqualStrings("2", state.fields[1].after.?.scalar);
+}

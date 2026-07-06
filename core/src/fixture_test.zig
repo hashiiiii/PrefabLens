@@ -126,7 +126,7 @@ test "fixture: .mat diffs as a loose Material with nested property paths" {
     try testing.expectEqualStrings("0.5", mat.fields[1].after.?.scalar);
 }
 
-test "fixture: .controller shows only the changed AnimatorState via type_name fallback" {
+test "fixture: .controller shows only the changed AnimatorState" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
@@ -136,7 +136,7 @@ test "fixture: .controller shows only the changed AnimatorState via type_name fa
     try testing.expectEqual(@as(usize, 0), res.roots.len);
     try testing.expectEqual(@as(usize, 1), res.loose.len);
     const state = res.loose[0];
-    // classid.zig のテーブルに 1102 は無く、トップレベルキーへの fallback で命名される。
+    // 1102 は classid.zig のテーブルで AnimatorState に解決される。
     try testing.expectEqual(@as(u32, 1102), state.class_id);
     try testing.expectEqualStrings("AnimatorState", state.type_name);
     try testing.expectEqual(model.Status.modified, state.status);

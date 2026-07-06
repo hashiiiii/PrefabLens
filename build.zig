@@ -1,8 +1,14 @@
 const std = @import("std");
+const zon = @import("build.zig.zon");
 
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
+
+    // バージョンの単一ソースは build.zig.zon。CLI バイナリへは build options で注入する。
+    const opts = b.addOptions();
+    opts.addOption([]const u8, "version", zon.version);
+    const build_options_mod = opts.createModule();
 
     const core_mod = b.addModule("core", .{
         .root_source_file = b.path("core/src/root.zig"),
@@ -23,6 +29,7 @@ pub fn build(b: *std.Build) void {
                 .{ .name = "core", .module = core_mod },
                 .{ .name = "testdata_plane_before", .module = plane_before },
                 .{ .name = "testdata_plane_after", .module = plane_after },
+                .{ .name = "build_options", .module = build_options_mod },
             },
         }),
     });
@@ -46,6 +53,7 @@ pub fn build(b: *std.Build) void {
                 .{ .name = "core", .module = core_mod },
                 .{ .name = "testdata_plane_before", .module = plane_before },
                 .{ .name = "testdata_plane_after", .module = plane_after },
+                .{ .name = "build_options", .module = build_options_mod },
             },
         }),
     });

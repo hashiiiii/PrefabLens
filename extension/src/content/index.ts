@@ -52,7 +52,7 @@ function attachToggle(pr: { owner: string; repo: string; prNumber: number }, ent
     };
     request();
   });
-  entry.header.append(toggle);
+  entry.header.append(toggle.element);
 }
 
 function requestDiff(req: SemanticDiffRequest): Promise<SemanticDiffResponse> {

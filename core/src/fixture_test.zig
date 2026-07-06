@@ -121,6 +121,51 @@ test "fixture: deleted Cylinder Variant.prefab mirrors the added enumeration" {
     try testing.expectEqualStrings("2", inst.overrides[2].before.?.scalar);
 }
 
+test "fixture: variant merged with source shows Scale (1, 2, 1) and all components" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    // ソース(Cylinder.prefab 相当)を supply すると Inspector と同じ合成状態になる。
+    var assets: root.Assets = .empty;
+    try assets.put(arena, "05ba59bdbdf954600a21005e3b7bf963", cylinder_after);
+    const res = try root.diffBytesWithAssets(arena, "", cylinder_variant_after, &assets);
+    try testing.expectEqual(@as(usize, 0), res.needed_sources.len);
+    try testing.expectEqual(@as(usize, 1), res.roots.len);
+    const inst = res.roots[0];
+    try testing.expectEqualStrings("Cylinder Variant", inst.name);
+    try testing.expectEqual(model.Status.added, inst.status);
+    // 展開成功: overrides は消え、ソースの全コンポーネントが added で並ぶ。
+    try testing.expectEqual(@as(usize, 0), inst.overrides.len);
+    var saw = [_]bool{false} ** 4; // Transform / MeshFilter / MeshRenderer / CapsuleCollider
+    for (inst.components) |c| {
+        try testing.expectEqual(model.Status.added, c.status);
+        switch (c.class_id) {
+            4 => {
+                saw[0] = true;
+                // override 適用済み: Scale.y=2 が (1, 2, 1) に、Position は (0, 0, 0)。
+                var saw_scale = false;
+                var saw_pos = false;
+                for (c.fields) |f| {
+                    if (std.mem.eql(u8, f.path, "Scale")) {
+                        saw_scale = true;
+                        try testing.expectEqualStrings("(1, 2, 1)", f.after.?.scalar);
+                    }
+                    if (std.mem.eql(u8, f.path, "Position")) {
+                        saw_pos = true;
+                        try testing.expectEqualStrings("(0, 0, 0)", f.after.?.scalar);
+                    }
+                }
+                try testing.expect(saw_scale and saw_pos);
+            },
+            33 => saw[1] = true,
+            23 => saw[2] = true,
+            136 => saw[3] = true,
+            else => {},
+        }
+    }
+    for (saw) |s| try testing.expect(s);
+}
+
 // ---- prefab/scene 以外の UnityYAML アセット(.mat / .controller)----
 // core は拡張子を見ないので既に diff できる。ここはその保証を固定する回帰点。
 

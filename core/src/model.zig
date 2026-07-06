@@ -113,10 +113,16 @@ pub const ObjectDiff = struct {
     children: []ObjectDiff,
 };
 
+// ホストに内容の供給を求めるソースプレハブ。side は取得すべき ref
+// (added instance -> after/head、removed instance -> before/base)。
+pub const SourceSide = enum { before, after };
+pub const NeededSource = struct { guid: []const u8, side: SourceSide };
+
 pub const DiffResult = struct {
     roots: []ObjectDiff,
     loose: []ComponentDiff,
     unresolved_guids: [][]const u8,
+    needed_sources: []NeededSource = &.{},
 };
 
 test "Node.eql: scalars, refs, seqs, maps" {

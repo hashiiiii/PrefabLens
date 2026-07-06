@@ -39,7 +39,7 @@ function makeDeps(overrides?: {
     }),
   };
   const deps: Deps = {
-    getSettings: async () => ({ pat: 'pat' in (overrides ?? {}) ? overrides!.pat : 'tok', baseUrl: undefined }),
+    getSettings: async () => ({ pat: Object.hasOwn(overrides ?? {}, 'pat') ? overrides!.pat : 'tok', baseUrl: undefined }),
     makeClient: () => client,
     getDiffer: async () => differ,
     guidCache,
@@ -72,14 +72,50 @@ describe('createHandler', () => {
   });
 
   it('uses an empty before for added files without fetching the base side', async () => {
-    const diff = vi.fn(() => DIFF);
+    const diff = vi.fn<Differ['diff']>(() => DIFF);
     const { deps, client } = makeDeps({ files: [{ path: 'Assets/Foo.prefab', status: 'added' }], diff });
     await createHandler(deps)(REQ);
     const baseFetches = client.getFileAtRef.mock.calls.filter(
       (c) => c[2] === 'Assets/Foo.prefab' && c[3] === 'base-sha',
     );
     expect(baseFetches).toHaveLength(0);
-    expect((diff.mock.calls[0] as any[])?.[0]).toHaveLength(0); // before は空
+    expect(diff.mock.calls[0]?.[0]).toHaveLength(0); // before は空
+  });
+
+  it('uses an empty after for removed files without fetching the head side', async () => {
+    const diff = vi.fn<Differ['diff']>(() => DIFF);
+    const { deps, client } = makeDeps({ files: [{ path: 'Assets/Foo.prefab', status: 'removed' }], diff });
+    await createHandler(deps)(REQ);
+    const headFetches = client.getFileAtRef.mock.calls.filter(
+      (c) => c[2] === 'Assets/Foo.prefab' && c[3] === 'head-sha',
+    );
+    expect(headFetches).toHaveLength(0);
+    expect(diff.mock.calls[0]?.[1]).toHaveLength(0); // after は空
+  });
+
+  it('diffs a file missing from the PR list as modified (files API caps at 3000)', async () => {
+    // 3000 ファイル超の PR では一覧 API が打ち切られ、UI にあるファイルが一覧に無いことがある
+    const { deps, client } = makeDeps({ files: [{ path: 'Assets/Other.prefab', status: 'modified' }] });
+    const res = await createHandler(deps)(REQ);
+    expect(res.ok).toBe(true);
+    expect(client.getFileAtRef).toHaveBeenCalledWith('o', 'r', 'Assets/Foo.prefab', 'base-sha');
+    expect(client.getFileAtRef).toHaveBeenCalledWith('o', 'r', 'Assets/Foo.prefab', 'head-sha');
+  });
+
+  it('fetches the base and head blobs in parallel', async () => {
+    // 初回トグルのレイテンシは blob フェッチ 2 本が支配的なので、直列化への退行を固定する
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const { deps, client } = makeDeps();
+    client.getFileAtRef.mockImplementation(async () => {
+      inFlight++;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      await new Promise((r) => setTimeout(r, 0));
+      inFlight--;
+      return new TextEncoder().encode('x');
+    });
+    await createHandler(deps)(REQ);
+    expect(maxInFlight).toBe(2);
   });
 
   it('reads renamed files from previousPath on the base side', async () => {
@@ -116,6 +152,15 @@ describe('createHandler', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('retries the PR context after a failed load instead of caching the failure', async () => {
+    // 一時的なネットワーク失敗が 60 秒キャッシュに乗ると、再トグルしても直らなくなる
+    const { deps, client } = makeDeps();
+    client.listPrFiles.mockRejectedValueOnce(new Error('socket'));
+    const handle = createHandler(deps);
+    expect(await handle(REQ)).toEqual({ ok: false, error: 'fetch-failed' });
+    expect((await handle(REQ)).ok).toBe(true);
   });
 
   it('fetches each sha+path blob only once (immutable content)', async () => {
@@ -191,6 +236,15 @@ describe('createHandler', () => {
     const { deps, client } = makeDeps({ diff: () => many });
     await createHandler(deps)(REQ);
     expect(client.searchMetaByGuid).toHaveBeenCalledTimes(10);
+  });
+
+  it('does not count cached guids against the search cap', async () => {
+    // 12 guid 中 2 つがキャッシュ済みなら、検索枠 10 は未知の 10 guid にまるごと使える
+    const many: DiffV2 = { ...DIFF, unresolvedGuids: Array.from({ length: 12 }, (_, i) => `g${i}`) };
+    const { deps, client } = makeDeps({ diff: () => many, cached: { g0: 'Assets/A.cs', g1: 'Assets/B.cs' } });
+    const res = await createHandler(deps)(REQ);
+    expect(client.searchMetaByGuid).toHaveBeenCalledTimes(10);
+    expect(res).toEqual({ ok: true, json: { ...many, resolved: { g0: 'Assets/A.cs', g1: 'Assets/B.cs' } } });
   });
 
   it('maps AuthError / DiffError / other failures to stable error codes', async () => {

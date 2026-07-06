@@ -16,6 +16,19 @@ function fakeStorage(initial: Record<string, unknown> = {}) {
   };
 }
 
+function fakeGhes(granted = true) {
+  return {
+    permissions: { request: vi.fn(async () => granted) },
+    scripting: {
+      registerContentScripts: vi.fn(async () => {}),
+      unregisterContentScripts: vi.fn(async () => {}),
+    },
+  } satisfies ChromeGhes;
+}
+
+// click ハンドラの async チェーンが status を書き終わるまで待つ(マクロタスクで flush)
+const flush = () => new Promise((r) => setTimeout(r, 0));
+
 describe('initOptions', () => {
   it('loads stored values into the form', async () => {
     document.body.innerHTML = OPTIONS_BODY;
@@ -30,24 +43,18 @@ describe('initOptions', () => {
     await initOptions(document, storage);
     document.querySelector<HTMLInputElement>('#pat')!.value = '  tok  ';
     document.querySelector<HTMLButtonElement>('#save')!.click();
-    await new Promise((r) => setTimeout(r, 0));
+    await flush();
     expect(storage.data['pat']).toBe('tok');
     expect(document.querySelector('#status')!.textContent).toBe('Saved');
   });
 
   it('applies ghes registration with the trimmed base url on save', async () => {
     document.body.innerHTML = OPTIONS_BODY;
-    const ghes: ChromeGhes = {
-      permissions: { request: vi.fn(async () => true) },
-      scripting: {
-        registerContentScripts: vi.fn(async () => {}),
-        unregisterContentScripts: vi.fn(async () => {}),
-      },
-    };
+    const ghes = fakeGhes();
     await initOptions(document, fakeStorage(), ghes);
     document.querySelector<HTMLInputElement>('#baseUrl')!.value = '  ghe.corp.com  ';
     document.querySelector<HTMLButtonElement>('#save')!.click();
-    await new Promise((r) => setTimeout(r, 0));
+    await flush();
     expect(ghes.permissions.request).toHaveBeenCalledWith({ origins: ['https://ghe.corp.com/*'] });
     expect(document.querySelector('#status')!.textContent).toBe('Saved');
   });
@@ -55,17 +62,10 @@ describe('initOptions', () => {
   it('saves but reports when the host permission is declined', async () => {
     document.body.innerHTML = OPTIONS_BODY;
     const storage = fakeStorage();
-    const ghes: ChromeGhes = {
-      permissions: { request: vi.fn(async () => false) },
-      scripting: {
-        registerContentScripts: vi.fn(async () => {}),
-        unregisterContentScripts: vi.fn(async () => {}),
-      },
-    };
-    await initOptions(document, storage, ghes);
+    await initOptions(document, storage, fakeGhes(false));
     document.querySelector<HTMLInputElement>('#baseUrl')!.value = 'ghe.corp.com';
     document.querySelector<HTMLButtonElement>('#save')!.click();
-    await new Promise((r) => setTimeout(r, 0));
+    await flush();
     expect(storage.data['baseUrl']).toBe('ghe.corp.com');
     expect(document.querySelector('#status')!.textContent).toBe('Saved (host permission declined)');
   });
@@ -73,18 +73,11 @@ describe('initOptions', () => {
   it('still saves settings when ghes setup itself fails', async () => {
     document.body.innerHTML = OPTIONS_BODY;
     const storage = fakeStorage();
-    const ghes: ChromeGhes = {
-      permissions: { request: vi.fn(async () => true) },
-      scripting: {
-        registerContentScripts: vi.fn(async () => {}),
-        unregisterContentScripts: vi.fn(async () => {}),
-      },
-    };
-    await initOptions(document, storage, ghes);
+    await initOptions(document, storage, fakeGhes());
     document.querySelector<HTMLInputElement>('#pat')!.value = 'tok';
     document.querySelector<HTMLInputElement>('#baseUrl')!.value = 'https://'; // originOf が throw する不正 URL
     document.querySelector<HTMLButtonElement>('#save')!.click();
-    await new Promise((r) => setTimeout(r, 0));
+    await flush();
     expect(storage.data['pat']).toBe('tok'); // PAT は捨てない
     expect(document.querySelector('#status')!.textContent).toBe('Saved (GHES setup failed)');
   });
@@ -95,17 +88,11 @@ describe('initOptions', () => {
     storage.set = async () => {
       throw new Error('quota exceeded');
     };
-    const ghes: ChromeGhes = {
-      permissions: { request: vi.fn(async () => true) },
-      scripting: {
-        registerContentScripts: vi.fn(async () => {}),
-        unregisterContentScripts: vi.fn(async () => {}),
-      },
-    };
+    const ghes = fakeGhes();
     await initOptions(document, storage, ghes);
     document.querySelector<HTMLInputElement>('#baseUrl')!.value = 'ghe.corp.com';
     document.querySelector<HTMLButtonElement>('#save')!.click();
-    await new Promise((r) => setTimeout(r, 0));
+    await flush();
     // 保存に失敗したのに登録だけ進む中途半端な状態を作らない
     expect(ghes.scripting.registerContentScripts).not.toHaveBeenCalled();
     expect(document.querySelector('#status')!.textContent).toBe('Save failed');
@@ -119,7 +106,7 @@ describe('initOptions', () => {
     };
     await initOptions(document, storage);
     document.querySelector<HTMLButtonElement>('#save')!.click();
-    await new Promise((r) => setTimeout(r, 0));
+    await flush();
     expect(document.querySelector('#status')!.textContent).toBe('Save failed');
   });
 });

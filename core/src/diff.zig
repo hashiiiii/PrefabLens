@@ -999,8 +999,13 @@ fn modValue(m: Mod) ?*Node {
     return m.obj_ref orelse m.value;
 }
 
+// instantiate と共有する mod の同一性キー(target fileID + propertyPath)。
+pub fn modKeyOf(arena: std.mem.Allocator, target: i64, path: []const u8) ![]const u8 {
+    return std.fmt.allocPrint(arena, "{d}:{s}", .{ target, path });
+}
+
 fn modKey(arena: std.mem.Allocator, m: Mod) ![]const u8 {
-    return std.fmt.allocPrint(arena, "{d}:{s}", .{ m.target, m.path });
+    return modKeyOf(arena, m.target, m.path);
 }
 
 fn nodeEqlOpt(a: ?*const Node, b: ?*const Node) bool {
@@ -1098,7 +1103,22 @@ fn findMod(mods: []Mod, path: []const u8) ?Mod {
 // 片側にしか存在しない instance(added/removed)の override 全列挙。
 // 値は added なら after、removed なら before に載る。
 fn soleInstanceOverrides(arena: std.mem.Allocator, doc: *const model.Document, status: Status) ![]model.OverrideDiff {
-    const mods = try collectMods(arena, doc);
+    return soleOverridesFromMods(arena, doc, try collectMods(arena, doc), status);
+}
+
+// 展開済み instance の残余行(instantiate 用): 合成へ適用できた mod を除き、
+// 適用できなかったものだけを従来の縮退表示で残す(黙って消さない)。
+pub fn soleInstanceOverridesSkipping(arena: std.mem.Allocator, doc: *const model.Document, status: Status, applied: *const std.StringHashMapUnmanaged(void)) ![]model.OverrideDiff {
+    const all = try collectMods(arena, doc);
+    var kept: std.ArrayList(Mod) = .empty;
+    for (all) |m| {
+        if (applied.contains(try modKey(arena, m))) continue;
+        try kept.append(arena, m);
+    }
+    return soleOverridesFromMods(arena, doc, kept.items, status);
+}
+
+fn soleOverridesFromMods(arena: std.mem.Allocator, doc: *const model.Document, mods: []Mod, status: Status) ![]model.OverrideDiff {
     var out: std.ArrayList(model.OverrideDiff) = .empty;
 
     // Placement サマリ: 全成分が揃っていれば合成 1 行。

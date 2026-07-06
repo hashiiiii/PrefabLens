@@ -166,6 +166,45 @@ test "fixture: variant merged with source shows Scale (1, 2, 1) and all componen
     for (saw) |s| try testing.expect(s);
 }
 
+test "fixture: Plane variant instance merges nested sources with outer placement" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    // Plane -> Cylinder Variant.prefab -> Cylinder.prefab の 2 段解決。
+    // Plane 側の配置 (2.03, 3.63, 1.11797) が XOR push-down で Transform に届き、
+    // Scale は variant の override (1, 2, 1) が残る = Inspector と同じ合成。
+    var assets: root.Assets = .empty;
+    try assets.put(arena, "b01772ea746dd4b869440c40c8b1f48e", cylinder_variant_after);
+    try assets.put(arena, "05ba59bdbdf954600a21005e3b7bf963", cylinder_after);
+    const res = try root.diffBytesWithAssets(arena, plane_before, plane_after, &assets);
+    try testing.expectEqual(@as(usize, 0), res.needed_sources.len);
+    const plane = res.roots[0];
+    const variant = childByName(plane, "Cylinder Variant").?;
+    try testing.expectEqual(model.Status.added, variant.status);
+    // 二重ノードにならず、override は全部適用済みで行としては残らない。
+    try testing.expectEqual(@as(usize, 0), variant.children.len);
+    try testing.expectEqual(@as(usize, 0), variant.overrides.len);
+    var saw_transform = false;
+    for (variant.components) |c| {
+        if (c.class_id != 4) continue;
+        saw_transform = true;
+        var saw_pos = false;
+        var saw_scale = false;
+        for (c.fields) |f| {
+            if (std.mem.eql(u8, f.path, "Position")) {
+                saw_pos = true;
+                try testing.expectEqualStrings("(2.03, 3.63, 1.11797)", f.after.?.scalar);
+            }
+            if (std.mem.eql(u8, f.path, "Scale")) {
+                saw_scale = true;
+                try testing.expectEqualStrings("(1, 2, 1)", f.after.?.scalar);
+            }
+        }
+        try testing.expect(saw_pos and saw_scale);
+    }
+    try testing.expect(saw_transform);
+}
+
 // ---- prefab/scene 以外の UnityYAML アセット(.mat / .controller)----
 // core は拡張子を見ないので既に diff できる。ここはその保証を固定する回帰点。
 

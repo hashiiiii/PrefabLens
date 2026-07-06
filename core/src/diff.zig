@@ -77,7 +77,8 @@ test "diff: nested field path and added field" {
     const fd = try compute(arena, before, after);
     const d = findDoc(fd, 4).?;
     try testing.expectEqual(model.Status.modified, d.status);
-    // 期待: modified な leaf(m_LocalPosition.y)+ added なサブツリー(m_LocalScale)。
+    // 期待: modified な leaf(m_LocalPosition.y)と、added な m_LocalScale が
+    // ベクトル縮約されて "Scale" 1 行になること。
     var saw_y = false;
     var saw_added_scale = false;
     for (d.fields) |f| {
@@ -87,9 +88,10 @@ test "diff: nested field path and added field" {
             try testing.expectEqualStrings("0", f.before.?.scalar);
             try testing.expectEqualStrings("5", f.after.?.scalar);
         }
-        if (std.mem.startsWith(u8, f.path, "Scale")) {
+        if (std.mem.eql(u8, f.path, "Scale")) {
             saw_added_scale = true;
             try testing.expectEqual(model.Status.added, f.status);
+            try testing.expectEqualStrings("(1, 1, 1)", f.after.?.scalar);
         }
     }
     try testing.expect(saw_y and saw_added_scale);
@@ -260,6 +262,47 @@ test "diff: editor class identifier tail is extracted" {
     try testing.expectEqualStrings("Cylinder1", findDoc(fd, 5).?.class_name.?);
 }
 
+test "diff: editor class identifier without separator or with empty tail" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const src =
+        \\--- !u!114 &5
+        \\MonoBehaviour:
+        \\  m_EditorClassIdentifier: Cylinder1
+        \\--- !u!114 &6
+        \\MonoBehaviour:
+        \\  m_EditorClassIdentifier: Assembly-CSharp::
+    ;
+    const fd = try compute(arena, src, src);
+    // 区切りなしは全体をクラス名として使い、末尾が空なら class_name なし。
+    try testing.expectEqualStrings("Cylinder1", findDoc(fd, 5).?.class_name.?);
+    try testing.expect(findDoc(fd, 6).?.class_name == null);
+}
+
+test "diff: unresolved guids are deduplicated in first-reference order" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const after =
+        \\--- !u!114 &5
+        \\MonoBehaviour:
+        \\  m_Script: {fileID: 1, guid: bbb, type: 3}
+        \\--- !u!114 &6
+        \\MonoBehaviour:
+        \\  m_Script: {fileID: 1, guid: aaa, type: 3}
+        \\--- !u!114 &7
+        \\MonoBehaviour:
+        \\  m_Script: {fileID: 1, guid: bbb, type: 3}
+    ;
+    const fd = try compute(arena, "", after);
+    // 重複する bbb は 1 回だけ、初回参照順(bbb, aaa)で並ぶ。
+    // JSON の unresolvedGuids/resolved の決定的な順序はこれに依存する。
+    try testing.expectEqual(@as(usize, 2), fd.unresolved_guids.len);
+    try testing.expectEqualStrings("bbb", fd.unresolved_guids[0]);
+    try testing.expectEqualStrings("aaa", fd.unresolved_guids[1]);
+}
+
 test "diff: sortByGroup keeps same-group rows contiguous beyond known ranks" {
     // レンダラは「同一グループの行は連続」を core の不変条件として前提にする。
     // groupOf が将来 4 つ目のグループ名を返しても壊れないことを直接固定する。
@@ -297,34 +340,6 @@ test "diff: added document enumerates fields with vector collapse" {
     try testing.expectEqualStrings("Position", d.fields[0].path);
     try testing.expectEqualStrings("(4, 0, 0)", d.fields[0].after.?.scalar);
     try testing.expectEqualStrings("Max Hp", d.fields[1].path);
-}
-
-test "diff: added map field inside a modified document is flattened" {
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
-    const before =
-        \\--- !u!4 &4
-        \\Transform:
-        \\  m_LocalPosition: {x: 0, y: 0, z: 0}
-    ;
-    const after =
-        \\--- !u!4 &4
-        \\Transform:
-        \\  m_LocalPosition: {x: 0, y: 5, z: 0}
-        \\  m_LocalScale: {x: 1, y: 1, z: 1}
-    ;
-    const fd = try compute(arena, before, after);
-    const d = findDoc(fd, 4).?;
-    var saw_scale = false;
-    for (d.fields) |f| {
-        if (std.mem.eql(u8, f.path, "Scale")) {
-            saw_scale = true;
-            try testing.expectEqual(model.Status.added, f.status);
-            try testing.expectEqualStrings("(1, 1, 1)", f.after.?.scalar);
-        }
-    }
-    try testing.expect(saw_scale);
 }
 
 test "diff: prefab instance override keyed by target+propertyPath" {

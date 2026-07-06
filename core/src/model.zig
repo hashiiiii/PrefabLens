@@ -150,4 +150,9 @@ test "Node.eql: scalars, refs, seqs, maps" {
     var m1 = Node{ .map = &e_a };
     var m2 = Node{ .map = &e_b };
     try std.testing.expect(Node.eql(&m1, &m2));
+
+    // 要素数が同じでもキー集合が異なるマップは不等。
+    var e_c = [_]Entry{ .{ .key = "x", .value = &s1 }, .{ .key = "z", .value = &s3 } };
+    var m3 = Node{ .map = &e_c };
+    try std.testing.expect(!Node.eql(&m1, &m3));
 }

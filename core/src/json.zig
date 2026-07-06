@@ -393,6 +393,16 @@ test "json: resolved follows unresolvedGuids order, skipping guids the resolver 
     try testing.expect(std.mem.indexOf(u8, out, "\"unresolvedGuids\":[\"guidB\",\"guidA\",\"guidX\"]") != null);
 }
 
+test "json: control characters are escaped" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var aw: std.Io.Writer.Allocating = .init(arena);
+    // 名前つきエスケープ(\n 等)はそれを、その他の制御文字は \u00XX を使う。
+    try writeJsonString(&aw.writer, "a\nb\x01c");
+    try testing.expectEqualStrings("\"a\\nb\\u0001c\"", aw.written());
+}
+
 test "json: string escaping" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();

@@ -409,6 +409,30 @@ test "tree: child GameObject nests under parent via Transform m_Father" {
     try testing.expectEqual(@as(i64, 2), parent.children[0].file_id);
 }
 
+test "tree: removed GameObject surfaces as a removed root with its name" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const before =
+        \\--- !u!1 &1
+        \\GameObject:
+        \\  m_Name: Player
+        \\  m_Component:
+        \\  - component: {fileID: 4}
+        \\--- !u!4 &4
+        \\Transform:
+        \\  m_GameObject: {fileID: 1}
+        \\  m_Father: {fileID: 0}
+    ;
+    // after 側に doc がなくても、構造解決が before に fallback するので
+    // 名前解決とコンポーネントの帰属が機能する(loose に漏れない)。
+    const res = try root.diffBytes(arena, before, "");
+    try testing.expectEqual(@as(usize, 1), res.roots.len);
+    try testing.expectEqual(@as(usize, 0), res.loose.len);
+    try testing.expectEqualStrings("Player", res.roots[0].name);
+    try testing.expectEqual(model.Status.removed, res.roots[0].status);
+}
+
 test "tree: ScriptableObject .asset becomes a loose component" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();

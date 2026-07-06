@@ -137,6 +137,24 @@ test "parse: multi-entry sequence map (modifications)" {
     try testing.expectEqual(@as(i64, 7), model.findValue(item.map, "target").?.ref.file_id);
 }
 
+test "parse: non-empty flow sequence of refs and scalars" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const src =
+        \\--- !u!1 &1
+        \\GameObject:
+        \\  m_List: [{fileID: 7}, 2]
+    ;
+    // parseFlowSeq の非空経路: 入れ子の flow map があってもトップレベルの
+    // カンマだけで分割され、要素ごとに ref/scalar として parse される。
+    const doc = try parseOne(arena, src);
+    const list = model.findValue(doc.body.map, "m_List").?;
+    try testing.expectEqual(@as(usize, 2), list.seq.len);
+    try testing.expectEqual(@as(i64, 7), list.seq[0].ref.file_id);
+    try testing.expectEqualStrings("2", list.seq[1].scalar);
+}
+
 test "parse: quoted scalar and empty flow seq" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
@@ -273,6 +291,36 @@ test "parse: comment lines are skipped" {
     const doc = try parseOne(arena, src);
     try testing.expectEqualStrings("Player", model.findValue(doc.body.map, "m_Name").?.scalar);
     try testing.expectEqualStrings("1", model.findValue(doc.body.map, "m_IsActive").?.scalar);
+}
+
+test "parse: double-quoted scalar resolves backslash escapes" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const src =
+        \\--- !u!1 &1
+        \\GameObject:
+        \\  m_Name: "a\"b\\c"
+    ;
+    // scalar はソース表記ではなくリテラル値を持つ(\" -> "、\\ -> \)。
+    const doc = try parseOne(arena, src);
+    try testing.expectEqualStrings("a\"b\\c", model.findValue(doc.body.map, "m_Name").?.scalar);
+}
+
+test "parse: malformed class id and anchor default to 0" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const src =
+        \\--- !u!xx &yy
+        \\GameObject:
+        \\  m_Name: A
+    ;
+    // diff の first-occurrence-wins(重複 fileID)はこの 0 への縮退を前提と
+    // するため、parse エラーではなく 0 に落ちることを固定する。
+    const doc = try parseOne(arena, src);
+    try testing.expectEqual(@as(u32, 0), doc.class_id);
+    try testing.expectEqual(@as(i64, 0), doc.file_id);
 }
 
 test "parse: single-quoted scalar is unquoted" {

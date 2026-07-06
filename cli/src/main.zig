@@ -379,6 +379,64 @@ test "run: color=true colors tree output, --no-color forces it back off" {
     try testing.expect(std.mem.indexOf(u8, output2.items, "\x1b[") == null);
 }
 
+test "run: --project supplies source prefabs for merged instance diffs" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "Cylinder.prefab", .data =
+        \\--- !u!1 &10
+        \\GameObject:
+        \\  m_Name: Cyl
+        \\  m_Component:
+        \\  - component: {fileID: 40}
+        \\--- !u!4 &40
+        \\Transform:
+        \\  m_GameObject: {fileID: 10}
+        \\  m_LocalScale: {x: 1, y: 1, z: 1}
+    });
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "Cylinder.prefab.meta", .data =
+        \\fileFormatVersion: 2
+        \\guid: 0123456789abcdef0123456789abcdef
+    });
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "Variant.prefab", .data =
+        \\--- !u!1001 &1001
+        \\PrefabInstance:
+        \\  m_Modification:
+        \\    m_Modifications:
+        \\    - target: {fileID: 40, guid: 0123456789abcdef0123456789abcdef, type: 3}
+        \\      propertyPath: m_LocalScale.y
+        \\      value: 2
+        \\  m_SourcePrefab: {fileID: 100100000, guid: 0123456789abcdef0123456789abcdef, type: 3}
+    });
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "empty.prefab", .data = "" });
+    const dir = try tmp.dir.realPathFileAlloc(testing.io, ".", arena);
+    const variant_path = try tmp.dir.realPathFileAlloc(testing.io, "Variant.prefab", arena);
+    const empty_path = try tmp.dir.realPathFileAlloc(testing.io, "empty.prefab", arena);
+
+    // --project あり: ソースを供給して合成表示(Scale (1, 2, 1))。
+    var out: std.ArrayList(u8) = .empty;
+    var aw = std.Io.Writer.Allocating.fromArrayList(arena, &out);
+    var errbuf: std.ArrayList(u8) = .empty;
+    var aw_err = std.Io.Writer.Allocating.fromArrayList(arena, &errbuf);
+    const code = try run(testing.io, arena, &.{ "--no-color", "--project", dir, empty_path, variant_path }, &aw.writer, &aw_err.writer, false);
+    const output = aw.toArrayList();
+    try testing.expectEqual(@as(u8, 0), code);
+    try testing.expect(std.mem.indexOf(u8, output.items, "Scale: (1, 2, 1)") != null);
+
+    // --project なし: 縮退表示(記録済み override の列挙)のまま。
+    var out2: std.ArrayList(u8) = .empty;
+    var aw2 = std.Io.Writer.Allocating.fromArrayList(arena, &out2);
+    var errbuf2: std.ArrayList(u8) = .empty;
+    var aw_err2 = std.Io.Writer.Allocating.fromArrayList(arena, &errbuf2);
+    const code2 = try run(testing.io, arena, &.{ "--no-color", empty_path, variant_path }, &aw2.writer, &aw_err2.writer, false);
+    const output2 = aw2.toArrayList();
+    try testing.expectEqual(@as(u8, 0), code2);
+    try testing.expect(std.mem.indexOf(u8, output2.items, "Scale.y: 2") != null);
+}
+
 /// リリースタグ v<version> と lockstep(cut-release の 5 ソースの一員)。
 pub const version = "0.3.0";
 
@@ -569,7 +627,8 @@ pub fn run(io: std.Io, arena: std.mem.Allocator, args: []const []const u8, stdou
             return 1;
         };
 
-    const res = core.diffBytes(arena, before, after) catch |err| {
+    var assets: core.Assets = .empty;
+    var res = core.diffBytesWithAssets(arena, before, after, &assets) catch |err| {
         if (err == error.NestingTooDeep) {
             try stderr.writeAll("error: input nested too deeply\n");
             return 1;
@@ -584,6 +643,22 @@ pub fn run(io: std.Io, arena: std.mem.Allocator, args: []const []const u8, stdou
             return 1;
         };
         resolver_ptr = &idx;
+        // needed_sources をローカル資産で満たして再 diff(入れ子ソースで新たな
+        // 要求が出るため最大 3 周、進捗が無ければ打ち切り)。読めない資産は
+        // スキップして diff は落とさない。
+        var rounds: usize = 0;
+        while (res.needed_sources.len != 0 and rounds < 3) : (rounds += 1) {
+            var progressed = false;
+            for (res.needed_sources) |ns| {
+                if (assets.contains(ns.guid)) continue;
+                const path = idx.get(ns.guid) orelse continue;
+                const bytes = readFile(io, arena, path) catch continue;
+                try assets.put(arena, ns.guid, bytes);
+                progressed = true;
+            }
+            if (!progressed) break;
+            res = try core.diffBytesWithAssets(arena, before, after, &assets);
+        }
     }
     switch (opt.format) {
         .json => {

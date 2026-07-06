@@ -63,7 +63,9 @@ fn expandNode(ctx: *Ctx, node: *model.ObjectDiff, docs: *std.AutoHashMap(i64, *m
     const inst_doc = docs.get(node.file_id) orelse return;
 
     // ソースを parse し、この instance の m_RemovedComponents / m_Modifications を適用。
-    const src_docs = try parser.parse(ctx.arena, bytes);
+    // 壊れたソース資産で diff 全体を落とさない: parse 失敗はその instance だけ
+    // 縮退表示(override 列挙)のままにする。
+    const src_docs = parser.parse(ctx.arena, bytes) catch return;
     applyRemovedComponents(inst_doc, src_docs);
     applyModifications(inst_doc, src_docs, guid);
 
@@ -301,6 +303,26 @@ test "instantiate: cyclic source reference terminates" {
     try assets.put(arena, "loopguid", cyclic_source);
     const res = try root.diffBytesWithAssets(arena, "", variant, &assets);
     try testing.expectEqual(@as(usize, 1), res.roots.len);
+    try testing.expectEqual(@as(usize, 0), res.needed_sources.len);
+}
+
+test "instantiate: unparseable source degrades to the override view" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    // parser の max_nesting_depth(128)を確実に超える壊れたソース。
+    var hostile: std.ArrayList(u8) = .empty;
+    try hostile.appendSlice(arena, "--- !u!1 &1\nGameObject:\n");
+    for (1..200) |depth| {
+        try hostile.appendNTimes(arena, ' ', depth * 2);
+        try hostile.appendSlice(arena, "a:\n");
+    }
+    var assets: Assets = .empty;
+    try assets.put(arena, "srcguid", hostile.items);
+    // diff 全体は成功し、instance は縮退表示(override が残る)のまま。
+    const res = try root.diffBytesWithAssets(arena, "", test_variant, &assets);
+    try testing.expectEqual(@as(usize, 1), res.roots.len);
+    try testing.expect(res.roots[0].overrides.len != 0);
     try testing.expectEqual(@as(usize, 0), res.needed_sources.len);
 }
 

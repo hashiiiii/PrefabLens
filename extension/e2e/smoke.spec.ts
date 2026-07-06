@@ -78,6 +78,26 @@ test('detects a Unity file, toggles to Semantic, renders the tree', async ({ pag
   await expect(view).toBeHidden();
 });
 
+test('sends a prefetch message on pr page arrival', async ({ page }) => {
+  await page.route('**/pull/1/files', (route) => route.fulfill({ body: fixture, contentType: 'text/html' }));
+  await stubChrome(page, cannedResponse);
+  // stubChrome の sendMessage を包んで記録する
+  await page.addInitScript(() => {
+    const w = window as unknown as { chrome: { runtime: { sendMessage: (m: unknown) => Promise<unknown> } }; __sent: unknown[] };
+    w.__sent = [];
+    const orig = w.chrome.runtime.sendMessage;
+    w.chrome.runtime.sendMessage = (m: unknown) => {
+      w.__sent.push(m);
+      return orig(m);
+    };
+  });
+  await page.goto('https://prefablens.test/owner/repo/pull/1/files');
+  await page.addScriptTag({ path: 'dist/content.js' });
+  await expect
+    .poll(() => page.evaluate(() => (window as unknown as { __sent: Array<{ type?: string }> }).__sent.filter((m) => m?.type === 'prefetch').length))
+    .toBe(1); // 同一 PR では 1 回だけ
+});
+
 test('attaches toggles to files added after the initial scan (SPA lazy loading)', async ({ page }) => {
   await page.route('**/pull/1/files', (route) => route.fulfill({ body: fixture, contentType: 'text/html' }));
   await stubChrome(page, cannedResponse);
@@ -105,7 +125,10 @@ test('recovers after an error response', async ({ page }) => {
     (window as unknown as Record<string, unknown>)['__prefablensCalls'] = 0;
     (window as unknown as Record<string, unknown>)['chrome'] = {
       runtime: {
-        sendMessage: () => {
+        // prefetch はカウント対象外にする: attach() が pull ページ到達時に必ず 1 通送るため、
+        // 素朴な全件カウントだと 1 回目の semanticDiff がずれてエラー→成功の検証が壊れる
+        sendMessage: (msg: { type?: string }) => {
+          if (msg?.type !== 'semanticDiff') return Promise.resolve();
           const w = window as unknown as Record<string, number>;
           const call = w['__prefablensCalls']!;
           w['__prefablensCalls'] = call + 1;

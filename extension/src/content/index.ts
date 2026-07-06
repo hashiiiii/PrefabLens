@@ -1,8 +1,8 @@
-import { parsePrUrl, scanUnityFiles, type FileEntry } from './detect';
+import { parsePrPage, parsePrUrl, scanUnityFiles, type FileEntry } from './detect';
 import { createToggle, type Toggle, type View } from './toggle';
 import { createViewState, type ViewState } from './viewstate';
 import { render, renderError, renderLoading, renderTooLarge } from '../renderer/render';
-import type { BackgroundError, SemanticDiffRequest, SemanticDiffResponse } from '../types';
+import type { BackgroundError, PrefetchRequest, SemanticDiffRequest, SemanticDiffResponse } from '../types';
 
 const ERROR_TEXT: Record<BackgroundError, string> = {
   'pat-missing': 'Set a GitHub token in the PrefabLens options page.',
@@ -17,8 +17,17 @@ type Applier = { header: HTMLElement; apply(view: View): void };
 const appliers = new Set<Applier>();
 let globalToggle: Toggle | undefined;
 let currentPr = ''; // 上書きは PR 滞在中のみ有効: PR が変わったら捨てる
+let prefetchedPr = ''; // conversation タブ含む全 PR タブで 1 回だけプリフェッチを送る
 
 function attach(state: ViewState): void {
+  const page = parsePrPage(location.pathname);
+  if (!page) return;
+  const pageKey = `${page.owner}/${page.repo}#${page.prNumber}`;
+  if (pageKey !== prefetchedPr) {
+    prefetchedPr = pageKey;
+    // fire-and-forget: 応答は待たず、失敗も無視(手動トグル経路が別に生きている)
+    void (chrome.runtime.sendMessage({ type: 'prefetch', ...page } satisfies PrefetchRequest) as Promise<unknown>).catch(() => {});
+  }
   const pr = parsePrUrl(location.pathname);
   if (!pr) return;
   const key = `${pr.owner}/${pr.repo}#${pr.prNumber}`;

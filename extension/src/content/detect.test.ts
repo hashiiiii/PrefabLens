@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from 'vitest';
-import { parsePrUrl, scanUnityFiles } from './detect';
+import { parsePrPage, parsePrUrl, scanUnityFiles } from './detect';
 
 const FIXTURE = `
   <div class="file">
@@ -30,6 +30,21 @@ describe('parsePrUrl', () => {
   it('rejects other pages', () => {
     expect(parsePrUrl('/owner/repo/pull/42')).toBeNull();
     expect(parsePrUrl('/owner/repo/blob/main/a.prefab')).toBeNull();
+  });
+});
+
+describe('parsePrPage', () => {
+  it('matches every pr tab, not just files', () => {
+    // プリフェッチは conversation タブ到達時から始める(spec B2)
+    expect(parsePrPage('/o/r/pull/12')).toEqual({ owner: 'o', repo: 'r', prNumber: 12 });
+    expect(parsePrPage('/o/r/pull/12/commits')).toEqual({ owner: 'o', repo: 'r', prNumber: 12 });
+    expect(parsePrPage('/o/r/pull/12/files')).toEqual({ owner: 'o', repo: 'r', prNumber: 12 });
+  });
+
+  it('rejects non-pr pages', () => {
+    expect(parsePrPage('/o/r/pulls')).toBeNull();
+    expect(parsePrPage('/o/r/issues/12')).toBeNull();
+    expect(parsePrPage('/o/r/pull/notanumber')).toBeNull();
   });
 });
 

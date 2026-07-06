@@ -15,7 +15,7 @@ namespace PrefabLens
         public bool IsRef;
         public bool IsNull;
 
-        public static readonly Value Null = new Value { IsNull = true };
+        public static readonly Value Null = new() { IsNull = true };
     }
 
     public sealed class FieldDiff
@@ -43,7 +43,7 @@ namespace PrefabLens
         public string ScriptGuid;
         public string ClassName;
         public DiffStatus Status;
-        public List<FieldDiff> Fields = new List<FieldDiff>();
+        public List<FieldDiff> Fields = new();
     }
 
     public abstract class NodeDiff
@@ -51,8 +51,8 @@ namespace PrefabLens
         public string FileId;
         public string Name;
         public DiffStatus Status;
-        public List<ComponentDiff> Components = new List<ComponentDiff>();
-        public List<NodeDiff> Children = new List<NodeDiff>();
+        public List<ComponentDiff> Components = new();
+        public List<NodeDiff> Children = new();
     }
 
     public sealed class GameObjectDiff : NodeDiff { }
@@ -60,17 +60,17 @@ namespace PrefabLens
     public sealed class PrefabInstanceDiff : NodeDiff
     {
         public string SourceGuid;
-        public List<OverrideDiff> Overrides = new List<OverrideDiff>();
+        public List<OverrideDiff> Overrides = new();
     }
 
     /// prefablens.diff.v2(core/src/json.zig の出力)の読み取り側モデル。
     /// 未知の kind やフィールド欠損は落とさず読み飛ばす(CLI が新しい場合に Editor 側が壊れない)。
     public sealed class DiffModel
     {
-        public List<string> UnresolvedGuids = new List<string>();
-        public Dictionary<string, string> Resolved = new Dictionary<string, string>();
-        public List<NodeDiff> Roots = new List<NodeDiff>();
-        public List<ComponentDiff> Loose = new List<ComponentDiff>();
+        public List<string> UnresolvedGuids = new();
+        public Dictionary<string, string> Resolved = new();
+        public List<NodeDiff> Roots = new();
+        public List<ComponentDiff> Loose = new();
 
         public bool IsEmpty => Roots.Count == 0 && Loose.Count == 0;
 
@@ -78,15 +78,15 @@ namespace PrefabLens
         {
             var o = JObject.Parse(json);
             var m = new DiffModel();
-            foreach (var g in o["unresolvedGuids"] as JArray ?? new JArray())
+            foreach (var g in Items(o["unresolvedGuids"]))
                 m.UnresolvedGuids.Add((string)g);
             if (o["resolved"] is JObject resolved)
                 foreach (var p in resolved.Properties())
                     m.Resolved[p.Name] = (string)p.Value;
-            foreach (var r in o["roots"] as JArray ?? new JArray())
+            foreach (var r in Items(o["roots"]))
                 if (ParseNode(r as JObject) is NodeDiff n)
                     m.Roots.Add(n);
-            foreach (var c in o["loose"] as JArray ?? new JArray())
+            foreach (var c in Items(o["loose"]))
                 if (c is JObject co)
                     m.Loose.Add(ParseComponent(co));
             return m;
@@ -106,39 +106,39 @@ namespace PrefabLens
         static NodeDiff ParseNode(JObject o)
         {
             if (o == null) return null;
-            NodeDiff n;
-            switch ((string)o["kind"])
+            NodeDiff n = (string)o["kind"] switch
             {
-                case "gameObject":
-                    n = new GameObjectDiff();
-                    break;
-                case "prefabInstance":
-                    var pi = new PrefabInstanceDiff { SourceGuid = (string)o["sourceGuid"] };
-                    foreach (var ov in o["overrides"] as JArray ?? new JArray())
-                        if (ov is JObject ovo)
-                            pi.Overrides.Add(new OverrideDiff
-                            {
-                                Group = (string)ovo["group"] ?? "",
-                                Label = (string)ovo["label"] ?? "",
-                                Status = ParseStatus((string)ovo["status"]),
-                                Before = ParseValue(ovo["before"]),
-                                After = ParseValue(ovo["after"]),
-                            });
-                    n = pi;
-                    break;
-                default:
-                    return null; // 未知の kind は読み飛ばす
-            }
+                "gameObject" => new GameObjectDiff(),
+                "prefabInstance" => ParsePrefabInstance(o),
+                _ => null, // 未知の kind は読み飛ばす
+            };
+            if (n == null) return null;
             n.FileId = (string)o["fileId"] ?? "";
             n.Name = (string)o["name"] ?? "";
             n.Status = ParseStatus((string)o["status"]);
-            foreach (var c in o["components"] as JArray ?? new JArray())
+            foreach (var c in Items(o["components"]))
                 if (c is JObject co)
                     n.Components.Add(ParseComponent(co));
-            foreach (var ch in o["children"] as JArray ?? new JArray())
+            foreach (var ch in Items(o["children"]))
                 if (ParseNode(ch as JObject) is NodeDiff child)
                     n.Children.Add(child);
             return n;
+        }
+
+        static PrefabInstanceDiff ParsePrefabInstance(JObject o)
+        {
+            var pi = new PrefabInstanceDiff { SourceGuid = (string)o["sourceGuid"] };
+            foreach (var ov in Items(o["overrides"]))
+                if (ov is JObject ovo)
+                    pi.Overrides.Add(new OverrideDiff
+                    {
+                        Group = (string)ovo["group"] ?? "",
+                        Label = (string)ovo["label"] ?? "",
+                        Status = ParseStatus((string)ovo["status"]),
+                        Before = ParseValue(ovo["before"]),
+                        After = ParseValue(ovo["after"]),
+                    });
+            return pi;
         }
 
         static ComponentDiff ParseComponent(JObject o)
@@ -152,7 +152,7 @@ namespace PrefabLens
                 ClassName = (string)o["className"],
                 Status = ParseStatus((string)o["status"]),
             };
-            foreach (var f in o["fields"] as JArray ?? new JArray())
+            foreach (var f in Items(o["fields"]))
                 if (f is JObject fo)
                     c.Fields.Add(new FieldDiff
                     {
@@ -172,15 +172,15 @@ namespace PrefabLens
             return new Value { Scalar = (string)t };
         }
 
-        static DiffStatus ParseStatus(string s)
+        static IEnumerable<JToken> Items(JToken t) =>
+            t is JArray a ? a : (IEnumerable<JToken>)Array.Empty<JToken>();
+
+        static DiffStatus ParseStatus(string s) => s switch
         {
-            switch (s)
-            {
-                case "added": return DiffStatus.Added;
-                case "removed": return DiffStatus.Removed;
-                case "modified": return DiffStatus.Modified;
-                default: return DiffStatus.Unchanged;
-            }
-        }
+            "added" => DiffStatus.Added,
+            "removed" => DiffStatus.Removed,
+            "modified" => DiffStatus.Modified,
+            _ => DiffStatus.Unchanged,
+        };
     }
 }

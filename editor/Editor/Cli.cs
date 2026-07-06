@@ -63,12 +63,10 @@ namespace PrefabLens
 
         public static string Sha256Hex(byte[] bytes)
         {
-            using (var sha = SHA256.Create())
-            {
-                var sb = new StringBuilder();
-                foreach (var b in sha.ComputeHash(bytes)) sb.Append(b.ToString("x2"));
-                return sb.ToString();
-            }
+            using var sha = SHA256.Create();
+            var sb = new StringBuilder();
+            foreach (var b in sha.ComputeHash(bytes)) sb.Append(b.ToString("x2"));
+            return sb.ToString();
         }
 
         // ---- Editor 連携 ----
@@ -101,21 +99,17 @@ namespace PrefabLens
             try
             {
                 EditorUtility.DisplayProgressBar("PrefabLens", $"Downloading {asset}…", 0.3f);
-                using (var http = new HttpClient())
+                using var http = new HttpClient();
+                var bytes = http.GetByteArrayAsync(url).Result;
+                VerifyChecksum(http, asset, bytes);
+                using var zip = new ZipArchive(new MemoryStream(bytes));
+                foreach (var entry in zip.Entries)
                 {
-                    var bytes = http.GetByteArrayAsync(url).Result;
-                    VerifyChecksum(http, asset, bytes);
-                    using (var zip = new ZipArchive(new MemoryStream(bytes)))
-                    {
-                        foreach (var entry in zip.Entries)
-                        {
-                            // ZipFileExtensions(ExtractToFile)は netstandard で参照できないため手動コピー
-                            var dest = Path.Combine(dir, entry.Name);
-                            using (var src = entry.Open())
-                            using (var dst = File.Create(dest))
-                                src.CopyTo(dst);
-                        }
-                    }
+                    // ZipFileExtensions(ExtractToFile)は netstandard で参照できないため手動コピー
+                    var dest = Path.Combine(dir, entry.Name);
+                    using var src = entry.Open();
+                    using var dst = File.Create(dest);
+                    src.CopyTo(dst);
                 }
             }
             finally
@@ -167,28 +161,26 @@ namespace PrefabLens
                 CreateNoWindow = true,
                 WorkingDirectory = workDir,
             };
-            using (var p = Process.Start(psi))
+            using var p = Process.Start(psi);
+            // 双方向 ReadToEnd のデッドロックを避ける: 片方は async で読む
+            var stdout = p.StandardOutput.ReadToEndAsync();
+            var stderr = p.StandardError.ReadToEndAsync();
+            if (!p.WaitForExit(timeoutMs))
             {
-                // 双方向 ReadToEnd のデッドロックを避ける: 片方は async で読む
-                var stdout = p.StandardOutput.ReadToEndAsync();
-                var stderr = p.StandardError.ReadToEndAsync();
-                if (!p.WaitForExit(timeoutMs))
+                // ハングした CLI から Unity メインスレッドを守る。Kill 後も stdio を掴む
+                // 孫プロセスが残ると Read タスクは完了しないため、読み残しは待たない。
+                try { p.Kill(); }
+                catch (InvalidOperationException) { /* タイムアウトと終了の競合 */ }
+                catch (System.ComponentModel.Win32Exception) { /* 既に終了処理中 */ }
+                return new Result
                 {
-                    // ハングした CLI から Unity メインスレッドを守る。Kill 後も stdio を掴む
-                    // 孫プロセスが残ると Read タスクは完了しないため、読み残しは待たない。
-                    try { p.Kill(); }
-                    catch (InvalidOperationException) { /* タイムアウトと終了の競合 */ }
-                    catch (System.ComponentModel.Win32Exception) { /* 既に終了処理中 */ }
-                    return new Result
-                    {
-                        ExitCode = -1,
-                        Stdout = "",
-                        Stderr = $"prefablens timed out after {timeoutMs / 1000}s and was killed",
-                        TimedOut = true,
-                    };
-                }
-                return new Result { ExitCode = p.ExitCode, Stdout = stdout.Result, Stderr = stderr.Result };
+                    ExitCode = -1,
+                    Stdout = "",
+                    Stderr = $"prefablens timed out after {timeoutMs / 1000}s and was killed",
+                    TimedOut = true,
+                };
             }
+            return new Result { ExitCode = p.ExitCode, Stdout = stdout.Result, Stderr = stderr.Result };
         }
     }
 }

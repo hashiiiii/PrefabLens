@@ -107,6 +107,16 @@ namespace PrefabLens.Tests
         }
 
         [Test]
+        public void ThrowsOnMalformedOrNonObjectJson()
+        {
+            // 同梱の MiniJSON は不正入力で throw せず null を返す流儀だが、DiffModel.Parse は
+            // throw する契約(Window が「Could not parse CLI output」表示に変換する)を保つ。
+            Assert.That(() => DiffModel.Parse("not json at all"), Throws.Exception);
+            Assert.That(() => DiffModel.Parse(""), Throws.Exception);
+            Assert.That(() => DiffModel.Parse("[]"), Throws.Exception); // ルートが object でない
+        }
+
+        [Test]
         public void ResolveWithFillsOnlyUnresolvedGuids()
         {
             var m = DiffModel.Parse(Golden);

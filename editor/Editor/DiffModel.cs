@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
-using Newtonsoft.Json.Linq;
+using System.Globalization;
+using PrefabLens.MiniJson;
 
 namespace PrefabLens
 {
@@ -76,18 +77,23 @@ namespace PrefabLens
 
         public static DiffModel Parse(string json)
         {
-            var o = JObject.Parse(json);
+            // MiniJSON は不正入力で throw せず null を返す。Window の「Could not parse
+            // CLI output」分岐(Exception を握る)を成立させるため、ここで throw に戻す。
+            if (Json.Deserialize(json) is not Dictionary<string, object> o)
+                throw new FormatException("diff json root is not an object");
             var m = new DiffModel();
-            foreach (var g in Items(o["unresolvedGuids"]))
-                m.UnresolvedGuids.Add((string)g);
-            if (o["resolved"] is JObject resolved)
-                foreach (var p in resolved.Properties())
-                    m.Resolved[p.Name] = (string)p.Value;
-            foreach (var r in Items(o["roots"]))
-                if (ParseNode(r as JObject) is NodeDiff n)
+            foreach (var g in Items(o, "unresolvedGuids"))
+                if (g is string s)
+                    m.UnresolvedGuids.Add(s);
+            if (Val(o, "resolved") is Dictionary<string, object> resolved)
+                foreach (var p in resolved)
+                    if (p.Value is string path)
+                        m.Resolved[p.Key] = path;
+            foreach (var r in Items(o, "roots"))
+                if (ParseNode(r as Dictionary<string, object>) is NodeDiff n)
                     m.Roots.Add(n);
-            foreach (var c in Items(o["loose"]))
-                if (c is JObject co)
+            foreach (var c in Items(o, "loose"))
+                if (c is Dictionary<string, object> co)
                     m.Loose.Add(ParseComponent(co));
             return m;
         }
@@ -103,77 +109,94 @@ namespace PrefabLens
             }
         }
 
-        static NodeDiff ParseNode(JObject o)
+        static NodeDiff ParseNode(Dictionary<string, object> o)
         {
             if (o == null) return null;
-            NodeDiff n = (string)o["kind"] switch
+            NodeDiff n = Str(o, "kind") switch
             {
                 "gameObject" => new GameObjectDiff(),
                 "prefabInstance" => ParsePrefabInstance(o),
                 _ => null, // 未知の kind は読み飛ばす
             };
             if (n == null) return null;
-            n.FileId = (string)o["fileId"] ?? "";
-            n.Name = (string)o["name"] ?? "";
-            n.Status = ParseStatus((string)o["status"]);
-            foreach (var c in Items(o["components"]))
-                if (c is JObject co)
+            n.FileId = Str(o, "fileId") ?? "";
+            n.Name = Str(o, "name") ?? "";
+            n.Status = ParseStatus(Str(o, "status"));
+            foreach (var c in Items(o, "components"))
+                if (c is Dictionary<string, object> co)
                     n.Components.Add(ParseComponent(co));
-            foreach (var ch in Items(o["children"]))
-                if (ParseNode(ch as JObject) is NodeDiff child)
+            foreach (var ch in Items(o, "children"))
+                if (ParseNode(ch as Dictionary<string, object>) is NodeDiff child)
                     n.Children.Add(child);
             return n;
         }
 
-        static PrefabInstanceDiff ParsePrefabInstance(JObject o)
+        static PrefabInstanceDiff ParsePrefabInstance(Dictionary<string, object> o)
         {
-            var pi = new PrefabInstanceDiff { SourceGuid = (string)o["sourceGuid"] };
-            foreach (var ov in Items(o["overrides"]))
-                if (ov is JObject ovo)
+            var pi = new PrefabInstanceDiff { SourceGuid = Str(o, "sourceGuid") };
+            foreach (var ov in Items(o, "overrides"))
+                if (ov is Dictionary<string, object> ovo)
                     pi.Overrides.Add(new OverrideDiff
                     {
-                        Group = (string)ovo["group"] ?? "",
-                        Label = (string)ovo["label"] ?? "",
-                        Status = ParseStatus((string)ovo["status"]),
-                        Before = ParseValue(ovo["before"]),
-                        After = ParseValue(ovo["after"]),
+                        Group = Str(ovo, "group") ?? "",
+                        Label = Str(ovo, "label") ?? "",
+                        Status = ParseStatus(Str(ovo, "status")),
+                        Before = ParseValue(Val(ovo, "before")),
+                        After = ParseValue(Val(ovo, "after")),
                     });
             return pi;
         }
 
-        static ComponentDiff ParseComponent(JObject o)
+        static ComponentDiff ParseComponent(Dictionary<string, object> o)
         {
             var c = new ComponentDiff
             {
-                FileId = (string)o["fileId"] ?? "",
-                ClassId = (int?)o["classId"] ?? 0,
-                TypeName = (string)o["typeName"] ?? "",
-                ScriptGuid = (string)o["scriptGuid"],
-                ClassName = (string)o["className"],
-                Status = ParseStatus((string)o["status"]),
+                FileId = Str(o, "fileId") ?? "",
+                ClassId = Val(o, "classId") is long id ? (int)id : 0,
+                TypeName = Str(o, "typeName") ?? "",
+                ScriptGuid = Str(o, "scriptGuid"),
+                ClassName = Str(o, "className"),
+                Status = ParseStatus(Str(o, "status")),
             };
-            foreach (var f in Items(o["fields"]))
-                if (f is JObject fo)
+            foreach (var f in Items(o, "fields"))
+                if (f is Dictionary<string, object> fo)
                     c.Fields.Add(new FieldDiff
                     {
-                        Path = (string)fo["path"] ?? "",
-                        Status = ParseStatus((string)fo["status"]),
-                        Before = ParseValue(fo["before"]),
-                        After = ParseValue(fo["after"]),
+                        Path = Str(fo, "path") ?? "",
+                        Status = ParseStatus(Str(fo, "status")),
+                        Before = ParseValue(Val(fo, "before")),
+                        After = ParseValue(Val(fo, "after")),
                     });
             return c;
         }
 
-        static Value ParseValue(JToken t)
+        static Value ParseValue(object t)
         {
-            if (t == null || t.Type == JTokenType.Null) return Value.Null;
-            if (t is JObject o && o["ref"] is JObject r)
-                return new Value { IsRef = true, RefFileId = (string)r["fileId"] ?? "0", RefGuid = (string)r["guid"] };
-            return new Value { Scalar = (string)t };
+            if (t == null) return Value.Null;
+            if (t is Dictionary<string, object> o && Val(o, "ref") is Dictionary<string, object> r)
+                return new Value { IsRef = true, RefFileId = Str(r, "fileId") ?? "0", RefGuid = Str(r, "guid") };
+            return new Value { Scalar = ScalarString(t) };
         }
 
-        static IEnumerable<JToken> Items(JToken t) =>
-            t is JArray a ? a : (IEnumerable<JToken>)Array.Empty<JToken>();
+        /// scalar は CLI が文字列で出すが、数値 / bool が来ても JSON 表記のまま文字列化する。
+        static string ScalarString(object t) => t switch
+        {
+            string s => s,
+            bool b => b ? "true" : "false",
+            IFormattable f => f.ToString(null, CultureInfo.InvariantCulture),
+            _ => t.ToString(),
+        };
+
+        static readonly List<object> EmptyList = new();
+
+        static string Str(Dictionary<string, object> o, string key) =>
+            o.TryGetValue(key, out var v) ? v as string : null;
+
+        static object Val(Dictionary<string, object> o, string key) =>
+            o.TryGetValue(key, out var v) ? v : null;
+
+        static List<object> Items(Dictionary<string, object> o, string key) =>
+            Val(o, key) as List<object> ?? EmptyList;
 
         static DiffStatus ParseStatus(string s) => s switch
         {

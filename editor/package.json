@@ -4,8 +4,5 @@
   "displayName": "PrefabLens",
   "description": "Semantic diffs for Unity YAML assets (prefab / scene / asset) against git, rendered inside the Editor.",
   "unity": "2022.3",
-  "license": "Apache-2.0",
-  "dependencies": {
-    "com.unity.nuget.newtonsoft-json": "3.2.1"
-  }
+  "license": "Apache-2.0"
 }

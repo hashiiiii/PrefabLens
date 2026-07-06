@@ -23,14 +23,29 @@ describe('createViewState', () => {
     expect(state.effective('a.prefab')).toBe('semantic'); // 上書きは消えている
   });
 
-  it('setDefault is a no-op when the view is unchanged', () => {
-    // 冪等性: 同値の再設定で上書きが消えたり storage 書き込みが走ったりしない
+  it('same-value setDefault still clears overrides without persisting', () => {
+    // 「全体を押したら必ず全部揃う」: 既に押されている側をもう一度押しても上書きは消える。
+    // storage への再書き込みだけはしない(onChanged エコーの無駄打ち防止)
     const persist = vi.fn();
     const state = createViewState('semantic', persist);
+    const listener = vi.fn();
+    state.onDefaultChange(listener);
     state.setOverride('a.prefab', 'raw');
     state.setDefault('semantic');
     expect(persist).not.toHaveBeenCalled();
-    expect(state.effective('a.prefab')).toBe('raw');
+    expect(listener).toHaveBeenCalledWith('semantic');
+    expect(state.effective('a.prefab')).toBe('semantic');
+  });
+
+  it('same-value setDefault with no overrides is a pure no-op', () => {
+    // 上書きが無ければ通知も不要: appliers の全再適用を無駄に走らせない
+    const persist = vi.fn();
+    const state = createViewState('semantic', persist);
+    const listener = vi.fn();
+    state.onDefaultChange(listener);
+    state.setDefault('semantic');
+    expect(persist).not.toHaveBeenCalled();
+    expect(listener).not.toHaveBeenCalled();
   });
 
   it('applyExternal updates without persisting (storage.onChanged echo)', () => {
@@ -39,7 +54,9 @@ describe('createViewState', () => {
     const state = createViewState('raw', persist);
     const listener = vi.fn();
     state.onDefaultChange(listener);
+    state.setOverride('a.prefab', 'raw');
     state.applyExternal('semantic');
+    expect(state.effective('a.prefab')).toBe('semantic'); // 他タブ由来の切り替えでも全ファイルが揃う
     expect(state.defaultView()).toBe('semantic');
     expect(persist).not.toHaveBeenCalled();
     expect(listener).toHaveBeenCalledWith('semantic');

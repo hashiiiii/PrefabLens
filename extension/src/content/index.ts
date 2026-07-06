@@ -104,9 +104,12 @@ function requestDiff(req: SemanticDiffRequest): Promise<SemanticDiffResponse> {
 }
 
 async function init(): Promise<void> {
-  const stored = await chrome.storage.local.get(['viewMode']);
+  const stored = await chrome.storage.local.get(['viewMode']).catch(() => ({}) as Record<string, unknown>);
   const initial: View = stored['viewMode'] === 'semantic' ? 'semantic' : 'raw';
-  const state = createViewState(initial, (view) => void chrome.storage.local.set({ viewMode: view }));
+  const state = createViewState(
+    initial,
+    (view) => void chrome.storage.local.set({ viewMode: view }).catch(() => {}),
+  );
   state.onDefaultChange((view) => {
     globalToggle?.set(view);
     for (const a of [...appliers]) {

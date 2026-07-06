@@ -150,6 +150,10 @@ test('applies the persisted semantic default to every unity file and late additi
   await expect(page.locator('[data-prefablens-view]')).toHaveCount(2);
   await expect(page.locator('.file:has(.file-header[data-path="Assets/Foo.prefab"]) .js-file-content')).toBeHidden();
 
+  // 全体トグルも既定を反映して Semantic 押下状態で現れる
+  const global = page.locator('[data-prefablens-global]');
+  await expect(global.locator('button[data-view="semantic"]')).toHaveAttribute('aria-pressed', 'true');
+
   // 遅延ロードで現れたファイルも既定を継承する(「押したのに raw」が起きない核心)
   await page.evaluate(() => {
     const file = document.createElement('div');
@@ -172,6 +176,9 @@ test('global toggle switches all files and resets per-file overrides', async ({ 
   // 全体トグルは最初の Unity ファイルの直前に 1 つだけ注入される
   const global = page.locator('[data-prefablens-global]');
   await expect(global).toHaveCount(1);
+
+  // 位置契約: バーは最初の Unity ファイルの .file コンテナ直前に入る
+  await expect(page.locator('[data-prefablens-global] + .file .file-header[data-path="Assets/Foo.prefab"]')).toHaveCount(1);
 
   // 全体 Semantic → 全 Unity ファイルが切り替わる(README は対象外)
   await global.getByRole('button', { name: 'Semantic' }).click();

@@ -26,7 +26,11 @@ export function createViewState(initial: View, persist: (view: View) => void): V
     setOverride: (path, view) => void overrides.set(path, view),
     clearOverrides: () => overrides.clear(),
     setDefault: (view) => {
-      if (view === def) return;
+      if (view === def) {
+        // 同値クリックでも「全体を押したら必ず全部揃う」: 上書きを消して再適用し、storage には書かない
+        if (overrides.size) change(view);
+        return;
+      }
       change(view);
       persist(view);
     },

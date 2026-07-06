@@ -67,7 +67,7 @@ fn expandNode(ctx: *Ctx, node: *model.ObjectDiff, docs: *std.AutoHashMap(i64, *m
     // 縮退表示(override 列挙)のままにする。
     const src_docs = parser.parse(ctx.arena, bytes) catch return;
     applyRemovedComponents(inst_doc, src_docs);
-    applyModifications(inst_doc, src_docs, guid);
+    var applied = try applyModifications(ctx.arena, inst_doc, src_docs, guid);
 
     // 片側 diff として全列挙し、既存パイプラインで ObjectDiff 化する。
     const none = try parser.parse(ctx.arena, "");
@@ -86,16 +86,29 @@ fn expandNode(ctx: *Ctx, node: *model.ObjectDiff, docs: *std.AutoHashMap(i64, *m
     for (sub_fd.after) |*d| try sub_docs.put(d.file_id, d);
     for (sub.roots) |*r| try expandNode(ctx, r, &sub_docs, depth + 1);
 
-    // 接ぎ木: 単一 GameObject root ならその中身を instance ノードへ持ち上げる
-    // (Unity の hierarchy 表示と同じ: instance = ソース root の合成)。
-    if (sub.roots.len == 1 and sub.roots[0].kind == .game_object) {
+    // 接ぎ木: 単一 root ならその中身を instance ノードへ持ち上げる(Unity の
+    // hierarchy 表示と同じ: instance = ソース root の合成)。変種ファイルの root は
+    // PrefabInstance なので、その残余 override も引き継いで二重ノードを畳む。
+    var inner_overrides: []model.OverrideDiff = &.{};
+    if (sub.roots.len == 1) {
         node.components = try concatComponents(ctx.arena, node.components, sub.roots[0].components, sub.loose);
         node.children = try concatObjects(ctx.arena, node.children, sub.roots[0].children);
+        inner_overrides = sub.roots[0].overrides;
     } else {
         node.components = try concatComponents(ctx.arena, node.components, &.{}, sub.loose);
         node.children = try concatObjects(ctx.arena, node.children, sub.roots);
     }
-    node.overrides = &.{}; // 合成値に反映済み
+    // 適用できなかった mod は行として残す(黙って消さない)。
+    const leftover = try diffmod.soleInstanceOverridesSkipping(ctx.arena, inst_doc, node.status, &applied);
+    node.overrides = try concatOverrides(ctx.arena, leftover, inner_overrides);
+}
+
+fn concatOverrides(arena: std.mem.Allocator, a: []model.OverrideDiff, b: []model.OverrideDiff) ![]model.OverrideDiff {
+    if (b.len == 0) return a;
+    var out: std.ArrayList(model.OverrideDiff) = .empty;
+    try out.appendSlice(arena, a);
+    try out.appendSlice(arena, b);
+    return out.toOwnedSlice(arena);
 }
 
 fn inChain(ctx: *Ctx, guid: []const u8) bool {
@@ -133,13 +146,19 @@ fn applyRemovedComponents(inst_doc: *const model.Document, src_docs: []model.Doc
     }
 }
 
-// m_Modifications をソース Document へ適用する。target.guid が source guid の
-// もののみ(入れ子ソースのオブジェクトを狙う override はスコープ外)。
-fn applyModifications(inst_doc: *const model.Document, src_docs: []model.Document, source_guid: []const u8) void {
-    const m = model.findValue(inst_doc.body.map, "m_Modification") orelse return;
-    if (m.* != .map) return;
-    const list = model.findValue(m.map, "m_Modifications") orelse return;
-    if (list.* != .seq) return;
+const AppliedSet = std.StringHashMapUnmanaged(void);
+
+// m_Modifications をソース Document へ適用する(target.guid が source guid のもの)。
+// 直接一致しない fileID は入れ子 instance の名前空間: Unity の入れ子 fileID は
+// 「instance fileID XOR ソース内 fileID」なので、XOR で変換した mod を instance の
+// m_Modifications 末尾へ追記して押し下げる(末尾 = 外側が後勝ち、Inspector と同じ)。
+// 戻り値は適用または押し下げできた mod のキー集合(残余の縮退表示用)。
+fn applyModifications(arena: std.mem.Allocator, inst_doc: *const model.Document, src_docs: []model.Document, source_guid: []const u8) !AppliedSet {
+    var applied: AppliedSet = .empty;
+    const m = model.findValue(inst_doc.body.map, "m_Modification") orelse return applied;
+    if (m.* != .map) return applied;
+    const list = model.findValue(m.map, "m_Modifications") orelse return applied;
+    if (list.* != .seq) return applied;
     for (list.seq) |item| {
         if (item.* != .map) continue;
         const pp = model.findValue(item.map, "propertyPath") orelse continue;
@@ -148,15 +167,63 @@ fn applyModifications(inst_doc: *const model.Document, src_docs: []model.Documen
         if (target.* != .ref) continue;
         const tguid = target.ref.guid orelse continue;
         if (!std.mem.eql(u8, tguid, source_guid)) continue;
+        const value = model.findValue(item.map, "value");
+        const obj_ref = objRefIfSet(model.findValue(item.map, "objectReference"));
         // objectReference が設定されていればそれ、なければ value(diff.zig の modValue と同じ規則)。
-        const value = objRefIfSet(model.findValue(item.map, "objectReference")) orelse
-            (model.findValue(item.map, "value") orelse continue);
+        const eff = obj_ref orelse (value orelse continue);
+        var handled = false;
         for (src_docs) |*d| {
             if (d.file_id != target.ref.file_id) continue;
-            setByPropertyPath(d.body, pp.scalar, value);
+            setByPropertyPath(d.body, pp.scalar, eff);
+            handled = true;
             break;
         }
+        if (!handled) handled = try pushDown(arena, src_docs, target.ref.file_id, pp, value, obj_ref);
+        if (handled) try applied.put(arena, try diffmod.modKeyOf(arena, target.ref.file_id, pp.scalar), {});
     }
+    return applied;
+}
+
+// XOR 変換した mod を全 instance doc に追記する。正しい instance でのみ内側の
+// fileID が一致して適用され、他は再帰的に押し下げられるか残余行として現れる
+// (複数 instance を持つソースでの余分な行は許容 — 情報を消すより安全側)。
+fn pushDown(arena: std.mem.Allocator, src_docs: []model.Document, target_id: i64, pp: *model.Node, value: ?*model.Node, obj_ref: ?*model.Node) !bool {
+    var pushed = false;
+    for (src_docs) |*d| {
+        if (d.class_id != 1001 or d.stripped) continue;
+        const pguid = sourceGuidOf(d) orelse continue;
+        if (try appendMod(arena, d, target_id ^ d.file_id, pguid, pp, value, obj_ref)) pushed = true;
+    }
+    return pushed;
+}
+
+fn sourceGuidOf(doc: *const model.Document) ?[]const u8 {
+    const s = model.findValue(doc.body.map, "m_SourcePrefab") orelse return null;
+    return switch (s.*) {
+        .ref => |r| r.guid,
+        else => null,
+    };
+}
+
+fn appendMod(arena: std.mem.Allocator, pi_doc: *model.Document, inner_id: i64, pguid: []const u8, pp: *model.Node, value: ?*model.Node, obj_ref: ?*model.Node) !bool {
+    const m = model.findValue(pi_doc.body.map, "m_Modification") orelse return false;
+    if (m.* != .map) return false;
+    const list = model.findValue(m.map, "m_Modifications") orelse return false;
+    if (list.* != .seq) return false;
+    const target = try arena.create(model.Node);
+    target.* = .{ .ref = .{ .file_id = inner_id, .guid = pguid, .type_id = 3 } };
+    var entries: std.ArrayList(model.Entry) = .empty;
+    try entries.append(arena, .{ .key = "target", .value = target });
+    try entries.append(arena, .{ .key = "propertyPath", .value = pp });
+    if (value) |v| try entries.append(arena, .{ .key = "value", .value = v });
+    if (obj_ref) |o| try entries.append(arena, .{ .key = "objectReference", .value = o });
+    const item = try arena.create(model.Node);
+    item.* = .{ .map = try entries.toOwnedSlice(arena) };
+    const new_seq = try arena.alloc(*model.Node, list.seq.len + 1);
+    @memcpy(new_seq[0..list.seq.len], list.seq);
+    new_seq[list.seq.len] = item;
+    list.seq = new_seq;
+    return true;
 }
 
 fn objRefIfSet(n: ?*model.Node) ?*model.Node {
@@ -360,6 +427,128 @@ test "instantiate: removed components are dropped from the merged tree" {
     const inst = res.roots[0];
     // BoxCollider (fileID 50) は除去済み: Transform だけが残る。
     for (inst.components) |c| try testing.expect(c.class_id != 65);
+}
+
+test "instantiate: outer overrides push down through nested instances" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    // 3 段構成: outer -> variant (guid varguid) -> base (guid baseguid)。
+    // Unity は入れ子オブジェクトを「instance fileID XOR ソース fileID」で参照する。
+    // outer の mod は variant 内の instance (&100) 越しに base の Transform (&40) を
+    // 狙う: target fileID = 100 ^ 40 = 76。
+    const base =
+        \\--- !u!1 &10
+        \\GameObject:
+        \\  m_Name: Base
+        \\  m_Component:
+        \\  - component: {fileID: 40}
+        \\--- !u!4 &40
+        \\Transform:
+        \\  m_GameObject: {fileID: 10}
+        \\  m_LocalPosition: {x: 0, y: 0, z: 0}
+    ;
+    const variant =
+        \\--- !u!1001 &100
+        \\PrefabInstance:
+        \\  m_Modification:
+        \\    m_Modifications:
+        \\    - target: {fileID: 40, guid: baseguid, type: 3}
+        \\      propertyPath: m_LocalPosition.x
+        \\      value: 1
+        \\  m_SourcePrefab: {fileID: 100100000, guid: baseguid, type: 3}
+    ;
+    const outer =
+        \\--- !u!1001 &1001
+        \\PrefabInstance:
+        \\  m_Modification:
+        \\    m_Modifications:
+        \\    - target: {fileID: 76, guid: varguid, type: 3}
+        \\      propertyPath: m_LocalPosition.x
+        \\      value: 9
+        \\  m_SourcePrefab: {fileID: 100100000, guid: varguid, type: 3}
+    ;
+    var assets: Assets = .empty;
+    try assets.put(arena, "varguid", variant);
+    try assets.put(arena, "baseguid", base);
+    const res = try root.diffBytesWithAssets(arena, "", outer, &assets);
+    try testing.expectEqual(@as(usize, 0), res.needed_sources.len);
+    try testing.expectEqual(@as(usize, 1), res.roots.len);
+    const inst = res.roots[0];
+    // 単一 instance root は外側ノードへ畳まれ、二重ノードにならない。
+    try testing.expectEqual(@as(usize, 0), inst.children.len);
+    try testing.expectEqual(@as(usize, 0), inst.overrides.len);
+    try testing.expectEqual(@as(usize, 1), inst.components.len);
+    // 外側の override が最後に適用され、variant の 1 ではなく 9 が勝つ。
+    try testing.expectEqualStrings("Position", inst.components[0].fields[0].path);
+    try testing.expectEqualStrings("(9, 0, 0)", inst.components[0].fields[0].after.?.scalar);
+}
+
+test "instantiate: pushed-down overrides win in the degraded view" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    // push-down テストと同じ 3 段構成だが base 側の asset を供給しない。
+    // 内側 instance は縮退表示になり、押し下げられた外側の値(9)が
+    // variant 自身の値(1)に後勝ちして行に出る。
+    const variant =
+        \\--- !u!1001 &100
+        \\PrefabInstance:
+        \\  m_Modification:
+        \\    m_Modifications:
+        \\    - target: {fileID: 40, guid: baseguid, type: 3}
+        \\      propertyPath: m_LocalPosition.x
+        \\      value: 1
+        \\  m_SourcePrefab: {fileID: 100100000, guid: baseguid, type: 3}
+    ;
+    const outer =
+        \\--- !u!1001 &1001
+        \\PrefabInstance:
+        \\  m_Modification:
+        \\    m_Modifications:
+        \\    - target: {fileID: 76, guid: varguid, type: 3}
+        \\      propertyPath: m_LocalPosition.x
+        \\      value: 9
+        \\  m_SourcePrefab: {fileID: 100100000, guid: varguid, type: 3}
+    ;
+    var assets: Assets = .empty;
+    try assets.put(arena, "varguid", variant);
+    const res = try root.diffBytesWithAssets(arena, "", outer, &assets);
+    try testing.expectEqual(@as(usize, 1), res.needed_sources.len);
+    try testing.expectEqualStrings("baseguid", res.needed_sources[0].guid);
+    const inst = res.roots[0];
+    try testing.expectEqual(@as(usize, 1), inst.overrides.len);
+    try testing.expectEqualStrings("Position.x", inst.overrides[0].label);
+    try testing.expectEqualStrings("9", inst.overrides[0].after.?.scalar);
+}
+
+test "instantiate: unappliable overrides stay visible as rows" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const variant =
+        \\--- !u!1001 &1001
+        \\PrefabInstance:
+        \\  m_Modification:
+        \\    m_Modifications:
+        \\    - target: {fileID: 40, guid: srcguid, type: 3}
+        \\      propertyPath: m_LocalScale.y
+        \\      value: 2
+        \\    - target: {fileID: 999, guid: otherguid, type: 3}
+        \\      propertyPath: m_LocalPosition.x
+        \\      value: 5
+        \\  m_SourcePrefab: {fileID: 100100000, guid: srcguid, type: 3}
+    ;
+    var assets: Assets = .empty;
+    try assets.put(arena, "srcguid", test_source);
+    const res = try root.diffBytesWithAssets(arena, "", variant, &assets);
+    const inst = res.roots[0];
+    // Scale.y は合成へ適用済み。適用できない otherguid 行は黙って消さず残す。
+    try testing.expectEqual(@as(usize, 1), inst.components.len);
+    try testing.expectEqualStrings("(1, 2, 1)", inst.components[0].fields[0].after.?.scalar);
+    try testing.expectEqual(@as(usize, 1), inst.overrides.len);
+    try testing.expectEqualStrings("Position.x", inst.overrides[0].label);
+    try testing.expectEqualStrings("5", inst.overrides[0].after.?.scalar);
 }
 
 test "instantiate: setByPropertyPath handles nested and array paths" {

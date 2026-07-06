@@ -30,7 +30,9 @@ namespace PrefabLens
         static bool ValidateDiffSelected()
         {
             var p = Selection.activeObject == null ? "" : AssetDatabase.GetAssetPath(Selection.activeObject);
-            return p.EndsWith(".prefab") || p.EndsWith(".unity") || p.EndsWith(".asset");
+            return p.EndsWith(".prefab", StringComparison.Ordinal)
+                || p.EndsWith(".unity", StringComparison.Ordinal)
+                || p.EndsWith(".asset", StringComparison.Ordinal);
         }
 
         public void CreateGUI()
@@ -85,7 +87,7 @@ namespace PrefabLens
                 return;
             }
 
-            model.ResolveWith(g => AssetDatabase.GUIDToAssetPath(g));
+            model.ResolveWith(AssetDatabase.GUIDToAssetPath);
             if (model.IsEmpty)
             {
                 Note("No semantic changes");
@@ -142,7 +144,7 @@ namespace PrefabLens
 
         sealed class Row
         {
-            public readonly List<Span> Spans = new List<Span>();
+            public readonly List<Span> Spans = new();
 
             public Row Add(string text, Color? tint = null)
             {
@@ -177,16 +179,17 @@ namespace PrefabLens
 
         static TreeViewItemData<Row> NodeItem(NodeDiff n, DiffModel m, ref int id)
         {
+            var pi = n as PrefabInstanceDiff;
             var children = new List<TreeViewItemData<Row>>();
-            if (n is PrefabInstanceDiff pi)
+            if (pi != null)
                 foreach (var ov in pi.Overrides)
                     children.Add(new TreeViewItemData<Row>(id++, OverrideRow(ov, m)));
             foreach (var c in n.Components) children.Add(ComponentItem(c, m, ref id));
             foreach (var ch in n.Children) children.Add(NodeItem(ch, m, ref id));
 
             var row = Badge(n.Status).Add(n.Name);
-            if (n is PrefabInstanceDiff p && p.SourceGuid != null)
-                row.Add(" ‹Prefab: " + (m.Resolved.TryGetValue(p.SourceGuid, out var src) ? src : p.SourceGuid) + "›", Palette.Muted);
+            if (pi?.SourceGuid != null)
+                row.Add(" ‹Prefab: " + (m.Resolved.TryGetValue(pi.SourceGuid, out var src) ? src : pi.SourceGuid) + "›", Palette.Muted);
             return new TreeViewItemData<Row>(id++, row, children);
         }
 
@@ -235,16 +238,13 @@ namespace PrefabLens
             return v.RefFileId == "0" ? "None" : "#" + v.RefFileId;
         }
 
-        static Row Badge(DiffStatus s)
+        static Row Badge(DiffStatus s) => s switch
         {
-            switch (s)
-            {
-                case DiffStatus.Added: return new Row().Add("+ ", Palette.Added);
-                case DiffStatus.Removed: return new Row().Add("− ", Palette.Removed);
-                case DiffStatus.Modified: return new Row().Add("~ ", Palette.Modified);
-                default: return new Row().Add("  ");
-            }
-        }
+            DiffStatus.Added => new Row().Add("+ ", Palette.Added),
+            DiffStatus.Removed => new Row().Add("− ", Palette.Removed),
+            DiffStatus.Modified => new Row().Add("~ ", Palette.Modified),
+            _ => new Row().Add("  "),
+        };
 
         static string Stem(string path)
         {

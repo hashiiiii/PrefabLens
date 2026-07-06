@@ -1,8 +1,32 @@
 /// <reference types="node" />
-import { expect, test } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 
 const fixture = readFileSync(new URL('./fixtures/pr-files.html', import.meta.url), 'utf8');
+
+// content script は起動時に chrome.storage.local から viewMode を読む。
+// スタブに storage が無いと init が落ちて全テストが壊れるため、必ず与える。
+function stubChrome(page: Page, res: unknown, viewMode?: string) {
+  return page.addInitScript(
+    ({ res, viewMode }) => {
+      (window as unknown as Record<string, unknown>)['chrome'] = {
+        runtime: {
+          sendMessage: (msg: { type?: string }) =>
+            msg?.type === 'semanticDiff' ? Promise.resolve(res) : Promise.resolve(),
+          onMessage: { addListener: () => {} },
+        },
+        storage: {
+          local: {
+            get: () => Promise.resolve(viewMode ? { viewMode } : {}),
+            set: () => Promise.resolve(),
+          },
+          onChanged: { addListener: () => {} },
+        },
+      };
+    },
+    { res, viewMode },
+  );
+}
 
 const cannedResponse = {
   ok: true,
@@ -30,11 +54,7 @@ test('detects a Unity file, toggles to Semantic, renders the tree', async ({ pag
   // content script は URL(/pull/N/files)を見る: フィクスチャを PR の URL で返す
   await page.route('**/pull/1/files', (route) => route.fulfill({ body: fixture, contentType: 'text/html' }));
   // background を固定応答でスタブ(この面の本物は handler.test.ts が担保)
-  await page.addInitScript((res) => {
-    (window as unknown as Record<string, unknown>)['chrome'] = {
-      runtime: { sendMessage: () => Promise.resolve(res) },
-    };
-  }, cannedResponse);
+  await stubChrome(page, cannedResponse);
 
   await page.goto('https://prefablens.test/owner/repo/pull/1/files');
   await page.addScriptTag({ path: 'dist/content.js' });
@@ -60,11 +80,7 @@ test('detects a Unity file, toggles to Semantic, renders the tree', async ({ pag
 
 test('attaches toggles to files added after the initial scan (SPA lazy loading)', async ({ page }) => {
   await page.route('**/pull/1/files', (route) => route.fulfill({ body: fixture, contentType: 'text/html' }));
-  await page.addInitScript((res) => {
-    (window as unknown as Record<string, unknown>)['chrome'] = {
-      runtime: { sendMessage: () => Promise.resolve(res) },
-    };
-  }, cannedResponse);
+  await stubChrome(page, cannedResponse);
 
   await page.goto('https://prefablens.test/owner/repo/pull/1/files');
   await page.addScriptTag({ path: 'dist/content.js' });
@@ -84,6 +100,7 @@ test('attaches toggles to files added after the initial scan (SPA lazy loading)'
 test('recovers after an error response', async ({ page }) => {
   await page.route('**/pull/1/files', (route) => route.fulfill({ body: fixture, contentType: 'text/html' }));
   // 1回目は pat-missing エラー、2回目以降は正常応答を返す(エラーはキャッシュされず再フェッチされることを確認)
+  // カウンタ用に専用スタブを使うが、init が落ちないよう storage/onMessage は stubChrome と同じ形にする
   await page.addInitScript((res) => {
     (window as unknown as Record<string, unknown>)['__prefablensCalls'] = 0;
     (window as unknown as Record<string, unknown>)['chrome'] = {
@@ -94,6 +111,14 @@ test('recovers after an error response', async ({ page }) => {
           w['__prefablensCalls'] = call + 1;
           return Promise.resolve(call === 0 ? { ok: false, error: 'pat-missing' } : res);
         },
+        onMessage: { addListener: () => {} },
+      },
+      storage: {
+        local: {
+          get: () => Promise.resolve({}),
+          set: () => Promise.resolve(),
+        },
+        onChanged: { addListener: () => {} },
       },
     };
   }, cannedResponse);
@@ -112,4 +137,61 @@ test('recovers after an error response', async ({ page }) => {
   await unityHeader.getByRole('button', { name: 'Raw' }).click();
   await unityHeader.getByRole('button', { name: 'Semantic' }).click();
   await expect(view).toContainText('MonoBehaviour');
+});
+
+test('applies the persisted semantic default to every unity file and late additions', async ({ page }) => {
+  await page.route('**/pull/1/files', (route) => route.fulfill({ body: fixture, contentType: 'text/html' }));
+  await stubChrome(page, cannedResponse, 'semantic'); // 前回の選択が semantic で保存済み
+
+  await page.goto('https://prefablens.test/owner/repo/pull/1/files');
+  await page.addScriptTag({ path: 'dist/content.js' });
+
+  // クリックなしで両方の Unity ファイルが semantic 描画になっている
+  await expect(page.locator('[data-prefablens-view]')).toHaveCount(2);
+  await expect(page.locator('.file:has(.file-header[data-path="Assets/Foo.prefab"]) .js-file-content')).toBeHidden();
+
+  // 全体トグルも既定を反映して Semantic 押下状態で現れる
+  const global = page.locator('[data-prefablens-global]');
+  await expect(global.locator('button[data-view="semantic"]')).toHaveAttribute('aria-pressed', 'true');
+
+  // 遅延ロードで現れたファイルも既定を継承する(「押したのに raw」が起きない核心)
+  await page.evaluate(() => {
+    const file = document.createElement('div');
+    file.className = 'file';
+    file.innerHTML =
+      '<div class="file-header" data-path="Assets/Late.prefab"></div><div class="js-file-content">raw diff</div>';
+    document.body.append(file);
+  });
+  await expect(page.locator('[data-prefablens-view]')).toHaveCount(3);
+  await expect(page.locator('.file:has(.file-header[data-path="Assets/Late.prefab"]) .js-file-content')).toBeHidden();
+});
+
+test('global toggle switches all files and resets per-file overrides', async ({ page }) => {
+  await page.route('**/pull/1/files', (route) => route.fulfill({ body: fixture, contentType: 'text/html' }));
+  await stubChrome(page, cannedResponse);
+
+  await page.goto('https://prefablens.test/owner/repo/pull/1/files');
+  await page.addScriptTag({ path: 'dist/content.js' });
+
+  // 全体トグルは最初の Unity ファイルの直前に 1 つだけ注入される
+  const global = page.locator('[data-prefablens-global]');
+  await expect(global).toHaveCount(1);
+
+  // 位置契約: バーは最初の Unity ファイルの .file コンテナ直前に入る
+  await expect(page.locator('[data-prefablens-global] + .file .file-header[data-path="Assets/Foo.prefab"]')).toHaveCount(1);
+
+  // 全体 Semantic → 全 Unity ファイルが切り替わる(README は対象外)
+  await global.getByRole('button', { name: 'Semantic' }).click();
+  await expect(page.locator('[data-prefablens-view]')).toHaveCount(2);
+
+  // 個別に Raw へ上書き → そのファイルだけ raw に戻る
+  const fooHeader = page.locator('.file-header[data-path="Assets/Foo.prefab"]');
+  await fooHeader.getByRole('button', { name: 'Raw' }).click();
+  await expect(page.locator('.file:has(.file-header[data-path="Assets/Foo.prefab"]) .js-file-content')).toBeVisible();
+  await expect(page.locator('.file:has(.file-header[data-path="Assets/Big.unity"]) .js-file-content')).toBeHidden();
+
+  // 全体 Raw → Semantic と操作すると上書きがリセットされ、必ず全ファイルが揃う
+  await global.getByRole('button', { name: 'Raw' }).click();
+  await global.getByRole('button', { name: 'Semantic' }).click();
+  await expect(page.locator('.file:has(.file-header[data-path="Assets/Foo.prefab"]) .js-file-content')).toBeHidden();
 });

@@ -56,7 +56,12 @@ test "diff: added and removed documents" {
     try testing.expectEqual(model.Status.added, findDoc(fd, 2).?.status);
 
     const fd2 = try compute(arena, after, before);
-    try testing.expectEqual(model.Status.removed, findDoc(fd2, 2).?.status);
+    const removed = findDoc(fd2, 2).?;
+    try testing.expectEqual(model.Status.removed, removed.status);
+    // 削除側も全列挙: hierarchy で見えていた Name が before 値で残る。
+    try testing.expectEqual(@as(usize, 1), removed.fields.len);
+    try testing.expectEqualStrings("Name", removed.fields[0].path);
+    try testing.expectEqualStrings("B", removed.fields[0].before.?.scalar);
 }
 
 test "diff: nested field path and added field" {
@@ -340,6 +345,30 @@ test "diff: added document enumerates fields with vector collapse" {
     try testing.expectEqualStrings("Position", d.fields[0].path);
     try testing.expectEqualStrings("(4, 0, 0)", d.fields[0].after.?.scalar);
     try testing.expectEqualStrings("Max Hp", d.fields[1].path);
+}
+
+test "diff: removed document enumerates fields with vector collapse" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const before =
+        \\--- !u!4 &4
+        \\Transform:
+        \\  m_GameObject: {fileID: 1}
+        \\  m_LocalPosition: {x: 4, y: 0, z: 0}
+        \\  maxHp: 100
+    ;
+    const fd = try compute(arena, before, "");
+    const d = findDoc(fd, 4).?;
+    try testing.expectEqual(model.Status.removed, d.status);
+    // 追加側と対称: m_GameObject は非表示、Position はベクトル 1 行、値は before に載る。
+    try testing.expectEqual(@as(usize, 2), d.fields.len);
+    try testing.expectEqualStrings("Position", d.fields[0].path);
+    try testing.expectEqual(model.Status.removed, d.fields[0].status);
+    try testing.expectEqualStrings("(4, 0, 0)", d.fields[0].before.?.scalar);
+    try testing.expect(d.fields[0].after == null);
+    try testing.expectEqualStrings("Max Hp", d.fields[1].path);
+    try testing.expectEqualStrings("100", d.fields[1].before.?.scalar);
 }
 
 test "diff: prefab instance override keyed by target+propertyPath" {
@@ -697,15 +726,30 @@ pub fn compute(arena: std.mem.Allocator, before_src: []const u8, after_src: []co
         if (bd.stripped) continue;
         if (after_idx.contains(bd.file_id)) continue;
         try collectGuids(arena, &guids, bd.body);
-        try docs.append(arena, .{
-            .file_id = bd.file_id,
-            .class_id = bd.class_id,
-            .type_name = resolvedTypeName(bd),
-            .script_guid = scriptGuid(bd),
-            .class_name = editorClassName(bd),
-            .status = .removed,
-            .fields = &.{},
-        });
+        if (bd.class_id == 1001) {
+            try docs.append(arena, .{
+                .file_id = bd.file_id,
+                .class_id = bd.class_id,
+                .type_name = resolvedTypeName(bd),
+                .script_guid = scriptGuid(bd),
+                .class_name = editorClassName(bd),
+                .status = .removed,
+                .fields = &.{},
+            });
+        } else {
+            // 追加側(flattenSubtree ~ presentFields)と対称の全列挙。
+            var raw: std.ArrayList(FieldDiff) = .empty;
+            for (bd.body.map) |e| try flattenSubtree(arena, &raw, e.key, e.value, .removed);
+            try docs.append(arena, .{
+                .file_id = bd.file_id,
+                .class_id = bd.class_id,
+                .type_name = resolvedTypeName(bd),
+                .script_guid = scriptGuid(bd),
+                .class_name = editorClassName(bd),
+                .status = .removed,
+                .fields = try presentFields(arena, raw.items),
+            });
+        }
     }
 
     return .{

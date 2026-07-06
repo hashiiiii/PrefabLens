@@ -220,7 +220,7 @@ describe('render', () => {
     expect(row?.textContent).not.toContain('—');
   });
 
-  it('collapses added component cards but keeps modified ones open', () => {
+  it('keeps added and modified component cards open', () => {
     const root = freshRoot();
     const diff: DiffV2 = {
       schema: 'prefablens.diff.v2',
@@ -251,7 +251,8 @@ describe('render', () => {
     render(root, diff);
     const cards = [...root.querySelectorAll('.pl-components > details')] as HTMLDetailsElement[];
     expect(cards).toHaveLength(2);
-    expect(cards[0]!.open).toBe(false); // added Cylinder1 は閉
+    // added を閉じると「Cylinder1 だけ折り畳まれる」非対称な見え方になるため、状態によらず常に開く
+    expect(cards[0]!.open).toBe(true); // added Cylinder1 も開
     expect(cards[0]!.textContent).toContain('Cylinder1'); // className フォールバック
     expect(cards[1]!.open).toBe(true); // modified Transform は開
   });

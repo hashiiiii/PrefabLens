@@ -150,7 +150,6 @@ function renderOverrideGroups(overrides: OverrideDiff[], diff: DiffV2): HTMLElem
 
 function renderComponent(c: ComponentDiff, diff: DiffV2): HTMLElement {
   const details = openDetails('pl-comp', c.status);
-  details.open = c.status !== 'added'; // added(初期値の全列挙)は閉、それ以外は開
   const resolved = c.scriptGuid ? diff.resolved?.[c.scriptGuid] : undefined;
   const display = resolved ? stem(resolved) : (c.className ?? c.typeName);
   const summary = summaryLine(c.status, display);

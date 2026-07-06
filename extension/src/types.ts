@@ -78,6 +78,18 @@ export type BackgroundRequest = SemanticDiffRequest | PrefetchRequest;
 export type BackgroundError = 'pat-missing' | 'auth-failed' | 'rate-limited' | 'fetch-failed' | 'diff-failed';
 
 export type SemanticDiffResponse =
-  | { ok: true; json: DiffV2 }
+  | { ok: true; json: DiffV2; pending?: boolean }
   | { ok: false; error: BackgroundError }
   | { ok: false; error: 'too-large'; bytes: number };
+
+// background → content の非同期 push(2 段階応答の後段)。
+export type GuidResolvedPush = {
+  type: 'guidResolved';
+  owner: string;
+  repo: string;
+  prNumber: number;
+  path: string;
+  resolved: Record<string, string>;
+  json?: DiffV2; // mergeSources で構造が更新されたとき最終 push に載る(content は view を置換)
+  done: boolean; // true が来たら解決作業は終わり(空 resolved でも送る = インジケータ消灯の合図)
+};

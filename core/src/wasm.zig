@@ -23,14 +23,32 @@ export fn diff(
     after_ptr: ?[*]const u8,
     after_len: usize,
 ) ?[*]u8 {
-    const before: []const u8 = if (before_ptr) |p| p[0..before_len] else "";
-    const after: []const u8 = if (after_ptr) |p| p[0..after_len] else "";
+    return run(slice(before_ptr, before_len), slice(after_ptr, after_len), null);
+}
 
+// assets はバイナリ TLV(LE): [u32 count] repeat{ [u32 guid_len][guid][u32 data_len][data] }。
+// JSON 文字列エスケープを避けるため、ソース prefab bytes はそのまま渡す。
+export fn diff_with_assets(
+    before_ptr: ?[*]const u8,
+    before_len: usize,
+    after_ptr: ?[*]const u8,
+    after_len: usize,
+    assets_ptr: ?[*]const u8,
+    assets_len: usize,
+) ?[*]u8 {
+    return run(slice(before_ptr, before_len), slice(after_ptr, after_len), slice(assets_ptr, assets_len));
+}
+
+fn slice(ptr: ?[*]const u8, len: usize) []const u8 {
+    return if (ptr) |p| p[0..len] else "";
+}
+
+fn run(before: []const u8, after: []const u8, assets_bytes: ?[]const u8) ?[*]u8 {
     var arena_state = std.heap.ArenaAllocator.init(gpa);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
-    const json = core.diffToJson(arena, before, after) catch |err| {
+    const json = computeJson(arena, before, after, assets_bytes) catch |err| {
         const msg = std.fmt.allocPrint(
             arena,
             "{{\"schema\":\"prefablens.error.v1\",\"error\":\"{s}\"}}",
@@ -39,6 +57,42 @@ export fn diff(
         return packResult(msg);
     };
     return packResult(json);
+}
+
+fn computeJson(arena: std.mem.Allocator, before: []const u8, after: []const u8, assets_bytes: ?[]const u8) ![]u8 {
+    const ab = assets_bytes orelse return core.diffToJson(arena, before, after);
+    var assets = try parseAssets(arena, ab);
+    return core.diffToJsonWithAssets(arena, before, after, &assets);
+}
+
+// 壊れた TLV は error を返し、error.v1 ペイロードに落ちる(trap しない)。
+fn parseAssets(arena: std.mem.Allocator, bytes: []const u8) !core.Assets {
+    var assets: core.Assets = .empty;
+    if (bytes.len == 0) return assets;
+    var off: usize = 0;
+    const count = try readU32(bytes, &off);
+    var i: u32 = 0;
+    while (i < count) : (i += 1) {
+        const guid = try readChunk(bytes, &off);
+        const data = try readChunk(bytes, &off);
+        try assets.put(arena, guid, data);
+    }
+    return assets;
+}
+
+fn readU32(bytes: []const u8, off: *usize) !u32 {
+    if (bytes.len - off.* < 4) return error.TruncatedAssets;
+    const v = std.mem.readInt(u32, bytes[off.*..][0..4], .little);
+    off.* += 4;
+    return v;
+}
+
+fn readChunk(bytes: []const u8, off: *usize) ![]const u8 {
+    const len = try readU32(bytes, off);
+    if (bytes.len - off.* < len) return error.TruncatedAssets;
+    const s = bytes[off.*..][0..len];
+    off.* += len;
+    return s;
 }
 
 // arena の外(呼び出し側所有)へコピーして長さ前置する。

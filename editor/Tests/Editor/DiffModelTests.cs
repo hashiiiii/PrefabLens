@@ -78,6 +78,35 @@ namespace PrefabLens.Tests
         }
 
         [Test]
+        public void EmptyDiffIsEmpty()
+        {
+            // 変更なしのとき Window は IsEmpty を見て "No semantic changes" を出す。その分岐の根拠。
+            var m = DiffModel.Parse(@"{""schema"":""prefablens.diff.v2"",""unresolvedGuids"":[],""roots"":[],""loose"":[]}");
+            Assert.IsTrue(m.IsEmpty);
+        }
+
+        [Test]
+        public void ParsesResolvedMapAndRemovedStatus()
+        {
+            // resolved は CLI 側で解決済みの guid -> パス(ResolveWith が上書きしないのは別テストで検証)。
+            // removed は 4 status のうち他テストが通っていない残り 1 つ。
+            const string json = @"{
+                ""unresolvedGuids"":[],
+                ""resolved"":{""ccc"":""Assets/Textures/Grass.png""},
+                ""roots"":[],
+                ""loose"":[{""kind"":""component"",""fileId"":""3"",""classId"":135,""typeName"":""SphereCollider"",""scriptGuid"":null,""className"":null,""status"":""removed"",
+                    ""fields"":[{""path"":""m_Radius"",""status"":""removed"",""before"":""0.5"",""after"":null}]}]
+            }";
+            var m = DiffModel.Parse(json);
+            Assert.AreEqual("Assets/Textures/Grass.png", m.Resolved["ccc"]);
+            Assert.AreEqual(DiffStatus.Removed, m.Loose[0].Status);
+            var f = m.Loose[0].Fields[0];
+            Assert.AreEqual(DiffStatus.Removed, f.Status);
+            Assert.AreEqual("0.5", f.Before.Scalar);
+            Assert.IsTrue(f.After.IsNull);
+        }
+
+        [Test]
         public void ResolveWithFillsOnlyUnresolvedGuids()
         {
             var m = DiffModel.Parse(Golden);

@@ -94,5 +94,38 @@ namespace PrefabLens.Tests
             Assert.AreEqual(0, res.ExitCode);
             StringAssert.Contains("hello", res.Stdout);
         }
+
+        [Test]
+        public void RunProcessCapturesStderrAndExitCode()
+        {
+            // ExitCode != 0 のとき Window は stderr を一次情報として表示する。その配線の検証。
+            var isWindows = RuntimeInformation.IsOSPlatform(OSPlatform.Windows);
+            var file = isWindows ? "cmd.exe" : "/bin/sh";
+            var args = isWindows ? "/c echo boom 1>&2 & exit 3" : "-c \"echo boom 1>&2; exit 3\"";
+            var res = Cli.RunProcess(file, args, ".", timeoutMs: Cli.RunTimeoutMs);
+            Assert.IsFalse(res.TimedOut);
+            Assert.AreEqual(3, res.ExitCode);
+            StringAssert.Contains("boom", res.Stderr);
+        }
+
+        [Test]
+        public void RunProcessDrainsBothPipesPastTheOsBuffer()
+        {
+            // stdout / stderr の両方を OS のパイプバッファ(通常 64KB)より多く書く子でも
+            // デッドロックせず全量読めること。RunProcess の非同期読みを同期 ReadToEnd ×2 に
+            // 「単純化」すると、子が stderr 書き込みでブロックしたままタイムアウトして fail する。
+            var isWindows = RuntimeInformation.IsOSPlatform(OSPlatform.Windows);
+            var file = isWindows ? "cmd.exe" : "/bin/sh";
+            var line = new string('x', 40);
+            var args = isWindows
+                ? $"/c for /L %i in (1,1,4000) do @(echo {line}& echo {line} 1>&2)"
+                : $"-c \"i=0; while [ $i -lt 4000 ]; do echo {line}; echo {line} 1>&2; i=$((i+1)); done\"";
+            var res = Cli.RunProcess(file, args, ".", timeoutMs: Cli.RunTimeoutMs);
+            Assert.IsFalse(res.TimedOut);
+            Assert.AreEqual(0, res.ExitCode);
+            // 4000 行 × 41 バイト ≈ 160KB。バッファ超えを確実にしつつ取りこぼしも検出する。
+            Assert.Greater(res.Stdout.Length, 100_000);
+            Assert.Greater(res.Stderr.Length, 100_000);
+        }
     }
 }

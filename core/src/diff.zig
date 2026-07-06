@@ -705,7 +705,11 @@ fn resolvedTypeName(doc: *const model.Document) []const u8 {
 pub fn compute(arena: std.mem.Allocator, before_src: []const u8, after_src: []const u8) !FlatDiff {
     const before = try parser.parse(arena, before_src);
     const after = try parser.parse(arena, after_src);
+    return computeParsed(arena, before, after);
+}
 
+// 既にパース済みのドキュメント列を diff する(instantiate が変異済み docs を食わせる)。
+pub fn computeParsed(arena: std.mem.Allocator, before: []model.Document, after: []model.Document) !FlatDiff {
     var docs: std.ArrayList(DocDiff) = .empty;
     // array hash map は初回挿入順を保持するので、unresolvedGuids が
     // 参照順で決定的にシリアライズされる。

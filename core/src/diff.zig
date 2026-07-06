@@ -1103,13 +1103,24 @@ fn findMod(mods: []Mod, path: []const u8) ?Mod {
 // 片側にしか存在しない instance(added/removed)の override 全列挙。
 // 値は added なら after、removed なら before に載る。
 fn soleInstanceOverrides(arena: std.mem.Allocator, doc: *const model.Document, status: Status) ![]model.OverrideDiff {
-    return soleOverridesFromMods(arena, doc, try collectMods(arena, doc), status);
+    return soleOverridesFromMods(arena, doc, try dedupModsLastWins(arena, try collectMods(arena, doc)), status);
+}
+
+// 同一 (target, propertyPath) は後勝ちで 1 件に畳む(表示位置は初出)。実ファイルに
+// 重複は無いが、instantiate の push-down は外側の mod を末尾に追記するため、
+// 縮退表示でも適用と同じ「外側が勝つ」セマンティクスになるよう揃える。
+fn dedupModsLastWins(arena: std.mem.Allocator, mods: []Mod) ![]Mod {
+    var map: std.StringArrayHashMapUnmanaged(Mod) = .empty;
+    for (mods) |m| try map.put(arena, try modKey(arena, m), m);
+    var out: std.ArrayList(Mod) = .empty;
+    for (map.values()) |m| try out.append(arena, m);
+    return out.toOwnedSlice(arena);
 }
 
 // 展開済み instance の残余行(instantiate 用): 合成へ適用できた mod を除き、
 // 適用できなかったものだけを従来の縮退表示で残す(黙って消さない)。
 pub fn soleInstanceOverridesSkipping(arena: std.mem.Allocator, doc: *const model.Document, status: Status, applied: *const std.StringHashMapUnmanaged(void)) ![]model.OverrideDiff {
-    const all = try collectMods(arena, doc);
+    const all = try dedupModsLastWins(arena, try collectMods(arena, doc));
     var kept: std.ArrayList(Mod) = .empty;
     for (all) |m| {
         if (applied.contains(try modKey(arena, m))) continue;

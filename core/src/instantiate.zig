@@ -484,6 +484,44 @@ test "instantiate: outer overrides push down through nested instances" {
     try testing.expectEqualStrings("(9, 0, 0)", inst.components[0].fields[0].after.?.scalar);
 }
 
+test "instantiate: pushed-down overrides win in the degraded view" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    // push-down テストと同じ 3 段構成だが base 側の asset を供給しない。
+    // 内側 instance は縮退表示になり、押し下げられた外側の値(9)が
+    // variant 自身の値(1)に後勝ちして行に出る。
+    const variant =
+        \\--- !u!1001 &100
+        \\PrefabInstance:
+        \\  m_Modification:
+        \\    m_Modifications:
+        \\    - target: {fileID: 40, guid: baseguid, type: 3}
+        \\      propertyPath: m_LocalPosition.x
+        \\      value: 1
+        \\  m_SourcePrefab: {fileID: 100100000, guid: baseguid, type: 3}
+    ;
+    const outer =
+        \\--- !u!1001 &1001
+        \\PrefabInstance:
+        \\  m_Modification:
+        \\    m_Modifications:
+        \\    - target: {fileID: 76, guid: varguid, type: 3}
+        \\      propertyPath: m_LocalPosition.x
+        \\      value: 9
+        \\  m_SourcePrefab: {fileID: 100100000, guid: varguid, type: 3}
+    ;
+    var assets: Assets = .empty;
+    try assets.put(arena, "varguid", variant);
+    const res = try root.diffBytesWithAssets(arena, "", outer, &assets);
+    try testing.expectEqual(@as(usize, 1), res.needed_sources.len);
+    try testing.expectEqualStrings("baseguid", res.needed_sources[0].guid);
+    const inst = res.roots[0];
+    try testing.expectEqual(@as(usize, 1), inst.overrides.len);
+    try testing.expectEqualStrings("Position.x", inst.overrides[0].label);
+    try testing.expectEqualStrings("9", inst.overrides[0].after.?.scalar);
+}
+
 test "instantiate: unappliable overrides stay visible as rows" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();

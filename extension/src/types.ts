@@ -47,9 +47,14 @@ export type PrefabInstanceDiff = {
 
 export type NodeDiff = GameObjectDiff | PrefabInstanceDiff;
 
+// core が内容の供給を求めるソースプレハブ。side は取得すべき ref
+// (added instance -> after/head、removed instance -> before/base)。
+export type NeededSource = { guid: string; side: 'before' | 'after' };
+
 export type DiffV2 = {
   schema: 'prefablens.diff.v2';
   unresolvedGuids: string[];
+  neededSources?: NeededSource[]; // 空なら省略される(additive)
   resolved?: Record<string, string>; // ホスト側(applyResolved)が付与
   roots: NodeDiff[];
   loose: ComponentDiff[];

@@ -65,16 +65,15 @@ export function renderTooLarge(root: ShadowRoot, bytes: number, onRender: () => 
   button.className = 'pl-render';
   button.textContent = 'Render anyway';
   button.addEventListener('click', onRender);
-  container.append(note('pl-empty', `Large file (${Math.round(bytes / 1048576)} MB).`), button);
+  container.append(note('pl-empty', `Large file (${Math.round(bytes / (1024 * 1024))} MB).`), button);
 }
 
 function mount(root: ShadowRoot): HTMLElement {
   root.replaceChildren();
-  const doc = root.host.ownerDocument;
-  const style = doc.createElement('style');
+  const style = document.createElement('style');
   style.textContent = STYLES;
-  const container = doc.createElement('div');
-  container.className = `pl-root pl-${detectTheme(doc)}`;
+  const container = document.createElement('div');
+  container.className = `pl-root pl-${detectTheme(document)}`;
   root.append(style, container);
   return container;
 }
@@ -87,7 +86,7 @@ function note(className: string, text: string): HTMLElement {
 }
 
 function stem(path: string): string {
-  const base = path.split('/').pop() ?? path;
+  const base = path.split('/').at(-1) ?? path;
   const dot = base.lastIndexOf('.');
   return dot > 0 ? base.slice(0, dot) : base;
 }
@@ -133,7 +132,7 @@ function renderNode(node: NodeDiff, diff: DiffV2): HTMLElement {
 function renderOverrideGroups(overrides: OverrideDiff[], diff: DiffV2): HTMLElement[] {
   const groups: { name: string; rows: OverrideDiff[] }[] = [];
   for (const ov of overrides) {
-    const last = groups[groups.length - 1];
+    const last = groups.at(-1);
     if (last && last.name === ov.group) last.rows.push(ov);
     else groups.push({ name: ov.group, rows: [ov] });
   }

@@ -1,3 +1,5 @@
+import { applyGhes, type ChromeGhes } from './ghes';
+
 // フォーム本体を TS 側に持つ: options.html と jsdom テストで同一マークアップを共有する。
 export const OPTIONS_BODY = `
   <h1>PrefabLens</h1>
@@ -14,8 +16,6 @@ export const OPTIONS_BODY = `
   <button id="save" type="button">Save</button>
   <span id="status" role="status"></span>
 `;
-
-import { applyGhes, type ChromeGhes } from './ghes';
 
 type StorageLike = {
   get(keys: string[]): Promise<Record<string, unknown>>;

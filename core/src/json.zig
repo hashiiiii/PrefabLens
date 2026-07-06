@@ -9,8 +9,7 @@ const Status = model.Status;
 pub const Resolver = std.StringHashMap([]const u8);
 
 pub fn serialize(arena: std.mem.Allocator, res: model.DiffResult, resolved: ?*const Resolver) ![]u8 {
-    var buf: std.ArrayList(u8) = .empty;
-    var aw = std.Io.Writer.Allocating.fromArrayList(arena, &buf);
+    var aw: std.Io.Writer.Allocating = .init(arena);
     const w = &aw.writer;
 
     try w.writeAll("{\"schema\":\"prefablens.diff.v2\"");
@@ -50,8 +49,7 @@ pub fn serialize(arena: std.mem.Allocator, res: model.DiffResult, resolved: ?*co
     }
     try w.writeAll("]}");
 
-    var list = aw.toArrayList();
-    return list.toOwnedSlice(arena);
+    return aw.toOwnedSlice();
 }
 
 fn writeObject(w: *std.Io.Writer, o: model.ObjectDiff, resolved: ?*const Resolver) !void {

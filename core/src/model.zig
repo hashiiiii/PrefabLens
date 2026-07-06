@@ -120,9 +120,6 @@ pub const DiffResult = struct {
 };
 
 test "Node.eql: scalars, refs, seqs, maps" {
-    const a = std.testing.allocator;
-    _ = a;
-
     // Scalars
     var s1 = Node{ .scalar = "100" };
     var s2 = Node{ .scalar = "100" };

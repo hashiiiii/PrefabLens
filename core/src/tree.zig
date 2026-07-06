@@ -41,7 +41,7 @@ fn transformOf(idx: *Index, go_id: i64) ?*model.Document {
         const cref = if (item.* == .map) model.findValue(item.map, "component") else null;
         const cid = refFileId(cref) orelse continue;
         const cdoc = idx.structuralDoc(cid) orelse continue;
-        if (cdoc.class_id == 4 or cdoc.class_id == 224) return cdoc;
+        if (isTransformClass(cdoc.class_id)) return cdoc;
     }
     return null;
 }
@@ -206,19 +206,19 @@ pub fn build(arena: std.mem.Allocator, fd: diffmod.FlatDiff) !model.DiffResult {
     var obj_by_id = std.AutoHashMap(i64, ObjectDiff).init(arena);
     for (go_ids.items) |go_id| {
         const gd = idx.diff_by_id.get(go_id).?;
-        const comps: []ComponentDiff = if (comps_by_owner.get(go_id)) |list| list.items else &[_]ComponentDiff{};
+        const comps: []ComponentDiff = if (comps_by_owner.get(go_id)) |list| list.items else &.{};
         try obj_by_id.put(go_id, .{
             .file_id = go_id,
             .name = goName(&idx, go_id),
             .status = gd.status,
             .components = comps,
-            .children = &[_]ObjectDiff{},
+            .children = &.{},
         });
     }
     for (pi_ids.items) |pi_id| {
         const dd = idx.diff_by_id.get(pi_id).?;
         const doc = idx.structuralDoc(pi_id);
-        const comps: []ComponentDiff = if (comps_by_owner.get(pi_id)) |list| list.items else &[_]ComponentDiff{};
+        const comps: []ComponentDiff = if (comps_by_owner.get(pi_id)) |list| list.items else &.{};
         try obj_by_id.put(pi_id, .{
             .kind = .prefab_instance,
             .file_id = pi_id,
@@ -227,7 +227,7 @@ pub fn build(arena: std.mem.Allocator, fd: diffmod.FlatDiff) !model.DiffResult {
             .status = dd.status,
             .overrides = dd.overrides,
             .components = comps,
-            .children = &[_]ObjectDiff{},
+            .children = &.{},
         });
     }
 

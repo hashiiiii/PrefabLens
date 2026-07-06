@@ -579,8 +579,7 @@ fn editorClassName(doc: *const model.Document) ?[]const u8 {
         .scalar => |s| s,
         else => return null,
     };
-    const idx = std.mem.lastIndexOfScalar(u8, s, ':') orelse (if (s.len != 0) return s else return null);
-    const tail = s[idx + 1 ..];
+    const tail = if (std.mem.lastIndexOfScalar(u8, s, ':')) |idx| s[idx + 1 ..] else s;
     return if (tail.len != 0) tail else null;
 }
 
@@ -607,7 +606,9 @@ pub fn compute(arena: std.mem.Allocator, before_src: []const u8, after_src: []co
     const after = try parser.parse(arena, after_src);
 
     var docs: std.ArrayList(DocDiff) = .empty;
-    var guids = GuidSet.init(arena);
+    // Array hash map: preserves first-insertion order so unresolvedGuids
+    // serializes deterministically in reference order.
+    var guids: std.StringArrayHashMapUnmanaged(void) = .empty;
 
     // fileID -> *Document indices so the union walk below is O(n) instead of
     // O(n^2) linear scans (matters at scene scale: tens of thousands of docs).
@@ -618,10 +619,10 @@ pub fn compute(arena: std.mem.Allocator, before_src: []const u8, after_src: []co
     // then `before`-only documents.
     for (after) |*ad| {
         if (ad.stripped) continue;
-        try collectGuids(&guids, ad.body);
+        try collectGuids(arena, &guids, ad.body);
         const bd = before_idx.get(ad.file_id);
         if (bd) |b| {
-            try collectGuids(&guids, b.body);
+            try collectGuids(arena, &guids, b.body);
             if (ad.class_id == 1001) {
                 const overrides = try diffOverrides(arena, b, ad);
                 try docs.append(arena, .{
@@ -630,13 +631,13 @@ pub fn compute(arena: std.mem.Allocator, before_src: []const u8, after_src: []co
                     .type_name = resolvedTypeName(ad),
                     .script_guid = scriptGuid(ad),
                     .status = if (overrides.len == 0) .unchanged else .modified,
-                    .fields = &[_]FieldDiff{},
+                    .fields = &.{},
                     .overrides = overrides,
                 });
             } else {
                 var raw: std.ArrayList(FieldDiff) = .empty;
                 try diffNode(arena, &raw, "", b.body, ad.body);
-                const fields = try presentFields(arena, try raw.toOwnedSlice(arena));
+                const fields = try presentFields(arena, raw.items);
                 try docs.append(arena, .{
                     .file_id = ad.file_id,
                     .class_id = ad.class_id,
@@ -655,7 +656,7 @@ pub fn compute(arena: std.mem.Allocator, before_src: []const u8, after_src: []co
                     .type_name = resolvedTypeName(ad),
                     .script_guid = scriptGuid(ad),
                     .status = .added,
-                    .fields = &[_]FieldDiff{},
+                    .fields = &.{},
                     .overrides = try addedInstanceOverrides(arena, ad),
                 });
             } else {
@@ -668,7 +669,7 @@ pub fn compute(arena: std.mem.Allocator, before_src: []const u8, after_src: []co
                     .script_guid = scriptGuid(ad),
                     .class_name = editorClassName(ad),
                     .status = .added,
-                    .fields = try presentFields(arena, try raw.toOwnedSlice(arena)),
+                    .fields = try presentFields(arena, raw.items),
                 });
             }
         }
@@ -676,7 +677,7 @@ pub fn compute(arena: std.mem.Allocator, before_src: []const u8, after_src: []co
     for (before) |*bd| {
         if (bd.stripped) continue;
         if (after_idx.contains(bd.file_id)) continue;
-        try collectGuids(&guids, bd.body);
+        try collectGuids(arena, &guids, bd.body);
         try docs.append(arena, .{
             .file_id = bd.file_id,
             .class_id = bd.class_id,
@@ -684,13 +685,13 @@ pub fn compute(arena: std.mem.Allocator, before_src: []const u8, after_src: []co
             .script_guid = scriptGuid(bd),
             .class_name = editorClassName(bd),
             .status = .removed,
-            .fields = &[_]FieldDiff{},
+            .fields = &.{},
         });
     }
 
     return .{
         .docs = try docs.toOwnedSlice(arena),
-        .unresolved_guids = try guids.toSlice(),
+        .unresolved_guids = guids.keys(),
         .before = before,
         .after = after,
     };
@@ -705,11 +706,11 @@ fn diffNode(
     b: *const Node,
 ) anyerror!void {
     // Same kind?
-    if (std.meta.activeTag(a.*) == .map and std.meta.activeTag(b.*) == .map) {
+    if (a.* == .map and b.* == .map) {
         try diffMap(arena, out, prefix, a.map, b.map);
         return;
     }
-    if (std.meta.activeTag(a.*) == .seq and std.meta.activeTag(b.*) == .seq) {
+    if (a.* == .seq and b.* == .seq) {
         try diffSeq(arena, out, prefix, a.seq, b.seq);
         return;
     }
@@ -752,18 +753,17 @@ fn diffSeq(
     b: []*Node,
 ) anyerror!void {
     const n = @min(a.len, b.len);
-    var i: usize = 0;
-    while (i < n) : (i += 1) {
+    for (a[0..n], b[0..n], 0..) |ea, eb, i| {
         const path = try std.fmt.allocPrint(arena, "{s}[{d}]", .{ prefix, i });
-        try diffNode(arena, out, path, a[i], b[i]);
+        try diffNode(arena, out, path, ea, eb);
     }
-    while (i < a.len) : (i += 1) {
+    for (a[n..], n..) |ea, i| {
         const path = try std.fmt.allocPrint(arena, "{s}[{d}]", .{ prefix, i });
-        try flattenSubtree(arena, out, path, a[i], .removed);
+        try flattenSubtree(arena, out, path, ea, .removed);
     }
-    while (i < b.len) : (i += 1) {
+    for (b[n..], n..) |eb, i| {
         const path = try std.fmt.allocPrint(arena, "{s}[{d}]", .{ prefix, i });
-        try flattenSubtree(arena, out, path, b[i], .added);
+        try flattenSubtree(arena, out, path, eb, .added);
     }
 }
 
@@ -951,7 +951,7 @@ fn sortByGroup(overrides: []model.OverrideDiff) void {
             return std.mem.order(u8, a.group, b.group) == .lt;
         }
     };
-    std.sort.insertion(model.OverrideDiff, overrides, {}, Ctx.lessThan);
+    std.sort.block(model.OverrideDiff, overrides, {}, Ctx.lessThan);
 }
 
 const Placement = struct { prefix: []const u8, label: []const u8, comps: []const []const u8 };
@@ -969,6 +969,8 @@ fn scalarOf(n: ?*Node) ?[]const u8 {
     };
 }
 
+/// Exact equality on purpose: near-default values are real overrides and must
+/// stay visible (epsilon matching was evaluated and rejected).
 fn numEql(s: []const u8, want: f64) bool {
     const v = std.fmt.parseFloat(f64, std.mem.trim(u8, s, " ")) catch return false;
     return v == want;
@@ -1068,29 +1070,11 @@ fn appendStructuralSummaries(arena: std.mem.Allocator, out: *std.ArrayList(model
 
 // ---- guid collection ----
 
-const GuidSet = struct {
-    arena: std.mem.Allocator,
-    map: std.StringHashMap(void),
-    order: std.ArrayList([]const u8),
-
-    fn init(arena: std.mem.Allocator) GuidSet {
-        return .{ .arena = arena, .map = std.StringHashMap(void).init(arena), .order = .empty };
-    }
-    fn add(self: *GuidSet, guid: []const u8) !void {
-        if (self.map.contains(guid)) return;
-        try self.map.put(guid, {});
-        try self.order.append(self.arena, guid);
-    }
-    fn toSlice(self: *GuidSet) ![][]const u8 {
-        return self.order.toOwnedSlice(self.arena);
-    }
-};
-
-fn collectGuids(set: *GuidSet, node: *const Node) anyerror!void {
+fn collectGuids(arena: std.mem.Allocator, set: *std.StringArrayHashMapUnmanaged(void), node: *const Node) anyerror!void {
     switch (node.*) {
-        .ref => |r| if (r.guid) |g| try set.add(g),
-        .map => |entries| for (entries) |e| try collectGuids(set, e.value),
-        .seq => |items| for (items) |it| try collectGuids(set, it),
+        .ref => |r| if (r.guid) |g| try set.put(arena, g, {}),
+        .map => |entries| for (entries) |e| try collectGuids(arena, set, e.value),
+        .seq => |items| for (items) |it| try collectGuids(arena, set, it),
         .scalar => {},
     }
 }

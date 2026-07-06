@@ -4,11 +4,9 @@ const root = @import("root.zig");
 /// Build a synthetic scene with `n` GameObjects, each with a Transform and a
 /// MonoBehaviour, as a single YAML byte buffer.
 fn buildScene(arena: std.mem.Allocator, n: usize, hp: usize) ![]u8 {
-    var buf: std.ArrayList(u8) = .empty;
-    var aw = std.Io.Writer.Allocating.fromArrayList(arena, &buf);
+    var aw: std.Io.Writer.Allocating = .init(arena);
     const w = &aw.writer;
-    var i: usize = 0;
-    while (i < n) : (i += 1) {
+    for (0..n) |i| {
         const go: i64 = @intCast(1 + i * 3);
         const tr: i64 = go + 1;
         const mb: i64 = go + 2;
@@ -31,8 +29,7 @@ fn buildScene(arena: std.mem.Allocator, n: usize, hp: usize) ![]u8 {
             \\
         , .{ go, i, tr, mb, tr, go, mb, go, hp });
     }
-    var list = aw.toArrayList();
-    return list.toOwnedSlice(arena);
+    return aw.toOwnedSlice();
 }
 
 /// Returns nanoseconds for one before/after diff over `n` objects.

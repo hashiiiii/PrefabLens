@@ -207,11 +207,9 @@ test "parse: deeply nested flow value is rejected instead of overflowing the sta
     const depth = 5000;
     var src: std.ArrayList(u8) = .empty;
     try src.appendSlice(arena, "--- !u!114 &1\nMonoBehaviour:\n  m_Field: ");
-    var i: usize = 0;
-    while (i < depth) : (i += 1) try src.appendSlice(arena, "{a: ");
+    for (0..depth) |_| try src.appendSlice(arena, "{a: ");
     try src.appendSlice(arena, "1");
-    i = 0;
-    while (i < depth) : (i += 1) try src.append(arena, '}');
+    for (0..depth) |_| try src.append(arena, '}');
 
     try testing.expectError(error.NestingTooDeep, parse(arena, src.items));
 }
@@ -548,9 +546,9 @@ fn parseFlow(arena: std.mem.Allocator, s: []const u8, depth: usize) anyerror!*No
     const es = try entries.toOwnedSlice(arena);
     if (model.findValue(es, "fileID")) |fid_node| {
         return makeNode(arena, .{ .ref = .{
-            .file_id = scalarToInt(i64, fid_node) orelse 0,
+            .file_id = scalarToI64(fid_node) orelse 0,
             .guid = if (model.findValue(es, "guid")) |g| scalarString(g) else null,
-            .type_id = if (model.findValue(es, "type")) |t| scalarToInt(i64, t) else null,
+            .type_id = if (model.findValue(es, "type")) |t| scalarToI64(t) else null,
         } });
     }
     return makeNode(arena, .{ .map = es });
@@ -576,11 +574,9 @@ fn parseFlowSeq(arena: std.mem.Allocator, s: []const u8, depth: usize) anyerror!
     return makeNode(arena, .{ .seq = try items.toOwnedSlice(arena) });
 }
 
-fn scalarToInt(comptime T: type, n: *const Node) ?T {
-    return switch (n.*) {
-        .scalar => |s| std.fmt.parseInt(T, std.mem.trim(u8, s, " "), 10) catch null,
-        else => null,
-    };
+fn scalarToI64(n: *const Node) ?i64 {
+    const s = scalarString(n) orelse return null;
+    return std.fmt.parseInt(i64, std.mem.trim(u8, s, " "), 10) catch null;
 }
 
 fn stripBrackets(s: []const u8, open: u8, close: u8) []const u8 {

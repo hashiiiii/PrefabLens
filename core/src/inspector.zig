@@ -125,8 +125,7 @@ fn appendNicified(arena: std.mem.Allocator, out: *std.ArrayList(u8), name: []con
 }
 
 const transform_props = [_][]const u8{
-    "m_LocalPosition", "m_LocalRotation", "m_LocalScale",
-    "m_LocalEulerAnglesHint", "m_ConstrainProportionsScale",
+    "m_LocalPosition", "m_LocalRotation", "m_LocalScale", "m_LocalEulerAnglesHint", "m_ConstrainProportionsScale",
 };
 const game_object_props = [_][]const u8{
     "m_Name", "m_IsActive", "m_TagString", "m_Layer", "m_StaticEditorFlags", "m_Icon",

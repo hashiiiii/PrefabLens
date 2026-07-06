@@ -19,6 +19,7 @@ const handler = createHandler({
   },
   makeClient: (base, token, lane) => new GithubClient(base, token, queuedFetch(lane === 'user')),
   getDiffer() {
+    // 遅延シングルトン。SW が再起動したらフェッチし直すだけ。
     differ ??= fetch(chrome.runtime.getURL('prefablens.wasm'))
       .then((r) => r.arrayBuffer())
       .then(createDiffer);

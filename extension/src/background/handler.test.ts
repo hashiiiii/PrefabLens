@@ -412,6 +412,7 @@ describe('prefetch', () => {
     const { deps, client } = makeDeps();
     const handler = createHandler(deps);
     await handler.prefetch({ type: 'prefetch', owner: 'o', repo: 'r', prNumber: 1 });
+    expect(client.searchMetaByGuid).not.toHaveBeenCalled(); // prefetch は 10 req/min の Code Search に触れない
     const fetchesAfterPrefetch = client.getFileAtRef.mock.calls.length;
     const res = await handler.semanticDiff(REQ);
     expect(res.ok).toBe(true);

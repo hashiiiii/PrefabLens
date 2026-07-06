@@ -48,4 +48,26 @@ describe('createQueue', () => {
     await expect(queue(async () => { throw new Error('boom'); })).rejects.toThrow('boom');
     await expect(queue(async () => 'next')).resolves.toBe('next');
   });
+
+  it('normalizes a synchronous throw into a rejection without losing a slot', async () => {
+    // task() が Promise を返す前に throw しても active が漏れない: limit 1 で後続が動けば漏れていない
+    const queue = createQueue(1);
+    const syncThrow = (() => { throw new Error('sync boom'); }) as () => Promise<never>;
+    await expect(queue(syncThrow)).rejects.toThrow('sync boom');
+    await expect(queue(async () => 'next')).resolves.toBe('next');
+  });
+
+  it('keeps pumping when a queued task throws synchronously on dispatch', async () => {
+    // pump() の .finally 内から起動されるタスクの同期 throw が未処理拒否にならず、呼び出し元の Promise が確定する
+    const queue = createQueue(1);
+    const gate = deferred();
+    const first = queue(async () => { await gate.promise; });
+    const syncThrow = (() => { throw new Error('boom'); }) as () => Promise<never>;
+    const bad = queue(syncThrow);
+    const good = queue(async () => 'ok');
+    gate.resolve();
+    await first;
+    await expect(bad).rejects.toThrow('boom');
+    await expect(good).resolves.toBe('ok');
+  });
 });

@@ -11,10 +11,14 @@ export function createQueue(limit: number): Queue {
     while (active < limit && pending.length) {
       const job = pending.shift()!;
       active++;
-      job.run().then(job.resolve, job.reject).finally(() => {
-        active--;
-        pump();
-      });
+      // 同期 throw も reject に正規化する: ここで漏れると active が戻らず、キューが永久に詰まる
+      Promise.resolve()
+        .then(job.run)
+        .then(job.resolve, job.reject)
+        .finally(() => {
+          active--;
+          pump();
+        });
     }
   };
   return <T>(task: () => Promise<T>, opts?: { front?: boolean }) =>

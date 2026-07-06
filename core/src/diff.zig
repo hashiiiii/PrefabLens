@@ -77,7 +77,7 @@ test "diff: nested field path and added field" {
     const fd = try compute(arena, before, after);
     const d = findDoc(fd, 4).?;
     try testing.expectEqual(model.Status.modified, d.status);
-    // Expect one modified leaf (m_LocalPosition.y) plus added subtree (m_LocalScale.*).
+    // 期待: modified な leaf(m_LocalPosition.y)+ added なサブツリー(m_LocalScale)。
     var saw_y = false;
     var saw_added_scale = false;
     for (d.fields) |f| {
@@ -99,9 +99,9 @@ test "diff: duplicate before fileIDs match the first occurrence" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
-    // Malformed anchors default file_id to 0 in the parser, so genuine
-    // duplicates occur; the linear scan this index replaced matched the
-    // FIRST document, and that semantics must be preserved.
+    // 不正な anchor は parser が file_id を 0 に落とすため、重複は実際に
+    // 起こる。index 導入前の線形探索は「最初の」ドキュメントに一致して
+    // いたので、そのセマンティクスを維持しなければならない。
     const before =
         \\--- !u!114 &5
         \\MonoBehaviour:
@@ -119,7 +119,7 @@ test "diff: duplicate before fileIDs match the first occurrence" {
     const d = findDoc(fd, 5).?;
     try testing.expectEqual(model.Status.modified, d.status);
     try testing.expectEqual(@as(usize, 1), d.fields.len);
-    // First occurrence wins: before must be 100, not the duplicate's 999.
+    // 最初の出現が勝つ: before は重複側の 999 ではなく 100。
     try testing.expectEqualStrings("100", d.fields[0].before.?.scalar);
     try testing.expectEqualStrings("150", d.fields[0].after.?.scalar);
 }
@@ -139,7 +139,7 @@ test "diff: unresolved guids collected from external refs" {
         \\  m_Script: {fileID: 1, guid: bbbb, type: 3}
     ;
     const fd = try compute(arena, before, after);
-    // Both aaaa and bbbb are external guids referenced; both should appear.
+    // aaaa と bbbb はどちらも参照された外部 guid なので両方現れる。
     var saw_a = false;
     var saw_b = false;
     for (fd.unresolved_guids) |g| {
@@ -556,8 +556,8 @@ fn buildIndex(arena: std.mem.Allocator, docs: []model.Document) !std.AutoHashMap
     var idx = std.AutoHashMap(i64, *model.Document).init(arena);
     try idx.ensureTotalCapacity(@intCast(docs.len));
     for (docs) |*d| {
-        // First occurrence wins on duplicate fileIDs, matching the linear
-        // scan this index replaced (duplicates occur with malformed anchors).
+        // fileID 重複は最初の出現が勝つ(不正な anchor で発生する)。
+        // index 導入前の線形探索と同じセマンティクス。
         const gop = idx.getOrPutAssumeCapacity(d.file_id);
         if (!gop.found_existing) gop.value_ptr.* = d;
     }
@@ -572,7 +572,7 @@ fn scriptGuid(doc: *const model.Document) ?[]const u8 {
     };
 }
 
-/// "Assembly-CSharp::Cylinder1" -> "Cylinder1"(最後の ':' より後)。
+// "Assembly-CSharp::Cylinder1" -> "Cylinder1"(最後の ':' より後)。
 fn editorClassName(doc: *const model.Document) ?[]const u8 {
     const v = model.findValue(doc.body.map, "m_EditorClassIdentifier") orelse return null;
     const s = switch (v.*) {
@@ -583,7 +583,7 @@ fn editorClassName(doc: *const model.Document) ?[]const u8 {
     return if (tail.len != 0) tail else null;
 }
 
-/// 生の field diff から Inspector 非表示を落とし、path を表示名に置換する。
+// 生の field diff から Inspector 非表示を落とし、path を表示名に置換する。
 fn presentFields(arena: std.mem.Allocator, raw: []FieldDiff) ![]FieldDiff {
     var kept: std.ArrayList(FieldDiff) = .empty;
     for (raw) |f| {
@@ -597,7 +597,7 @@ fn presentFields(arena: std.mem.Allocator, raw: []FieldDiff) ![]FieldDiff {
 
 fn resolvedTypeName(doc: *const model.Document) []const u8 {
     if (classid.typeName(doc.class_id)) |n| return n;
-    // Unknown classID: fall back to the document's own top key.
+    // 未知の classID はドキュメント自身のトップレベルキーに fallback。
     return doc.type_name;
 }
 
@@ -606,17 +606,17 @@ pub fn compute(arena: std.mem.Allocator, before_src: []const u8, after_src: []co
     const after = try parser.parse(arena, after_src);
 
     var docs: std.ArrayList(DocDiff) = .empty;
-    // Array hash map: preserves first-insertion order so unresolvedGuids
-    // serializes deterministically in reference order.
+    // array hash map は初回挿入順を保持するので、unresolvedGuids が
+    // 参照順で決定的にシリアライズされる。
     var guids: std.StringArrayHashMapUnmanaged(void) = .empty;
 
-    // fileID -> *Document indices so the union walk below is O(n) instead of
-    // O(n^2) linear scans (matters at scene scale: tens of thousands of docs).
+    // fileID -> *Document の索引。以降の和集合の走査を O(n^2) の線形探索
+    // ではなく O(n) にする(数万 doc のシーン規模で効く)。
     var before_idx = try buildIndex(arena, before);
     var after_idx = try buildIndex(arena, after);
 
-    // Walk the union of file_ids: iterate `after` first (preserves after order),
-    // then `before`-only documents.
+    // file_id の和集合を歩く: まず `after` を順に(after の順序を保つ)、
+    // 次に `before` にしかないドキュメントを処理する。
     for (after) |*ad| {
         if (ad.stripped) continue;
         try collectGuids(arena, &guids, ad.body);
@@ -697,7 +697,7 @@ pub fn compute(arena: std.mem.Allocator, before_src: []const u8, after_src: []co
     };
 }
 
-/// Recursive field diff. `prefix` is the dotted/indexed path to `a`/`b`.
+// 再帰的な field diff。`prefix` は `a`/`b` へのドット/添字区切りパス。
 fn diffNode(
     arena: std.mem.Allocator,
     out: *std.ArrayList(FieldDiff),
@@ -705,7 +705,7 @@ fn diffNode(
     a: *const Node,
     b: *const Node,
 ) anyerror!void {
-    // Same kind?
+    // 同じ種別なら再帰。
     if (a.* == .map and b.* == .map) {
         try diffMap(arena, out, prefix, a.map, b.map);
         return;
@@ -714,7 +714,7 @@ fn diffNode(
         try diffSeq(arena, out, prefix, a.seq, b.seq);
         return;
     }
-    // Leaf (scalar/ref) or kind change.
+    // leaf(scalar/ref)または種別の変化。
     if (!Node.eql(a, b)) {
         try out.append(arena, .{ .path = prefix, .status = .modified, .before = a, .after = b });
     }
@@ -727,7 +727,7 @@ fn diffMap(
     a: []model.Entry,
     b: []model.Entry,
 ) anyerror!void {
-    // keys in a: modified/removed/recurse
+    // a にあるキー: modified/removed または再帰
     for (a) |ea| {
         const path = try joinKey(arena, prefix, ea.key);
         if (model.findValue(b, ea.key)) |bv| {
@@ -736,7 +736,7 @@ fn diffMap(
             try flattenSubtree(arena, out, path, ea.value, .removed);
         }
     }
-    // keys only in b: added
+    // b にしかないキー: added
     for (b) |eb| {
         if (model.findValue(a, eb.key) == null) {
             const path = try joinKey(arena, prefix, eb.key);
@@ -782,7 +782,7 @@ fn isVectorMap(entries: []model.Entry) bool {
     return true;
 }
 
-/// "(a, b, c)" 形の合成スカラー Node("Position: (2, 3, 1)" 等の 1 行表示用)。
+// "(a, b, c)" 形の合成スカラー Node("Position: (2, 3, 1)" 等の 1 行表示用)。
 fn parenJoinNode(arena: std.mem.Allocator, vals: []const []const u8) !*Node {
     var out: std.ArrayList(u8) = .empty;
     try out.append(arena, '(');
@@ -810,7 +810,7 @@ fn appendLeaf(arena: std.mem.Allocator, out: *std.ArrayList(FieldDiff), path: []
     });
 }
 
-/// added/removed サブツリーを leaf 単位に展開する。ベクトル風 map は 1 行に縮約。
+// added/removed サブツリーを leaf 単位に展開する。ベクトル風 map は 1 行に縮約。
 fn flattenSubtree(
     arena: std.mem.Allocator,
     out: *std.ArrayList(FieldDiff),
@@ -873,7 +873,7 @@ fn objRefIfSet(n: ?*Node) ?*Node {
     };
 }
 
-/// objectReference が設定されていればそれ、なければ value。
+// objectReference が設定されていればそれ、なければ value。
 fn modValue(m: Mod) ?*Node {
     return m.obj_ref orelse m.value;
 }
@@ -931,9 +931,9 @@ fn diffOverrides(arena: std.mem.Allocator, before_doc: ?*const model.Document, a
     return out.toOwnedSlice(arena);
 }
 
-/// group 単位で安定ソート(Transform → GameObject → Overrides)。
-/// レンダラは同一グループの行が連続することを前提に見出しを出すため、
-/// 生の m_Modifications 順を group ごとに束ね直す。
+// group 単位で安定ソート(Transform → GameObject → Overrides)。
+// レンダラは同一グループの行が連続することを前提に見出しを出すため、
+// 生の m_Modifications 順を group ごとに束ね直す。
 fn groupRank(group: []const u8) u2 {
     if (std.mem.eql(u8, group, "Transform")) return 0;
     if (std.mem.eql(u8, group, "GameObject")) return 1;
@@ -969,8 +969,8 @@ fn scalarOf(n: ?*Node) ?[]const u8 {
     };
 }
 
-/// Exact equality on purpose: near-default values are real overrides and must
-/// stay visible (epsilon matching was evaluated and rejected).
+// 意図的な厳密一致: ほぼデフォルトに近い値も実在する override であり、
+// 表示され続けるべき(epsilon 比較は検討のうえ見送り済み)。
 fn numEql(s: []const u8, want: f64) bool {
     const v = std.fmt.parseFloat(f64, std.mem.trim(u8, s, " ")) catch return false;
     return v == want;
@@ -1046,7 +1046,7 @@ fn modificationSeqLen(doc: *const model.Document, key: []const u8) usize {
     };
 }
 
-/// m_Added*/m_Removed* の完全展開はスコープ外。件数の要約 1 行で情報が黙って消えるのを防ぐ。
+// m_Added*/m_Removed* の完全展開はスコープ外。件数の要約 1 行で情報が黙って消えるのを防ぐ。
 fn appendStructuralSummaries(arena: std.mem.Allocator, out: *std.ArrayList(model.OverrideDiff), before_doc: ?*const model.Document, after_doc: *const model.Document) !void {
     const keys = [_]struct { key: []const u8, label: []const u8 }{
         .{ .key = "m_AddedGameObjects", .label = "Added GameObjects" },

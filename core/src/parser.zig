@@ -105,7 +105,7 @@ test "parse: ref with guid and type, and a non-ref flow map (vector)" {
     try testing.expectEqual(@as(i64, 3), script.ref.type_id.?);
 
     const pos = model.findValue(doc.body.map, "m_LocalPosition").?;
-    // A flow map without fileID stays a .map, not a .ref.
+    // fileID を持たない flow map は .ref にならず .map のまま。
     const x = model.findValue(pos.map, "x").?;
     try testing.expectEqualStrings("1", x.scalar);
 
@@ -202,8 +202,8 @@ test "parse: deeply nested flow value is rejected instead of overflowing the sta
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
-    // Enough nesting to previously blow the stack (~14000 levels crashes);
-    // 5000 is well past any sane cap and well within the 200 KB file budget.
+    // かつてスタックを溢れさせた深さ(~14000 段でクラッシュ)を再現する規模。
+    // 5000 は正気な上限をはるかに超え、かつ 200 KB のファイル予算には収まる。
     const depth = 5000;
     var src: std.ArrayList(u8) = .empty;
     try src.appendSlice(arena, "--- !u!114 &1\nMonoBehaviour:\n  m_Field: ");
@@ -218,8 +218,8 @@ test "parse: sequence document body degrades to an empty map instead of crashing
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
-    // Unity never writes a sequence as a document body, but hostile input can;
-    // downstream reads body.map unconditionally, so it must stay a map.
+    // Unity はドキュメント本体にシーケンスを書かないが、敵対的入力では起こり得る。
+    // 下流は body.map を無条件に読むため、body は常に map でなければならない。
     const src =
         \\--- !u!1 &1
         \\GameObject:
@@ -305,8 +305,8 @@ const Parser = struct {
     }
 };
 
-/// Tokenize into significant logical lines (indent + content), dropping
-/// blanks, `%` directives, and `#` comments.
+// 意味のある論理行(インデント + 内容)に分解する。空行・`%` ディレクティブ・
+// `#` コメントは落とす。
 fn tokenize(arena: std.mem.Allocator, source: []const u8) ![]Line {
     var lines: std.ArrayList(Line) = .empty;
     var it = std.mem.splitScalar(u8, source, '\n');
@@ -357,11 +357,11 @@ fn parseDocument(p: *Parser) !Document {
     var body: *Node = undefined;
     if (p.peek()) |first| {
         if (!std.mem.startsWith(u8, first.text, "---")) {
-            _ = p.advance(); // the "TypeName:" line at indent 0
+            _ = p.advance(); // indent 0 の "TypeName:" 行
             type_name = stripTrailingColon(first.text);
             body = try parseBlock(p, indentOfNext(p, 2), 0);
-            // Downstream reads body.map unconditionally; a malformed body
-            // that parses as a sequence must not escape as a non-map node.
+            // 下流は body.map を無条件に読む。シーケンスとして parse された
+            // 不正な body を map 以外のノードとして外に出してはならない。
             if (body.* != .map) body = try emptyMap(p.arena);
         } else {
             body = try emptyMap(p.arena);
@@ -379,18 +379,18 @@ fn parseDocument(p: *Parser) !Document {
     };
 }
 
-/// The body's first field indent (Unity uses 2, but be tolerant): peek the
-/// next line; if it's deeper than 0, use its indent, else default.
+// 本体の最初のフィールドのインデント(Unity は 2 だが寛容に扱う): 次の行を
+// 覗き、0 より深ければそのインデント、そうでなければ default。
 fn indentOfNext(p: *const Parser, default_indent: usize) usize {
     if (p.peek()) |l| if (l.indent > 0 and !std.mem.startsWith(u8, l.text, "---")) return l.indent;
     return default_indent;
 }
 
-/// Unity YAML never nests more than a handful of levels deep; this is a
-/// generous cap that rejects hostile input before it can overflow the stack.
+// Unity YAML の入れ子は高々数段。スタックを溢れさせる敵対的入力を
+// 事前に拒否するための、十分に余裕を持った上限。
 const max_nesting_depth: usize = 128;
 
-/// Parse a block (mapping or sequence) whose entries sit at exactly `indent`.
+// エントリがちょうど `indent` に並ぶブロック(mapping または sequence)を parse する。
 fn parseBlock(p: *Parser, indent: usize, depth: usize) anyerror!*Node {
     if (depth > max_nesting_depth) return error.NestingTooDeep;
     const first = p.peek() orelse return emptyMap(p.arena);
@@ -418,10 +418,10 @@ fn parseMap(p: *Parser, indent: usize, depth: usize) anyerror!*Node {
     return makeNode(p.arena, .{ .map = try entries.toOwnedSlice(p.arena) });
 }
 
-/// Value of a "key:" line with nothing after the colon: a nested block at a
-/// deeper indent, or a block sequence whose dash items are aligned with the
-/// key's own indent (Unity's convention, e.g. `m_Component:` followed by
-/// `- component: {...}` at the same column); otherwise an empty map.
+// コロンの後に何もない "key:" 行の値: より深いインデントの入れ子ブロック、
+// またはキー自身のインデントにダッシュが揃うブロックシーケンス(Unity の
+// 慣習。`m_Component:` の直後に同じ桁で `- component: {...}` が続く形)。
+// どちらでもなければ空 map。
 fn parseNestedValue(p: *Parser, key_indent: usize, depth: usize) anyerror!*Node {
     if (p.peek()) |next| {
         const is_dash = std.mem.startsWith(u8, next.text, "- ") or std.mem.eql(u8, next.text, "-");
@@ -440,11 +440,11 @@ fn parseSeq(p: *Parser, indent: usize, depth: usize) anyerror!*Node {
         _ = p.advance();
         const rest = if (line.text.len >= 2) std.mem.trimStart(u8, line.text[1..], " ") else "";
         if (rest.len == 0) {
-            // "-" alone: nested block belongs to this item at deeper indent.
+            // "-" 単独: この項目の入れ子ブロックがより深いインデントに続く。
             const ci = indentOfNext(p, indent + 2);
             try items.append(p.arena, try parseBlock(p, ci, depth + 1));
         } else if (looksLikeMapEntry(rest)) {
-            // compact map item: first entry on the dash line, continuation at indent+2.
+            // コンパクトな map 項目: 先頭エントリはダッシュ行、続きは indent+2。
             try items.append(p.arena, try parseSeqMapItem(p, indent, rest, depth));
         } else {
             try items.append(p.arena, try parseValue(p.arena, rest, depth));
@@ -453,13 +453,13 @@ fn parseSeq(p: *Parser, indent: usize, depth: usize) anyerror!*Node {
     return makeNode(p.arena, .{ .seq = try items.toOwnedSlice(p.arena) });
 }
 
-/// A sequence item that is a mapping, e.g.
-///   - target: {fileID: 0}
-///     propertyPath: m_Name
-///     value: Foo
+// mapping であるシーケンス項目。例:
+//   - target: {fileID: 0}
+//     propertyPath: m_Name
+//     value: Foo
 fn parseSeqMapItem(p: *Parser, dash_indent: usize, first_line: []const u8, depth: usize) anyerror!*Node {
     var entries: std.ArrayList(Entry) = .empty;
-    // All keys of the item sit at the column just past "- ".
+    // 項目のキーはすべて "- " の直後の桁に並ぶ。
     const key_indent = dash_indent + 2;
     const kv = splitKeyValue(first_line);
     if (kv.value.len == 0) {
@@ -467,7 +467,7 @@ fn parseSeqMapItem(p: *Parser, dash_indent: usize, first_line: []const u8, depth
     } else {
         try entries.append(p.arena, .{ .key = kv.key, .value = try parseValue(p.arena, kv.value, depth) });
     }
-    // Continuation entries are indented two past the dash (aligned after "- ").
+    // 継続エントリはダッシュより 2 つ深い("- " の直後に揃う)。
     while (p.peek()) |line| {
         if (line.indent != key_indent) break;
         if (std.mem.startsWith(u8, line.text, "- ") or std.mem.eql(u8, line.text, "-")) break;
@@ -502,10 +502,10 @@ fn stripTrailingColon(s: []const u8) []const u8 {
 
 const KV = struct { key: []const u8, value: []const u8, has_colon: bool };
 
-/// Split "key: value" / "key:" at the first ": " or trailing ":".
-/// Does not split inside a flow value (the value starts after the first colon).
+// "key: value" / "key:" を最初の ": " または末尾の ":" で分割する。
+// flow 値の内側では分割しない(値は最初のコロンの後から始まる)。
 fn splitKeyValue(line: []const u8) KV {
-    // Find the first ":" that is followed by a space or end-of-line.
+    // 空白または行末が続く最初の ":" を探す。
     var i: usize = 0;
     while (i < line.len) : (i += 1) {
         if (line[i] == ':' and (i + 1 == line.len or line[i + 1] == ' ')) {
@@ -518,7 +518,7 @@ fn splitKeyValue(line: []const u8) KV {
 }
 
 fn looksLikeMapEntry(s: []const u8) bool {
-    if (s.len > 0 and s[0] == '{') return false; // flow value, not a map entry
+    if (s.len > 0 and s[0] == '{') return false; // flow 値であって map エントリではない
     const kv = splitKeyValue(s);
     return kv.has_colon and kv.key.len > 0;
 }
@@ -532,7 +532,7 @@ fn parseValue(arena: std.mem.Allocator, raw: []const u8, depth: usize) anyerror!
     return makeNode(arena, .{ .scalar = try unquote(arena, s) });
 }
 
-/// Parse a flow mapping `{a: b, c: d}`. If it has a `fileID` key, return a Ref node.
+// flow mapping `{a: b, c: d}` を parse する。`fileID` キーを持てば Ref ノードを返す。
 fn parseFlow(arena: std.mem.Allocator, s: []const u8, depth: usize) anyerror!*Node {
     const inner = stripBrackets(s, '{', '}');
     var entries: std.ArrayList(Entry) = .empty;
@@ -586,9 +586,9 @@ fn stripBrackets(s: []const u8, open: u8, close: u8) []const u8 {
     return t;
 }
 
-/// Strip enclosing quotes. Double-quoted scalars also resolve YAML's
-/// backslash escapes for `\"` and `\\` (the only escapes Unity emits),
-/// so the raw scalar holds the literal value rather than the source text.
+// 囲みの引用符を外す。double-quote のスカラーは YAML のバックスラッシュ
+// エスケープ `\"` と `\\`(Unity が出力する唯一のエスケープ)も解決し、
+// scalar がソース表記ではなくリテラル値を持つようにする。
 fn unquote(arena: std.mem.Allocator, s: []const u8) anyerror![]const u8 {
     if (s.len >= 2 and s[0] == '\'' and s[s.len - 1] == '\'') {
         return s[1 .. s.len - 1];
@@ -612,7 +612,7 @@ fn unquote(arena: std.mem.Allocator, s: []const u8) anyerror![]const u8 {
     return s;
 }
 
-/// Iterator over comma-separated parts at brace/bracket depth 0.
+// brace/bracket の深さ 0 にあるカンマで区切られた部分のイテレータ。
 const TopLevelIter = struct {
     s: []const u8,
     i: usize = 0,

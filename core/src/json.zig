@@ -22,8 +22,8 @@ pub fn serialize(arena: std.mem.Allocator, res: model.DiffResult, resolved: ?*co
     try w.writeByte(']');
 
     if (resolved) |r| {
-        // Scope to guids the diff actually references (not the whole project
-        // index), in the same deterministic order as unresolvedGuids.
+        // diff が実際に参照した guid だけに絞る(プロジェクト index 全体を
+        // 出さない)。順序は unresolvedGuids と同じで決定的。
         try w.writeAll(",\"resolved\":{");
         var first = true;
         for (res.unresolved_guids) |g| {
@@ -155,7 +155,7 @@ fn writeValue(w: *std.Io.Writer, node: ?*const Node) !void {
             if (r.type_id) |t| try w.print("{d}", .{t}) else try w.writeAll("null");
             try w.writeAll("}}");
         },
-        // Maps/seqs as field leaves are uncommon (they recurse), but render compactly.
+        // map/seq が leaf に来るのは稀(通常は再帰される)。コンパクトに表現する。
         .map => try w.writeAll("\"<map>\""),
         .seq => try w.writeAll("\"<seq>\""),
     }
@@ -349,8 +349,8 @@ test "json: resolved is scoped to referenced guids, ordered like unresolvedGuids
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
-    // A project index built from 2 .meta files -- guidA and guidC are both
-    // resolvable, but only guidA is actually referenced by the diff.
+    // 2 つの .meta から構築したプロジェクト index。guidA と guidC はどちらも
+    // 解決可能だが、diff が参照するのは guidA のみ。
     var resolver = Resolver.init(arena);
     try resolver.put("guidA", "Assets/Scripts/A.cs");
     try resolver.put("guidC", "Assets/Scripts/C.cs");
@@ -363,9 +363,9 @@ test "json: resolved is scoped to referenced guids, ordered like unresolvedGuids
     };
 
     const out = try serialize(arena, res, &resolver);
-    // Only the referenced guid is present in "resolved" ...
+    // "resolved" には参照された guid だけが載り、
     try testing.expect(std.mem.indexOf(u8, out, "\"resolved\":{\"guidA\":\"Assets/Scripts/A.cs\"}") != null);
-    // ... the unreferenced-but-resolvable guidC must not leak into the dump.
+    // 参照されていない guidC は解決可能でも出力に漏れない。
     try testing.expect(std.mem.indexOf(u8, out, "guidC") == null);
 }
 
@@ -378,7 +378,7 @@ test "json: resolved follows unresolvedGuids order, skipping guids the resolver 
     try resolver.put("guidA", "Assets/Scripts/A.cs");
     try resolver.put("guidB", "Assets/Scripts/B.cs");
 
-    // Referenced order is B, A; guidX is referenced but not in the project index.
+    // 参照順は B, A。guidX は参照されているがプロジェクト index に存在しない。
     var unresolved_guids = [_][]const u8{ "guidB", "guidA", "guidX" };
     const res: model.DiffResult = .{
         .roots = &.{},
@@ -389,7 +389,7 @@ test "json: resolved follows unresolvedGuids order, skipping guids the resolver 
     const out = try serialize(arena, res, &resolver);
     try testing.expect(std.mem.indexOf(u8, out, "\"resolved\":{\"guidB\":\"Assets/Scripts/B.cs\",\"guidA\":\"Assets/Scripts/A.cs\"}") != null);
     try testing.expect(std.mem.indexOf(u8, out, "guidX\":") == null);
-    // guidX stays listed as unresolved.
+    // guidX は unresolved のまま残る。
     try testing.expect(std.mem.indexOf(u8, out, "\"unresolvedGuids\":[\"guidB\",\"guidA\",\"guidX\"]") != null);
 }
 
@@ -408,6 +408,6 @@ test "json: string escaping" {
         \\  m_Name: "a\"b"
     ;
     const out = try root.diffToJson(arena, before, after);
-    // The quote inside the value must be escaped in JSON output.
+    // 値の中の引用符は JSON 出力でエスケープされる。
     try testing.expect(std.mem.indexOf(u8, out, "a\\\"b") != null);
 }

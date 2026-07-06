@@ -1,11 +1,11 @@
 const std = @import("std");
 const perf = @import("perf.zig");
 
-// Budget multipliers leave headroom for CI runner noise; nominal targets are
-// spec §5.7 (typical < 5ms, ~10MB scene < 150ms). We size a ~10MB scene and
-// assert it diffs under a generous CI ceiling.
-const big_objects = 50_000; // ~10 MB of YAML at ~200 bytes/object
-const ci_ceiling_ms = 600; // 4x the 150ms nominal; fails only on real regressions
+// 予算は CI ランナーのノイズを見込んで名目値より緩めてある。名目値は
+// spec §5.7(通常 < 5ms、~10MB シーン < 150ms)。~10MB 相当のシーンを
+// 生成し、CI 上限内で diff できることを検証する。
+const big_objects = 50_000; // 1 オブジェクト ~200 bytes として YAML ~10 MB
+const ci_ceiling_ms = 600; // 名目 150ms の 4 倍。真の退行でのみ失敗する
 
 pub fn main(init: std.process.Init) !void {
     var arena_state = std.heap.ArenaAllocator.init(std.heap.page_allocator);

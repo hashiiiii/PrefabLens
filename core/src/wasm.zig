@@ -1,5 +1,5 @@
-//! WASM C ABI ラッパ(親仕様 §5.6)。diff 1 回 = 1 arena、グローバル可変状態なし。
-//! 戻り値は u32(LE)長さ前置の JSON バイト列。呼び出し側が free(ptr, 4 + len) で解放する。
+// WASM C ABI ラッパ(親仕様 §5.6)。diff 1 回 = 1 arena、グローバル可変状態なし。
+// 戻り値は u32(LE)長さ前置の JSON バイト列。呼び出し側が free(ptr, 4 + len) で解放する。
 const std = @import("std");
 const core = @import("root.zig");
 

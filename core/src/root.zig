@@ -1,4 +1,3 @@
-//! By convention, root.zig is the root source file when making a package.
 const std = @import("std");
 pub const model = @import("model.zig");
 pub const classid = @import("classid.zig");

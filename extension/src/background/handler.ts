@@ -32,19 +32,17 @@ export function createHandler(deps: Deps): (req: SemanticDiffRequest) => Promise
    *  検索の失敗(レート制限含む)で diff は落とさない: 解決できた分だけ載せる。 */
   async function searchUnresolved(json: DiffV2, client: ClientLike, owner: string, repo: string, repoKey: string): Promise<DiffV2> {
     const resolved = { ...json.resolved };
-    // hasOwn: guid は任意文字列なので 'constructor' 等が in 演算子でプロトタイプに誤ヒットしない
+    // hasOwn: guid は任意文字列なので 'constructor' 等が Object.prototype に誤ヒットしない(cached も同様)
     const pending = json.unresolvedGuids.filter((g) => !Object.hasOwn(resolved, g) && !misses.has(`${repoKey}:${g}`));
     if (!pending.length) return { ...json, resolved };
     const cached = await deps.guidCache.load(repoKey);
-    const found: Record<string, string> = {};
-    let searches = 0;
+    const unknown: string[] = [];
     for (const g of pending) {
-      // hasOwn: guid は任意文字列なので 'constructor' 等で Object.prototype を拾わない
-      if (Object.hasOwn(cached, g)) {
-        resolved[g] = cached[g]!;
-        continue;
-      }
-      if (searches++ >= MAX_SEARCHES) continue;
+      if (Object.hasOwn(cached, g)) resolved[g] = cached[g]!;
+      else unknown.push(g);
+    }
+    const found: Record<string, string> = {};
+    for (const g of unknown.slice(0, MAX_SEARCHES)) {
       try {
         const path = await client.searchMetaByGuid(owner, repo, g);
         if (path) resolved[g] = found[g] = path;
@@ -73,8 +71,10 @@ export function createHandler(deps: Deps): (req: SemanticDiffRequest) => Promise
     const entry = contexts.get(key);
     if (entry && Date.now() - entry.at < CONTEXT_TTL_MS) return entry.ctx;
     const ctx = (async () => {
-      const refs = await client.getPrRefs(owner, repo, prNumber);
-      const files = await client.listPrFiles(owner, repo, prNumber);
+      const [refs, files] = await Promise.all([
+        client.getPrRefs(owner, repo, prNumber),
+        client.listPrFiles(owner, repo, prNumber),
+      ]);
       const guidIndex = await buildGuidIndex(files, async (path, side) => {
         const bytes = await fetchBlob(client, owner, repo, path, side === 'base' ? refs.baseSha : refs.headSha);
         return bytes ? new TextDecoder().decode(bytes) : null;
@@ -95,13 +95,16 @@ export function createHandler(deps: Deps): (req: SemanticDiffRequest) => Promise
       const { refs, files, guidIndex } = await loadContext(client, req.owner, req.repo, req.prNumber);
 
       const file = files.find((f) => f.path === req.path);
+      // 一覧に無い場合(files API は 3000 件で打ち切り)は modified 扱い: 無い側は 404 → EMPTY に落ちるだけ
       const status = file?.status ?? 'modified';
       const beforePath = file?.previousPath ?? req.path;
 
-      const before =
-        status === 'added' ? EMPTY : ((await fetchBlob(client, req.owner, req.repo, beforePath, refs.baseSha)) ?? EMPTY);
-      const after =
-        status === 'removed' ? EMPTY : ((await fetchBlob(client, req.owner, req.repo, req.path, refs.headSha)) ?? EMPTY);
+      const fetchSide = (path: string, sha: string) =>
+        fetchBlob(client, req.owner, req.repo, path, sha).then((bytes) => bytes ?? EMPTY);
+      const [before, after] = await Promise.all([
+        status === 'added' ? EMPTY : fetchSide(beforePath, refs.baseSha),
+        status === 'removed' ? EMPTY : fetchSide(req.path, refs.headSha),
+      ]);
 
       if (!req.force && before.length + after.length > TOO_LARGE_BYTES) {
         return { ok: false, error: 'too-large', bytes: before.length + after.length };

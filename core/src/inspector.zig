@@ -33,7 +33,7 @@ test "inspector: groupOf infers pseudo component from propertyPath" {
     try testing.expectEqualStrings("Overrides", groupOf("maxHp"));
 }
 
-/// Inspector に表示されないフィールド(パス先頭セグメントで判定)。
+// Inspector に表示されないフィールド(パス先頭セグメントで判定)。
 const hidden = [_][]const u8{
     "m_ObjectHideFlags",
     "m_CorrespondingSourceObject",
@@ -50,7 +50,7 @@ const hidden = [_][]const u8{
     "m_RootOrder",
 };
 
-/// 主要ビルトインの Inspector 表示名(先頭セグメント単位)。
+// 主要ビルトインの Inspector 表示名(先頭セグメント単位)。
 const display = [_]struct { raw: []const u8, shown: []const u8 }{
     .{ .raw = "m_LocalPosition", .shown = "Position" },
     .{ .raw = "m_LocalRotation", .shown = "Rotation" },
@@ -88,15 +88,15 @@ pub fn displayPath(arena: std.mem.Allocator, path: []const u8) ![]const u8 {
     return out.toOwnedSlice(arena);
 }
 
-/// "[N]" 添字は名前部の後ろにそのまま残す。
+// "[N]" 添字は名前部の後ろにそのまま残す。
 fn appendSegment(arena: std.mem.Allocator, out: *std.ArrayList(u8), seg: []const u8) !void {
     const br = std.mem.indexOfScalar(u8, seg, '[') orelse seg.len;
     try appendNicified(arena, out, seg[0..br]);
     try out.appendSlice(arena, seg[br..]);
 }
 
-/// Unity の ObjectNames.NicifyVariableName 相当: 固定テーブル →
-/// "m_" 除去 + 先頭大文字化 + 小文字/数字→大文字境界に空白挿入。
+// Unity の ObjectNames.NicifyVariableName 相当: 固定テーブル →
+// "m_" 除去 + 先頭大文字化 + 小文字/数字→大文字境界に空白挿入。
 fn appendNicified(arena: std.mem.Allocator, out: *std.ArrayList(u8), name: []const u8) !void {
     for (display) |d| if (std.mem.eql(u8, name, d.raw)) {
         try out.appendSlice(arena, d.shown);
@@ -125,8 +125,7 @@ fn appendNicified(arena: std.mem.Allocator, out: *std.ArrayList(u8), name: []con
 }
 
 const transform_props = [_][]const u8{
-    "m_LocalPosition", "m_LocalRotation", "m_LocalScale",
-    "m_LocalEulerAnglesHint", "m_ConstrainProportionsScale",
+    "m_LocalPosition", "m_LocalRotation", "m_LocalScale", "m_LocalEulerAnglesHint", "m_ConstrainProportionsScale",
 };
 const game_object_props = [_][]const u8{
     "m_Name", "m_IsActive", "m_TagString", "m_Layer", "m_StaticEditorFlags", "m_Icon",

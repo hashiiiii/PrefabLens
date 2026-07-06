@@ -77,7 +77,8 @@ test "diff: nested field path and added field" {
     const fd = try compute(arena, before, after);
     const d = findDoc(fd, 4).?;
     try testing.expectEqual(model.Status.modified, d.status);
-    // Expect one modified leaf (m_LocalPosition.y) plus added subtree (m_LocalScale.*).
+    // 期待: modified な leaf(m_LocalPosition.y)と、added な m_LocalScale が
+    // ベクトル縮約されて "Scale" 1 行になること。
     var saw_y = false;
     var saw_added_scale = false;
     for (d.fields) |f| {
@@ -87,9 +88,10 @@ test "diff: nested field path and added field" {
             try testing.expectEqualStrings("0", f.before.?.scalar);
             try testing.expectEqualStrings("5", f.after.?.scalar);
         }
-        if (std.mem.startsWith(u8, f.path, "Scale")) {
+        if (std.mem.eql(u8, f.path, "Scale")) {
             saw_added_scale = true;
             try testing.expectEqual(model.Status.added, f.status);
+            try testing.expectEqualStrings("(1, 1, 1)", f.after.?.scalar);
         }
     }
     try testing.expect(saw_y and saw_added_scale);
@@ -99,9 +101,9 @@ test "diff: duplicate before fileIDs match the first occurrence" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
-    // Malformed anchors default file_id to 0 in the parser, so genuine
-    // duplicates occur; the linear scan this index replaced matched the
-    // FIRST document, and that semantics must be preserved.
+    // 不正な anchor は parser が file_id を 0 に落とすため、重複は実際に
+    // 起こる。index 導入前の線形探索は「最初の」ドキュメントに一致して
+    // いたので、そのセマンティクスを維持しなければならない。
     const before =
         \\--- !u!114 &5
         \\MonoBehaviour:
@@ -119,7 +121,7 @@ test "diff: duplicate before fileIDs match the first occurrence" {
     const d = findDoc(fd, 5).?;
     try testing.expectEqual(model.Status.modified, d.status);
     try testing.expectEqual(@as(usize, 1), d.fields.len);
-    // First occurrence wins: before must be 100, not the duplicate's 999.
+    // 最初の出現が勝つ: before は重複側の 999 ではなく 100。
     try testing.expectEqualStrings("100", d.fields[0].before.?.scalar);
     try testing.expectEqualStrings("150", d.fields[0].after.?.scalar);
 }
@@ -139,7 +141,7 @@ test "diff: unresolved guids collected from external refs" {
         \\  m_Script: {fileID: 1, guid: bbbb, type: 3}
     ;
     const fd = try compute(arena, before, after);
-    // Both aaaa and bbbb are external guids referenced; both should appear.
+    // aaaa と bbbb はどちらも参照された外部 guid なので両方現れる。
     var saw_a = false;
     var saw_b = false;
     for (fd.unresolved_guids) |g| {
@@ -260,6 +262,47 @@ test "diff: editor class identifier tail is extracted" {
     try testing.expectEqualStrings("Cylinder1", findDoc(fd, 5).?.class_name.?);
 }
 
+test "diff: editor class identifier without separator or with empty tail" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const src =
+        \\--- !u!114 &5
+        \\MonoBehaviour:
+        \\  m_EditorClassIdentifier: Cylinder1
+        \\--- !u!114 &6
+        \\MonoBehaviour:
+        \\  m_EditorClassIdentifier: Assembly-CSharp::
+    ;
+    const fd = try compute(arena, src, src);
+    // 区切りなしは全体をクラス名として使い、末尾が空なら class_name なし。
+    try testing.expectEqualStrings("Cylinder1", findDoc(fd, 5).?.class_name.?);
+    try testing.expect(findDoc(fd, 6).?.class_name == null);
+}
+
+test "diff: unresolved guids are deduplicated in first-reference order" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const after =
+        \\--- !u!114 &5
+        \\MonoBehaviour:
+        \\  m_Script: {fileID: 1, guid: bbb, type: 3}
+        \\--- !u!114 &6
+        \\MonoBehaviour:
+        \\  m_Script: {fileID: 1, guid: aaa, type: 3}
+        \\--- !u!114 &7
+        \\MonoBehaviour:
+        \\  m_Script: {fileID: 1, guid: bbb, type: 3}
+    ;
+    const fd = try compute(arena, "", after);
+    // 重複する bbb は 1 回だけ、初回参照順(bbb, aaa)で並ぶ。
+    // JSON の unresolvedGuids/resolved の決定的な順序はこれに依存する。
+    try testing.expectEqual(@as(usize, 2), fd.unresolved_guids.len);
+    try testing.expectEqualStrings("bbb", fd.unresolved_guids[0]);
+    try testing.expectEqualStrings("aaa", fd.unresolved_guids[1]);
+}
+
 test "diff: sortByGroup keeps same-group rows contiguous beyond known ranks" {
     // レンダラは「同一グループの行は連続」を core の不変条件として前提にする。
     // groupOf が将来 4 つ目のグループ名を返しても壊れないことを直接固定する。
@@ -297,34 +340,6 @@ test "diff: added document enumerates fields with vector collapse" {
     try testing.expectEqualStrings("Position", d.fields[0].path);
     try testing.expectEqualStrings("(4, 0, 0)", d.fields[0].after.?.scalar);
     try testing.expectEqualStrings("Max Hp", d.fields[1].path);
-}
-
-test "diff: added map field inside a modified document is flattened" {
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
-    const before =
-        \\--- !u!4 &4
-        \\Transform:
-        \\  m_LocalPosition: {x: 0, y: 0, z: 0}
-    ;
-    const after =
-        \\--- !u!4 &4
-        \\Transform:
-        \\  m_LocalPosition: {x: 0, y: 5, z: 0}
-        \\  m_LocalScale: {x: 1, y: 1, z: 1}
-    ;
-    const fd = try compute(arena, before, after);
-    const d = findDoc(fd, 4).?;
-    var saw_scale = false;
-    for (d.fields) |f| {
-        if (std.mem.eql(u8, f.path, "Scale")) {
-            saw_scale = true;
-            try testing.expectEqual(model.Status.added, f.status);
-            try testing.expectEqualStrings("(1, 1, 1)", f.after.?.scalar);
-        }
-    }
-    try testing.expect(saw_scale);
 }
 
 test "diff: prefab instance override keyed by target+propertyPath" {
@@ -556,8 +571,8 @@ fn buildIndex(arena: std.mem.Allocator, docs: []model.Document) !std.AutoHashMap
     var idx = std.AutoHashMap(i64, *model.Document).init(arena);
     try idx.ensureTotalCapacity(@intCast(docs.len));
     for (docs) |*d| {
-        // First occurrence wins on duplicate fileIDs, matching the linear
-        // scan this index replaced (duplicates occur with malformed anchors).
+        // fileID 重複は最初の出現が勝つ(不正な anchor で発生する)。
+        // index 導入前の線形探索と同じセマンティクス。
         const gop = idx.getOrPutAssumeCapacity(d.file_id);
         if (!gop.found_existing) gop.value_ptr.* = d;
     }
@@ -572,19 +587,18 @@ fn scriptGuid(doc: *const model.Document) ?[]const u8 {
     };
 }
 
-/// "Assembly-CSharp::Cylinder1" -> "Cylinder1"(最後の ':' より後)。
+// "Assembly-CSharp::Cylinder1" -> "Cylinder1"(最後の ':' より後)。
 fn editorClassName(doc: *const model.Document) ?[]const u8 {
     const v = model.findValue(doc.body.map, "m_EditorClassIdentifier") orelse return null;
     const s = switch (v.*) {
         .scalar => |s| s,
         else => return null,
     };
-    const idx = std.mem.lastIndexOfScalar(u8, s, ':') orelse (if (s.len != 0) return s else return null);
-    const tail = s[idx + 1 ..];
+    const tail = if (std.mem.lastIndexOfScalar(u8, s, ':')) |idx| s[idx + 1 ..] else s;
     return if (tail.len != 0) tail else null;
 }
 
-/// 生の field diff から Inspector 非表示を落とし、path を表示名に置換する。
+// 生の field diff から Inspector 非表示を落とし、path を表示名に置換する。
 fn presentFields(arena: std.mem.Allocator, raw: []FieldDiff) ![]FieldDiff {
     var kept: std.ArrayList(FieldDiff) = .empty;
     for (raw) |f| {
@@ -598,7 +612,7 @@ fn presentFields(arena: std.mem.Allocator, raw: []FieldDiff) ![]FieldDiff {
 
 fn resolvedTypeName(doc: *const model.Document) []const u8 {
     if (classid.typeName(doc.class_id)) |n| return n;
-    // Unknown classID: fall back to the document's own top key.
+    // 未知の classID はドキュメント自身のトップレベルキーに fallback。
     return doc.type_name;
 }
 
@@ -607,21 +621,23 @@ pub fn compute(arena: std.mem.Allocator, before_src: []const u8, after_src: []co
     const after = try parser.parse(arena, after_src);
 
     var docs: std.ArrayList(DocDiff) = .empty;
-    var guids = GuidSet.init(arena);
+    // array hash map は初回挿入順を保持するので、unresolvedGuids が
+    // 参照順で決定的にシリアライズされる。
+    var guids: std.StringArrayHashMapUnmanaged(void) = .empty;
 
-    // fileID -> *Document indices so the union walk below is O(n) instead of
-    // O(n^2) linear scans (matters at scene scale: tens of thousands of docs).
+    // fileID -> *Document の索引。以降の和集合の走査を O(n^2) の線形探索
+    // ではなく O(n) にする(数万 doc のシーン規模で効く)。
     var before_idx = try buildIndex(arena, before);
     var after_idx = try buildIndex(arena, after);
 
-    // Walk the union of file_ids: iterate `after` first (preserves after order),
-    // then `before`-only documents.
+    // file_id の和集合を歩く: まず `after` を順に(after の順序を保つ)、
+    // 次に `before` にしかないドキュメントを処理する。
     for (after) |*ad| {
         if (ad.stripped) continue;
-        try collectGuids(&guids, ad.body);
+        try collectGuids(arena, &guids, ad.body);
         const bd = before_idx.get(ad.file_id);
         if (bd) |b| {
-            try collectGuids(&guids, b.body);
+            try collectGuids(arena, &guids, b.body);
             if (ad.class_id == 1001) {
                 const overrides = try diffOverrides(arena, b, ad);
                 try docs.append(arena, .{
@@ -630,13 +646,13 @@ pub fn compute(arena: std.mem.Allocator, before_src: []const u8, after_src: []co
                     .type_name = resolvedTypeName(ad),
                     .script_guid = scriptGuid(ad),
                     .status = if (overrides.len == 0) .unchanged else .modified,
-                    .fields = &[_]FieldDiff{},
+                    .fields = &.{},
                     .overrides = overrides,
                 });
             } else {
                 var raw: std.ArrayList(FieldDiff) = .empty;
                 try diffNode(arena, &raw, "", b.body, ad.body);
-                const fields = try presentFields(arena, try raw.toOwnedSlice(arena));
+                const fields = try presentFields(arena, raw.items);
                 try docs.append(arena, .{
                     .file_id = ad.file_id,
                     .class_id = ad.class_id,
@@ -655,7 +671,7 @@ pub fn compute(arena: std.mem.Allocator, before_src: []const u8, after_src: []co
                     .type_name = resolvedTypeName(ad),
                     .script_guid = scriptGuid(ad),
                     .status = .added,
-                    .fields = &[_]FieldDiff{},
+                    .fields = &.{},
                     .overrides = try addedInstanceOverrides(arena, ad),
                 });
             } else {
@@ -668,7 +684,7 @@ pub fn compute(arena: std.mem.Allocator, before_src: []const u8, after_src: []co
                     .script_guid = scriptGuid(ad),
                     .class_name = editorClassName(ad),
                     .status = .added,
-                    .fields = try presentFields(arena, try raw.toOwnedSlice(arena)),
+                    .fields = try presentFields(arena, raw.items),
                 });
             }
         }
@@ -676,7 +692,7 @@ pub fn compute(arena: std.mem.Allocator, before_src: []const u8, after_src: []co
     for (before) |*bd| {
         if (bd.stripped) continue;
         if (after_idx.contains(bd.file_id)) continue;
-        try collectGuids(&guids, bd.body);
+        try collectGuids(arena, &guids, bd.body);
         try docs.append(arena, .{
             .file_id = bd.file_id,
             .class_id = bd.class_id,
@@ -684,19 +700,19 @@ pub fn compute(arena: std.mem.Allocator, before_src: []const u8, after_src: []co
             .script_guid = scriptGuid(bd),
             .class_name = editorClassName(bd),
             .status = .removed,
-            .fields = &[_]FieldDiff{},
+            .fields = &.{},
         });
     }
 
     return .{
         .docs = try docs.toOwnedSlice(arena),
-        .unresolved_guids = try guids.toSlice(),
+        .unresolved_guids = guids.keys(),
         .before = before,
         .after = after,
     };
 }
 
-/// Recursive field diff. `prefix` is the dotted/indexed path to `a`/`b`.
+// 再帰的な field diff。`prefix` は `a`/`b` へのドット/添字区切りパス。
 fn diffNode(
     arena: std.mem.Allocator,
     out: *std.ArrayList(FieldDiff),
@@ -704,16 +720,16 @@ fn diffNode(
     a: *const Node,
     b: *const Node,
 ) anyerror!void {
-    // Same kind?
-    if (std.meta.activeTag(a.*) == .map and std.meta.activeTag(b.*) == .map) {
+    // 同じ種別なら再帰。
+    if (a.* == .map and b.* == .map) {
         try diffMap(arena, out, prefix, a.map, b.map);
         return;
     }
-    if (std.meta.activeTag(a.*) == .seq and std.meta.activeTag(b.*) == .seq) {
+    if (a.* == .seq and b.* == .seq) {
         try diffSeq(arena, out, prefix, a.seq, b.seq);
         return;
     }
-    // Leaf (scalar/ref) or kind change.
+    // leaf(scalar/ref)または種別の変化。
     if (!Node.eql(a, b)) {
         try out.append(arena, .{ .path = prefix, .status = .modified, .before = a, .after = b });
     }
@@ -726,7 +742,7 @@ fn diffMap(
     a: []model.Entry,
     b: []model.Entry,
 ) anyerror!void {
-    // keys in a: modified/removed/recurse
+    // a にあるキー: modified/removed または再帰
     for (a) |ea| {
         const path = try joinKey(arena, prefix, ea.key);
         if (model.findValue(b, ea.key)) |bv| {
@@ -735,7 +751,7 @@ fn diffMap(
             try flattenSubtree(arena, out, path, ea.value, .removed);
         }
     }
-    // keys only in b: added
+    // b にしかないキー: added
     for (b) |eb| {
         if (model.findValue(a, eb.key) == null) {
             const path = try joinKey(arena, prefix, eb.key);
@@ -752,18 +768,17 @@ fn diffSeq(
     b: []*Node,
 ) anyerror!void {
     const n = @min(a.len, b.len);
-    var i: usize = 0;
-    while (i < n) : (i += 1) {
+    for (a[0..n], b[0..n], 0..) |ea, eb, i| {
         const path = try std.fmt.allocPrint(arena, "{s}[{d}]", .{ prefix, i });
-        try diffNode(arena, out, path, a[i], b[i]);
+        try diffNode(arena, out, path, ea, eb);
     }
-    while (i < a.len) : (i += 1) {
+    for (a[n..], n..) |ea, i| {
         const path = try std.fmt.allocPrint(arena, "{s}[{d}]", .{ prefix, i });
-        try flattenSubtree(arena, out, path, a[i], .removed);
+        try flattenSubtree(arena, out, path, ea, .removed);
     }
-    while (i < b.len) : (i += 1) {
+    for (b[n..], n..) |eb, i| {
         const path = try std.fmt.allocPrint(arena, "{s}[{d}]", .{ prefix, i });
-        try flattenSubtree(arena, out, path, b[i], .added);
+        try flattenSubtree(arena, out, path, eb, .added);
     }
 }
 
@@ -782,7 +797,7 @@ fn isVectorMap(entries: []model.Entry) bool {
     return true;
 }
 
-/// "(a, b, c)" 形の合成スカラー Node("Position: (2, 3, 1)" 等の 1 行表示用)。
+// "(a, b, c)" 形の合成スカラー Node("Position: (2, 3, 1)" 等の 1 行表示用)。
 fn parenJoinNode(arena: std.mem.Allocator, vals: []const []const u8) !*Node {
     var out: std.ArrayList(u8) = .empty;
     try out.append(arena, '(');
@@ -810,7 +825,7 @@ fn appendLeaf(arena: std.mem.Allocator, out: *std.ArrayList(FieldDiff), path: []
     });
 }
 
-/// added/removed サブツリーを leaf 単位に展開する。ベクトル風 map は 1 行に縮約。
+// added/removed サブツリーを leaf 単位に展開する。ベクトル風 map は 1 行に縮約。
 fn flattenSubtree(
     arena: std.mem.Allocator,
     out: *std.ArrayList(FieldDiff),
@@ -873,7 +888,7 @@ fn objRefIfSet(n: ?*Node) ?*Node {
     };
 }
 
-/// objectReference が設定されていればそれ、なければ value。
+// objectReference が設定されていればそれ、なければ value。
 fn modValue(m: Mod) ?*Node {
     return m.obj_ref orelse m.value;
 }
@@ -931,9 +946,9 @@ fn diffOverrides(arena: std.mem.Allocator, before_doc: ?*const model.Document, a
     return out.toOwnedSlice(arena);
 }
 
-/// group 単位で安定ソート(Transform → GameObject → Overrides)。
-/// レンダラは同一グループの行が連続することを前提に見出しを出すため、
-/// 生の m_Modifications 順を group ごとに束ね直す。
+// group 単位で安定ソート(Transform → GameObject → Overrides)。
+// レンダラは同一グループの行が連続することを前提に見出しを出すため、
+// 生の m_Modifications 順を group ごとに束ね直す。
 fn groupRank(group: []const u8) u2 {
     if (std.mem.eql(u8, group, "Transform")) return 0;
     if (std.mem.eql(u8, group, "GameObject")) return 1;
@@ -951,7 +966,7 @@ fn sortByGroup(overrides: []model.OverrideDiff) void {
             return std.mem.order(u8, a.group, b.group) == .lt;
         }
     };
-    std.sort.insertion(model.OverrideDiff, overrides, {}, Ctx.lessThan);
+    std.sort.block(model.OverrideDiff, overrides, {}, Ctx.lessThan);
 }
 
 const Placement = struct { prefix: []const u8, label: []const u8, comps: []const []const u8 };
@@ -969,6 +984,8 @@ fn scalarOf(n: ?*Node) ?[]const u8 {
     };
 }
 
+// 意図的な厳密一致: ほぼデフォルトに近い値も実在する override であり、
+// 表示され続けるべき(epsilon 比較は検討のうえ見送り済み)。
 fn numEql(s: []const u8, want: f64) bool {
     const v = std.fmt.parseFloat(f64, std.mem.trim(u8, s, " ")) catch return false;
     return v == want;
@@ -1044,7 +1061,7 @@ fn modificationSeqLen(doc: *const model.Document, key: []const u8) usize {
     };
 }
 
-/// m_Added*/m_Removed* の完全展開はスコープ外。件数の要約 1 行で情報が黙って消えるのを防ぐ。
+// m_Added*/m_Removed* の完全展開はスコープ外。件数の要約 1 行で情報が黙って消えるのを防ぐ。
 fn appendStructuralSummaries(arena: std.mem.Allocator, out: *std.ArrayList(model.OverrideDiff), before_doc: ?*const model.Document, after_doc: *const model.Document) !void {
     const keys = [_]struct { key: []const u8, label: []const u8 }{
         .{ .key = "m_AddedGameObjects", .label = "Added GameObjects" },
@@ -1068,29 +1085,11 @@ fn appendStructuralSummaries(arena: std.mem.Allocator, out: *std.ArrayList(model
 
 // ---- guid collection ----
 
-const GuidSet = struct {
-    arena: std.mem.Allocator,
-    map: std.StringHashMap(void),
-    order: std.ArrayList([]const u8),
-
-    fn init(arena: std.mem.Allocator) GuidSet {
-        return .{ .arena = arena, .map = std.StringHashMap(void).init(arena), .order = .empty };
-    }
-    fn add(self: *GuidSet, guid: []const u8) !void {
-        if (self.map.contains(guid)) return;
-        try self.map.put(guid, {});
-        try self.order.append(self.arena, guid);
-    }
-    fn toSlice(self: *GuidSet) ![][]const u8 {
-        return self.order.toOwnedSlice(self.arena);
-    }
-};
-
-fn collectGuids(set: *GuidSet, node: *const Node) anyerror!void {
+fn collectGuids(arena: std.mem.Allocator, set: *std.StringArrayHashMapUnmanaged(void), node: *const Node) anyerror!void {
     switch (node.*) {
-        .ref => |r| if (r.guid) |g| try set.add(g),
-        .map => |entries| for (entries) |e| try collectGuids(set, e.value),
-        .seq => |items| for (items) |it| try collectGuids(set, it),
+        .ref => |r| if (r.guid) |g| try set.put(arena, g, {}),
+        .map => |entries| for (entries) |e| try collectGuids(arena, set, e.value),
+        .seq => |items| for (items) |it| try collectGuids(arena, set, it),
         .scalar => {},
     }
 }

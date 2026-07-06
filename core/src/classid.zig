@@ -2,8 +2,8 @@ const std = @import("std");
 
 const Pair = struct { id: u32, name: []const u8 };
 
-// Common Unity classIDs (subset sufficient for prefab/scene/asset diffing).
-// Source: Unity "YAML Class ID Reference".
+// 頻出の Unity classID(prefab/scene/asset の diff に十分なサブセット)。
+// 出典: Unity "YAML Class ID Reference"。
 const table = [_]Pair{
     .{ .id = 1, .name = "GameObject" },
     .{ .id = 2, .name = "Component" },

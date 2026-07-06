@@ -1,5 +1,5 @@
-//! 検証 PR (hashiiiii/unity-yaml-playground#1) の実データに対する統合テスト。
-//! 期待値は spec の承認済みモック(docs/superpowers/specs/2026-07-03-semantic-diff-inspector-model-design.md)。
+// 検証 PR (hashiiiii/unity-yaml-playground#1) の実データに対する統合テスト。
+// 期待値は spec の承認済みモック(docs/superpowers/specs/2026-07-03-semantic-diff-inspector-model-design.md)。
 const std = @import("std");
 const root = @import("root.zig");
 const model = @import("model.zig");

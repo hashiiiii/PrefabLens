@@ -8,11 +8,11 @@ const diffmod = @import("diff.zig");
 const ComponentDiff = model.ComponentDiff;
 const ObjectDiff = model.ObjectDiff;
 
-/// Index helpers over the parsed documents (use the union of before+after).
+// パース済みドキュメント(before+after の和集合)への索引。
 const Index = struct {
-    // file_id -> DocDiff (status + fields), for quick component construction.
+    // file_id -> DocDiff(status + fields)。コンポーネント構築を速くする。
     diff_by_id: std.AutoHashMap(i64, diffmod.DocDiff),
-    // file_id -> *Document for the *structural* (after-preferred) version.
+    // file_id -> 構造解決用(after 優先)の *Document。
     doc_by_id: std.AutoHashMap(i64, *model.Document),
 
     fn structuralDoc(self: *Index, file_id: i64) ?*model.Document {
@@ -33,7 +33,7 @@ fn gameObjectIdOfComponent(doc: *model.Document) ?i64 {
 }
 
 fn transformOf(idx: *Index, go_id: i64) ?*model.Document {
-    // The GameObject lists its components; find the one whose doc is a Transform/RectTransform.
+    // GameObject が列挙するコンポーネントから Transform/RectTransform のものを探す。
     const go = idx.structuralDoc(go_id) orelse return null;
     const comps = model.findValue(go.body.map, "m_Component") orelse return null;
     if (comps.* != .seq) return null;
@@ -41,7 +41,7 @@ fn transformOf(idx: *Index, go_id: i64) ?*model.Document {
         const cref = if (item.* == .map) model.findValue(item.map, "component") else null;
         const cid = refFileId(cref) orelse continue;
         const cdoc = idx.structuralDoc(cid) orelse continue;
-        if (cdoc.class_id == 4 or cdoc.class_id == 224) return cdoc;
+        if (isTransformClass(cdoc.class_id)) return cdoc;
     }
     return null;
 }
@@ -58,7 +58,7 @@ fn sourcePrefabGuid(doc: *const model.Document) ?[]const u8 {
     };
 }
 
-/// m_Name override をインスタンス名として拾う(after 優先の structural doc から)。
+// m_Name override をインスタンス名として拾う(after 優先の structural doc から)。
 fn instanceName(idx: *Index, pi_id: i64) []const u8 {
     const doc = idx.structuralDoc(pi_id) orelse return "";
     const m = model.findValue(doc.body.map, "m_Modification") orelse return "";
@@ -78,12 +78,12 @@ fn instanceName(idx: *Index, pi_id: i64) []const u8 {
     return "";
 }
 
-/// 入れ子チェーン歩行の hop 上限。壊れたファイルで stripped PrefabInstance
-/// 同士が循環参照しても停止する(実プロジェクトの入れ子深度は数段)。
+// 入れ子チェーン歩行の hop 上限。壊れたファイルで stripped PrefabInstance
+// 同士が循環参照しても停止する(実プロジェクトの入れ子深度は数段)。
 const max_instance_hops = 8;
 
-/// stripped な PrefabInstance の m_PrefabInstance チェーンを外側へ辿り、
-/// 実体(非 stripped)の PrefabInstance の file_id を返す。
+// stripped な PrefabInstance の m_PrefabInstance チェーンを外側へ辿り、
+// 実体(非 stripped)の PrefabInstance の file_id を返す。
 fn resolveInstanceChain(idx: *Index, start_id: i64) ?i64 {
     var id = start_id;
     var hops: usize = 0;
@@ -96,8 +96,8 @@ fn resolveInstanceChain(idx: *Index, start_id: i64) ?i64 {
     return null;
 }
 
-/// Transform の file_id から親ノード(GameObject または PrefabInstance)の id。
-/// stripped Transform は m_PrefabInstance を辿って所属インスタンスに橋渡し。
+// Transform の file_id から親ノード(GameObject または PrefabInstance)の id。
+// stripped Transform は m_PrefabInstance を辿って所属インスタンスに橋渡し。
 fn ownerNodeIdOfTransform(idx: *Index, tr_id: i64) ?i64 {
     if (tr_id == 0) return null;
     const tr = idx.structuralDoc(tr_id) orelse return null;
@@ -150,14 +150,14 @@ pub fn build(arena: std.mem.Allocator, fd: diffmod.FlatDiff) !model.DiffResult {
         .doc_by_id = std.AutoHashMap(i64, *model.Document).init(arena),
     };
     for (fd.docs) |d| try idx.diff_by_id.put(d.file_id, d);
-    // Structural docs: prefer after, fall back to before (for removed objects).
+    // 構造解決用 doc: after 優先、removed オブジェクトは before に fallback。
     for (fd.before) |*d| try idx.doc_by_id.put(d.file_id, d);
-    for (fd.after) |*d| try idx.doc_by_id.put(d.file_id, d); // overwrites -> after wins
+    for (fd.after) |*d| try idx.doc_by_id.put(d.file_id, d); // 上書きにより after が勝つ
 
-    // Partition documents: GameObjects, PrefabInstances, their components, and loose docs.
+    // ドキュメントを仕分ける: GameObject、PrefabInstance、その所属コンポーネント、loose。
     var go_ids: std.ArrayList(i64) = .empty;
     var pi_ids: std.ArrayList(i64) = .empty;
-    // components grouped by owning GameObject/PrefabInstance id
+    // 所属先 GameObject/PrefabInstance の id でグループ化したコンポーネント
     var comps_by_owner = std.AutoHashMap(i64, std.ArrayList(ComponentDiff)).init(arena);
     var loose: std.ArrayList(ComponentDiff) = .empty;
 
@@ -173,52 +173,52 @@ pub fn build(arena: std.mem.Allocator, fd: diffmod.FlatDiff) !model.DiffResult {
         const owner = blk: {
             const doc = idx.structuralDoc(d.file_id) orelse break :blk null;
             const go_id = gameObjectIdOfComponent(doc) orelse break :blk null;
-            // Only a confirmed GameObject document owns components; an
-            // unresolvable ref ({fileID: 0} or dangling) would otherwise
-            // bucket the component under a phantom id and drop it.
+            // 所有者になれるのは GameObject と確認できた doc のみ。解決不能な
+            // 参照({fileID: 0} や宙ぶらりん)を許すと、コンポーネントが
+            // 幻の id の下に仕分けられて消えてしまう。
             const go_doc = idx.structuralDoc(go_id) orelse break :blk null;
             if (go_doc.class_id != 1) break :blk null;
-            // stripped GameObject (nested prefab instance's root, placed in
-            // the outer document) never becomes a node itself; bridge to its
-            // owning PrefabInstance so the component isn't silently dropped.
-            // The owning instance may itself be stripped (nested prefab), so
-            // walk the chain out to the nearest materialized instance.
+            // stripped GameObject(入れ子インスタンスの root が外側ドキュメントに
+            // 置かれたもの)はノードにならない。所属 PrefabInstance に橋渡しして
+            // コンポーネントが黙って消えないようにする。所属インスタンス自体も
+            // stripped の場合(入れ子 prefab)があるため、チェーンを実体化される
+            // 最寄りのインスタンスまで辿る。
             const owner_id = if (go_doc.stripped) inner: {
                 const pi_id = refFileId(model.findValue(go_doc.body.map, "m_PrefabInstance")) orelse break :blk null;
                 break :inner resolveInstanceChain(&idx, pi_id) orelse break :blk null;
             } else go_id;
-            // Stripped docs are excluded from fd.docs and never become nodes;
-            // only an owner that materializes may claim the component.
+            // stripped doc は fd.docs から除外されノードにならない。
+            // コンポーネントを引き取れるのは実体化する所有者だけ。
             break :blk if (idx.diff_by_id.contains(owner_id)) owner_id else null;
         };
         if (owner) |owner_id| {
             const gop = try comps_by_owner.getOrPut(owner_id);
             if (!gop.found_existing) gop.value_ptr.* = .empty;
-            // Collapse unchanged components with no fields.
+            // fields を持たない unchanged コンポーネントは畳む。
             if (d.status != .unchanged) try gop.value_ptr.append(arena, makeComponent(d));
         } else {
-            // No owning GameObject/PrefabInstance -> loose (e.g. ScriptableObject).
+            // 所属 GameObject/PrefabInstance なし -> loose(ScriptableObject 等)。
             if (d.status != .unchanged) try loose.append(arena, makeComponent(d));
         }
     }
 
-    // Build ObjectDiff per GameObject (without children yet).
+    // GameObject ごとの ObjectDiff を構築する(children はまだ空)。
     var obj_by_id = std.AutoHashMap(i64, ObjectDiff).init(arena);
     for (go_ids.items) |go_id| {
         const gd = idx.diff_by_id.get(go_id).?;
-        const comps: []ComponentDiff = if (comps_by_owner.get(go_id)) |list| list.items else &[_]ComponentDiff{};
+        const comps: []ComponentDiff = if (comps_by_owner.get(go_id)) |list| list.items else &.{};
         try obj_by_id.put(go_id, .{
             .file_id = go_id,
             .name = goName(&idx, go_id),
             .status = gd.status,
             .components = comps,
-            .children = &[_]ObjectDiff{},
+            .children = &.{},
         });
     }
     for (pi_ids.items) |pi_id| {
         const dd = idx.diff_by_id.get(pi_id).?;
         const doc = idx.structuralDoc(pi_id);
-        const comps: []ComponentDiff = if (comps_by_owner.get(pi_id)) |list| list.items else &[_]ComponentDiff{};
+        const comps: []ComponentDiff = if (comps_by_owner.get(pi_id)) |list| list.items else &.{};
         try obj_by_id.put(pi_id, .{
             .kind = .prefab_instance,
             .file_id = pi_id,
@@ -227,11 +227,11 @@ pub fn build(arena: std.mem.Allocator, fd: diffmod.FlatDiff) !model.DiffResult {
             .status = dd.status,
             .overrides = dd.overrides,
             .components = comps,
-            .children = &[_]ObjectDiff{},
+            .children = &.{},
         });
     }
 
-    // Assemble parent/child links.
+    // 親子リンクを組み立てる。
     var children_of = std.AutoHashMap(i64, std.ArrayList(i64)).init(arena);
     var roots_ids: std.ArrayList(i64) = .empty;
     for (go_ids.items) |go_id|
@@ -239,7 +239,7 @@ pub fn build(arena: std.mem.Allocator, fd: diffmod.FlatDiff) !model.DiffResult {
     for (pi_ids.items) |pi_id|
         try linkToParent(arena, &obj_by_id, &children_of, &roots_ids, instanceParentId(&idx, pi_id), pi_id);
 
-    // Recursively materialize, pruning unchanged subtrees with no changed descendants.
+    // 再帰的に実体化し、変更された子孫を持たない unchanged な部分木を刈る。
     var roots: std.ArrayList(ObjectDiff) = .empty;
     for (roots_ids.items) |rid| {
         if (try materialize(arena, &obj_by_id, &children_of, rid)) |node| {
@@ -254,7 +254,7 @@ pub fn build(arena: std.mem.Allocator, fd: diffmod.FlatDiff) !model.DiffResult {
     };
 }
 
-/// 親が実在ノードなら children_of へ、そうでなければ root へ振り分ける。
+// 親が実在ノードなら children_of へ、そうでなければ root へ振り分ける。
 fn linkToParent(
     arena: std.mem.Allocator,
     obj_by_id: *std.AutoHashMap(i64, ObjectDiff),
@@ -274,8 +274,8 @@ fn linkToParent(
     try roots_ids.append(arena, id);
 }
 
-/// Build the ObjectDiff for `go_id` with its kept children. Returns null if the
-/// node and its entire subtree are unchanged with no kept components.
+// `go_id` の ObjectDiff を残った children ごと構築する。ノードと部分木全体が
+// unchanged で残すコンポーネントもなければ null を返す。
 fn materialize(
     arena: std.mem.Allocator,
     obj_by_id: *std.AutoHashMap(i64, ObjectDiff),
@@ -344,9 +344,9 @@ test "tree: GameObject groups its components; modified component bubbles up" {
     const res = try root.diffBytes(arena, before, after);
     const go = findRoot(res, 1).?;
     try testing.expectEqualStrings("Player", go.name);
-    // Player itself is structurally unchanged but kept because a child component changed.
+    // Player 自体は unchanged だが、子コンポーネントに変更があるので残る。
     try testing.expectEqual(model.Status.unchanged, go.status);
-    // Components: the Transform (unchanged, no fields) is collapsed; MonoBehaviour kept.
+    // コンポーネント: unchanged で fields もない Transform は畳まれ、MonoBehaviour は残る。
     var saw_modified_mb = false;
     for (go.components) |c| {
         if (c.file_id == 5) {
@@ -382,7 +382,7 @@ test "tree: child GameObject nests under parent via Transform m_Father" {
         \\  m_GameObject: {fileID: 2}
         \\  m_Father: {fileID: 4}
     ;
-    // after: child renamed
+    // after: 子をリネーム
     const src_after =
         \\--- !u!1 &1
         \\GameObject:
@@ -407,6 +407,30 @@ test "tree: child GameObject nests under parent via Transform m_Father" {
     const parent = findRoot(res, 1).?;
     try testing.expectEqual(@as(usize, 1), parent.children.len);
     try testing.expectEqual(@as(i64, 2), parent.children[0].file_id);
+}
+
+test "tree: removed GameObject surfaces as a removed root with its name" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const before =
+        \\--- !u!1 &1
+        \\GameObject:
+        \\  m_Name: Player
+        \\  m_Component:
+        \\  - component: {fileID: 4}
+        \\--- !u!4 &4
+        \\Transform:
+        \\  m_GameObject: {fileID: 1}
+        \\  m_Father: {fileID: 0}
+    ;
+    // after 側に doc がなくても、構造解決が before に fallback するので
+    // 名前解決とコンポーネントの帰属が機能する(loose に漏れない)。
+    const res = try root.diffBytes(arena, before, "");
+    try testing.expectEqual(@as(usize, 1), res.roots.len);
+    try testing.expectEqual(@as(usize, 0), res.loose.len);
+    try testing.expectEqualStrings("Player", res.roots[0].name);
+    try testing.expectEqual(model.Status.removed, res.roots[0].status);
 }
 
 test "tree: ScriptableObject .asset becomes a loose component" {
@@ -607,8 +631,8 @@ test "tree: component whose m_GameObject resolves to a non-GameObject document b
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
-    // fileID 999 exists but is a MonoBehaviour, not a GameObject: a dangling
-    // reference in spirit (no GameObject there), distinct from fileID: 0.
+    // fileID 999 は存在するが GameObject ではなく MonoBehaviour。fileID: 0 とは
+    // 別種の、実質的に宙ぶらりんな参照(そこに GameObject はいない)。
     const before =
         \\--- !u!114 &7
         \\MonoBehaviour:
@@ -629,7 +653,7 @@ test "tree: component whose m_GameObject resolves to a non-GameObject document b
     ;
     const res = try root.diffBytes(arena, before, after);
     try testing.expectEqual(@as(usize, 0), res.roots.len);
-    // Component 999 is unchanged (collapsed); component 7 is loose, not dropped.
+    // コンポーネント 999 は unchanged で畳まれ、7 は消えずに loose へ。
     try testing.expectEqual(@as(usize, 1), res.loose.len);
     try testing.expectEqual(@as(i64, 7), res.loose[0].file_id);
     try testing.expectEqual(model.Status.modified, res.loose[0].status);
@@ -639,9 +663,9 @@ test "tree: component of a stripped GameObject attaches to the owning prefab ins
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
-    // A component added to a prefab instance's placed GameObject: the
-    // instance's root GameObject is `stripped` in the outer document, and
-    // the real MonoBehaviour doc points m_GameObject at it.
+    // prefab インスタンスが配置した GameObject に追加されたコンポーネント:
+    // インスタンスの root GameObject は外側ドキュメントでは stripped で、
+    // 実体の MonoBehaviour doc が m_GameObject でそれを指す。
     const before =
         \\--- !u!1001 &1001
         \\PrefabInstance:
@@ -698,8 +722,8 @@ test "tree: component of a stripped GameObject with unresolvable m_PrefabInstanc
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
-    // The stripped GameObject's m_PrefabInstance points nowhere resolvable
-    // (fileID 9999 doesn't exist): the component must not be dropped.
+    // stripped GameObject の m_PrefabInstance が解決不能な先(存在しない
+    // fileID 9999)を指す: それでもコンポーネントを消してはならない。
     const before =
         \\--- !u!1 &2 stripped
         \\GameObject:
@@ -731,9 +755,9 @@ test "tree: component bridged to a stripped nested prefab instance becomes loose
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
-    // Component bridged to a stripped nested PrefabInstance that carries NO
-    // m_PrefabInstance ref of its own: the chain out to the outer instance
-    // is broken, so the component must fall back to loose, not vanish.
+    // 橋渡し先の stripped な入れ子 PrefabInstance が自身の m_PrefabInstance
+    // 参照を持たないケース: 外側インスタンスへのチェーンが切れているので、
+    // コンポーネントは消えるのではなく loose に落ちる。
     const before =
         \\--- !u!1001 &1001
         \\PrefabInstance:
@@ -783,7 +807,7 @@ test "tree: component bridged to a stripped nested prefab instance becomes loose
         \\  hp: 2
     ;
     const res = try root.diffBytes(arena, before, after);
-    // Outer instance is unchanged -> pruned as usual; the component stays visible.
+    // 外側インスタンスは unchanged なので通常どおり刈られ、コンポーネントは見え続ける。
     try testing.expectEqual(@as(usize, 0), res.roots.len);
     try testing.expectEqual(@as(usize, 1), res.loose.len);
     try testing.expectEqual(@as(i64, 3), res.loose[0].file_id);
@@ -794,11 +818,10 @@ test "tree: component of a nested stripped chain attaches to the outer prefab in
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
-    // Component added to a GameObject inside a NESTED instance: the inner
-    // PrefabInstance is stripped in the outer document and carries its own
-    // m_PrefabInstance ref to the outer instance. Walking that chain must
-    // attach the component to the outer (materialized) instance node
-    // instead of dropping it to loose.
+    // 入れ子インスタンス内の GameObject に追加されたコンポーネント: 内側の
+    // PrefabInstance は外側ドキュメントでは stripped で、外側インスタンスへの
+    // m_PrefabInstance 参照を自身が持つ。このチェーンを辿って、loose に落とす
+    // のではなく外側の(実体化される)インスタンスノードに付け替える。
     const before =
         \\--- !u!1001 &1001
         \\PrefabInstance:
@@ -866,8 +889,8 @@ test "tree: cyclic stripped instance chain falls back to loose, not an infinite 
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
-    // Corrupt file: two stripped PrefabInstances reference each other. The
-    // hop cap must break the cycle and the component keeps the loose floor.
+    // 壊れたファイル: stripped な PrefabInstance 2 つが互いを参照する。
+    // hop 上限が循環を断ち切り、コンポーネントは loose の床を維持する。
     const before =
         \\--- !u!1001 &2002 stripped
         \\PrefabInstance:
@@ -911,9 +934,9 @@ test "tree: instance parented inside a nested instance nests under the outer ins
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
-    // A real PrefabInstance whose m_TransformParent is a stripped Transform
-    // belonging to a stripped NESTED instance: the chain walks out to the
-    // outer real instance instead of flattening the child to a root.
+    // 実体の PrefabInstance の m_TransformParent が、stripped な入れ子
+    // インスタンスに属する stripped Transform を指すケース: チェーンを外側の
+    // 実体インスタンスまで辿り、子を root に平坦化しない。
     const after =
         \\--- !u!1001 &1001
         \\PrefabInstance:

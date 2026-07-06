@@ -1,14 +1,12 @@
 const std = @import("std");
 const root = @import("root.zig");
 
-/// Build a synthetic scene with `n` GameObjects, each with a Transform and a
-/// MonoBehaviour, as a single YAML byte buffer.
+// n 個の GameObject(各 Transform + MonoBehaviour つき)からなる合成シーンを
+// 1 つの YAML バッファとして生成する。
 fn buildScene(arena: std.mem.Allocator, n: usize, hp: usize) ![]u8 {
-    var buf: std.ArrayList(u8) = .empty;
-    var aw = std.Io.Writer.Allocating.fromArrayList(arena, &buf);
+    var aw: std.Io.Writer.Allocating = .init(arena);
     const w = &aw.writer;
-    var i: usize = 0;
-    while (i < n) : (i += 1) {
+    for (0..n) |i| {
         const go: i64 = @intCast(1 + i * 3);
         const tr: i64 = go + 1;
         const mb: i64 = go + 2;
@@ -31,11 +29,10 @@ fn buildScene(arena: std.mem.Allocator, n: usize, hp: usize) ![]u8 {
             \\
         , .{ go, i, tr, mb, tr, go, mb, go, hp });
     }
-    var list = aw.toArrayList();
-    return list.toOwnedSlice(arena);
+    return aw.toOwnedSlice();
 }
 
-/// Returns nanoseconds for one before/after diff over `n` objects.
+// n オブジェクトの before/after diff 1 回の所要ナノ秒を返す。
 pub fn timeDiff(io: std.Io, arena: std.mem.Allocator, n: usize) !u64 {
     const before = try buildScene(arena, n, 1);
     const after = try buildScene(arena, n, 2);
@@ -50,7 +47,7 @@ test "perf: small scene diff completes well under budget" {
     var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
-    const ns = try timeDiff(std.testing.io, arena, 200); // ~200 objects ~= a small prefab
-    // Generous sanity bound for a debug test build (real budget enforced by `zig build perf`).
+    const ns = try timeDiff(std.testing.io, arena, 200); // 200 オブジェクト ≒ 小さめの prefab
+    // debug ビルドのテスト向けの緩い上限(本来の予算は `zig build perf` が強制する)。
     try std.testing.expect(ns < 500 * std.time.ns_per_ms);
 }

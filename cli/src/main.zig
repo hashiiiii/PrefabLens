@@ -437,8 +437,8 @@ test "run: --project supplies source prefabs for merged instance diffs" {
     try testing.expect(std.mem.indexOf(u8, output2.items, "Scale.y: 2") != null);
 }
 
-/// リリースタグ v<version> と lockstep(cut-release の 5 ソースの一員)。
-pub const version = "0.3.0";
+/// リリースタグ v<version> と lockstep。単一ソースは build.zig.zon(release.yml が bump する)。
+pub const version = @import("build_options").version;
 
 test "run: --project points git mode at a repo outside the cwd" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
@@ -483,10 +483,6 @@ test "run: --project points git mode at a repo outside the cwd" {
     const output = aw.toArrayList();
     try testing.expectEqual(@as(u8, 0), code);
     try testing.expect(std.mem.indexOf(u8, output.items, "\"after\":\"2\"") != null);
-}
-
-test "version constant exists for serverInfo and release lockstep" {
-    try testing.expectEqualStrings("0.3.0", version);
 }
 
 pub const Format = enum { tree, json, html };

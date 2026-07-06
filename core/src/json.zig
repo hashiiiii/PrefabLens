@@ -21,6 +21,18 @@ pub fn serialize(arena: std.mem.Allocator, res: model.DiffResult, resolved: ?*co
     }
     try w.writeByte(']');
 
+    // ホストに内容取得を求めるソースプレハブ。空なら省略(additive な拡張)。
+    if (res.needed_sources.len != 0) {
+        try w.writeAll(",\"neededSources\":[");
+        for (res.needed_sources, 0..) |ns, i| {
+            if (i != 0) try w.writeByte(',');
+            try w.writeAll("{\"guid\":");
+            try writeJsonString(w, ns.guid);
+            try w.print(",\"side\":\"{s}\"}}", .{@tagName(ns.side)});
+        }
+        try w.writeByte(']');
+    }
+
     if (resolved) |r| {
         // diff が実際に参照した guid だけに絞る(プロジェクト index 全体を
         // 出さない)。順序は unresolvedGuids と同じで決定的。
@@ -222,6 +234,31 @@ test "json: v2 prefab instance node with overrides" {
     try testing.expect(std.mem.indexOf(u8, out, "\"overrides\":[{\"group\":\"Transform\",\"label\":\"Scale.y\",\"status\":\"added\",\"before\":null,\"after\":\"2\"}]") != null);
 }
 
+test "json: needed sources are emitted only when unresolved" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const after =
+        \\--- !u!1001 &1001
+        \\PrefabInstance:
+        \\  m_Modification:
+        \\    m_Modifications:
+        \\    - target: {fileID: 7, guid: aaa, type: 3}
+        \\      propertyPath: m_LocalScale.y
+        \\      value: 2
+        \\  m_SourcePrefab: {fileID: 100100000, guid: aaa, type: 3}
+    ;
+    // assets 未供給: ホストへの取得要求として neededSources が載る。
+    const out = try root.diffToJson(arena, "", after);
+    try testing.expect(std.mem.indexOf(u8, out, "\"neededSources\":[{\"guid\":\"aaa\",\"side\":\"after\"}]") != null);
+
+    // 供給済み: 展開されて neededSources は emit されない(空なら省略)。
+    var assets: root.Assets = .empty;
+    try assets.put(arena, "aaa", "--- !u!1 &10\nGameObject:\n  m_Name: Src\n");
+    const merged = try root.diffToJsonWithAssets(arena, "", after, &assets);
+    try testing.expect(std.mem.indexOf(u8, merged, "neededSources") == null);
+}
+
 test "json: v2 root node shape matches golden" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
@@ -277,7 +314,7 @@ test "json: v2 root node shape matches golden" {
     // roots 側のノード全形状 (gameObject + components + 子 prefabInstance +
     // overrides + 構造サマリ) を byte-for-byte で固定する回帰ピン。
     const golden =
-        \\{"schema":"prefablens.diff.v2","unresolvedGuids":["def","aaa"],"roots":[{"kind":"gameObject","fileId":"1","name":"Plane","status":"unchanged","components":[{"kind":"component","fileId":"5","classId":114,"typeName":"MonoBehaviour","scriptGuid":"def","className":null,"status":"modified","fields":[{"path":"Hp","status":"modified","before":"1","after":"2"}]}],"children":[{"kind":"prefabInstance","fileId":"1001","name":"Cylinder","status":"added","sourceGuid":"aaa","overrides":[{"group":"Transform","label":"Scale.y","status":"added","before":null,"after":"2"},{"group":"Overrides","label":"Added Components (1)","status":"added","before":null,"after":null}],"components":[],"children":[]}]}],"loose":[]}
+        \\{"schema":"prefablens.diff.v2","unresolvedGuids":["def","aaa"],"neededSources":[{"guid":"aaa","side":"after"}],"roots":[{"kind":"gameObject","fileId":"1","name":"Plane","status":"unchanged","components":[{"kind":"component","fileId":"5","classId":114,"typeName":"MonoBehaviour","scriptGuid":"def","className":null,"status":"modified","fields":[{"path":"Hp","status":"modified","before":"1","after":"2"}]}],"children":[{"kind":"prefabInstance","fileId":"1001","name":"Cylinder","status":"added","sourceGuid":"aaa","overrides":[{"group":"Transform","label":"Scale.y","status":"added","before":null,"after":"2"},{"group":"Overrides","label":"Added Components (1)","status":"added","before":null,"after":null}],"components":[],"children":[]}]}],"loose":[]}
     ;
     try testing.expectEqualStrings(golden, out);
 }

@@ -1,5 +1,3 @@
-# Unity YAML fixtures are byte-exact test inputs (golden tests parse them as-is).
-# Keep them out of CRLF conversion on Windows checkouts.
-*.prefab -text
-*.unity -text
-*.asset -text
+# testdata の UnityYAML fixture をテキストとして扱わないことで、改行コードの自動変換を防止する。
+# こうすることで Windows で checkout した際に CSRF になってしまうことを防ぐ。
+core/src/testdata/** -text

@@ -1,4 +1,5 @@
 *.cs text diff=csharp eol=lf
+*.zig text eol=lf
 
 # testdata の UnityYAML fixture をテキストとして扱わないことで、改行コードの自動変換を防止する。
 # こうすることで Windows で checkout した際に CSRF になってしまうことを防ぐ。

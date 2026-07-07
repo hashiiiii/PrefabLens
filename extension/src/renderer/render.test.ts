@@ -293,6 +293,21 @@ describe('render', () => {
     expect(root.textContent).toContain('‹Prefab›');
   });
 
+  it('shows a resolving indicator while guid resolution is pending', () => {
+    const root = freshRoot();
+    render(root, { schema: 'prefablens.diff.v2', unresolvedGuids: ['g1', 'g2'], roots: [], loose: [] }, { resolving: 2 });
+    expect(root.textContent).toContain('Resolving 2 reference(s)…');
+  });
+
+  it('drops the indicator on re-render after resolution completes', () => {
+    // push の done で再描画されたときに消えること(mount が全置換するので自然に消える)
+    const root = freshRoot();
+    const diff = { schema: 'prefablens.diff.v2' as const, unresolvedGuids: ['g1'], roots: [], loose: [] };
+    render(root, diff, { resolving: 1 });
+    render(root, diff);
+    expect(root.textContent).not.toContain('Resolving');
+  });
+
   it('falls back component display to className when the script guid is unresolved', () => {
     const root = freshRoot();
     const diff: DiffV2 = {

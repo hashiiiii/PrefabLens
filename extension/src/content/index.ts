@@ -2,7 +2,7 @@ import { parsePrPage, parsePrUrl, scanUnityFiles, type FileEntry } from './detec
 import { createToggle, type Toggle, type View } from './toggle';
 import { createViewState, type ViewState } from './viewstate';
 import { render, renderError, renderLoading, renderTooLarge } from '../renderer/render';
-import type { BackgroundError, PrefetchRequest, SemanticDiffRequest, SemanticDiffResponse } from '../types';
+import type { BackgroundError, DiffV2, GuidResolvedPush, PrefetchRequest, SemanticDiffRequest, SemanticDiffResponse } from '../types';
 
 const ERROR_TEXT: Record<BackgroundError, string> = {
   'pat-missing': 'Set a GitHub token in the PrefabLens options page.',
@@ -11,6 +11,13 @@ const ERROR_TEXT: Record<BackgroundError, string> = {
   'fetch-failed': 'Could not fetch file contents from GitHub.',
   'diff-failed': 'Could not compute a semantic diff for this file.',
 };
+
+// path → 描画先。push(guidResolved)が届いたら resolved をマージして再描画する
+const views = new Map<string, { root: ShadowRoot; json: DiffV2 }>();
+
+function countUnresolved(json: DiffV2): number {
+  return json.unresolvedGuids.filter((g) => !Object.hasOwn(json.resolved ?? {}, g)).length;
+}
 
 // 全体切り替えの適用先: attach 済みファイルのトグル + 表示を外から駆動する
 type Applier = { header: HTMLElement; apply(view: View): void };
@@ -34,6 +41,8 @@ function attach(state: ViewState): void {
   if (key !== currentPr) {
     currentPr = key;
     state.clearOverrides();
+    // PR をまたいだら死んだ DOM への参照も捨てる(soft leak 防止)
+    for (const a of [...appliers]) if (!a.header.isConnected) appliers.delete(a);
   }
   const entries = scanUnityFiles(document);
   if (entries.length) ensureGlobalToggle(state, entries[0]!);
@@ -60,6 +69,7 @@ function ensureGlobalToggle(state: ViewState, first: FileEntry): void {
 function attachToggle(state: ViewState, pr: { owner: string; repo: string; prNumber: number }, entry: FileEntry): void {
   if (entry.header.hasAttribute('data-prefablens')) return;
   entry.header.setAttribute('data-prefablens', '');
+  const viewKey = `${pr.owner}/${pr.repo}#${pr.prNumber}:${entry.path}`;
 
   let host: HTMLElement | undefined;
   let requested = false;
@@ -84,7 +94,10 @@ function attachToggle(state: ViewState, pr: { owner: string; repo: string; prNum
       requested = true;
       renderLoading(root);
       void requestDiff({ type: 'semanticDiff', ...pr, path: entry.path, force }).then((res) => {
-        if (res.ok) return render(root, res.json);
+        if (res.ok) {
+          views.set(viewKey, { root, json: res.json });
+          return render(root, res.json, { resolving: res.pending ? countUnresolved(res.json) : 0 });
+        }
         requested = false; // エラーはキャッシュしない: 次回トグルで再フェッチさせる
         if (res.error === 'too-large') renderTooLarge(root, res.bytes, () => request(true));
         else renderError(root, ERROR_TEXT[res.error]);
@@ -134,6 +147,16 @@ async function init(): Promise<void> {
     if (area !== 'local') return;
     const next = changes['viewMode']?.newValue;
     if (next === 'raw' || next === 'semantic') state.applyExternal(next);
+  });
+
+  // background からの guid 解決 push(2 段階応答の後段): 該当 view があれば再描画する
+  chrome.runtime.onMessage.addListener((msg: GuidResolvedPush) => {
+    if (msg?.type !== 'guidResolved') return;
+    const view = views.get(`${msg.owner}/${msg.repo}#${msg.prNumber}:${msg.path}`);
+    if (!view) return; // 既に別 PR へ遷移した等: 黙って捨てる
+    // 最終 push は json 置換(mergeSources で構造が変わり得る)、中間 push は resolved のマージ
+    view.json = msg.json ?? { ...view.json, resolved: { ...view.json.resolved, ...msg.resolved } };
+    render(view.root, view.json, { resolving: msg.done ? 0 : countUnresolved(view.json) });
   });
 
   // GitHub は SPA: 初回スキャン + MutationObserver で遅延ロード・タブ遷移に追従(200ms デバウンス)。

@@ -9,6 +9,9 @@
     "[zig]": {
         "editor.defaultFormatter": "ziglang.vscode-zig"
     },
+    "[csharp]": {
+        "editor.defaultFormatter": "csharpier.csharpier-vscode"
+    },
     "zig.zls.enabled": "on",
     "zig.path": "${userHome}/.local/share/mise/shims/zig",
     "zig.zls.path": "${userHome}/.local/share/mise/shims/zls",

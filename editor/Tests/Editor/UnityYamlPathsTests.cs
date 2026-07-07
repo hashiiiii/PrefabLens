@@ -8,11 +8,32 @@ namespace PrefabLens.Tests
         // Unity の実出力どおりの camelCase(.overrideController 等)で列挙する。
         static readonly string[] Supported =
         {
-            ".prefab", ".unity", ".asset", ".mat", ".anim", ".controller", ".overrideController",
-            ".physicMaterial", ".physicsMaterial2D", ".playable", ".mask", ".brush", ".flare",
-            ".fontsettings", ".guiskin", ".giparams", ".renderTexture", ".spriteatlas",
-            ".spriteatlasv2", ".terrainlayer", ".mixer", ".shadervariants", ".preset", ".signal",
-            ".lighting", ".scenetemplate",
+            ".prefab",
+            ".unity",
+            ".asset",
+            ".mat",
+            ".anim",
+            ".controller",
+            ".overrideController",
+            ".physicMaterial",
+            ".physicsMaterial2D",
+            ".playable",
+            ".mask",
+            ".brush",
+            ".flare",
+            ".fontsettings",
+            ".guiskin",
+            ".giparams",
+            ".renderTexture",
+            ".spriteatlas",
+            ".spriteatlasv2",
+            ".terrainlayer",
+            ".mixer",
+            ".shadervariants",
+            ".preset",
+            ".signal",
+            ".lighting",
+            ".scenetemplate",
         };
 
         [Test]

@@ -10,7 +10,8 @@ namespace PrefabLens
     /// 選択アセットの「HEAD vs 作業ツリー」意味的 diff を表示する(Phase 3 ウォーキングスケルトン)。
     public sealed class PrefabLensWindow : EditorWindow
     {
-        [SerializeField] string assetPath = "";
+        [SerializeField]
+        string assetPath = "";
 
         Label status;
         VisualElement content;
@@ -35,8 +36,24 @@ namespace PrefabLens
 
         public void CreateGUI()
         {
-            var toolbar = new VisualElement { style = { flexDirection = FlexDirection.Row, marginTop = 4, marginBottom = 4 } };
-            status = new Label { style = { flexGrow = 1, unityTextAlign = TextAnchor.MiddleLeft, marginLeft = 6 } };
+            var toolbar = new VisualElement
+            {
+                style =
+                {
+                    flexDirection = FlexDirection.Row,
+                    marginTop = 4,
+                    marginBottom = 4,
+                },
+            };
+            status = new Label
+            {
+                style =
+                {
+                    flexGrow = 1,
+                    unityTextAlign = TextAnchor.MiddleLeft,
+                    marginLeft = 6,
+                },
+            };
             toolbar.Add(status);
             toolbar.Add(new Button(Refresh) { text = "Refresh" });
             rootVisualElement.Add(toolbar);
@@ -51,7 +68,8 @@ namespace PrefabLens
             content.Clear();
             if (string.IsNullOrEmpty(assetPath))
             {
-                status.text = "Select a UnityYAML asset (.prefab / .unity / .asset / .mat / .anim / …) and run Assets → PrefabLens: Diff vs HEAD";
+                status.text =
+                    "Select a UnityYAML asset (.prefab / .unity / .asset / .mat / .anim / …) and run Assets → PrefabLens: Diff vs HEAD";
                 return;
             }
             status.text = assetPath;
@@ -60,7 +78,13 @@ namespace PrefabLens
             if (cli == null)
             {
                 Note($"prefablens CLI not found (v{Cli.Version}).");
-                content.Add(new Button(DownloadThenRefresh) { text = "Download from GitHub Releases", style = { alignSelf = Align.FlexStart, marginLeft = 6 } });
+                content.Add(
+                    new Button(DownloadThenRefresh)
+                    {
+                        text = "Download from GitHub Releases",
+                        style = { alignSelf = Align.FlexStart, marginLeft = 6 },
+                    }
+                );
                 Note($"Or set a manual path via EditorPrefs key '{Cli.CliPathPref}'.");
                 return;
             }
@@ -112,7 +136,17 @@ namespace PrefabLens
 
         void Note(string text)
         {
-            content.Add(new Label(text) { style = { marginLeft = 6, marginTop = 2, whiteSpace = WhiteSpace.Normal } });
+            content.Add(
+                new Label(text)
+                {
+                    style =
+                    {
+                        marginLeft = 6,
+                        marginTop = 2,
+                        whiteSpace = WhiteSpace.Normal,
+                    },
+                }
+            );
         }
 
         // ---- ツリー描画(Chrome 版レンダラと同じ配色トーン・記法) ----
@@ -125,7 +159,8 @@ namespace PrefabLens
             public static Color Modified => Hex(EditorGUIUtility.isProSkin ? 0xd29922 : 0x9a6700);
             public static Color Muted => Hex(EditorGUIUtility.isProSkin ? 0x9198a1 : 0x59636e);
 
-            static Color Hex(int rgb) => new Color(((rgb >> 16) & 0xff) / 255f, ((rgb >> 8) & 0xff) / 255f, (rgb & 0xff) / 255f);
+            static Color Hex(int rgb) =>
+                new Color(((rgb >> 16) & 0xff) / 255f, ((rgb >> 8) & 0xff) / 255f, (rgb & 0xff) / 255f);
         }
 
         readonly struct Span
@@ -146,7 +181,8 @@ namespace PrefabLens
 
             public Row Add(string text, Color? tint = null)
             {
-                if (!string.IsNullOrEmpty(text)) Spans.Add(new Span(text, tint));
+                if (!string.IsNullOrEmpty(text))
+                    Spans.Add(new Span(text, tint));
                 return this;
             }
         }
@@ -155,19 +191,32 @@ namespace PrefabLens
         {
             var id = 0;
             var items = new List<TreeViewItemData<Row>>();
-            foreach (var n in model.Roots) items.Add(NodeItem(n, model, ref id));
-            foreach (var c in model.Loose) items.Add(ComponentItem(c, model, ref id));
+            foreach (var n in model.Roots)
+                items.Add(NodeItem(n, model, ref id));
+            foreach (var c in model.Loose)
+                items.Add(ComponentItem(c, model, ref id));
 
             var tree = new TreeView { fixedItemHeight = 18, style = { flexGrow = 1 } };
             tree.SetRootItems(items);
-            tree.makeItem = () => new VisualElement { style = { flexDirection = FlexDirection.Row, alignItems = Align.Center } };
+            tree.makeItem = () =>
+                new VisualElement { style = { flexDirection = FlexDirection.Row, alignItems = Align.Center } };
             tree.bindItem = (e, i) =>
             {
                 e.Clear();
                 foreach (var span in tree.GetItemDataForIndex<Row>(i).Spans)
                 {
-                    var l = new Label(span.Text) { style = { marginLeft = 0, marginRight = 0, paddingLeft = 0, paddingRight = 0 } };
-                    if (span.Tint is Color tint) l.style.color = tint;
+                    var l = new Label(span.Text)
+                    {
+                        style =
+                        {
+                            marginLeft = 0,
+                            marginRight = 0,
+                            paddingLeft = 0,
+                            paddingRight = 0,
+                        },
+                    };
+                    if (span.Tint is Color tint)
+                        l.style.color = tint;
                     e.Add(l);
                 }
             };
@@ -182,12 +231,17 @@ namespace PrefabLens
             if (pi != null)
                 foreach (var ov in pi.Overrides)
                     children.Add(new TreeViewItemData<Row>(id++, OverrideRow(ov, m)));
-            foreach (var c in n.Components) children.Add(ComponentItem(c, m, ref id));
-            foreach (var ch in n.Children) children.Add(NodeItem(ch, m, ref id));
+            foreach (var c in n.Components)
+                children.Add(ComponentItem(c, m, ref id));
+            foreach (var ch in n.Children)
+                children.Add(NodeItem(ch, m, ref id));
 
             var row = Badge(n.Status).Add(n.Name);
             if (pi?.SourceGuid != null)
-                row.Add(" ‹Prefab: " + (m.Resolved.TryGetValue(pi.SourceGuid, out var src) ? src : pi.SourceGuid) + "›", Palette.Muted);
+                row.Add(
+                    " ‹Prefab: " + (m.Resolved.TryGetValue(pi.SourceGuid, out var src) ? src : pi.SourceGuid) + "›",
+                    Palette.Muted
+                );
             return new TreeViewItemData<Row>(id++, row, children);
         }
 
@@ -229,20 +283,23 @@ namespace PrefabLens
 
         static string Format(Value v, DiffModel m)
         {
-            if (v == null || v.IsNull) return "";
-            if (!v.IsRef) return v.Scalar ?? "";
+            if (v == null || v.IsNull)
+                return "";
+            if (!v.IsRef)
+                return v.Scalar ?? "";
             if (v.RefGuid != null)
                 return m.Resolved.TryGetValue(v.RefGuid, out var p) ? Stem(p) : v.RefGuid;
             return v.RefFileId == "0" ? "None" : "#" + v.RefFileId;
         }
 
-        static Row Badge(DiffStatus s) => s switch
-        {
-            DiffStatus.Added => new Row().Add("+ ", Palette.Added),
-            DiffStatus.Removed => new Row().Add("− ", Palette.Removed),
-            DiffStatus.Modified => new Row().Add("~ ", Palette.Modified),
-            _ => new Row().Add("  "),
-        };
+        static Row Badge(DiffStatus s) =>
+            s switch
+            {
+                DiffStatus.Added => new Row().Add("+ ", Palette.Added),
+                DiffStatus.Removed => new Row().Add("− ", Palette.Removed),
+                DiffStatus.Modified => new Row().Add("~ ", Palette.Modified),
+                _ => new Row().Add("  "),
+            };
 
         static string Stem(string path)
         {

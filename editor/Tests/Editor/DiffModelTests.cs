@@ -30,7 +30,8 @@ namespace PrefabLens.Tests
         [Test]
         public void ParsesNodesInstancesAndRefValues()
         {
-            const string json = @"{
+            const string json =
+                @"{
                 ""schema"":""prefablens.diff.v2"",""unresolvedGuids"":[""aaa""],""resolved"":{},
                 ""roots"":[{
                     ""kind"":""gameObject"",""fileId"":""1"",""name"":""Plane"",""status"":""unchanged"",""components"":[],
@@ -63,7 +64,8 @@ namespace PrefabLens.Tests
         [Test]
         public void SkipsUnknownNodeKindsAndToleratesMissingFields()
         {
-            const string json = @"{
+            const string json =
+                @"{
                 ""unresolvedGuids"":[],
                 ""roots"":[
                     {""kind"":""hologram"",""fileId"":""9"",""name"":""Future"",""status"":""added""},
@@ -81,7 +83,9 @@ namespace PrefabLens.Tests
         public void EmptyDiffIsEmpty()
         {
             // 変更なしのとき Window は IsEmpty を見て "No semantic changes" を出す。その分岐の根拠。
-            var m = DiffModel.Parse(@"{""schema"":""prefablens.diff.v2"",""unresolvedGuids"":[],""roots"":[],""loose"":[]}");
+            var m = DiffModel.Parse(
+                @"{""schema"":""prefablens.diff.v2"",""unresolvedGuids"":[],""roots"":[],""loose"":[]}"
+            );
             Assert.IsTrue(m.IsEmpty);
         }
 
@@ -90,7 +94,8 @@ namespace PrefabLens.Tests
         {
             // resolved は CLI 側で解決済みの guid -> パス(ResolveWith が上書きしないのは別テストで検証)。
             // removed は 4 status のうち他テストが通っていない残り 1 つ。
-            const string json = @"{
+            const string json =
+                @"{
                 ""unresolvedGuids"":[],
                 ""resolved"":{""ccc"":""Assets/Textures/Grass.png""},
                 ""roots"":[],

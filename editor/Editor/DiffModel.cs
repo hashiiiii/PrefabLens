@@ -5,14 +5,20 @@ using PrefabLens.MiniJson;
 
 namespace PrefabLens
 {
-    public enum DiffStatus { Added, Removed, Modified, Unchanged }
+    public enum DiffStatus
+    {
+        Added,
+        Removed,
+        Modified,
+        Unchanged,
+    }
 
     /// diff.v2 のフィールド値: scalar / ref / null の 3 態。
     public sealed class Value
     {
-        public string Scalar;      // scalar のときのみ
-        public string RefFileId;   // ref のときのみ
-        public string RefGuid;     // ref かつ外部参照のときのみ
+        public string Scalar; // scalar のときのみ
+        public string RefFileId; // ref のときのみ
+        public string RefGuid; // ref かつ外部参照のときのみ
         public bool IsRef;
         public bool IsNull;
 
@@ -103,22 +109,26 @@ namespace PrefabLens
         {
             foreach (var g in UnresolvedGuids)
             {
-                if (Resolved.ContainsKey(g)) continue;
+                if (Resolved.ContainsKey(g))
+                    continue;
                 var path = guidToPath(g);
-                if (!string.IsNullOrEmpty(path)) Resolved[g] = path;
+                if (!string.IsNullOrEmpty(path))
+                    Resolved[g] = path;
             }
         }
 
         static NodeDiff ParseNode(Dictionary<string, object> o)
         {
-            if (o == null) return null;
+            if (o == null)
+                return null;
             NodeDiff n = Str(o, "kind") switch
             {
                 "gameObject" => new GameObjectDiff(),
                 "prefabInstance" => ParsePrefabInstance(o),
                 _ => null, // 未知の kind は読み飛ばす
             };
-            if (n == null) return null;
+            if (n == null)
+                return null;
             n.FileId = Str(o, "fileId") ?? "";
             n.Name = Str(o, "name") ?? "";
             n.Status = ParseStatus(Str(o, "status"));
@@ -136,14 +146,16 @@ namespace PrefabLens
             var pi = new PrefabInstanceDiff { SourceGuid = Str(o, "sourceGuid") };
             foreach (var ov in Items(o, "overrides"))
                 if (ov is Dictionary<string, object> ovo)
-                    pi.Overrides.Add(new OverrideDiff
-                    {
-                        Group = Str(ovo, "group") ?? "",
-                        Label = Str(ovo, "label") ?? "",
-                        Status = ParseStatus(Str(ovo, "status")),
-                        Before = ParseValue(Val(ovo, "before")),
-                        After = ParseValue(Val(ovo, "after")),
-                    });
+                    pi.Overrides.Add(
+                        new OverrideDiff
+                        {
+                            Group = Str(ovo, "group") ?? "",
+                            Label = Str(ovo, "label") ?? "",
+                            Status = ParseStatus(Str(ovo, "status")),
+                            Before = ParseValue(Val(ovo, "before")),
+                            After = ParseValue(Val(ovo, "after")),
+                        }
+                    );
             return pi;
         }
 
@@ -160,50 +172,58 @@ namespace PrefabLens
             };
             foreach (var f in Items(o, "fields"))
                 if (f is Dictionary<string, object> fo)
-                    c.Fields.Add(new FieldDiff
-                    {
-                        Path = Str(fo, "path") ?? "",
-                        Status = ParseStatus(Str(fo, "status")),
-                        Before = ParseValue(Val(fo, "before")),
-                        After = ParseValue(Val(fo, "after")),
-                    });
+                    c.Fields.Add(
+                        new FieldDiff
+                        {
+                            Path = Str(fo, "path") ?? "",
+                            Status = ParseStatus(Str(fo, "status")),
+                            Before = ParseValue(Val(fo, "before")),
+                            After = ParseValue(Val(fo, "after")),
+                        }
+                    );
             return c;
         }
 
         static Value ParseValue(object t)
         {
-            if (t == null) return Value.Null;
+            if (t == null)
+                return Value.Null;
             if (t is Dictionary<string, object> o && Val(o, "ref") is Dictionary<string, object> r)
-                return new Value { IsRef = true, RefFileId = Str(r, "fileId") ?? "0", RefGuid = Str(r, "guid") };
+                return new Value
+                {
+                    IsRef = true,
+                    RefFileId = Str(r, "fileId") ?? "0",
+                    RefGuid = Str(r, "guid"),
+                };
             return new Value { Scalar = ScalarString(t) };
         }
 
         /// scalar は CLI が文字列で出すが、数値 / bool が来ても JSON 表記のまま文字列化する。
-        static string ScalarString(object t) => t switch
-        {
-            string s => s,
-            bool b => b ? "true" : "false",
-            IFormattable f => f.ToString(null, CultureInfo.InvariantCulture),
-            _ => t.ToString(),
-        };
+        static string ScalarString(object t) =>
+            t switch
+            {
+                string s => s,
+                bool b => b ? "true" : "false",
+                IFormattable f => f.ToString(null, CultureInfo.InvariantCulture),
+                _ => t.ToString(),
+            };
 
         static readonly List<object> EmptyList = new();
 
         static string Str(Dictionary<string, object> o, string key) =>
             o.TryGetValue(key, out var v) ? v as string : null;
 
-        static object Val(Dictionary<string, object> o, string key) =>
-            o.TryGetValue(key, out var v) ? v : null;
+        static object Val(Dictionary<string, object> o, string key) => o.TryGetValue(key, out var v) ? v : null;
 
-        static List<object> Items(Dictionary<string, object> o, string key) =>
-            Val(o, key) as List<object> ?? EmptyList;
+        static List<object> Items(Dictionary<string, object> o, string key) => Val(o, key) as List<object> ?? EmptyList;
 
-        static DiffStatus ParseStatus(string s) => s switch
-        {
-            "added" => DiffStatus.Added,
-            "removed" => DiffStatus.Removed,
-            "modified" => DiffStatus.Modified,
-            _ => DiffStatus.Unchanged,
-        };
+        static DiffStatus ParseStatus(string s) =>
+            s switch
+            {
+                "added" => DiffStatus.Added,
+                "removed" => DiffStatus.Removed,
+                "modified" => DiffStatus.Modified,
+                _ => DiffStatus.Unchanged,
+            };
     }
 }

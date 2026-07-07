@@ -47,3 +47,15 @@ jobs:
         run: |
           npx playwright install --with-deps chromium
           npm run e2e
+
+  editor:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install tools
+        uses: jdx/mise-action@v4
+      - name: Lint
+        working-directory: editor
+        run: |
+          dotnet tool restore
+          dotnet csharpier check . --no-msbuild-check

@@ -10,10 +10,22 @@ namespace PrefabLens.Tests
         [Test]
         public void ReleaseAssetNameCoversAllTargets()
         {
-            Assert.AreEqual("prefablens-windows-x64.zip", Cli.ReleaseAssetName(isWindows: true, isMac: false, isArm64: false));
-            Assert.AreEqual("prefablens-macos-arm64.zip", Cli.ReleaseAssetName(isWindows: false, isMac: true, isArm64: true));
-            Assert.AreEqual("prefablens-macos-x64.zip", Cli.ReleaseAssetName(isWindows: false, isMac: true, isArm64: false));
-            Assert.AreEqual("prefablens-linux-x64.zip", Cli.ReleaseAssetName(isWindows: false, isMac: false, isArm64: false));
+            Assert.AreEqual(
+                "prefablens-windows-x64.zip",
+                Cli.ReleaseAssetName(isWindows: true, isMac: false, isArm64: false)
+            );
+            Assert.AreEqual(
+                "prefablens-macos-arm64.zip",
+                Cli.ReleaseAssetName(isWindows: false, isMac: true, isArm64: true)
+            );
+            Assert.AreEqual(
+                "prefablens-macos-x64.zip",
+                Cli.ReleaseAssetName(isWindows: false, isMac: true, isArm64: false)
+            );
+            Assert.AreEqual(
+                "prefablens-linux-x64.zip",
+                Cli.ReleaseAssetName(isWindows: false, isMac: false, isArm64: false)
+            );
         }
 
         [Test]
@@ -21,19 +33,26 @@ namespace PrefabLens.Tests
         {
             Assert.AreEqual(
                 "https://github.com/hashiiiii/PrefabLens/releases/download/v0.1.0/prefablens-macos-arm64.zip",
-                Cli.DownloadUrl("0.1.0", "prefablens-macos-arm64.zip"));
+                Cli.DownloadUrl("0.1.0", "prefablens-macos-arm64.zip")
+            );
         }
 
         [Test]
         public void BuildArgsDiffsHeadAgainstTheWorktreeAsJson()
         {
-            Assert.AreEqual(new[] { "--git", "HEAD", "Assets/Foo.prefab", "--json" }, Cli.BuildArgs("Assets/Foo.prefab"));
+            Assert.AreEqual(
+                new[] { "--git", "HEAD", "Assets/Foo.prefab", "--json" },
+                Cli.BuildArgs("Assets/Foo.prefab")
+            );
         }
 
         [Test]
         public void QuoteArgsSurvivesSpacesAndQuotes()
         {
-            Assert.AreEqual("\"--git\" \"HEAD\" \"Assets/My Prefab.prefab\" \"--json\"", Cli.QuoteArgs(Cli.BuildArgs("Assets/My Prefab.prefab")));
+            Assert.AreEqual(
+                "\"--git\" \"HEAD\" \"Assets/My Prefab.prefab\" \"--json\"",
+                Cli.QuoteArgs(Cli.BuildArgs("Assets/My Prefab.prefab"))
+            );
             Assert.AreEqual("\"a\\\"b\"", Cli.QuoteArgs(new[] { "a\"b" }));
         }
 
@@ -42,11 +61,12 @@ namespace PrefabLens.Tests
         {
             // release.yml の `sha256sum *.zip` が生成するそのままの形。
             var sums =
-                "1111111111111111111111111111111111111111111111111111111111111111  prefablens-linux-x64.zip\n" +
-                "2222222222222222222222222222222222222222222222222222222222222222  prefablens-macos-arm64.zip\n";
+                "1111111111111111111111111111111111111111111111111111111111111111  prefablens-linux-x64.zip\n"
+                + "2222222222222222222222222222222222222222222222222222222222222222  prefablens-macos-arm64.zip\n";
             Assert.AreEqual(
                 "2222222222222222222222222222222222222222222222222222222222222222",
-                Cli.ParseSha256Sums(sums, "prefablens-macos-arm64.zip"));
+                Cli.ParseSha256Sums(sums, "prefablens-macos-arm64.zip")
+            );
             Assert.IsNull(Cli.ParseSha256Sums(sums, "prefablens-windows-x64.zip"));
         }
 
@@ -64,7 +84,8 @@ namespace PrefabLens.Tests
             // FIPS 180-2 の既知ベクタ: sha256("abc")
             Assert.AreEqual(
                 "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
-                Cli.Sha256Hex(Encoding.ASCII.GetBytes("abc")));
+                Cli.Sha256Hex(Encoding.ASCII.GetBytes("abc"))
+            );
         }
 
         [Test]

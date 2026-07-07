@@ -26,16 +26,17 @@ namespace PrefabLens
 
         public static string ReleaseAssetName(bool isWindows, bool isMac, bool isArm64)
         {
-            if (isWindows) return "prefablens-windows-x64.zip";
-            if (isMac) return isArm64 ? "prefablens-macos-arm64.zip" : "prefablens-macos-x64.zip";
+            if (isWindows)
+                return "prefablens-windows-x64.zip";
+            if (isMac)
+                return isArm64 ? "prefablens-macos-arm64.zip" : "prefablens-macos-x64.zip";
             return "prefablens-linux-x64.zip";
         }
 
         public static string DownloadUrl(string version, string assetName) =>
             $"https://github.com/hashiiiii/PrefabLens/releases/download/v{version}/{assetName}";
 
-        public static string[] BuildArgs(string assetPath) =>
-            new[] { "--git", "HEAD", assetPath, "--json" };
+        public static string[] BuildArgs(string assetPath) => new[] { "--git", "HEAD", assetPath, "--json" };
 
         /// ProcessStartInfo.Arguments 用の最小クオート(スペース入りアセットパス対策)。
         public static string QuoteArgs(string[] args)
@@ -54,9 +55,11 @@ namespace PrefabLens
             {
                 var line = raw.Trim();
                 var sep = line.IndexOf(' ');
-                if (sep <= 0) continue;
+                if (sep <= 0)
+                    continue;
                 var name = line.Substring(sep).Trim().TrimStart('*');
-                if (name == assetName) return line.Substring(0, sep);
+                if (name == assetName)
+                    return line.Substring(0, sep);
             }
             return null;
         }
@@ -65,7 +68,8 @@ namespace PrefabLens
         {
             using var sha = SHA256.Create();
             var sb = new StringBuilder();
-            foreach (var b in sha.ComputeHash(bytes)) sb.Append(b.ToString("x2"));
+            foreach (var b in sha.ComputeHash(bytes))
+                sb.Append(b.ToString("x2"));
             return sb.ToString();
         }
 
@@ -81,7 +85,8 @@ namespace PrefabLens
         public static string Find()
         {
             var manual = EditorPrefs.GetString(CliPathPref, "");
-            if (!string.IsNullOrEmpty(manual) && File.Exists(manual)) return manual;
+            if (!string.IsNullOrEmpty(manual) && File.Exists(manual))
+                return manual;
             return File.Exists(DefaultPath) ? DefaultPath : null;
         }
 
@@ -91,7 +96,8 @@ namespace PrefabLens
             var asset = ReleaseAssetName(
                 RuntimeInformation.IsOSPlatform(OSPlatform.Windows),
                 RuntimeInformation.IsOSPlatform(OSPlatform.OSX),
-                RuntimeInformation.ProcessArchitecture == Architecture.Arm64);
+                RuntimeInformation.ProcessArchitecture == Architecture.Arm64
+            );
             var url = DownloadUrl(Version, asset);
             var dir = Path.GetDirectoryName(DefaultPath);
             Directory.CreateDirectory(dir);
@@ -127,7 +133,8 @@ namespace PrefabLens
         static void VerifyChecksum(HttpClient http, string assetName, byte[] zipBytes)
         {
             var res = http.GetAsync(DownloadUrl(Version, "SHA256SUMS")).Result;
-            if (res.StatusCode == HttpStatusCode.NotFound) return;
+            if (res.StatusCode == HttpStatusCode.NotFound)
+                return;
             res.EnsureSuccessStatusCode();
             var want = ParseSha256Sums(res.Content.ReadAsStringAsync().Result, assetName);
             if (want == null)
@@ -169,9 +176,16 @@ namespace PrefabLens
             {
                 // ハングした CLI から Unity メインスレッドを守る。Kill 後も stdio を掴む
                 // 孫プロセスが残ると Read タスクは完了しないため、読み残しは待たない。
-                try { p.Kill(); }
-                catch (InvalidOperationException) { /* タイムアウトと終了の競合 */ }
-                catch (System.ComponentModel.Win32Exception) { /* 既に終了処理中 */ }
+                try
+                {
+                    p.Kill();
+                }
+                catch (InvalidOperationException)
+                { /* タイムアウトと終了の競合 */
+                }
+                catch (System.ComponentModel.Win32Exception)
+                { /* 既に終了処理中 */
+                }
                 return new Result
                 {
                     ExitCode = -1,
@@ -180,7 +194,12 @@ namespace PrefabLens
                     TimedOut = true,
                 };
             }
-            return new Result { ExitCode = p.ExitCode, Stdout = stdout.Result, Stderr = stderr.Result };
+            return new Result
+            {
+                ExitCode = p.ExitCode,
+                Stdout = stdout.Result,
+                Stderr = stderr.Result,
+            };
         }
     }
 }

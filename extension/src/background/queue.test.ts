@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createQueue } from "./queue";
 
-// 手動で解決できる deferred を並べ、実行順と同時実行数を観測する
+// Line up manually-resolvable deferreds to observe execution order and concurrency
 function deferred(): { promise: Promise<void>; resolve: () => void } {
   let resolve!: () => void;
   const promise = new Promise<void>((r) => {
@@ -25,14 +25,14 @@ describe("createQueue", () => {
       }),
     );
     await new Promise((r) => setTimeout(r, 0));
-    expect(maxActive).toBe(2); // secondary rate limit 回避: 同時 2 本を超えない
+    expect(maxActive).toBe(2); // avoids the secondary rate limit: never exceeds 2 concurrent
     gate.resolve();
     await Promise.all(tasks);
     expect(maxActive).toBe(2);
   });
 
   it("runs front tasks before queued ones", async () => {
-    // ユーザークリックがプリフェッチの行列に並ばされない
+    // A user click isn't made to wait behind the prefetch queue
     const queue = createQueue(1);
     const order: string[] = [];
     const gate = deferred();
@@ -55,7 +55,7 @@ describe("createQueue", () => {
   });
 
   it("keeps pumping after a task rejects", async () => {
-    // 1 つの失敗でキューが詰まると、以降の全フェッチが永久に待つ
+    // If one failure jams the queue, every subsequent fetch waits forever
     const queue = createQueue(1);
     await expect(
       queue(async () => {
@@ -66,7 +66,7 @@ describe("createQueue", () => {
   });
 
   it("normalizes a synchronous throw into a rejection without losing a slot", async () => {
-    // task() が Promise を返す前に throw しても active が漏れない: limit 1 で後続が動けば漏れていない
+    // Even if task() throws before returning a Promise, active doesn't leak: with limit 1, a following task running means nothing leaked
     const queue = createQueue(1);
     const syncThrow = (() => {
       throw new Error("sync boom");
@@ -76,7 +76,7 @@ describe("createQueue", () => {
   });
 
   it("keeps pumping when a queued task throws synchronously on dispatch", async () => {
-    // pump() の .finally 内から起動されるタスクの同期 throw が未処理拒否にならず、呼び出し元の Promise が確定する
+    // A synchronous throw from a task dispatched inside pump()'s .finally doesn't become an unhandled rejection, and the caller's Promise settles
     const queue = createQueue(1);
     const gate = deferred();
     const first = queue(async () => {

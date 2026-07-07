@@ -12,7 +12,7 @@ function callDiff(before, after) {
   const a = enc.encode(after);
   const bp = b.length ? exports.alloc(b.length) : 0;
   const ap = a.length ? exports.alloc(a.length) : 0;
-  // ビューは最後の alloc の後に作る: memory.grow で古い ArrayBuffer は detach される
+  // Build views after the last alloc: memory.grow detaches the old ArrayBuffer
   new Uint8Array(exports.memory.buffer, bp, b.length).set(b);
   new Uint8Array(exports.memory.buffer, ap, a.length).set(a);
   const rp = exports.diff(bp, b.length, ap, a.length);
@@ -48,7 +48,7 @@ test("empty before (added file) still yields a diff.v2 document", () => {
 });
 
 test("hostile nesting returns a clean error.v1 payload, not a trap", () => {
-  // parser の max_nesting_depth は 128(core/src/parser.zig)。200 段で確実に超える。
+  // The parser's max_nesting_depth is 128 (core/src/parser.zig). 200 levels reliably exceeds it.
   let src = "--- !u!1 &1\nGameObject:\n";
   for (let depth = 1; depth <= 200; depth++) src += `${"  ".repeat(depth)}a:\n`;
   const json = JSON.parse(callDiff(src, src));
@@ -60,9 +60,9 @@ test("repeated calls do not leak or corrupt state (pure, re-entrant)", () => {
   for (let i = 0; i < 50; i++) assert.equal(callDiff(BEFORE, AFTER), GOLDEN);
 });
 
-// ---- diff_with_assets(ソース prefab の合成)----
+// ---- diff_with_assets (merging a source prefab) ----
 
-// assets TLV(LE): [u32 count] repeat{ [u32 guid_len][guid][u32 data_len][data] }
+// assets TLV (LE): [u32 count] repeat{ [u32 guid_len][guid][u32 data_len][data] }
 function buildAssetsTlv(entries) {
   const enc = new TextEncoder();
   const parts = [];
@@ -96,7 +96,7 @@ function callDiffWithAssets(before, after, assetsTlv) {
   const bp = b.length ? exports.alloc(b.length) : 0;
   const ap = a.length ? exports.alloc(a.length) : 0;
   const tp = t.length ? exports.alloc(t.length) : 0;
-  // ビューは最後の alloc の後に作る: memory.grow で古い ArrayBuffer は detach される
+  // Build views after the last alloc: memory.grow detaches the old ArrayBuffer
   new Uint8Array(exports.memory.buffer, bp, b.length).set(b);
   new Uint8Array(exports.memory.buffer, ap, a.length).set(a);
   new Uint8Array(exports.memory.buffer, tp, t.length).set(t);

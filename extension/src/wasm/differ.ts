@@ -15,8 +15,8 @@ type Exports = {
   diff_with_assets(bp: number, bl: number, ap: number, al: number, tp: number, tl: number): number;
 };
 
-/** assets TLV(LE): [u32 count] repeat{ [u32 guid_len][guid][u32 data_len][data] }。
- *  core/src/wasm.zig の parseAssets と 1:1。 */
+/** assets TLV (LE): [u32 count] repeat{ [u32 guid_len][guid][u32 data_len][data] }.
+ *  1:1 with parseAssets in core/src/wasm.zig. */
 export function encodeAssets(assets: Map<string, Uint8Array>): Uint8Array {
   const enc = new TextEncoder();
   const guids = [...assets.keys()].map((g) => enc.encode(g));
@@ -48,7 +48,7 @@ export async function createDiffer(wasmBytes: BufferSource): Promise<Differ> {
   function call(before: Uint8Array, after: Uint8Array, assets?: Uint8Array): DiffV2 {
     const bufs = assets === undefined ? [before, after] : [before, after, assets];
     const ptrs = bufs.map((b) => (b.length ? exp.alloc(b.length) : 0));
-    // コピーは最後の alloc の後: memory.grow で古いビューは detach される
+    // Copy after the last alloc: memory.grow detaches older views
     bufs.forEach((b, i) => {
       new Uint8Array(exp.memory.buffer, ptrs[i]!, b.length).set(b);
     });

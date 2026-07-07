@@ -172,7 +172,7 @@ describe("render", () => {
     expect(text).toContain("components");
     expect(text).toContain("Transform");
     expect(text).toContain("Position");
-    // override カードは開いている。
+    // The override card is open.
     const card = root.querySelector(".pl-components details") as HTMLDetailsElement;
     expect(card.open).toBe(true);
   });
@@ -203,7 +203,7 @@ describe("render", () => {
     const card = root.querySelector(".pl-components details") as HTMLDetailsElement;
     expect(card.classList.contains("pl-modified")).toBe(true);
     expect(card.querySelector("summary .pl-badge")?.textContent).toBe("~");
-    // 行自体は元の status のまま。
+    // The rows themselves keep their original status.
     expect(card.querySelector(".pl-field.pl-added")?.textContent).toContain("Scale.y");
   });
 
@@ -275,10 +275,10 @@ describe("render", () => {
     render(root, diff);
     const cards = [...root.querySelectorAll(".pl-components > details")] as HTMLDetailsElement[];
     expect(cards).toHaveLength(2);
-    // added を閉じると「Cylinder1 だけ折り畳まれる」非対称な見え方になるため、状態によらず常に開く
-    expect(cards[0]?.open).toBe(true); // added Cylinder1 も開
-    expect(cards[0]?.textContent).toContain("Cylinder1"); // className フォールバック
-    expect(cards[1]?.open).toBe(true); // modified Transform は開
+    // Closing added would look asymmetric ("only Cylinder1 collapsed"), so always open regardless of status
+    expect(cards[0]?.open).toBe(true); // added Cylinder1 is open too
+    expect(cards[0]?.textContent).toContain("Cylinder1"); // className fallback
+    expect(cards[1]?.open).toBe(true); // modified Transform is open
   });
 
   it("falls back instance name to resolved source prefab stem", () => {
@@ -340,7 +340,7 @@ describe("render", () => {
   });
 
   it("drops the indicator on re-render after resolution completes", () => {
-    // push の done で再描画されたときに消えること(mount が全置換するので自然に消える)
+    // It disappears when re-rendered on the push's done (mount fully replaces, so it naturally goes away)
     const root = freshRoot();
     const diff = { schema: "prefablens.diff.v2" as const, unresolvedGuids: ["g1"], roots: [], loose: [] };
     render(root, diff, { resolving: 1 });
@@ -383,9 +383,9 @@ describe("detectTheme", () => {
   });
 
   it("follows the OS scheme via matchMedia when data-color-mode is auto", () => {
-    // GitHub の既定は auto: dark/light どちらでもない値は matchMedia に委ねる
+    // GitHub's default is auto: a value that is neither dark nor light defers to matchMedia
     document.documentElement.setAttribute("data-color-mode", "auto");
-    expect(detectTheme(document)).toBe("light"); // jsdom に matchMedia は無い → light に倒す
+    expect(detectTheme(document)).toBe("light"); // jsdom has no matchMedia → fall back to light
     const win = document.defaultView!;
     win.matchMedia = ((query: string) => ({
       matches: query === "(prefers-color-scheme: dark)",

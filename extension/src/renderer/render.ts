@@ -43,7 +43,7 @@ export function detectTheme(doc: Document): "light" | "dark" {
 
 export function render(root: ShadowRoot, diff: DiffV2, opts?: { resolving?: number }): void {
   const container = mount(root);
-  // 解決中の合図(spec B4): diff 本体は最初から正しく、参照名だけが後から埋まる
+  // Resolving indicator (spec B4): the diff body is correct from the start, only reference names fill in later
   if (opts?.resolving) container.append(note("pl-resolving", `Resolving ${opts.resolving} reference(s)…`));
   for (const node of diff.roots) container.append(renderNode(node, diff));
   for (const c of diff.loose) container.append(renderComponent(c, diff));
@@ -60,7 +60,7 @@ export function renderLoading(root: ShadowRoot): void {
   mount(root).append(note("pl-loading", "Computing semantic diff…"));
 }
 
-/** 25MB 超ガード(親仕様 §5.7): 自動描画せず明示クリックを待つ。 */
+/** Over-25MB guard (parent spec §5.7): doesn't auto-render, waits for an explicit click. */
 export function renderTooLarge(root: ShadowRoot, bytes: number, onRender: () => void): void {
   const container = mount(root);
   const button = document.createElement("button");
@@ -115,7 +115,7 @@ function renderNode(node: NodeDiff, diff: DiffV2): HTMLElement {
   }
   details.append(summary);
 
-  // 表示次元の規則: コンポーネント/override カードは components セクション配下のみ。
+  // Display-hierarchy rule: component/override cards live only under the components section.
   const cards: HTMLElement[] = [];
   if (node.kind === "prefabInstance") cards.push(...renderOverrideGroups(node.overrides, diff));
   cards.push(...node.components.map((c) => renderComponent(c, diff)));
@@ -140,11 +140,11 @@ function renderOverrideGroups(overrides: OverrideDiff[], diff: DiffV2): HTMLElem
     else groups.push({ name: ov.group, rows: [ov] });
   }
   return groups.map(({ name, rows }) => {
-    // 見出しの status: グループ内で一様ならその status、混在なら modified。
+    // The heading status: that status if uniform within the group, otherwise modified.
     const [first] = rows;
     const status = first && rows.every((r) => r.status === first.status) ? first.status : "modified";
     const el = openDetails("pl-comp", status);
-    el.open = true; // override カードは常に開(spec: 縮約サマリのみで軽い)
+    el.open = true; // override cards are always open (spec: light, just a collapsed summary)
     el.append(summaryLine(status, name));
     for (const r of rows) el.append(fieldRow(r.label, r.status, r.before, r.after, diff));
     return el;
@@ -174,7 +174,7 @@ function fieldRow(label: string, status: Status, before: FieldValue, after: Fiel
   path.className = "pl-path";
   path.textContent = label;
   row.append(path);
-  // 構造サマリ行 (before=after=null) は件数がラベルに含まれ、値を持たない。
+  // A structure summary row (before=after=null) has the count in its label and no value.
   if (before === null && after === null) return row;
   if (status === "modified") {
     row.append(valueSpan("pl-before", before, diff));
@@ -220,6 +220,6 @@ function formatValue(value: FieldValue, diff: DiffV2): string {
   if (value === null) return "—";
   if (typeof value === "string") return value;
   const { fileId, guid } = value.ref;
-  if (guid === null) return `#${fileId}`; // ローカル参照
-  return diff.resolved?.[guid] ?? `guid:${guid}`; // 外部参照(未解決は生 guid のまま)
+  if (guid === null) return `#${fileId}`; // local reference
+  return diff.resolved?.[guid] ?? `guid:${guid}`; // external reference (unresolved stays a raw guid)
 }

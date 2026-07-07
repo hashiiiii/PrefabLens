@@ -36,7 +36,7 @@ describe("buildGuidIndex", () => {
     expect(index.get("oldguid")).toBe("Assets/Old.cs");
     expect(fetched).toContainEqual(["Assets/Scripts/Player.cs.meta", "head"]);
     expect(fetched).toContainEqual(["Assets/Old.cs.meta", "base"]);
-    expect(fetched).toHaveLength(2); // .meta 以外は fetch しない
+    expect(fetched).toHaveLength(2); // does not fetch anything but .meta
   });
 
   it("skips metas that fail to fetch or parse", async () => {
@@ -47,7 +47,7 @@ describe("buildGuidIndex", () => {
   });
 
   it("propagates rate limits instead of degrading the index silently", async () => {
-    // 握りつぶすと劣化インデックスが SW 生存期間キャッシュされ、再トグルでも直らない
+    // Swallowing would cache a degraded index for the SW's lifetime, and re-toggling would not fix it
     await expect(
       buildGuidIndex(files, async () => {
         throw new RateLimitError("limited");
@@ -89,8 +89,8 @@ describe("applyResolved", () => {
       ["zzz", "Assets/Z.cs"],
     ]);
     const out = applyResolved(diff, index);
-    expect(out.resolved).toEqual({ aaa: "Assets/A.cs" }); // bbb 未解決、zzz は参照外
-    expect(out).not.toBe(diff); // 入力は破壊しない
+    expect(out.resolved).toEqual({ aaa: "Assets/A.cs" }); // bbb unresolved, zzz not referenced
+    expect(out).not.toBe(diff); // does not mutate the input
     expect(diff.resolved).toBeUndefined();
   });
 });

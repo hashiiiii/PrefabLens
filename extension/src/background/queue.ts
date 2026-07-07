@@ -2,8 +2,8 @@ type Job = { run: () => Promise<unknown>; resolve: (v: unknown) => void; reject:
 
 export type Queue = <T>(task: () => Promise<T>, opts?: { front?: boolean }) => Promise<T>;
 
-/** REST の同時実行数を絞る(GitHub secondary rate limit はバーストで発動する)。
- *  front はユーザー操作由来の割り込み用: プリフェッチの行列を追い越す。 */
+/** Throttles REST concurrency (GitHub secondary rate limits trigger on bursts).
+ *  front is for user-action interrupts: it jumps the prefetch queue. */
 export function createQueue(limit: number): Queue {
   const pending: Job[] = [];
   let active = 0;
@@ -11,7 +11,7 @@ export function createQueue(limit: number): Queue {
     while (active < limit && pending.length) {
       const job = pending.shift()!;
       active++;
-      // 同期 throw も reject に正規化する: ここで漏れると active が戻らず、キューが永久に詰まる
+      // Normalize even a synchronous throw into a rejection: a leak here leaves active undecremented and jams the queue forever
       Promise.resolve()
         .then(job.run)
         .then(job.resolve, job.reject)

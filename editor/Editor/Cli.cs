@@ -11,18 +11,18 @@ using UnityEditor;
 
 namespace PrefabLens
 {
-    /// prefablens CLI の探索・ダウンロード・実行。git ロジックは全て CLI 側に置く(親仕様 §6.3)。
+    /// Locate, download, and run the prefablens CLI. All git logic lives in the CLI (parent spec §6.3).
     public static class Cli
     {
-        /// ダウンロードする CLI のバージョン(GitHub Releases のタグ v{Version} と一致させる)。
+        /// Version of the CLI to download (kept in sync with the GitHub Releases tag v{Version}).
         public const string Version = "0.3.0";
         public const string CliPathPref = "PrefabLens.CliPath";
 
-        /// CLI 実行の上限。CLI 内部の git タイムアウト(60 秒)より長く取り、git ハング時は
-        /// CLI 自身の具体的なエラーを先に出させる。ここは Unity メインスレッド凍結の最終安全網。
+        /// Upper bound on CLI execution. Set longer than the CLI's internal git timeout (60s) so that on a git hang
+        /// the CLI surfaces its own specific error first. This is the last-resort safety net against freezing the Unity main thread.
         public const int RunTimeoutMs = 90_000;
 
-        // ---- 純関数(EditMode テスト対象) ----
+        // ---- Pure functions (EditMode test targets) ----
 
         public static string ReleaseAssetName(bool isWindows, bool isMac, bool isArm64)
         {
@@ -38,7 +38,7 @@ namespace PrefabLens
 
         public static string[] BuildArgs(string assetPath) => new[] { "--git", "HEAD", assetPath, "--json" };
 
-        /// ProcessStartInfo.Arguments 用の最小クオート(スペース入りアセットパス対策)。
+        /// Minimal quoting for ProcessStartInfo.Arguments (handles asset paths with spaces).
         public static string QuoteArgs(string[] args)
         {
             var quoted = new string[args.Length];
@@ -47,8 +47,8 @@ namespace PrefabLens
             return string.Join(" ", quoted);
         }
 
-        /// `sha256sum` 形式("<hex>  <name>"、バイナリモードは "<hex> *<name>")から
-        /// assetName の行のハッシュを取り出す。見つからなければ null。
+        /// Extract the hash of assetName's line from `sha256sum` format ("<hex>  <name>", binary mode "<hex> *<name>").
+        /// Returns null if not found.
         public static string ParseSha256Sums(string sums, string assetName)
         {
             foreach (var raw in sums.Split('\n'))
@@ -73,15 +73,15 @@ namespace PrefabLens
             return sb.ToString();
         }
 
-        // ---- Editor 連携 ----
+        // ---- Editor integration ----
 
         public static string BinaryName =>
             RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? "prefablens.exe" : "prefablens";
 
-        /// 既定の配置先。cwd(= Unity プロジェクトルート)相対の Library 配下。
+        /// Default install location. Under Library, relative to cwd (= Unity project root).
         public static string DefaultPath => Path.Combine("Library", "PrefabLens", Version, BinaryName);
 
-        /// EditorPrefs の手動指定が最優先。無ければ既定の配置先。どちらも無ければ null。
+        /// A manual EditorPrefs override takes precedence. Otherwise the default location. If neither exists, null.
         public static string Find()
         {
             var manual = EditorPrefs.GetString(CliPathPref, "");
@@ -90,7 +90,7 @@ namespace PrefabLens
             return File.Exists(DefaultPath) ? DefaultPath : null;
         }
 
-        /// GitHub Releases から取得して Library 配下に展開する。成功時は実行パス、失敗時は throw。
+        /// Fetch from GitHub Releases and extract under Library. Returns the executable path on success, throws on failure.
         public static string Download()
         {
             var asset = ReleaseAssetName(
@@ -111,7 +111,7 @@ namespace PrefabLens
                 using var zip = new ZipArchive(new MemoryStream(bytes));
                 foreach (var entry in zip.Entries)
                 {
-                    // ZipFileExtensions(ExtractToFile)は netstandard で参照できないため手動コピー
+                    // ZipFileExtensions (ExtractToFile) isn't referenceable under netstandard, so copy manually
                     var dest = Path.Combine(dir, entry.Name);
                     using var src = entry.Open();
                     using var dst = File.Create(dest);
@@ -128,8 +128,8 @@ namespace PrefabLens
             return DefaultPath;
         }
 
-        /// リリースの SHA256SUMS と zip を照合する。SHA256SUMS が無い(404 = v0.2.0 以前の
-        /// リリース)場合のみスキップし、それ以外の取得失敗と不一致は throw。
+        /// Verify the zip against the release's SHA256SUMS. Skip only when SHA256SUMS is absent (404 = a release
+        /// before v0.2.0); any other fetch failure or mismatch throws.
         static void VerifyChecksum(HttpClient http, string assetName, byte[] zipBytes)
         {
             var res = http.GetAsync(DownloadUrl(Version, "SHA256SUMS")).Result;
@@ -152,7 +152,7 @@ namespace PrefabLens
             public bool TimedOut;
         }
 
-        /// プロジェクトルートを cwd に CLI を実行する(--git は cwd のリポジトリを見る)。
+        /// Run the CLI with the project root as cwd (--git looks at the repository in cwd).
         public static Result Run(string cliPath, string assetPath)
         {
             return RunProcess(cliPath, QuoteArgs(BuildArgs(assetPath)), Directory.GetCurrentDirectory(), RunTimeoutMs);
@@ -169,22 +169,22 @@ namespace PrefabLens
                 WorkingDirectory = workDir,
             };
             using var p = Process.Start(psi);
-            // 双方向 ReadToEnd のデッドロックを避ける: 片方は async で読む
+            // Avoid a two-way ReadToEnd deadlock: read one side asynchronously
             var stdout = p.StandardOutput.ReadToEndAsync();
             var stderr = p.StandardError.ReadToEndAsync();
             if (!p.WaitForExit(timeoutMs))
             {
-                // ハングした CLI から Unity メインスレッドを守る。Kill 後も stdio を掴む
-                // 孫プロセスが残ると Read タスクは完了しないため、読み残しは待たない。
+                // Protect the Unity main thread from a hung CLI. If a grandchild process that holds stdio
+                // survives the Kill, the Read tasks never complete, so don't wait for the remaining output.
                 try
                 {
                     p.Kill();
                 }
                 catch (InvalidOperationException)
-                { /* タイムアウトと終了の競合 */
+                { /* race between timeout and exit */
                 }
                 catch (System.ComponentModel.Win32Exception)
-                { /* 既に終了処理中 */
+                { /* already terminating */
                 }
                 return new Result
                 {

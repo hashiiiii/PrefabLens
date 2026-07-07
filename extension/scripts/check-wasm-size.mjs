@@ -1,8 +1,8 @@
 import { readFileSync } from "node:fs";
 import { gzipSync } from "node:zlib";
 
-const TARGET_KB = 80; // 親仕様 §5.7 の目標
-const LIMIT_KB = 150; // 超過で CI 失敗
+const TARGET_KB = 80; // target from parent spec §5.7
+const LIMIT_KB = 150; // CI fails if exceeded
 
 const wasmUrl = new URL("../../zig-out/bin/prefablens.wasm", import.meta.url);
 const gz = gzipSync(readFileSync(wasmUrl), { level: 9 }).length;

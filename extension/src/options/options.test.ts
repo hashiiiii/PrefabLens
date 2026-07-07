@@ -26,7 +26,7 @@ function fakeGhes(granted = true) {
   } satisfies ChromeGhes;
 }
 
-// click ハンドラの async チェーンが status を書き終わるまで待つ(マクロタスクで flush)
+// Wait until the click handler's async chain finishes writing status (flush via a macrotask)
 const flush = () => new Promise((r) => setTimeout(r, 0));
 
 describe("initOptions", () => {
@@ -75,10 +75,10 @@ describe("initOptions", () => {
     const storage = fakeStorage();
     await initOptions(document, storage, fakeGhes());
     document.querySelector<HTMLInputElement>("#pat")!.value = "tok";
-    document.querySelector<HTMLInputElement>("#baseUrl")!.value = "https://"; // originOf が throw する不正 URL
+    document.querySelector<HTMLInputElement>("#baseUrl")!.value = "https://"; // an invalid URL that makes originOf throw
     document.querySelector<HTMLButtonElement>("#save")?.click();
     await flush();
-    expect(storage.data.pat).toBe("tok"); // PAT は捨てない
+    expect(storage.data.pat).toBe("tok"); // don't discard the PAT
     expect(document.querySelector("#status")?.textContent).toBe("Saved (GHES setup failed)");
   });
 
@@ -93,7 +93,7 @@ describe("initOptions", () => {
     document.querySelector<HTMLInputElement>("#baseUrl")!.value = "ghe.corp.com";
     document.querySelector<HTMLButtonElement>("#save")?.click();
     await flush();
-    // 保存に失敗したのに登録だけ進む中途半端な状態を作らない
+    // Don't create a half-done state where the save fails but registration proceeds anyway
     expect(ghes.scripting.registerContentScripts).not.toHaveBeenCalled();
     expect(document.querySelector("#status")?.textContent).toBe("Save failed");
   });

@@ -13,12 +13,12 @@ namespace PrefabLens
         Unchanged,
     }
 
-    /// diff.v2 のフィールド値: scalar / ref / null の 3 態。
+    /// A diff.v2 field value: one of three states — scalar / ref / null.
     public sealed class Value
     {
-        public string Scalar; // scalar のときのみ
-        public string RefFileId; // ref のときのみ
-        public string RefGuid; // ref かつ外部参照のときのみ
+        public string Scalar; // only when scalar
+        public string RefFileId; // only when ref
+        public string RefGuid; // only when ref and an external reference
         public bool IsRef;
         public bool IsNull;
 
@@ -70,8 +70,8 @@ namespace PrefabLens
         public List<OverrideDiff> Overrides = new();
     }
 
-    /// prefablens.diff.v2(core/src/json.zig の出力)の読み取り側モデル。
-    /// 未知の kind やフィールド欠損は落とさず読み飛ばす(CLI が新しい場合に Editor 側が壊れない)。
+    /// Reader-side model for prefablens.diff.v2 (the output of core/src/json.zig).
+    /// Unknown kinds and missing fields are skipped rather than failing (so the Editor doesn't break when the CLI is newer).
     public sealed class DiffModel
     {
         public List<string> UnresolvedGuids = new();
@@ -83,8 +83,8 @@ namespace PrefabLens
 
         public static DiffModel Parse(string json)
         {
-            // MiniJSON は不正入力で throw せず null を返す。Window の「Could not parse
-            // CLI output」分岐(Exception を握る)を成立させるため、ここで throw に戻す。
+            // MiniJSON returns null on malformed input rather than throwing. Convert back to a throw here
+            // so the Window's "Could not parse CLI output" branch (which catches the Exception) works.
             if (Json.Deserialize(json) is not Dictionary<string, object> o)
                 throw new FormatException("diff json root is not an object");
             var m = new DiffModel();
@@ -104,7 +104,7 @@ namespace PrefabLens
             return m;
         }
 
-        /// Editor 内では AssetDatabase で guid を完全解決できる(Chrome 版より強い)。
+        /// Inside the Editor, AssetDatabase can fully resolve guids (stronger than the Chrome build).
         public void ResolveWith(Func<string, string> guidToPath)
         {
             foreach (var g in UnresolvedGuids)
@@ -125,7 +125,7 @@ namespace PrefabLens
             {
                 "gameObject" => new GameObjectDiff(),
                 "prefabInstance" => ParsePrefabInstance(o),
-                _ => null, // 未知の kind は読み飛ばす
+                _ => null, // skip unknown kinds
             };
             if (n == null)
                 return null;
@@ -198,7 +198,7 @@ namespace PrefabLens
             return new Value { Scalar = ScalarString(t) };
         }
 
-        /// scalar は CLI が文字列で出すが、数値 / bool が来ても JSON 表記のまま文字列化する。
+        /// The CLI emits scalars as strings, but if a number / bool arrives, stringify it in JSON notation.
         static string ScalarString(object t) =>
             t switch
             {

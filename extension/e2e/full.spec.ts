@@ -1,6 +1,6 @@
 /// <reference types="node" />
-// 本物の拡張(--load-extension)で 検出 → 実 background → 実 WASM → 描画 を端から端まで通す。
-// ローカル HTTP サーバを A1 の GHES 動的登録経由で「GitHub」として使う(--e2e build が 127.0.0.1 を事前許可)。
+// Runs detection → real background → real WASM → render end-to-end with the actual extension (--load-extension).
+// Uses a local HTTP server as "GitHub" via A1's GHES dynamic registration (the --e2e build pre-grants 127.0.0.1).
 
 import { readFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
@@ -10,14 +10,14 @@ import { type BrowserContext, chromium, expect, test } from "@playwright/test";
 const DIST = fileURLToPath(new URL("../dist", import.meta.url));
 const fixture = readFileSync(new URL("./fixtures/pr-files.html", import.meta.url), "utf8");
 
-// core/tests/wasm_golden.test.mjs と同じミニマル prefab: 出力が golden で確定している
+// Same minimal prefab as core/tests/wasm_golden.test.mjs: the output is pinned by the golden
 const BEFORE = `--- !u!114 &11400000
 MonoBehaviour:
   m_Script: {fileID: 0, guid: def, type: 3}
   volume: 0.5
 `;
 const AFTER = BEFORE.replace("0.5", "0.8");
-// ドキュメントなしの 26MB = 25MB ガードを踏み、force 後は空 diff で軽く終わる
+// 26MB with no documents trips the 25MB guard; after force it finishes cheaply with an empty diff
 const BIG = "x".repeat(26 * 1024 * 1024);
 
 function startServer(): Promise<{ server: Server; port: number }> {
@@ -67,14 +67,14 @@ let port: number;
 test.beforeAll(async () => {
   ({ server, port } = await startServer());
   context = await chromium.launchPersistentContext("", {
-    channel: "chromium", // headless で拡張を使うには chromium channel が必要
+    channel: "chromium", // the chromium channel is required to use extensions headlessly
     args: [`--disable-extensions-except=${DIST}`, `--load-extension=${DIST}`],
   });
   let sw = context.serviceWorkers()[0];
   sw ??= await context.waitForEvent("serviceworker");
   const extensionId = new URL(sw.url()).host;
 
-  // Options で PAT とローカルサーバを保存 → applyGhes が 127.0.0.1 を動的登録する
+  // Save the PAT and local server in Options → applyGhes dynamically registers 127.0.0.1
   const options = await context.newPage();
   await options.goto(`chrome-extension://${extensionId}/options.html`);
   await options.fill("#pat", "tok");
@@ -97,7 +97,7 @@ test("renders a real wasm diff with code-search guid resolution", async () => {
   await header.getByRole("button", { name: "Semantic" }).click();
 
   const view = page.locator("[data-prefablens-view]");
-  // Code Search 経由で guid def → Sound.cs に実名解決され、型名ではなくスクリプト名が出る
+  // Via Code Search, guid def resolves to Sound.cs, so the script name shows instead of the type name
   await expect(view).toContainText("Sound");
   await expect(view).toContainText("Volume");
   await expect(view).toContainText("0.5");

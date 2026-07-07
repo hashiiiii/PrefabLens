@@ -1,5 +1,5 @@
-// WASM C ABI ラッパ(親仕様 §5.6)。diff 1 回 = 1 arena、グローバル可変状態なし。
-// 戻り値は u32(LE)長さ前置の JSON バイト列。呼び出し側が free(ptr, 4 + len) で解放する。
+// WASM C ABI wrapper (parent spec §5.6). One diff = one arena, no global mutable state.
+// Returns a JSON byte string prefixed with a u32 (LE) length. The caller frees it with free(ptr, 4 + len).
 const std = @import("std");
 const core = @import("root.zig");
 
@@ -26,8 +26,8 @@ export fn diff(
     return run(slice(before_ptr, before_len), slice(after_ptr, after_len), null);
 }
 
-// assets はバイナリ TLV(LE): [u32 count] repeat{ [u32 guid_len][guid][u32 data_len][data] }。
-// JSON 文字列エスケープを避けるため、ソース prefab bytes はそのまま渡す。
+// assets is a binary TLV (LE): [u32 count] repeat{ [u32 guid_len][guid][u32 data_len][data] }.
+// Source prefab bytes are passed as-is to avoid JSON string escaping.
 export fn diff_with_assets(
     before_ptr: ?[*]const u8,
     before_len: usize,
@@ -65,7 +65,7 @@ fn computeJson(arena: std.mem.Allocator, before: []const u8, after: []const u8, 
     return core.diffToJsonWithAssets(arena, before, after, &assets);
 }
 
-// 壊れた TLV は error を返し、error.v1 ペイロードに落ちる(trap しない)。
+// A broken TLV returns an error and falls through to the error.v1 payload (no trap).
 fn parseAssets(arena: std.mem.Allocator, bytes: []const u8) !core.Assets {
     var assets: core.Assets = .empty;
     if (bytes.len == 0) return assets;
@@ -95,7 +95,7 @@ fn readChunk(bytes: []const u8, off: *usize) ![]const u8 {
     return s;
 }
 
-// arena の外(呼び出し側所有)へコピーして長さ前置する。
+// Copy outside the arena (caller-owned) and prefix the length.
 fn packResult(json: []const u8) ?[*]u8 {
     const out = gpa.alloc(u8, 4 + json.len) catch return null;
     std.mem.writeInt(u32, out[0..4], @intCast(json.len), .little);

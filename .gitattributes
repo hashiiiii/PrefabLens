@@ -1,6 +1,6 @@
 *.cs text diff=csharp eol=lf
 *.zig text eol=lf
 
-# testdata の UnityYAML fixture をテキストとして扱わないことで、改行コードの自動変換を防止する。
-# こうすることで Windows で checkout した際に CSRF になってしまうことを防ぐ。
+# Treat the testdata UnityYAML fixtures as binary (not text) to prevent automatic line-ending conversion.
+# This keeps them from being converted to CRLF when checked out on Windows.
 core/src/testdata/** -text

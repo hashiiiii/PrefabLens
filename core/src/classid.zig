@@ -2,8 +2,8 @@ const std = @import("std");
 
 const Pair = struct { id: u32, name: []const u8 };
 
-// Unity classID の全マッピング(id 昇順)。
-// 出典: Unity 6000.5 Manual "ClassID Reference"(343 エントリ)。
+// Full Unity classID mapping (ascending by id).
+// Source: Unity 6000.5 Manual "ClassID Reference" (343 entries).
 const table = [_]Pair{
     .{ .id = 0, .name = "Object" },
     .{ .id = 1, .name = "GameObject" },
@@ -351,7 +351,7 @@ const table = [_]Pair{
 };
 
 comptime {
-    // 二分探索の前提: id 昇順・重複なし。崩れたらビルドで落とす。
+    // Binary search invariant: id ascending, no duplicates. Fail the build if violated.
     for (table[1..], 0..) |p, i| {
         if (p.id <= table[i].id) @compileError("classid table must be sorted by id and unique");
     }
@@ -380,8 +380,8 @@ test "classID lookup covers common types and returns null for unknown" {
 }
 
 test "classID lookup covers the full ClassIDReference table" {
-    // Unity 6000.5 の ClassIDReference は 343 エントリ。境界(最小/最大 ID)と
-    // 旧サブセットに無かった代表例で全域をおさえる。
+    // Unity 6000.5 ClassIDReference has 343 entries. Cover the whole range with the
+    // boundaries (min/max ID) and representative entries absent from the old subset.
     try std.testing.expectEqual(@as(usize, 343), table.len);
     try std.testing.expectEqualStrings("Object", typeName(0).?);
     try std.testing.expectEqualStrings("Rigidbody", typeName(54).?);

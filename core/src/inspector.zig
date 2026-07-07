@@ -33,7 +33,7 @@ test "inspector: groupOf infers pseudo component from propertyPath" {
     try testing.expectEqualStrings("Overrides", groupOf("maxHp"));
 }
 
-// Inspector に表示されないフィールド(パス先頭セグメントで判定)。
+// Fields not shown in the Inspector (matched by the path's first segment).
 const hidden = [_][]const u8{
     "m_ObjectHideFlags",
     "m_CorrespondingSourceObject",
@@ -50,7 +50,7 @@ const hidden = [_][]const u8{
     "m_RootOrder",
 };
 
-// 主要ビルトインの Inspector 表示名(先頭セグメント単位)。
+// Inspector display names for the main built-ins (per first segment).
 const display = [_]struct { raw: []const u8, shown: []const u8 }{
     .{ .raw = "m_LocalPosition", .shown = "Position" },
     .{ .raw = "m_LocalRotation", .shown = "Rotation" },
@@ -88,15 +88,15 @@ pub fn displayPath(arena: std.mem.Allocator, path: []const u8) ![]const u8 {
     return out.toOwnedSlice(arena);
 }
 
-// "[N]" 添字は名前部の後ろにそのまま残す。
+// Keep the "[N]" index as-is after the name part.
 fn appendSegment(arena: std.mem.Allocator, out: *std.ArrayList(u8), seg: []const u8) !void {
     const br = std.mem.indexOfScalar(u8, seg, '[') orelse seg.len;
     try appendNicified(arena, out, seg[0..br]);
     try out.appendSlice(arena, seg[br..]);
 }
 
-// Unity の ObjectNames.NicifyVariableName 相当: 固定テーブル →
-// "m_" 除去 + 先頭大文字化 + 小文字/数字→大文字境界に空白挿入。
+// Equivalent to Unity's ObjectNames.NicifyVariableName: fixed table →
+// strip "m_" + capitalize first + insert a space at lowercase/digit→uppercase boundaries.
 fn appendNicified(arena: std.mem.Allocator, out: *std.ArrayList(u8), name: []const u8) !void {
     for (display) |d| if (std.mem.eql(u8, name, d.raw)) {
         try out.appendSlice(arena, d.shown);
@@ -108,7 +108,7 @@ fn appendNicified(arena: std.mem.Allocator, out: *std.ArrayList(u8), name: []con
         try out.appendSlice(arena, name);
         return;
     }
-    // 単一小文字セグメント (x/y/z/w) は Inspector 同様そのまま。
+    // A single lowercase segment (x/y/z/w) is left as-is, like the Inspector.
     if (s.len == 1 and std.ascii.isLower(s[0])) {
         try out.appendSlice(arena, s);
         return;

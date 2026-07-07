@@ -1,4 +1,4 @@
-// prefablens.diff.v2 (core/src/json.zig の出力と 1:1)
+// prefablens.diff.v2 (1:1 with the output of core/src/json.zig)
 export type Status = "added" | "removed" | "modified" | "unchanged";
 
 export type RefValue = { ref: { fileId: string; guid: string | null; type: number | null } };
@@ -8,7 +8,7 @@ export type FieldDiff = { path: string; status: Status; before: FieldValue; afte
 
 export type OverrideDiff = {
   group: string; // "Transform" | "GameObject" | "Overrides"
-  label: string; // humanize 済み ("Position.x")
+  label: string; // already humanized ("Position.x")
   status: Status;
   before: FieldValue;
   after: FieldValue;
@@ -47,29 +47,29 @@ export type PrefabInstanceDiff = {
 
 export type NodeDiff = GameObjectDiff | PrefabInstanceDiff;
 
-// core が内容の供給を求めるソースプレハブ。side は取得すべき ref
-// (added instance -> after/head、removed instance -> before/base)。
+// Source prefab whose content core asks to be supplied. side is the ref to fetch
+// (added instance -> after/head, removed instance -> before/base).
 export type NeededSource = { guid: string; side: "before" | "after" };
 
 export type DiffV2 = {
   schema: "prefablens.diff.v2";
   unresolvedGuids: string[];
-  neededSources?: NeededSource[]; // 空なら省略される(additive)
-  resolved?: Record<string, string>; // ホスト側(applyResolved)が付与
+  neededSources?: NeededSource[]; // omitted when empty (additive)
+  resolved?: Record<string, string>; // attached by the host side (applyResolved)
   roots: NodeDiff[];
   loose: ComponentDiff[];
 };
 
 export type DiffErrorV1 = { schema: "prefablens.error.v1"; error: string };
 
-// content ↔ background メッセージ(chrome.runtime は JSON 直列化のみ)
+// content ↔ background messages (chrome.runtime only serializes JSON)
 export type SemanticDiffRequest = {
   type: "semanticDiff";
   owner: string;
   repo: string;
   prNumber: number;
   path: string;
-  force?: boolean; // 25MB ガードを越えて描画する(「Render anyway」クリック)
+  force?: boolean; // render past the 25MB guard ("Render anyway" click)
 };
 
 export type PrefetchRequest = { type: "prefetch"; owner: string; repo: string; prNumber: number };
@@ -82,7 +82,7 @@ export type SemanticDiffResponse =
   | { ok: false; error: BackgroundError }
   | { ok: false; error: "too-large"; bytes: number };
 
-// background → content の非同期 push(2 段階応答の後段)。
+// Async push from background → content (the second stage of the two-stage response).
 export type GuidResolvedPush = {
   type: "guidResolved";
   owner: string;
@@ -90,6 +90,6 @@ export type GuidResolvedPush = {
   prNumber: number;
   path: string;
   resolved: Record<string, string>;
-  json?: DiffV2; // mergeSources で構造が更新されたとき最終 push に載る(content は view を置換)
-  done: boolean; // true が来たら解決作業は終わり(空 resolved でも送る = インジケータ消灯の合図)
+  json?: DiffV2; // carried on the final push when mergeSources updated the structure (content replaces the view)
+  done: boolean; // when true, resolution is finished (sent even with empty resolved = the cue to turn off the indicator)
 };

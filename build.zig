@@ -5,7 +5,7 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    // バージョンの単一ソースは build.zig.zon。CLI バイナリへは build options で注入する。
+    // Single source of the version is build.zig.zon; inject it into the CLI binary via build options.
     const opts = b.addOptions();
     opts.addOption([]const u8, "version", zon.version);
     const build_options_mod = opts.createModule();
@@ -15,7 +15,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
     });
 
-    // mcp のパリティテストが server.test.ts と同じ plane fixture を @embedFile するための配線。
+    // Wiring so the mcp parity test can @embedFile the same plane fixture as server.test.ts.
     const plane_before = b.createModule(.{ .root_source_file = b.path("core/src/testdata/plane_before.prefab") });
     const plane_after = b.createModule(.{ .root_source_file = b.path("core/src/testdata/plane_after.prefab") });
 
@@ -62,8 +62,8 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&b.addRunArtifact(core_tests).step);
     test_step.dependOn(&b.addRunArtifact(cli_tests).step);
 
-    // 実バイナリでの MCP プロトコル smoke。git 不要な静的応答のみを exact match する。
-    // tools/list の期待値は cli/src/mcp.zig と同じ tools_list.json を埋め込む。
+    // MCP protocol smoke against the real binary; exact-match only the static, git-free responses.
+    // The tools/list expectation embeds the same tools_list.json as cli/src/mcp.zig.
     const tools_list_json = comptime std.mem.trimEnd(u8, @embedFile("cli/src/tools_list.json"), "\r\n");
     const mcp_smoke = b.addRunArtifact(exe);
     mcp_smoke.addArg("mcp");

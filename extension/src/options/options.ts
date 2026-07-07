@@ -1,6 +1,6 @@
 import { applyGhes, type ChromeGhes } from "./ghes";
 
-// フォーム本体を TS 側に持つ: options.html と jsdom テストで同一マークアップを共有する。
+// Keep the form body on the TS side: options.html and the jsdom tests share the same markup.
 export const OPTIONS_BODY = `
   <h1>PrefabLens</h1>
   <p>
@@ -33,7 +33,7 @@ export async function initOptions(doc: Document, storage: StorageLike, ghes?: Ch
 
   doc.querySelector<HTMLButtonElement>("#save")?.addEventListener("click", () => {
     void (async () => {
-      // 保存が最優先: GHES 登録の失敗で設定(特に PAT)を捨てない
+      // Saving comes first: a GHES registration failure must not discard settings (especially the PAT)
       await storage.set({ pat: pat.value.trim(), baseUrl: baseUrl.value.trim() });
       const grant = ghes ? await applyGhes(baseUrl.value.trim(), ghes).catch(() => "failed" as const) : "ok";
       status.textContent =
@@ -43,7 +43,7 @@ export async function initOptions(doc: Document, storage: StorageLike, ghes?: Ch
             ? "Saved (host permission declined)"
             : "Saved (GHES setup failed)";
     })().catch(() => {
-      status.textContent = "Save failed"; // ここに来るのは storage 失敗のみ
+      status.textContent = "Save failed"; // only a storage failure reaches here
     });
   });
 }

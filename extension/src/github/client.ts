@@ -2,15 +2,15 @@ export class AuthError extends Error {}
 export class RateLimitError extends Error {}
 export class ApiError extends Error {
   constructor(readonly status: number) {
-    super(`GitHub API error (HTTP ${status})`); // raw ボディは持たない(漏洩防止)
+    super(`GitHub API error (HTTP ${status})`); // does not carry the raw body (leak prevention)
   }
 }
 
 export type PrFile = { path: string; status: string; previousPath?: string };
 export type PrRefs = { baseSha: string; headSha: string };
 
-// Options フォームの入力はスキームなし("github.com")のことがある。
-// 素の new URL は throw し、握りつぶされて fetch-failed に化けるため補完する。
+// Input from the Options form may be scheme-less ("github.com").
+// A bare new URL throws and gets swallowed into fetch-failed, so we fill in the scheme.
 export function originOf(baseUrl: string): string {
   const withScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(baseUrl) ? baseUrl : `https://${baseUrl}`;
   return new URL(withScheme).origin;
@@ -22,8 +22,8 @@ export function apiBase(baseUrl: string | undefined): string {
   return origin === "https://github.com" ? "https://api.github.com" : `${origin}/api/v3`;
 }
 
-/** REST の base から GraphQL エンドポイントを導く。GHES は /api/v3 → /api/graphql。
- *  引数名は apiBase 関数と紛れないよう restBase とする。 */
+/** Derives the GraphQL endpoint from the REST base. GHES: /api/v3 → /api/graphql.
+ *  The argument is named restBase to avoid confusion with the apiBase function. */
 export function graphqlUrl(restBase: string): string {
   return restBase.endsWith("/api/v3") ? `${restBase.slice(0, -"/api/v3".length)}/api/graphql` : `${restBase}/graphql`;
 }
@@ -32,16 +32,16 @@ export class GithubClient {
   constructor(
     private readonly base: string,
     private readonly token: string,
-    // 素の `fetch` を既定値にすると `this.fetchFn(...)` の this がインスタンスになり
-    // Chrome では Illegal invocation で落ちる(Node の fetch は this を無視する)。
+    // Defaulting to bare `fetch` makes `this` in `this.fetchFn(...)` the instance,
+    // which fails with Illegal invocation on Chrome (Node's fetch ignores this).
     private readonly fetchFn: typeof fetch = (input, init) => fetch(input, init),
   ) {}
 
   private async rawRequest(url: string, init: RequestInit): Promise<Response> {
     const res = await this.fetchFn(url, init);
     if (res.status === 403 || res.status === 429) {
-      // primary は 403 + x-ratelimit-remaining: 0、secondary は 403 + retry-after または
-      // ヘッダなし(ボディの message のみ)、新 API は 429。ボディは分類にだけ使い、保持しない。
+      // primary is 403 + x-ratelimit-remaining: 0, secondary is 403 + retry-after or
+      // no header (only the body message), newer API is 429. The body is used only for classification, not retained.
       const body = await res.text().catch(() => "");
       const rateLimited =
         res.status === 429 ||
@@ -71,7 +71,7 @@ export class GithubClient {
     return res.json() as Promise<T>;
   }
 
-  // before 側は merge-base: GitHub の PR diff は base ブランチ先端ではなく merge-base 比較。
+  // The before side is the merge-base: GitHub's PR diff compares against the merge-base, not the base branch tip.
   async getPrRefs(owner: string, repo: string, prNumber: number): Promise<PrRefs> {
     const pr = await this.json<{ base: { sha: string }; head: { sha: string } }>(
       `/repos/${owner}/${repo}/pulls/${prNumber}`,
@@ -93,8 +93,8 @@ export class GithubClient {
     }
   }
 
-  /** Code Search で guid → asset path(.meta を剥いだもの)を引く。未ヒット・未インデックス(422)は null。
-   *  legacy 構文(extension:meta)= GHES 互換。索引はデフォルトブランチのみ・認証済み 10 req/min。 */
+  /** Looks up guid → asset path (with .meta stripped) via Code Search. No hit / not indexed (422) → null.
+   *  legacy syntax (extension:meta) = GHES-compatible. The index covers only the default branch, authenticated 10 req/min. */
   async searchMetaByGuid(owner: string, repo: string, guid: string): Promise<string | null> {
     const q = encodeURIComponent(`"${guid}" repo:${owner}/${repo} extension:meta`);
     const res = await this.request(`/search/code?q=${q}&per_page=1`, "application/vnd.github+json");
@@ -104,7 +104,7 @@ export class GithubClient {
     return path?.endsWith(".meta") ? path.slice(0, -".meta".length) : null;
   }
 
-  /** ref 時点の生バイト列。その側にファイルが無ければ null。 */
+  /** Raw bytes at ref. null if the file is absent on that side. */
   async getFileAtRef(owner: string, repo: string, path: string, ref: string): Promise<Uint8Array | null> {
     const encoded = path.split("/").map(encodeURIComponent).join("/");
     const res = await this.request(
@@ -116,7 +116,7 @@ export class GithubClient {
     return new Uint8Array(await res.arrayBuffer());
   }
 
-  /** ref(commit SHA 可)時点の全 .meta の path + blob SHA。truncated は 10 万エントリ超の打ち切り。 */
+  /** path + blob SHA of every .meta at ref (a commit SHA is allowed). truncated means the listing was cut off past 100k entries. */
   async listMetaTree(
     owner: string,
     repo: string,
@@ -131,7 +131,7 @@ export class GithubClient {
     return { truncated: body.truncated, metas };
   }
 
-  /** GraphQL で blob text を一括取得(分割は呼び出し側)。GraphQL は 5,000 pt/h の独立枠。 */
+  /** Batch-fetches blob text via GraphQL (chunking is the caller's job). GraphQL has an independent 5,000 pt/h budget. */
   async batchBlobTexts(owner: string, repo: string, oids: string[]): Promise<Record<string, string | null>> {
     const aliases = oids
       .map((oid, i) => `b${i}: object(oid: ${JSON.stringify(oid)}) { ... on Blob { text } }`)
@@ -151,7 +151,7 @@ export class GithubClient {
       data?: { repository?: Record<string, { text?: string | null } | null> } | null;
       errors?: Array<{ type?: string }>;
     };
-    // GraphQL は HTTP 200 のまま errors を返す: RATE_LIMITED はここで拾う
+    // GraphQL returns errors while still HTTP 200: RATE_LIMITED is caught here
     if (body.errors?.some((e) => e.type === "RATE_LIMITED")) throw new RateLimitError("GitHub rate limit exceeded");
     const blobs = body.data?.repository;
     if (!blobs) throw new ApiError(res.status);

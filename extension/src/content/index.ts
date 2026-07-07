@@ -43,6 +43,7 @@ function attach(state: ViewState): void {
     state.clearOverrides();
     // PR をまたいだら死んだ DOM への参照も捨てる(soft leak 防止)
     for (const a of [...appliers]) if (!a.header.isConnected) appliers.delete(a);
+    for (const [k, v] of views) if (!v.root.host.isConnected) views.delete(k); // 遷移で死んだ view への late push を無視するだけでなく参照も切る
   }
   const entries = scanUnityFiles(document);
   if (entries.length) ensureGlobalToggle(state, entries[0]!);
@@ -96,7 +97,8 @@ function attachToggle(state: ViewState, pr: { owner: string; repo: string; prNum
       void requestDiff({ type: 'semanticDiff', ...pr, path: entry.path, force }).then((res) => {
         if (res.ok) {
           views.set(viewKey, { root, json: res.json });
-          return render(root, res.json, { resolving: res.pending ? countUnresolved(res.json) : 0 });
+          // pending の間は必ず表示する: 名前が全解決でもソース合成が残っていることがある
+          return render(root, res.json, { resolving: res.pending ? Math.max(countUnresolved(res.json), 1) : 0 });
         }
         requested = false; // エラーはキャッシュしない: 次回トグルで再フェッチさせる
         if (res.error === 'too-large') renderTooLarge(root, res.bytes, () => request(true));
@@ -156,7 +158,7 @@ async function init(): Promise<void> {
     if (!view) return; // 既に別 PR へ遷移した等: 黙って捨てる
     // 最終 push は json 置換(mergeSources で構造が変わり得る)、中間 push は resolved のマージ
     view.json = msg.json ?? { ...view.json, resolved: { ...view.json.resolved, ...msg.resolved } };
-    render(view.root, view.json, { resolving: msg.done ? 0 : countUnresolved(view.json) });
+    render(view.root, view.json, { resolving: msg.done ? 0 : Math.max(countUnresolved(view.json), 1) });
   });
 
   // GitHub は SPA: 初回スキャン + MutationObserver で遅延ロード・タブ遷移に追従(200ms デバウンス)。

@@ -1,0 +1,34 @@
+core:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "core/**"
+
+cli:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "cli/**"
+
+editor:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "editor/**"
+
+extension:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extension/**"
+
+ci:
+  - changed-files:
+      - any-glob-to-any-file:
+          - ".github/**"
+          - "build.zig"
+          - "build.zig.zon"
+          - "mise.toml"
+          - "renovate.json"
+          - ".bumpversion.toml"
+
+documentation:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "**/*.md"

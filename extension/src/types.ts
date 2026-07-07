@@ -72,6 +72,9 @@ export type SemanticDiffRequest = {
   force?: boolean; // 25MB ガードを越えて描画する(「Render anyway」クリック)
 };
 
+export type PrefetchRequest = { type: 'prefetch'; owner: string; repo: string; prNumber: number };
+export type BackgroundRequest = SemanticDiffRequest | PrefetchRequest;
+
 export type BackgroundError = 'pat-missing' | 'auth-failed' | 'rate-limited' | 'fetch-failed' | 'diff-failed';
 
 export type SemanticDiffResponse =

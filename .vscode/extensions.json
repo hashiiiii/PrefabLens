@@ -1,0 +1,7 @@
+{
+  "recommendations": [
+    "biomejs.biome",
+    "ziglang.vscode-zig",
+    "csharpier.csharpier-vscode"
+  ]
+}

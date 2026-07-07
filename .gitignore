@@ -1,5 +1,6 @@
 .DS_Store
 *.swp
+.superpowers
 .zig-cache/
 zig-out/
 docs/superpowers/

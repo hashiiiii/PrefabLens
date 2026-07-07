@@ -15,7 +15,7 @@
     "@biomejs/biome": "^2.5.2",
     "@playwright/test": "^1.61.1",
     "@types/chrome": "^0.2.2",
-    "@types/node": "^26.1.0",
+    "@types/node": "^24.13.2",
     "esbuild": "^0.28.1",
     "jsdom": "^29.1.1",
     "typescript": "^6.0.3",

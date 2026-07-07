@@ -69,6 +69,7 @@ describe('createSessionDiffStore', () => {
     expect(area.remove).toHaveBeenCalledWith(['diff:old1', 'diff:old2']); // diff: だけ一掃
     expect(area.data.has('viewMode')).toBe(true); // 無関係キーは残す
     expect(area.data.get('diff:new')).toEqual(DIFF); // 再試行で書けている
+    expect(area.set).toHaveBeenCalledTimes(2); // 溢れ 1 回 + retry 1 回だけ(ループ化への退行を固定)
   });
 
   it('gives up quietly if the retry also fails', async () => {

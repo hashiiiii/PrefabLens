@@ -22,9 +22,10 @@ export function apiBase(baseUrl: string | undefined): string {
   return origin === 'https://github.com' ? 'https://api.github.com' : `${origin}/api/v3`;
 }
 
-/** REST の apiBase から GraphQL エンドポイントを導く。GHES は /api/v3 → /api/graphql。 */
-export function graphqlUrl(apiBase: string): string {
-  return apiBase.endsWith('/api/v3') ? `${apiBase.slice(0, -'/api/v3'.length)}/api/graphql` : `${apiBase}/graphql`;
+/** REST の base から GraphQL エンドポイントを導く。GHES は /api/v3 → /api/graphql。
+ *  引数名は apiBase 関数と紛れないよう restBase とする。 */
+export function graphqlUrl(restBase: string): string {
+  return restBase.endsWith('/api/v3') ? `${restBase.slice(0, -'/api/v3'.length)}/api/graphql` : `${restBase}/graphql`;
 }
 
 export class GithubClient {

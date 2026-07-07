@@ -30,6 +30,13 @@
       "groupName": "extension devDependencies"
     },
     {
+      "description": "@types/node は mise の node runtime (24) に追従させ major を上げない。node のメジャーを上げたら allowedVersions も一緒に更新する",
+      "matchPackageNames": [
+        "@types/node"
+      ],
+      "allowedVersions": "24"
+    },
+    {
       "description": "GitHub Actions は tag 運用を維持し SHA ピン留めせずまとめて更新する",
       "matchManagers": [
         "github-actions"

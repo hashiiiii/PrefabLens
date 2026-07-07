@@ -255,6 +255,34 @@ describe('createHandler', () => {
     expect(client.searchMetaByGuid).toHaveBeenCalledTimes(1);
   });
 
+  it('serves cached names even for guids that once missed in code search', async () => {
+    // 索引解決が guidCache に入る設計になったため、miss 記録済み guid がキャッシュに現れるケースが実在する。
+    // misses は「再検索しない」の門番であって「名前を出さない」の門番ではない
+    const { deps, client, guidCache } = makeDeps(); // search 未ヒット → g1 が misses に入る
+    const handler = createHandler(deps);
+    await handler.semanticDiff(REQ);
+    expect(client.searchMetaByGuid).toHaveBeenCalledTimes(1);
+    guidCache.data['https://api.github.com/o/r'] = { g1: 'Assets/Later.cs' }; // 索引解決が後から書いた体
+    const res = await handler.semanticDiff(REQ);
+    expect(res).toEqual({ ok: true, json: { ...DIFF, resolved: { g1: 'Assets/Later.cs' } } });
+    expect(client.searchMetaByGuid).toHaveBeenCalledTimes(1); // 再検索はしない
+  });
+
+  it('dedupes concurrent code searches for the same guid', async () => {
+    // semantic 既定では複数ファイルが同時に解決を走らせる: 同一 guid の検索は 1 回に畳む
+    const { deps, client } = makeDeps({ search: { g1: 'Assets/S.cs' } });
+    let release!: (v: string) => void;
+    client.searchMetaByGuid.mockImplementation(() => new Promise((r) => { release = r; }));
+    const handler = createHandler(deps);
+    const [a, b] = [handler.semanticDiff(REQ), handler.semanticDiff(REQ)];
+    await vi.waitFor(() => expect(client.searchMetaByGuid).toHaveBeenCalled());
+    release('Assets/S.cs');
+    const [ra, rb] = await Promise.all([a, b]);
+    expect(client.searchMetaByGuid).toHaveBeenCalledTimes(1);
+    expect(ra).toEqual({ ok: true, json: { ...DIFF, resolved: { g1: 'Assets/S.cs' } } });
+    expect(rb).toEqual(ra);
+  });
+
   it('keeps the diff usable when code search hits the rate limit', async () => {
     const twoGuids: DiffV2 = { ...DIFF, unresolvedGuids: ['g1', 'g2'] };
     const { deps, client } = makeDeps({ diff: () => twoGuids });

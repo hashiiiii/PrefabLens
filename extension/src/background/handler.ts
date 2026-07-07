@@ -44,6 +44,8 @@ export function createHandler(deps: Deps): Handler {
   const blobs = new Map<string, Promise<Uint8Array | null>>();
   // Code Search の未ヒット guid。索引遅延があるため永続化せず SW 生存期間のみ
   const misses = new Set<string>();
+  // repoKey:guid → 実行中の検索。同時多発の同一 guid 検索を 1 回に畳む(10 req/min 保護)
+  const searches = new Map<string, Promise<string | null>>();
   // baseSha:headSha:path → raw diff 計算の Promise。成功のみ保持(too-large/失敗は再計算を許す)
   const diffs = new Map<string, Promise<DiffOutcome>>();
   // repoKey@ref → repo 全体索引の Promise(Task 11)。null は索引不可(truncated/上限超/失敗)
@@ -54,25 +56,34 @@ export function createHandler(deps: Deps): Handler {
   /** guid[] をキャッシュ → Code Search の順で解決する(searchUnresolved の中身そのもの)。
    *  検索の失敗(レート制限含む)で diff は落とさない: 解決できた分だけ返す。 */
   async function searchGuids(guids: string[], client: ClientLike, owner: string, repo: string, repoKey: string): Promise<Record<string, string>> {
-    // hasOwn: guid は任意文字列なので 'constructor' 等が Object.prototype に誤ヒットしない(cached も同様)
-    const pending = guids.filter((g) => !misses.has(`${repoKey}:${g}`));
-    if (!pending.length) return {};
+    if (!guids.length) return {};
+    // hasOwn: guid は任意文字列なので 'constructor' 等が Object.prototype に誤ヒットしない
+    // cached lookup は misses を経由しない全 guid が対象: 索引解決も guidCache に載るため、
+    // misses(検索の門番)に入っていてもキャッシュ済みの名前は必ず出す
     const cached = await deps.guidCache.load(repoKey);
     const resolved: Record<string, string> = {};
     const unknown: string[] = [];
-    for (const g of pending) {
+    for (const g of guids) {
       if (Object.hasOwn(cached, g)) resolved[g] = cached[g]!;
       else unknown.push(g);
     }
+    const searchable = unknown.filter((g) => !misses.has(`${repoKey}:${g}`));
     const found: Record<string, string> = {};
-    for (const g of unknown.slice(0, MAX_SEARCHES)) {
+    for (const g of searchable.slice(0, MAX_SEARCHES)) {
+      const key = `${repoKey}:${g}`;
       try {
-        const path = await client.searchMetaByGuid(owner, repo, g);
+        let p = searches.get(key);
+        if (!p) {
+          p = client.searchMetaByGuid(owner, repo, g);
+          searches.set(key, p);
+          void p.catch(() => {}).then(() => searches.delete(key)); // 完了後は guidCache/misses が引き継ぐ
+        }
+        const path = await p;
         if (path) resolved[g] = found[g] = path;
-        else misses.add(`${repoKey}:${g}`);
+        else misses.add(key);
       } catch (err) {
         if (err instanceof RateLimitError) break;
-        misses.add(`${repoKey}:${g}`);
+        misses.add(key);
       }
     }
     if (Object.keys(found).length) await deps.guidCache.save(repoKey, found);
@@ -240,7 +251,8 @@ export function createHandler(deps: Deps): Handler {
     const repoKey = `${base}/${req.owner}/${req.repo}`;
     const at = { owner: req.owner, repo: req.repo, prNumber: req.prNumber, path: req.path };
     try {
-      const index = await getRepoIndex(client, req.owner, req.repo, repoKey, ctx.refs.headSha);
+      // remaining が空(ソース再合成のみ)なら索引を待たない: 初回索引構築は数十秒かかり得て解決に寄与しない
+      const index = remaining.length ? await getRepoIndex(client, req.owner, req.repo, repoKey, ctx.refs.headSha) : null;
       const fromIndex: Record<string, string> = {};
       let leftover = remaining;
       if (index) {

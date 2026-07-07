@@ -101,4 +101,14 @@ pub fn build(b: *std.Build) void {
     wasm.rdynamic = true;
     const wasm_step = b.step("wasm", "Build the core as a freestanding WASM library");
     wasm_step.dependOn(&b.addInstallArtifact(wasm, .{}).step);
+
+    const zig_sources = &.{ "build.zig", "core", "cli" };
+
+    const fmt = b.addFmt(.{ .paths = zig_sources });
+    const fmt_step = b.step("fmt", "Format Zig sources");
+    fmt_step.dependOn(&fmt.step);
+
+    const fmt_check = b.addFmt(.{ .paths = zig_sources, .check = true });
+    const lint_step = b.step("lint", "Check Zig source formatting");
+    lint_step.dependOn(&fmt_check.step);
 }

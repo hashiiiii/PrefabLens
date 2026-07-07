@@ -1,11 +1,13 @@
 {
     "editor.formatOnSave": true,
-    "editor.defaultFormatter": "biomejs.biome",
     "[typescript]": {
         "editor.defaultFormatter": "biomejs.biome"
     },
     "[javascript]": {
         "editor.defaultFormatter": "biomejs.biome"
+    },
+    "[zig]": {
+        "editor.defaultFormatter": "ziglang.vscode-zig"
     },
     "zig.zls.enabled": "on",
     "zig.path": "${userHome}/.local/share/mise/shims/zig",

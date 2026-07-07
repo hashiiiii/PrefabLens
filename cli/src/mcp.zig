@@ -231,19 +231,15 @@ test "mcp: initialize echoes a supported protocol version" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
-    const res = try roundtrip(arena,
-        "{\"jsonrpc\":\"2.0\",\"id\":0,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-03-26\",\"capabilities\":{},\"clientInfo\":{\"name\":\"t\",\"version\":\"0\"}}}\n");
-    try testing.expectEqualStrings(
-        "{\"jsonrpc\":\"2.0\",\"id\":0,\"result\":{\"protocolVersion\":\"2025-03-26\",\"capabilities\":{\"tools\":{}},\"serverInfo\":{\"name\":\"prefablens\",\"version\":\"" ++ main.version ++ "\"}}}\n",
-        res);
+    const res = try roundtrip(arena, "{\"jsonrpc\":\"2.0\",\"id\":0,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-03-26\",\"capabilities\":{},\"clientInfo\":{\"name\":\"t\",\"version\":\"0\"}}}\n");
+    try testing.expectEqualStrings("{\"jsonrpc\":\"2.0\",\"id\":0,\"result\":{\"protocolVersion\":\"2025-03-26\",\"capabilities\":{\"tools\":{}},\"serverInfo\":{\"name\":\"prefablens\",\"version\":\"" ++ main.version ++ "\"}}}\n", res);
 }
 
 test "mcp: initialize falls back to the default version for unknown ones" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
-    const res = try roundtrip(arena,
-        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"1999-01-01\"}}\n");
+    const res = try roundtrip(arena, "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"1999-01-01\"}}\n");
     try testing.expect(std.mem.indexOf(u8, res, "\"protocolVersion\":\"2025-06-18\"") != null);
 }
 
@@ -259,8 +255,7 @@ test "mcp: notifications get no response, even unknown ones" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
-    const res = try roundtrip(arena,
-        "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}\n" ++
+    const res = try roundtrip(arena, "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}\n" ++
         "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/whatever\"}\n");
     try testing.expectEqualStrings("", res);
 }
@@ -270,8 +265,7 @@ test "mcp: unknown request method is -32601" {
     defer arena_state.deinit();
     const arena = arena_state.allocator();
     const res = try roundtrip(arena, "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"nope\"}\n");
-    try testing.expectEqualStrings(
-        "{\"jsonrpc\":\"2.0\",\"id\":4,\"error\":{\"code\":-32601,\"message\":\"Method not found\"}}\n", res);
+    try testing.expectEqualStrings("{\"jsonrpc\":\"2.0\",\"id\":4,\"error\":{\"code\":-32601,\"message\":\"Method not found\"}}\n", res);
 }
 
 test "mcp: malformed json is -32700 with null id" {
@@ -279,8 +273,7 @@ test "mcp: malformed json is -32700 with null id" {
     defer arena_state.deinit();
     const arena = arena_state.allocator();
     const res = try roundtrip(arena, "this is not json\n");
-    try testing.expectEqualStrings(
-        "{\"jsonrpc\":\"2.0\",\"id\":null,\"error\":{\"code\":-32700,\"message\":\"Parse error\"}}\n", res);
+    try testing.expectEqualStrings("{\"jsonrpc\":\"2.0\",\"id\":null,\"error\":{\"code\":-32700,\"message\":\"Parse error\"}}\n", res);
 }
 
 test "mcp: non-object or method-less request is -32600" {
@@ -288,8 +281,7 @@ test "mcp: non-object or method-less request is -32600" {
     defer arena_state.deinit();
     const arena = arena_state.allocator();
     const res = try roundtrip(arena, "[1,2]\n{\"jsonrpc\":\"2.0\",\"id\":9}\n");
-    try testing.expectEqualStrings(
-        "{\"jsonrpc\":\"2.0\",\"id\":null,\"error\":{\"code\":-32600,\"message\":\"Invalid Request\"}}\n" ++
+    try testing.expectEqualStrings("{\"jsonrpc\":\"2.0\",\"id\":null,\"error\":{\"code\":-32600,\"message\":\"Invalid Request\"}}\n" ++
         "{\"jsonrpc\":\"2.0\",\"id\":9,\"error\":{\"code\":-32600,\"message\":\"Invalid Request\"}}\n", res);
 }
 
@@ -299,8 +291,7 @@ test "mcp: tools/list returns the single prefab_diff tool" {
     const arena = arena_state.allocator();
     const res = try roundtrip(arena, "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\"}\n");
     // golden: 実装の tools_list_result と envelope の結合そのもの
-    try testing.expectEqualStrings(
-        "{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":" ++ tools_list_result ++ "}\n", res);
+    try testing.expectEqualStrings("{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":" ++ tools_list_result ++ "}\n", res);
     // スキーマの要点が入っていること(golden の自己一致だけにしない)
     try testing.expect(std.mem.indexOf(u8, res, "\"name\":\"prefab_diff\"") != null);
     try testing.expect(std.mem.indexOf(u8, res, "\"required\":[\"path\"]") != null);
@@ -312,16 +303,14 @@ test "mcp: tools/call validation errors match the ts host contract" {
     defer arena_state.deinit();
     const arena = arena_state.allocator();
     // 空 path / 空 projectRoot / 不正 format / arguments 欠落 / 未知ツール
-    const res = try roundtrip(arena,
-        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"prefab_diff\",\"arguments\":{\"path\":\"\"}}}\n" ++
+    const res = try roundtrip(arena, "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"prefab_diff\",\"arguments\":{\"path\":\"\"}}}\n" ++
         "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"prefab_diff\",\"arguments\":{\"path\":\"a.prefab\",\"projectRoot\":\"\"}}}\n" ++
         "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"prefab_diff\",\"arguments\":{\"path\":\"a.prefab\",\"format\":\"xml\"}}}\n" ++
         "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tools/call\",\"params\":{\"name\":\"prefab_diff\"}}\n" ++
         "{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"tools/call\",\"params\":{\"name\":\"nope\",\"arguments\":{}}}\n");
     var lines = std.mem.splitScalar(u8, std.mem.trimEnd(u8, res, "\n"), '\n');
     const l1 = lines.next().?;
-    try testing.expectEqualStrings(
-        "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"Input validation error: path must be a non-empty string\"}],\"isError\":true}}", l1);
+    try testing.expectEqualStrings("{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"Input validation error: path must be a non-empty string\"}],\"isError\":true}}", l1);
     try testing.expect(std.mem.indexOf(u8, lines.next().?, "projectRoot must be a non-empty string") != null);
     try testing.expect(std.mem.indexOf(u8, lines.next().?, "format must be \\\"tree\\\" or \\\"json\\\"") != null);
     try testing.expect(std.mem.indexOf(u8, lines.next().?, "path must be a non-empty string") != null);
@@ -350,8 +339,7 @@ test "mcp: tools/call diffs a real git fixture with the ts host golden" {
     const result = parsed.object.get("result").?.object;
     try testing.expect(result.get("isError") == null);
     const text = result.get("content").?.array.items[0].object.get("text").?.string;
-    try testing.expectEqualStrings(
-        "  Plane\n" ++
+    try testing.expectEqualStrings("  Plane\n" ++
         "  ~ Cylinder  <Prefab>\n" ++
         "      components\n" ++
         "        ~ Transform\n" ++
@@ -405,8 +393,7 @@ test "mcp: initialize echoes the legacy 2024-10-07 version like the ts sdk" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
-    const res = try roundtrip(arena,
-        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2024-10-07\"}}\n");
+    const res = try roundtrip(arena, "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2024-10-07\"}}\n");
     try testing.expect(std.mem.indexOf(u8, res, "\"protocolVersion\":\"2024-10-07\"") != null);
 }
 
@@ -415,11 +402,9 @@ test "mcp: float and oversized integer ids are echoed verbatim" {
     defer arena_state.deinit();
     const arena = arena_state.allocator();
     // JSON-RPC 2.0 は応答 id が要求 id と等しいことを要求する(小数も i64 超の整数も合法)。
-    const res = try roundtrip(arena,
-        "{\"jsonrpc\":\"2.0\",\"id\":1.5,\"method\":\"ping\"}\n" ++
+    const res = try roundtrip(arena, "{\"jsonrpc\":\"2.0\",\"id\":1.5,\"method\":\"ping\"}\n" ++
         "{\"jsonrpc\":\"2.0\",\"id\":92233720368547758080,\"method\":\"ping\"}\n");
-    try testing.expectEqualStrings(
-        "{\"jsonrpc\":\"2.0\",\"id\":1.5,\"result\":{}}\n" ++
+    try testing.expectEqualStrings("{\"jsonrpc\":\"2.0\",\"id\":1.5,\"result\":{}}\n" ++
         "{\"jsonrpc\":\"2.0\",\"id\":92233720368547758080,\"result\":{}}\n", res);
 }
 
@@ -456,9 +441,7 @@ test "mcp: oversized request line responds with an error before closing" {
     var out: std.ArrayList(u8) = .empty;
     var aw = std.Io.Writer.Allocating.fromArrayList(arena, &out);
     try serve(testing.io, arena, &fr.interface, &aw.writer);
-    try testing.expectEqualStrings(
-        "{\"jsonrpc\":\"2.0\",\"id\":null,\"error\":{\"code\":-32600,\"message\":\"Request too large\"}}\n",
-        aw.toArrayList().items);
+    try testing.expectEqualStrings("{\"jsonrpc\":\"2.0\",\"id\":null,\"error\":{\"code\":-32600,\"message\":\"Request too large\"}}\n", aw.toArrayList().items);
 }
 
 test "mcp: blank lines and trailing CR are tolerated" {

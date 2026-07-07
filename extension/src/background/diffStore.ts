@@ -1,6 +1,6 @@
-import type { DiffV2 } from '../types';
+import type { DiffV2 } from "../types";
 
-const PREFIX = 'diff:';
+const PREFIX = "diff:";
 const MAX_BYTES = 512 * 1024; // storage.session は 10MB: 大物はメモリキャッシュだけに任せる(SW が死んだら再計算)
 
 // chrome.storage.session の必要部分だけを受ける(テストで fake に差し替え可能にするため)

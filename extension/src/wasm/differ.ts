@@ -1,4 +1,4 @@
-import type { DiffErrorV1, DiffV2 } from '../types';
+import type { DiffErrorV1, DiffV2 } from "../types";
 
 export class DiffError extends Error {}
 
@@ -22,7 +22,7 @@ export function encodeAssets(assets: Map<string, Uint8Array>): Uint8Array {
   const guids = [...assets.keys()].map((g) => enc.encode(g));
   let total = 4;
   let i = 0;
-  for (const data of assets.values()) total += 8 + guids[i++]!.length + data.length;
+  for (const data of assets.values()) total += 8 + guids[i++]?.length + data.length;
   const out = new Uint8Array(total);
   const view = new DataView(out.buffer);
   let off = 0;
@@ -49,18 +49,20 @@ export async function createDiffer(wasmBytes: BufferSource): Promise<Differ> {
     const bufs = assets === undefined ? [before, after] : [before, after, assets];
     const ptrs = bufs.map((b) => (b.length ? exp.alloc(b.length) : 0));
     // コピーは最後の alloc の後: memory.grow で古いビューは detach される
-    bufs.forEach((b, i) => new Uint8Array(exp.memory.buffer, ptrs[i]!, b.length).set(b));
+    bufs.forEach((b, i) => {
+      new Uint8Array(exp.memory.buffer, ptrs[i]!, b.length).set(b);
+    });
     const rp =
       assets === undefined
         ? exp.diff(ptrs[0]!, before.length, ptrs[1]!, after.length)
         : exp.diff_with_assets(ptrs[0]!, before.length, ptrs[1]!, after.length, ptrs[2]!, assets.length);
     try {
-      if (rp === 0) throw new DiffError('OutOfMemory');
+      if (rp === 0) throw new DiffError("OutOfMemory");
       const len = new DataView(exp.memory.buffer).getUint32(rp, true);
       const text = new TextDecoder().decode(new Uint8Array(exp.memory.buffer, rp + 4, len));
       exp.free(rp, 4 + len);
       const parsed = JSON.parse(text) as DiffV2 | DiffErrorV1;
-      if (parsed.schema !== 'prefablens.diff.v2') throw new DiffError((parsed as DiffErrorV1).error);
+      if (parsed.schema !== "prefablens.diff.v2") throw new DiffError((parsed as DiffErrorV1).error);
       return parsed;
     } finally {
       bufs.forEach((b, i) => {

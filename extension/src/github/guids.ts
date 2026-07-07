@@ -1,16 +1,16 @@
-import type { DiffV2 } from '../types';
-import { RateLimitError, type PrFile } from './client';
+import type { DiffV2 } from "../types";
+import { type PrFile, RateLimitError } from "./client";
 
 /** cli/src/resolve.zig の parseGuid と同じ規則: 行頭(trim 後)の "guid:" を拾う。 */
 export function parseGuidFromMeta(meta: string): string | undefined {
-  for (const line of meta.split('\n')) {
+  for (const line of meta.split("\n")) {
     const t = line.trim();
-    if (t.startsWith('guid:')) return t.slice('guid:'.length).trim();
+    if (t.startsWith("guid:")) return t.slice("guid:".length).trim();
   }
   return undefined;
 }
 
-export type MetaFetcher = (path: string, side: 'base' | 'head') => Promise<string | null>;
+export type MetaFetcher = (path: string, side: "base" | "head") => Promise<string | null>;
 
 /** Code Search で解決した guid→asset path の永続キャッシュ(repo キーは `<apiBase>/<owner>/<repo>`)。
  *  guid→path は安定なので TTL なし。save はマージ。 */
@@ -25,10 +25,10 @@ const MAX_CONCURRENT_META_FETCHES = 8;
  *  同時フェッチ数を上限 8 に抑える(大量 .meta 変更での GitHub secondary rate limit 回避)。 */
 export async function buildGuidIndex(files: PrFile[], fetchMeta: MetaFetcher): Promise<Map<string, string>> {
   const index = new Map<string, string>();
-  const metas = files.filter((f) => f.path.endsWith('.meta'));
+  const metas = files.filter((f) => f.path.endsWith(".meta"));
 
   const indexOne = async (f: PrFile): Promise<void> => {
-    const side = f.status === 'removed' ? 'base' : 'head';
+    const side = f.status === "removed" ? "base" : "head";
     // rate limit だけは伝播させる: 握りつぶすと劣化インデックスが SW 生存期間キャッシュされる
     const text = await fetchMeta(f.path, side).catch((err) => {
       if (err instanceof RateLimitError) throw err;
@@ -36,7 +36,7 @@ export async function buildGuidIndex(files: PrFile[], fetchMeta: MetaFetcher): P
     });
     if (!text) return;
     const guid = parseGuidFromMeta(text);
-    if (guid) index.set(guid, f.path.slice(0, -'.meta'.length));
+    if (guid) index.set(guid, f.path.slice(0, -".meta".length));
   };
 
   for (let i = 0; i < metas.length; i += MAX_CONCURRENT_META_FETCHES) {

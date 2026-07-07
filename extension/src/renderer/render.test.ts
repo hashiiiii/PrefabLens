@@ -1,62 +1,65 @@
 // @vitest-environment jsdom
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { detectTheme, render, renderError, renderTooLarge } from './render';
-import type { DiffV2 } from '../types';
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { DiffV2 } from "../types";
+import { detectTheme, render, renderError, renderTooLarge } from "./render";
 
 const DIFF: DiffV2 = {
-  schema: 'prefablens.diff.v2',
-  unresolvedGuids: ['def', 'ghi'],
-  resolved: { def: 'Assets/Scripts/Sound.cs' },
+  schema: "prefablens.diff.v2",
+  unresolvedGuids: ["def", "ghi"],
+  resolved: { def: "Assets/Scripts/Sound.cs" },
   roots: [
     {
-      kind: 'gameObject',
-      fileId: '1',
-      name: 'Player',
-      status: 'modified',
+      kind: "gameObject",
+      fileId: "1",
+      name: "Player",
+      status: "modified",
       components: [
         {
-          kind: 'component',
-          fileId: '2',
+          kind: "component",
+          fileId: "2",
           classId: 114,
-          typeName: 'MonoBehaviour',
-          scriptGuid: 'def',
+          typeName: "MonoBehaviour",
+          scriptGuid: "def",
           className: null,
-          status: 'modified',
+          status: "modified",
           fields: [
-            { path: 'volume', status: 'modified', before: '0.5', after: '0.8' },
-            { path: 'm_Target', status: 'modified', before: { ref: { fileId: '100', guid: null, type: null } }, after: { ref: { fileId: '0', guid: 'ghi', type: 2 } } },
-            { path: 'newField', status: 'added', before: null, after: '1' },
+            { path: "volume", status: "modified", before: "0.5", after: "0.8" },
+            {
+              path: "m_Target",
+              status: "modified",
+              before: { ref: { fileId: "100", guid: null, type: null } },
+              after: { ref: { fileId: "0", guid: "ghi", type: 2 } },
+            },
+            { path: "newField", status: "added", before: null, after: "1" },
           ],
         },
       ],
-      children: [
-        { kind: 'gameObject', fileId: '3', name: 'Weapon', status: 'added', components: [], children: [] },
-      ],
+      children: [{ kind: "gameObject", fileId: "3", name: "Weapon", status: "added", components: [], children: [] }],
     },
   ],
   loose: [],
 };
 
 const INSTANCE: DiffV2 = {
-  schema: 'prefablens.diff.v2',
-  unresolvedGuids: ['aaa'],
-  resolved: { aaa: 'Assets/Cylinder Variant.prefab' },
+  schema: "prefablens.diff.v2",
+  unresolvedGuids: ["aaa"],
+  resolved: { aaa: "Assets/Cylinder Variant.prefab" },
   roots: [
     {
-      kind: 'gameObject',
-      fileId: '1',
-      name: 'Plane',
-      status: 'unchanged',
+      kind: "gameObject",
+      fileId: "1",
+      name: "Plane",
+      status: "unchanged",
       components: [],
       children: [
         {
-          kind: 'prefabInstance',
-          fileId: '1001',
-          name: 'Cylinder Variant',
-          status: 'added',
-          sourceGuid: 'aaa',
+          kind: "prefabInstance",
+          fileId: "1001",
+          name: "Cylinder Variant",
+          status: "added",
+          sourceGuid: "aaa",
           overrides: [
-            { group: 'Transform', label: 'Position', status: 'added', before: null, after: '(2.03, 3.63, 1.12)' },
+            { group: "Transform", label: "Position", status: "added", before: null, after: "(2.03, 3.63, 1.12)" },
           ],
           components: [],
           children: [],
@@ -68,117 +71,126 @@ const INSTANCE: DiffV2 = {
 };
 
 function freshRoot(): ShadowRoot {
-  const host = document.createElement('div');
+  const host = document.createElement("div");
   document.body.append(host);
-  return host.attachShadow({ mode: 'open' });
+  return host.attachShadow({ mode: "open" });
 }
 
-describe('render', () => {
+describe("render", () => {
   beforeEach(() => {
-    document.body.innerHTML = '';
-    document.documentElement.removeAttribute('data-color-mode');
+    document.body.innerHTML = "";
+    document.documentElement.removeAttribute("data-color-mode");
   });
 
-  it('renders the GameObject hierarchy with statuses', () => {
+  it("renders the GameObject hierarchy with statuses", () => {
     const root = freshRoot();
     render(root, DIFF);
-    const gos = root.querySelectorAll('details.pl-go');
+    const gos = root.querySelectorAll("details.pl-go");
     expect(gos).toHaveLength(2);
-    expect(gos[0]!.querySelector('summary')!.textContent).toContain('Player');
-    expect(gos[1]!.classList.contains('pl-added')).toBe(true);
+    expect(gos[0]?.querySelector("summary")?.textContent).toContain("Player");
+    expect(gos[1]?.classList.contains("pl-added")).toBe(true);
   });
 
-  it('shows field values as before → after and resolves the component to its script stem', () => {
+  it("shows field values as before → after and resolves the component to its script stem", () => {
     const root = freshRoot();
     render(root, DIFF);
-    const text = root.querySelector('.pl-root')!.textContent!;
-    expect(text).toContain('volume');
-    expect(text).toContain('0.5');
-    expect(text).toContain('0.8');
-    expect(text).toContain('Sound'); // resolved guid → file stem, not the full path
-    expect(text).toContain('‹Script›');
+    const text = root.querySelector(".pl-root")!.textContent!;
+    expect(text).toContain("volume");
+    expect(text).toContain("0.5");
+    expect(text).toContain("0.8");
+    expect(text).toContain("Sound"); // resolved guid → file stem, not the full path
+    expect(text).toContain("‹Script›");
   });
 
-  it('shows only the current value for added fields, without a before placeholder', () => {
+  it("shows only the current value for added fields, without a before placeholder", () => {
     const root = freshRoot();
     render(root, DIFF);
-    const rows = [...root.querySelectorAll('.pl-field')];
-    const added = rows.find((r) => r.textContent!.includes('newField'))!;
-    expect(added.textContent).toBe('newField1');
+    const rows = [...root.querySelectorAll(".pl-field")];
+    const added = rows.find((r) => r.textContent?.includes("newField"))!;
+    expect(added.textContent).toBe("newField1");
   });
 
-  it('falls back to the raw guid when unresolved and to #fileId for local refs', () => {
+  it("falls back to the raw guid when unresolved and to #fileId for local refs", () => {
     const root = freshRoot();
     render(root, DIFF);
-    const text = root.querySelector('.pl-root')!.textContent!;
-    expect(text).toContain('#100'); // local ref
-    expect(text).toContain('ghi'); // unresolved guid stays visible
+    const text = root.querySelector(".pl-root")!.textContent!;
+    expect(text).toContain("#100"); // local ref
+    expect(text).toContain("ghi"); // unresolved guid stays visible
   });
 
-  it('renders repo-controlled strings as text, never as markup', () => {
+  it("renders repo-controlled strings as text, never as markup", () => {
     const hostile: DiffV2 = {
       ...DIFF,
-      roots: [{ kind: 'gameObject', fileId: '1', name: '<img src=x onerror=alert(1)>', status: 'added', components: [], children: [] }],
+      roots: [
+        {
+          kind: "gameObject",
+          fileId: "1",
+          name: "<img src=x onerror=alert(1)>",
+          status: "added",
+          components: [],
+          children: [],
+        },
+      ],
     };
     const root = freshRoot();
     render(root, hostile);
-    expect(root.querySelector('img')).toBeNull();
-    expect(root.textContent).toContain('<img src=x onerror=alert(1)>');
+    expect(root.querySelector("img")).toBeNull();
+    expect(root.textContent).toContain("<img src=x onerror=alert(1)>");
   });
 
-  it('replaces previous content on re-render and shows an empty note for empty diffs', () => {
+  it("replaces previous content on re-render and shows an empty note for empty diffs", () => {
     const root = freshRoot();
     render(root, DIFF);
-    render(root, { schema: 'prefablens.diff.v2', unresolvedGuids: [], roots: [], loose: [] });
-    expect(root.querySelectorAll('details')).toHaveLength(0);
-    expect(root.textContent).toContain('No semantic changes');
+    render(root, { schema: "prefablens.diff.v2", unresolvedGuids: [], roots: [], loose: [] });
+    expect(root.querySelectorAll("details")).toHaveLength(0);
+    expect(root.textContent).toContain("No semantic changes");
   });
 
-  it('renderTooLarge shows the size and renders on click', () => {
+  it("renderTooLarge shows the size and renders on click", () => {
     const root = freshRoot();
     const onRender = vi.fn();
     renderTooLarge(root, 26 * 1024 * 1024, onRender);
-    expect(root.textContent).toContain('Large file (26 MB)');
-    const button = root.querySelector<HTMLButtonElement>('button.pl-render')!;
-    expect(button.textContent).toBe('Render anyway');
+    expect(root.textContent).toContain("Large file (26 MB)");
+    const button = root.querySelector<HTMLButtonElement>("button.pl-render")!;
+    expect(button.textContent).toBe("Render anyway");
     button.click();
     expect(onRender).toHaveBeenCalledTimes(1);
   });
 
-  it('renderError shows a clean one-line message', () => {
+  it("renderError shows a clean one-line message", () => {
     const root = freshRoot();
-    renderError(root, 'Set a GitHub token in the PrefabLens options page.');
-    expect(root.textContent).toContain('Set a GitHub token');
+    renderError(root, "Set a GitHub token in the PrefabLens options page.");
+    expect(root.textContent).toContain("Set a GitHub token");
   });
 
-  it('renders prefab instance with badge, components section and open override card', () => {
+  it("renders prefab instance with badge, components section and open override card", () => {
     const root = freshRoot();
     render(root, INSTANCE);
-    const text = root.textContent ?? '';
-    expect(text).toContain('Cylinder Variant');
-    expect(text).toContain('‹Prefab: Assets/Cylinder Variant.prefab›');
-    expect(text).toContain('components');
-    expect(text).toContain('Transform');
-    expect(text).toContain('Position');
+    const text = root.textContent ?? "";
+    expect(text).toContain("Cylinder Variant");
+    expect(text).toContain("‹Prefab: Assets/Cylinder Variant.prefab›");
+    expect(text).toContain("components");
+    expect(text).toContain("Transform");
+    expect(text).toContain("Position");
     // override カードは開いている。
-    const card = root.querySelector('.pl-components details') as HTMLDetailsElement;
+    const card = root.querySelector(".pl-components details") as HTMLDetailsElement;
     expect(card.open).toBe(true);
   });
 
-  it('marks a mixed-status override group heading as modified', () => {
+  it("marks a mixed-status override group heading as modified", () => {
     const diff: DiffV2 = {
-      schema: 'prefablens.diff.v2',
+      schema: "prefablens.diff.v2",
       unresolvedGuids: [],
       roots: [
         {
-          kind: 'prefabInstance',
-          fileId: '1001',
-          name: 'Cylinder',
-          status: 'modified',
+          kind: "prefabInstance",
+          fileId: "1001",
+          name: "Cylinder",
+          status: "modified",
           sourceGuid: null,
           overrides: [
-            { group: 'Transform', label: 'Scale.y', status: 'added', before: null, after: '2' },
-            { group: 'Transform', label: 'Position.x', status: 'modified', before: '0', after: '1' },
+            { group: "Transform", label: "Scale.y", status: "added", before: null, after: "2" },
+            { group: "Transform", label: "Position.x", status: "modified", before: "0", after: "1" },
           ],
           components: [],
           children: [],
@@ -188,25 +200,27 @@ describe('render', () => {
     };
     const root = freshRoot();
     render(root, diff);
-    const card = root.querySelector('.pl-components details') as HTMLDetailsElement;
-    expect(card.classList.contains('pl-modified')).toBe(true);
-    expect(card.querySelector('summary .pl-badge')?.textContent).toBe('~');
+    const card = root.querySelector(".pl-components details") as HTMLDetailsElement;
+    expect(card.classList.contains("pl-modified")).toBe(true);
+    expect(card.querySelector("summary .pl-badge")?.textContent).toBe("~");
     // 行自体は元の status のまま。
-    expect(card.querySelector('.pl-field.pl-added')?.textContent).toContain('Scale.y');
+    expect(card.querySelector(".pl-field.pl-added")?.textContent).toContain("Scale.y");
   });
 
-  it('renders structural summary rows as label only, without a value placeholder', () => {
+  it("renders structural summary rows as label only, without a value placeholder", () => {
     const diff: DiffV2 = {
-      schema: 'prefablens.diff.v2',
+      schema: "prefablens.diff.v2",
       unresolvedGuids: [],
       roots: [
         {
-          kind: 'prefabInstance',
-          fileId: '1001',
-          name: 'Cylinder',
-          status: 'modified',
+          kind: "prefabInstance",
+          fileId: "1001",
+          name: "Cylinder",
+          status: "modified",
           sourceGuid: null,
-          overrides: [{ group: 'Overrides', label: 'Added Components (1)', status: 'added', before: null, after: null }],
+          overrides: [
+            { group: "Overrides", label: "Added Components (1)", status: "added", before: null, after: null },
+          ],
           components: [],
           children: [],
         },
@@ -215,32 +229,42 @@ describe('render', () => {
     };
     const root = freshRoot();
     render(root, diff);
-    const row = root.querySelector('.pl-field');
-    expect(row?.textContent).toContain('Added Components (1)');
-    expect(row?.textContent).not.toContain('—');
+    const row = root.querySelector(".pl-field");
+    expect(row?.textContent).toContain("Added Components (1)");
+    expect(row?.textContent).not.toContain("—");
   });
 
-  it('keeps added and modified component cards open', () => {
+  it("keeps added and modified component cards open", () => {
     const root = freshRoot();
     const diff: DiffV2 = {
-      schema: 'prefablens.diff.v2',
+      schema: "prefablens.diff.v2",
       unresolvedGuids: [],
       roots: [
         {
-          kind: 'gameObject',
-          fileId: '1',
-          name: 'Cylinder',
-          status: 'modified',
+          kind: "gameObject",
+          fileId: "1",
+          name: "Cylinder",
+          status: "modified",
           components: [
             {
-              kind: 'component', fileId: '8', classId: 114, typeName: 'MonoBehaviour',
-              scriptGuid: null, className: 'Cylinder1', status: 'added',
-              fields: [{ path: 'Enabled', status: 'added', before: null, after: '1' }],
+              kind: "component",
+              fileId: "8",
+              classId: 114,
+              typeName: "MonoBehaviour",
+              scriptGuid: null,
+              className: "Cylinder1",
+              status: "added",
+              fields: [{ path: "Enabled", status: "added", before: null, after: "1" }],
             },
             {
-              kind: 'component', fileId: '4', classId: 4, typeName: 'Transform',
-              scriptGuid: null, className: null, status: 'modified',
-              fields: [{ path: 'Position.x', status: 'modified', before: '0.64596', after: '1' }],
+              kind: "component",
+              fileId: "4",
+              classId: 4,
+              typeName: "Transform",
+              scriptGuid: null,
+              className: null,
+              status: "modified",
+              fields: [{ path: "Position.x", status: "modified", before: "0.64596", after: "1" }],
             },
           ],
           children: [],
@@ -249,104 +273,125 @@ describe('render', () => {
       loose: [],
     };
     render(root, diff);
-    const cards = [...root.querySelectorAll('.pl-components > details')] as HTMLDetailsElement[];
+    const cards = [...root.querySelectorAll(".pl-components > details")] as HTMLDetailsElement[];
     expect(cards).toHaveLength(2);
     // added を閉じると「Cylinder1 だけ折り畳まれる」非対称な見え方になるため、状態によらず常に開く
-    expect(cards[0]!.open).toBe(true); // added Cylinder1 も開
-    expect(cards[0]!.textContent).toContain('Cylinder1'); // className フォールバック
-    expect(cards[1]!.open).toBe(true); // modified Transform は開
+    expect(cards[0]?.open).toBe(true); // added Cylinder1 も開
+    expect(cards[0]?.textContent).toContain("Cylinder1"); // className フォールバック
+    expect(cards[1]?.open).toBe(true); // modified Transform は開
   });
 
-  it('falls back instance name to resolved source prefab stem', () => {
+  it("falls back instance name to resolved source prefab stem", () => {
     const root = freshRoot();
     const diff: DiffV2 = {
-      schema: 'prefablens.diff.v2',
-      unresolvedGuids: ['bbb'],
-      resolved: { bbb: 'Assets/Enemy.prefab' },
+      schema: "prefablens.diff.v2",
+      unresolvedGuids: ["bbb"],
+      resolved: { bbb: "Assets/Enemy.prefab" },
       roots: [
         {
-          kind: 'prefabInstance', fileId: '1001', name: '', status: 'added',
-          sourceGuid: 'bbb', overrides: [], components: [], children: [],
+          kind: "prefabInstance",
+          fileId: "1001",
+          name: "",
+          status: "added",
+          sourceGuid: "bbb",
+          overrides: [],
+          components: [],
+          children: [],
         },
       ],
       loose: [],
     };
     render(root, diff);
-    expect(root.textContent).toContain('Enemy');
+    expect(root.textContent).toContain("Enemy");
   });
 
-  it('falls back to generic instance name and badge when sourceGuid is unresolved', () => {
+  it("falls back to generic instance name and badge when sourceGuid is unresolved", () => {
     const root = freshRoot();
     const diff: DiffV2 = {
-      schema: 'prefablens.diff.v2',
-      unresolvedGuids: ['zzz'],
+      schema: "prefablens.diff.v2",
+      unresolvedGuids: ["zzz"],
       roots: [
         {
-          kind: 'prefabInstance', fileId: '1001', name: '', status: 'added',
-          sourceGuid: 'zzz', overrides: [], components: [], children: [],
+          kind: "prefabInstance",
+          fileId: "1001",
+          name: "",
+          status: "added",
+          sourceGuid: "zzz",
+          overrides: [],
+          components: [],
+          children: [],
         },
       ],
       loose: [],
     };
     render(root, diff);
-    expect(root.textContent).toContain('Prefab Instance');
-    expect(root.textContent).toContain('‹Prefab›');
+    expect(root.textContent).toContain("Prefab Instance");
+    expect(root.textContent).toContain("‹Prefab›");
   });
 
-  it('shows a resolving indicator while guid resolution is pending', () => {
+  it("shows a resolving indicator while guid resolution is pending", () => {
     const root = freshRoot();
-    render(root, { schema: 'prefablens.diff.v2', unresolvedGuids: ['g1', 'g2'], roots: [], loose: [] }, { resolving: 2 });
-    expect(root.textContent).toContain('Resolving 2 reference(s)…');
+    render(
+      root,
+      { schema: "prefablens.diff.v2", unresolvedGuids: ["g1", "g2"], roots: [], loose: [] },
+      { resolving: 2 },
+    );
+    expect(root.textContent).toContain("Resolving 2 reference(s)…");
   });
 
-  it('drops the indicator on re-render after resolution completes', () => {
+  it("drops the indicator on re-render after resolution completes", () => {
     // push の done で再描画されたときに消えること(mount が全置換するので自然に消える)
     const root = freshRoot();
-    const diff = { schema: 'prefablens.diff.v2' as const, unresolvedGuids: ['g1'], roots: [], loose: [] };
+    const diff = { schema: "prefablens.diff.v2" as const, unresolvedGuids: ["g1"], roots: [], loose: [] };
     render(root, diff, { resolving: 1 });
     render(root, diff);
-    expect(root.textContent).not.toContain('Resolving');
+    expect(root.textContent).not.toContain("Resolving");
   });
 
-  it('falls back component display to className when the script guid is unresolved', () => {
+  it("falls back component display to className when the script guid is unresolved", () => {
     const root = freshRoot();
     const diff: DiffV2 = {
-      schema: 'prefablens.diff.v2',
-      unresolvedGuids: ['xyz'],
+      schema: "prefablens.diff.v2",
+      unresolvedGuids: ["xyz"],
       roots: [],
       loose: [
         {
-          kind: 'component', fileId: '5', classId: 114, typeName: 'MonoBehaviour',
-          scriptGuid: 'xyz', className: 'Cylinder1', status: 'modified',
-          fields: [{ path: 'Hp', status: 'modified', before: '1', after: '2' }],
+          kind: "component",
+          fileId: "5",
+          classId: 114,
+          typeName: "MonoBehaviour",
+          scriptGuid: "xyz",
+          className: "Cylinder1",
+          status: "modified",
+          fields: [{ path: "Hp", status: "modified", before: "1", after: "2" }],
         },
       ],
     };
     render(root, diff);
-    const summary = root.querySelector('details > summary');
-    expect(summary?.textContent).toContain('Cylinder1');
-    expect(summary?.textContent).not.toContain('MonoBehaviour');
+    const summary = root.querySelector("details > summary");
+    expect(summary?.textContent).toContain("Cylinder1");
+    expect(summary?.textContent).not.toContain("MonoBehaviour");
   });
 });
 
-describe('detectTheme', () => {
-  it('follows html[data-color-mode]', () => {
-    document.documentElement.setAttribute('data-color-mode', 'dark');
-    expect(detectTheme(document)).toBe('dark');
-    document.documentElement.setAttribute('data-color-mode', 'light');
-    expect(detectTheme(document)).toBe('light');
+describe("detectTheme", () => {
+  it("follows html[data-color-mode]", () => {
+    document.documentElement.setAttribute("data-color-mode", "dark");
+    expect(detectTheme(document)).toBe("dark");
+    document.documentElement.setAttribute("data-color-mode", "light");
+    expect(detectTheme(document)).toBe("light");
   });
 
-  it('follows the OS scheme via matchMedia when data-color-mode is auto', () => {
+  it("follows the OS scheme via matchMedia when data-color-mode is auto", () => {
     // GitHub の既定は auto: dark/light どちらでもない値は matchMedia に委ねる
-    document.documentElement.setAttribute('data-color-mode', 'auto');
-    expect(detectTheme(document)).toBe('light'); // jsdom に matchMedia は無い → light に倒す
+    document.documentElement.setAttribute("data-color-mode", "auto");
+    expect(detectTheme(document)).toBe("light"); // jsdom に matchMedia は無い → light に倒す
     const win = document.defaultView!;
     win.matchMedia = ((query: string) => ({
-      matches: query === '(prefers-color-scheme: dark)',
+      matches: query === "(prefers-color-scheme: dark)",
     })) as unknown as typeof win.matchMedia;
     try {
-      expect(detectTheme(document)).toBe('dark');
+      expect(detectTheme(document)).toBe("dark");
     } finally {
       delete (win as { matchMedia?: unknown }).matchMedia;
     }

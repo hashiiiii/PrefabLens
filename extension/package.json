@@ -6,11 +6,13 @@
   "scripts": {
     "build": "node build.mjs",
     "typecheck": "tsc --noEmit",
+    "lint": "biome ci ..",
     "test": "vitest run",
     "size": "node scripts/check-wasm-size.mjs",
     "e2e": "node build.mjs --e2e && playwright test"
   },
   "devDependencies": {
+    "@biomejs/biome": "^2.5.2",
     "@playwright/test": "^1.61.1",
     "@types/chrome": "^0.2.2",
     "@types/node": "^26.1.0",

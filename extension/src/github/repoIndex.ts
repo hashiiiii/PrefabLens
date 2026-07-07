@@ -1,7 +1,7 @@
-import { parseGuidFromMeta } from './guids';
-import type { GithubClient } from './client';
+import type { GithubClient } from "./client";
+import { parseGuidFromMeta } from "./guids";
 
-type ClientLike = Pick<GithubClient, 'listMetaTree' | 'batchBlobTexts'>;
+type ClientLike = Pick<GithubClient, "listMetaTree" | "batchBlobTexts">;
 
 export type RepoIndexStore = {
   loadGuids(repo: string): Promise<Record<string, string>>;
@@ -33,7 +33,11 @@ export async function syncRepoIndex(
   const fetched: Record<string, string> = {};
   for (let i = 0; i < missing.length; i += GRAPHQL_BATCH) {
     const chunk = missing.slice(i, i + GRAPHQL_BATCH);
-    const texts = await client.batchBlobTexts(owner, repo, chunk.map((m) => m.sha));
+    const texts = await client.batchBlobTexts(
+      owner,
+      repo,
+      chunk.map((m) => m.sha),
+    );
     for (const m of chunk) {
       const text = texts[m.sha];
       if (!text) continue; // バイナリ・取得不可はスキップ
@@ -46,7 +50,7 @@ export async function syncRepoIndex(
   const guids: Record<string, string> = {};
   for (const m of tree.metas) {
     const guid = merged[m.sha];
-    if (guid) guids[guid] = m.path.slice(0, -'.meta'.length);
+    if (guid) guids[guid] = m.path.slice(0, -".meta".length);
   }
   await store.saveIndex(repoKey, { treeSha: ref, guids });
   return guids;

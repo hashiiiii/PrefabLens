@@ -1,15 +1,22 @@
-import { parsePrPage, parsePrUrl, scanUnityFiles, type FileEntry } from './detect';
-import { createToggle, type Toggle, type View } from './toggle';
-import { createViewState, type ViewState } from './viewstate';
-import { render, renderError, renderLoading, renderTooLarge } from '../renderer/render';
-import type { BackgroundError, DiffV2, GuidResolvedPush, PrefetchRequest, SemanticDiffRequest, SemanticDiffResponse } from '../types';
+import { render, renderError, renderLoading, renderTooLarge } from "../renderer/render";
+import type {
+  BackgroundError,
+  DiffV2,
+  GuidResolvedPush,
+  PrefetchRequest,
+  SemanticDiffRequest,
+  SemanticDiffResponse,
+} from "../types";
+import { type FileEntry, parsePrPage, parsePrUrl, scanUnityFiles } from "./detect";
+import { createToggle, type Toggle, type View } from "./toggle";
+import { createViewState, type ViewState } from "./viewstate";
 
 const ERROR_TEXT: Record<BackgroundError, string> = {
-  'pat-missing': 'Set a GitHub token in the PrefabLens options page.',
-  'auth-failed': 'GitHub authentication failed. Check your token in the PrefabLens options page.',
-  'rate-limited': 'GitHub rate limit exceeded. Wait a while and toggle again.',
-  'fetch-failed': 'Could not fetch file contents from GitHub.',
-  'diff-failed': 'Could not compute a semantic diff for this file.',
+  "pat-missing": "Set a GitHub token in the PrefabLens options page.",
+  "auth-failed": "GitHub authentication failed. Check your token in the PrefabLens options page.",
+  "rate-limited": "GitHub rate limit exceeded. Wait a while and toggle again.",
+  "fetch-failed": "Could not fetch file contents from GitHub.",
+  "diff-failed": "Could not compute a semantic diff for this file.",
 };
 
 // path → 描画先。push(guidResolved)が届いたら resolved をマージして再描画する
@@ -23,8 +30,8 @@ function countUnresolved(json: DiffV2): number {
 type Applier = { header: HTMLElement; apply(view: View): void };
 const appliers = new Set<Applier>();
 let globalToggle: Toggle | undefined;
-let currentPr = ''; // 上書きは PR 滞在中のみ有効: PR が変わったら捨てる
-let prefetchedPr = ''; // conversation タブ含む全 PR タブで 1 回だけプリフェッチを送る
+let currentPr = ""; // 上書きは PR 滞在中のみ有効: PR が変わったら捨てる
+let prefetchedPr = ""; // conversation タブ含む全 PR タブで 1 回だけプリフェッチを送る
 
 function attach(state: ViewState): void {
   const page = parsePrPage(location.pathname);
@@ -33,7 +40,9 @@ function attach(state: ViewState): void {
   if (pageKey !== prefetchedPr) {
     prefetchedPr = pageKey;
     // fire-and-forget: 応答は待たず、失敗も無視(手動トグル経路が別に生きている)
-    void (chrome.runtime.sendMessage({ type: 'prefetch', ...page } satisfies PrefetchRequest) as Promise<unknown>).catch(() => {});
+    void (
+      chrome.runtime.sendMessage({ type: "prefetch", ...page } satisfies PrefetchRequest) as Promise<unknown>
+    ).catch(() => {});
   }
   const pr = parsePrUrl(location.pathname);
   if (!pr) return;
@@ -53,14 +62,14 @@ function attach(state: ViewState): void {
 /** 最初の Unity ファイルの .file コンテナ直前に全体トグルを 1 つだけ注入する。
  *  ツールバー DOM は GitHub 側の変更が激しいため、確実に存在する .file を錨にする。 */
 function ensureGlobalToggle(state: ViewState, first: FileEntry): void {
-  if (globalToggle?.element.closest('[data-prefablens-global]')?.isConnected) return;
-  const container = first.header.closest('.file');
+  if (globalToggle?.element.closest("[data-prefablens-global]")?.isConnected) return;
+  const container = first.header.closest(".file");
   if (!container?.parentElement) return;
-  const bar = document.createElement('div');
-  bar.setAttribute('data-prefablens-global', '');
-  bar.style.cssText = 'display:flex;align-items:center;gap:8px;margin:0 0 8px;font:12px system-ui;';
-  const label = document.createElement('span');
-  label.textContent = 'PrefabLens';
+  const bar = document.createElement("div");
+  bar.setAttribute("data-prefablens-global", "");
+  bar.style.cssText = "display:flex;align-items:center;gap:8px;margin:0 0 8px;font:12px system-ui;";
+  const label = document.createElement("span");
+  label.textContent = "PrefabLens";
   const toggle = createToggle((view) => state.setDefault(view), state.defaultView());
   bar.append(label, toggle.element);
   container.before(bar);
@@ -68,40 +77,40 @@ function ensureGlobalToggle(state: ViewState, first: FileEntry): void {
 }
 
 function attachToggle(state: ViewState, pr: { owner: string; repo: string; prNumber: number }, entry: FileEntry): void {
-  if (entry.header.hasAttribute('data-prefablens')) return;
-  entry.header.setAttribute('data-prefablens', '');
+  if (entry.header.hasAttribute("data-prefablens")) return;
+  entry.header.setAttribute("data-prefablens", "");
   const viewKey = `${pr.owner}/${pr.repo}#${pr.prNumber}:${entry.path}`;
 
   let host: HTMLElement | undefined;
   let requested = false;
 
   const show = (view: View): void => {
-    if (view === 'raw') {
-      entry.content.style.display = '';
-      if (host) host.style.display = 'none';
+    if (view === "raw") {
+      entry.content.style.display = "";
+      if (host) host.style.display = "none";
       return;
     }
-    entry.content.style.display = 'none';
+    entry.content.style.display = "none";
     if (!host) {
-      host = document.createElement('div');
-      host.setAttribute('data-prefablens-view', '');
-      host.attachShadow({ mode: 'open' });
+      host = document.createElement("div");
+      host.setAttribute("data-prefablens-view", "");
+      host.attachShadow({ mode: "open" });
       entry.content.after(host);
     }
-    host.style.display = '';
+    host.style.display = "";
     if (requested) return; // 成功結果のみファイル単位でキャッシュ(再トグルで再フェッチしない)
     const root = host.shadowRoot!;
     const request = (force?: boolean): void => {
       requested = true;
       renderLoading(root);
-      void requestDiff({ type: 'semanticDiff', ...pr, path: entry.path, force }).then((res) => {
+      void requestDiff({ type: "semanticDiff", ...pr, path: entry.path, force }).then((res) => {
         if (res.ok) {
           views.set(viewKey, { root, json: res.json });
           // pending の間は必ず表示する: 名前が全解決でもソース合成が残っていることがある
           return render(root, res.json, { resolving: res.pending ? Math.max(countUnresolved(res.json), 1) : 0 });
         }
         requested = false; // エラーはキャッシュしない: 次回トグルで再フェッチさせる
-        if (res.error === 'too-large') renderTooLarge(root, res.bytes, () => request(true));
+        if (res.error === "too-large") renderTooLarge(root, res.bytes, () => request(true));
         else renderError(root, ERROR_TEXT[res.error]);
       });
     };
@@ -113,27 +122,30 @@ function attachToggle(state: ViewState, pr: { owner: string; repo: string; prNum
     show(view);
   }, state.effective(entry.path));
   entry.header.append(toggle.element);
-  appliers.add({ header: entry.header, apply: (view) => { toggle.set(view); show(view); } });
+  appliers.add({
+    header: entry.header,
+    apply: (view) => {
+      toggle.set(view);
+      show(view);
+    },
+  });
 
   // 既定が semantic なら attach 時点で描画開始: 遅延ロードされたファイルもここを通るので
   // 「全体は semantic なのに後から来たファイルだけ raw」は起きない
-  if (state.effective(entry.path) === 'semantic') show('semantic');
+  if (state.effective(entry.path) === "semantic") show("semantic");
 }
 
 function requestDiff(req: SemanticDiffRequest): Promise<SemanticDiffResponse> {
   return (chrome.runtime.sendMessage(req) as Promise<SemanticDiffResponse>).catch(() => ({
     ok: false as const,
-    error: 'fetch-failed' as const,
+    error: "fetch-failed" as const,
   }));
 }
 
 async function init(): Promise<void> {
-  const stored = await chrome.storage.local.get(['viewMode']).catch(() => ({}) as Record<string, unknown>);
-  const initial: View = stored['viewMode'] === 'semantic' ? 'semantic' : 'raw';
-  const state = createViewState(
-    initial,
-    (view) => void chrome.storage.local.set({ viewMode: view }).catch(() => {}),
-  );
+  const stored = await chrome.storage.local.get(["viewMode"]).catch(() => ({}) as Record<string, unknown>);
+  const initial: View = stored.viewMode === "semantic" ? "semantic" : "raw";
+  const state = createViewState(initial, (view) => void chrome.storage.local.set({ viewMode: view }).catch(() => {}));
   state.onDefaultChange((view) => {
     globalToggle?.set(view);
     for (const a of [...appliers]) {
@@ -146,14 +158,14 @@ async function init(): Promise<void> {
   });
   // 他タブでの既定変更に追随(set 元タブのエコーは applyExternal 側で無視される)
   chrome.storage.onChanged.addListener((changes, area) => {
-    if (area !== 'local') return;
-    const next = changes['viewMode']?.newValue;
-    if (next === 'raw' || next === 'semantic') state.applyExternal(next);
+    if (area !== "local") return;
+    const next = changes.viewMode?.newValue;
+    if (next === "raw" || next === "semantic") state.applyExternal(next);
   });
 
   // background からの guid 解決 push(2 段階応答の後段): 該当 view があれば再描画する
   chrome.runtime.onMessage.addListener((msg: GuidResolvedPush) => {
-    if (msg?.type !== 'guidResolved') return;
+    if (msg?.type !== "guidResolved") return;
     const view = views.get(`${msg.owner}/${msg.repo}#${msg.prNumber}:${msg.path}`);
     if (!view) return; // 既に別 PR へ遷移した等: 黙って捨てる
     // 最終 push は json 置換(mergeSources で構造が変わり得る)、中間 push は resolved のマージ

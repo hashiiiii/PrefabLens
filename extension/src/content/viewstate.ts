@@ -1,4 +1,4 @@
-import type { View } from './toggle';
+import type { View } from "./toggle";
 
 export type ViewState = {
   defaultView(): View;

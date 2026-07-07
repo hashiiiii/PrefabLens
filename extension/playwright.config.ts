@@ -1,6 +1,6 @@
-import { defineConfig } from '@playwright/test';
+import { defineConfig } from "@playwright/test";
 
 export default defineConfig({
-  testDir: 'e2e',
-  use: { browserName: 'chromium' },
+  testDir: "e2e",
+  use: { browserName: "chromium" },
 });

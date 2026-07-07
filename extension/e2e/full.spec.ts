@@ -39,6 +39,8 @@ function startServer(): Promise<{ server: Server; port: number }> {
         return json({ base: { sha: 'B' }, head: { sha: 'H' } });
       case '/api/v3/repos/o/r/compare/B...H':
         return json({ merge_base_commit: { sha: 'MB' } });
+      case '/api/v3/repos/o/r/git/trees/H':
+        return json({ truncated: false, tree: [] });
       case '/api/v3/repos/o/r/contents/Assets/Foo.prefab':
         return send(url.searchParams.get('ref') === 'MB' ? BEFORE : AFTER, 'application/vnd.github.raw+json');
       case '/api/v3/repos/o/r/contents/Assets/Big.unity':

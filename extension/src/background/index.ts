@@ -1,16 +1,16 @@
 import { createHandler } from './handler';
 import { createQueue } from './queue';
+import { createSessionDiffStore } from './diffStore';
 import { GithubClient } from '../github/client';
 import { createDiffer, type Differ } from '../wasm/differ';
-import type { BackgroundRequest, DiffV2, GuidResolvedPush } from '../types';
+import type { BackgroundRequest, GuidResolvedPush } from '../types';
 
 let differ: Promise<Differ> | undefined;
 
-// REST 全体で同時 6 本(spec B2)。ユーザー操作由来は front で行列を追い越す
+// REST/GraphQL 全体で同時 6 本(spec B2)。GraphQL も fetchFn 経由なので同じ枠を共有する。
+// ユーザー操作由来は front で行列を追い越す
 const queue = createQueue(6);
 const queuedFetch = (front: boolean): typeof fetch => (input, init) => queue(() => fetch(input, init), { front });
-
-const SESSION_MAX_BYTES = 512 * 1024; // storage.session は 10MB: 大物はメモリのみ(SW が死んだら再計算)
 
 const handler = createHandler({
   async getSettings() {
@@ -37,18 +37,7 @@ const handler = createHandler({
       await chrome.storage.local.set({ [key]: { ...(stored[key] as Record<string, string> | undefined), ...entries } });
     },
   },
-  diffStore: {
-    async load(key) {
-      const stored = await chrome.storage.session.get([`diff:${key}`]);
-      return stored[`diff:${key}`] as DiffV2 | undefined;
-    },
-    async save(key, json) {
-      if (JSON.stringify(json).length > SESSION_MAX_BYTES) return;
-      await chrome.storage.session.set({ [`diff:${key}`]: json }).catch(() => {
-        // quota 超過等は無視: メモリキャッシュだけで続行する
-      });
-    },
-  },
+  diffStore: createSessionDiffStore(chrome.storage.session),
   repoIndexStore: {
     async loadGuids(repo) {
       const key = `metaGuids:${repo}`;

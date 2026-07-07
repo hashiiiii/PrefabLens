@@ -16,37 +16,30 @@ jobs:
         uses: jdx/mise-action@v4
       - name: Test
         run: zig build test
-      # 絶対時間のバジェットは共有 Windows ランナーのノイズで偽陽性になる(実測 628-675ms vs 上限 600ms)ため linux のみ
       - name: Performance budget
         if: matrix.os == 'ubuntu-latest'
         run: zig build perf
 
   extension:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: extension
     steps:
       - uses: actions/checkout@v7
       - name: Install tools
         uses: jdx/mise-action@v4
-      - name: Build WASM core
-        run: zig build wasm
-        working-directory: ${{ github.workspace }}
-      - name: WASM golden (Node)
-        run: node --test core/tests/*.test.mjs
-        working-directory: ${{ github.workspace }}
-      - name: Install deps
-        run: npm ci
-      - name: WASM size budget
-        run: npm run size
-      - name: Typecheck
-        run: npm run typecheck
-      - name: Unit tests
-        run: npm test
-      - name: Build extension
-        run: npm run build
-      - name: Install Playwright browser
-        run: npx playwright install --with-deps chromium
-      - name: E2E smoke
-        run: npm run e2e
+      - name: WASM build and golden
+        run: |
+          zig build wasm
+          node --test core/tests/*.test.mjs
+      - name: Extension checks
+        working-directory: extension
+        run: |
+          npm ci
+          npm run size
+          npm run typecheck
+          npm test
+          npm run build
+      - name: Extension E2E
+        working-directory: extension
+        run: |
+          npx playwright install --with-deps chromium
+          npm run e2e

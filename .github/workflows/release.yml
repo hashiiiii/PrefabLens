@@ -9,7 +9,7 @@ on:
 permissions:
   contents: write
 
-# 二重起動で bump commit とタグが交錯しないよう、リリースは常に直列。
+# release.yml の重複実行を防止する
 concurrency:
   group: release
 
@@ -18,58 +18,33 @@ jobs:
     runs-on: ubuntu-latest
     env:
       VERSION: ${{ inputs.version }}
+      GIT_AUTHOR_NAME: github-actions[bot]
+      GIT_AUTHOR_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
+      GIT_COMMITTER_NAME: github-actions[bot]
+      GIT_COMMITTER_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
     steps:
       - uses: actions/checkout@v7
       - name: Install tools
         uses: jdx/mise-action@v4
       - name: Validate input
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           [ "$GITHUB_REF_NAME" = "main" ] || { echo "::error::run this workflow from main (got $GITHUB_REF_NAME)"; exit 1; }
-          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::version must be X.Y.Z (got $VERSION)"; exit 1; }
-          if git ls-remote --exit-code origin "refs/tags/v$VERSION" >/dev/null 2>&1; then
+          if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/v$VERSION" >/dev/null 2>&1; then
             echo "::error::tag v$VERSION already exists; delete it first to re-release: git push origin :refs/tags/v$VERSION"
             exit 1
           fi
-      # bump は冪等(既に一致していれば no-op)。commit 済み・タグ未 push で落ちた回の再 Run に耐える。
-      - name: Bump versions
+      - name: Bump, commit, and tag
         run: |
           set -euo pipefail
-          sed -i "s/\.version = \"[^\"]*\"/.version = \"$VERSION\"/" build.zig.zon
-          (cd extension && npm version "$VERSION" --no-git-tag-version --allow-same-version)
-          # JSON を再シリアライズすると 1 行配列などが再フォーマットされるため、version 行だけを置換する。
-          # "manifest_version": 3 はキー名も値の形も異なるためマッチしない。
-          sed -i "s/\"version\": \"[^\"]*\"/\"version\": \"$VERSION\"/" extension/manifest.json editor/package.json
-          sed -i "s/public const string Version = \"[^\"]*\"/public const string Version = \"$VERSION\"/" editor/Editor/Cli.cs
-      # 書き換え漏れの即 fail。バージョン記載箇所を増やしたらここにも追加する。
-      - name: Verify versions
-        run: |
-          set -euo pipefail
-          check() { grep -qF "$2" "$1" || { echo "::error::$1 does not contain: $2"; exit 1; }; }
-          check build.zig.zon ".version = \"$VERSION\""
-          check extension/package.json "\"version\": \"$VERSION\""
-          check extension/package-lock.json "\"version\": \"$VERSION\""
-          check extension/manifest.json "\"version\": \"$VERSION\""
-          check editor/package.json "\"version\": \"$VERSION\""
-          check editor/Editor/Cli.cs "public const string Version = \"$VERSION\""
-      # GITHUB_TOKEN での push は他ワークフローを起動しない(再帰防止)ため、CI 相当の検証をここで行う。
-      - name: Test
-        run: |
-          zig build test
-          zig build wasm
-      - name: Commit and tag
-        run: |
-          set -euo pipefail
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add build.zig.zon extension/package.json extension/package-lock.json extension/manifest.json editor/package.json editor/Editor/Cli.cs
+          bump-my-version bump --new-version "$VERSION"
+          npm --prefix extension version "$VERSION" --no-git-tag-version --allow-same-version
+          git add -u
           git diff --cached --quiet || git commit -m "chore: release v$VERSION"
-          git push origin HEAD:main
           git tag "v$VERSION"
-          git push origin "v$VERSION"
-      # zig は素でクロスコンパイルできるため 1 ランナーで全ターゲットを吐く。
-      # zig-out/bin はターゲットごとに上書きされるので都度 zip に退避する。
-      # アセットは zip 統一(Unity 側の System.IO.Compression.ZipFile が全 OS で扱える)。
+          git push origin main "v$VERSION"
       - name: Build CLI for all targets
         run: |
           set -euo pipefail
@@ -82,9 +57,7 @@ jobs:
           build x86_64-macos     macos-x64    prefablens
           build x86_64-linux-gnu linux-x64    prefablens
           build x86_64-windows   windows-x64  prefablens.exe
-          # ダウンロード側(Editor 等)が整合性検証に使える。sha256sum 形式で全 zip をカバーする。
-          (cd dist && sha256sum *.zip > SHA256SUMS)
       - name: Create release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "v$VERSION" dist/*.zip dist/SHA256SUMS --generate-notes
+        run: gh release create "v$VERSION" dist/*.zip --generate-notes

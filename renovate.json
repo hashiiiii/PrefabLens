@@ -2,5 +2,70 @@
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": [
     "config:recommended"
-  ]
+  ],
+  "timezone": "Asia/Tokyo",
+  "schedule": [
+    "before 9am on monday"
+  ],
+  "labels": [
+    "dependencies"
+  ],
+  "minimumReleaseAge": "7 days",
+  "prConcurrentLimit": 10,
+  "prHourlyLimit": 0,
+  "osvVulnerabilityAlerts": true,
+  "packageRules": [
+    {
+      "description": "extension の npm devDependencies は minor/patch をまとめて 1 本の PR にする",
+      "matchManagers": [
+        "npm"
+      ],
+      "matchDepTypes": [
+        "devDependencies"
+      ],
+      "matchUpdateTypes": [
+        "minor",
+        "patch"
+      ],
+      "groupName": "extension devDependencies"
+    },
+    {
+      "description": "GitHub Actions は tag 運用を維持し SHA ピン留めせずまとめて更新する",
+      "matchManagers": [
+        "github-actions"
+      ],
+      "groupName": "github-actions",
+      "pinDigests": false,
+      "addLabels": [
+        "github-actions"
+      ]
+    },
+    {
+      "description": "mise のツールチェーン (zig/zls/node/dotnet/bump-my-version) は build 全体に影響するため automerge せず CI レビューを必須にする",
+      "matchManagers": [
+        "mise"
+      ],
+      "groupName": "toolchain (mise)",
+      "automerge": false,
+      "addLabels": [
+        "toolchain"
+      ]
+    },
+    {
+      "description": "major はグループから外して個別 PR にし major ラベルで目立たせる",
+      "matchUpdateTypes": [
+        "major"
+      ],
+      "addLabels": [
+        "major"
+      ]
+    }
+  ],
+  "vulnerabilityAlerts": {
+    "labels": [
+      "dependencies",
+      "security"
+    ],
+    "minimumReleaseAge": null
+  }
 }

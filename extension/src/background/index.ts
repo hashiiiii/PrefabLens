@@ -2,7 +2,7 @@ import { createHandler } from './handler';
 import { createQueue } from './queue';
 import { GithubClient } from '../github/client';
 import { createDiffer, type Differ } from '../wasm/differ';
-import type { BackgroundRequest, DiffV2 } from '../types';
+import type { BackgroundRequest, DiffV2, GuidResolvedPush } from '../types';
 
 let differ: Promise<Differ> | undefined;
 
@@ -49,11 +49,36 @@ const handler = createHandler({
       });
     },
   },
+  repoIndexStore: {
+    async loadGuids(repo) {
+      const key = `metaGuids:${repo}`;
+      const stored = await chrome.storage.local.get([key]);
+      return (stored[key] as Record<string, string> | undefined) ?? {};
+    },
+    async saveGuids(repo, entries) {
+      const key = `metaGuids:${repo}`;
+      const stored = await chrome.storage.local.get([key]);
+      await chrome.storage.local
+        .set({ [key]: { ...(stored[key] as Record<string, string> | undefined), ...entries } })
+        .catch(() => {}); // quota 超過はメモリのみで続行
+    },
+    async loadIndex(repo) {
+      const key = `guidIndex:${repo}`;
+      const stored = await chrome.storage.local.get([key]);
+      return stored[key] as { treeSha: string; guids: Record<string, string> } | undefined;
+    },
+    async saveIndex(repo, index) {
+      await chrome.storage.local.set({ [`guidIndex:${repo}`]: index }).catch(() => {});
+    },
+  },
 });
 
-chrome.runtime.onMessage.addListener((msg: BackgroundRequest, _sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((msg: BackgroundRequest, sender, sendResponse) => {
   if (msg?.type === 'semanticDiff') {
-    void handler.semanticDiff(msg).then(sendResponse);
+    const tabId = sender.tab?.id;
+    const push =
+      tabId === undefined ? undefined : (m: GuidResolvedPush) => void chrome.tabs.sendMessage(tabId, m).catch(() => {});
+    void handler.semanticDiff(msg, push).then(sendResponse);
     return true; // 非同期応答
   }
   if (msg?.type === 'prefetch') void handler.prefetch(msg);

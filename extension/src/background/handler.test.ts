@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
-import { createHandler, type Deps } from './handler';
+import { createHandler, type Deps, type Handler } from './handler';
 import { AuthError, RateLimitError, type PrFile } from '../github/client';
 import { DiffError, type Differ } from '../wasm/differ';
-import type { DiffV2, SemanticDiffRequest } from '../types';
+import type { DiffV2, GuidResolvedPush, SemanticDiffRequest } from '../types';
 
 const REQ: SemanticDiffRequest = { type: 'semanticDiff', owner: 'o', repo: 'r', prNumber: 1, path: 'Assets/Foo.prefab' };
 
@@ -28,6 +28,11 @@ function makeDeps(overrides?: {
     listPrFiles: vi.fn(async () => files),
     getFileAtRef,
     searchMetaByGuid: vi.fn(async (_o: string, _r: string, guid: string) => overrides?.search?.[guid] ?? null),
+    listMetaTree: vi.fn(async (): Promise<{ truncated: boolean; metas: Array<{ path: string; sha: string }> }> => ({
+      truncated: false,
+      metas: [],
+    })),
+    batchBlobTexts: vi.fn(async (): Promise<Record<string, string | null>> => ({})),
   };
   const differ: Differ = {
     diff: overrides?.diff ?? vi.fn(() => DIFF),
@@ -50,14 +55,39 @@ function makeDeps(overrides?: {
       diffStoreData[key] = json;
     }),
   };
+  // Task 11 の makeFakes と同型(loadGuids/saveGuids/loadIndex/saveIndex)。テストごとに空で始まる。
+  const guidsData: Record<string, Record<string, string>> = {};
+  const indexData: Record<string, { treeSha: string; guids: Record<string, string> }> = {};
+  const repoIndexStore = {
+    loadGuids: vi.fn(async (repo: string) => guidsData[repo] ?? {}),
+    saveGuids: vi.fn(async (repo: string, entries: Record<string, string>) => {
+      guidsData[repo] = { ...guidsData[repo], ...entries };
+    }),
+    loadIndex: vi.fn(async (repo: string) => indexData[repo]),
+    saveIndex: vi.fn(async (repo: string, index: { treeSha: string; guids: Record<string, string> }) => {
+      indexData[repo] = index;
+    }),
+  };
   const deps: Deps = {
     getSettings: async () => ({ pat: Object.hasOwn(overrides ?? {}, 'pat') ? overrides!.pat : 'tok', baseUrl: undefined }),
     makeClient: (_base: string, _token: string, _lane: 'user' | 'prefetch') => client,
     getDiffer: async () => differ,
     guidCache,
     diffStore,
+    repoIndexStore,
   };
-  return { deps, client, differ, guidCache, diffStore };
+  return { deps, client, differ, guidCache, diffStore, repoIndexStore };
+}
+
+/** pending 応答の後始末: done push が来るまで待ってから検証する。 */
+async function serveAndResolve(
+  handler: Handler,
+  req: SemanticDiffRequest,
+): Promise<{ res: Awaited<ReturnType<Handler['semanticDiff']>>; pushes: GuidResolvedPush[] }> {
+  const pushes: GuidResolvedPush[] = [];
+  const res = await handler.semanticDiff(req, (m) => pushes.push(m));
+  if (res.ok && res.pending) await vi.waitFor(() => expect(pushes.at(-1)?.done).toBe(true));
+  return { res, pushes };
 }
 
 describe('createHandler', () => {
@@ -223,6 +253,34 @@ describe('createHandler', () => {
     await handle.semanticDiff(REQ);
     await handle.semanticDiff(REQ);
     expect(client.searchMetaByGuid).toHaveBeenCalledTimes(1);
+  });
+
+  it('serves cached names even for guids that once missed in code search', async () => {
+    // 索引解決が guidCache に入る設計になったため、miss 記録済み guid がキャッシュに現れるケースが実在する。
+    // misses は「再検索しない」の門番であって「名前を出さない」の門番ではない
+    const { deps, client, guidCache } = makeDeps(); // search 未ヒット → g1 が misses に入る
+    const handler = createHandler(deps);
+    await handler.semanticDiff(REQ);
+    expect(client.searchMetaByGuid).toHaveBeenCalledTimes(1);
+    guidCache.data['https://api.github.com/o/r'] = { g1: 'Assets/Later.cs' }; // 索引解決が後から書いた体
+    const res = await handler.semanticDiff(REQ);
+    expect(res).toEqual({ ok: true, json: { ...DIFF, resolved: { g1: 'Assets/Later.cs' } } });
+    expect(client.searchMetaByGuid).toHaveBeenCalledTimes(1); // 再検索はしない
+  });
+
+  it('dedupes concurrent code searches for the same guid', async () => {
+    // semantic 既定では複数ファイルが同時に解決を走らせる: 同一 guid の検索は 1 回に畳む
+    const { deps, client } = makeDeps({ search: { g1: 'Assets/S.cs' } });
+    let release!: (v: string) => void;
+    client.searchMetaByGuid.mockImplementation(() => new Promise((r) => { release = r; }));
+    const handler = createHandler(deps);
+    const [a, b] = [handler.semanticDiff(REQ), handler.semanticDiff(REQ)];
+    await vi.waitFor(() => expect(client.searchMetaByGuid).toHaveBeenCalled());
+    release('Assets/S.cs');
+    const [ra, rb] = await Promise.all([a, b]);
+    expect(client.searchMetaByGuid).toHaveBeenCalledTimes(1);
+    expect(ra).toEqual({ ok: true, json: { ...DIFF, resolved: { g1: 'Assets/S.cs' } } });
+    expect(rb).toEqual(ra);
   });
 
   it('keeps the diff usable when code search hits the rate limit', async () => {
@@ -479,4 +537,97 @@ it('dedupes a concurrent user toggle against an in-flight prefetch compute', asy
   expect(res.ok).toBe(true);
   const fooFetches = client.getFileAtRef.mock.calls.filter((c) => c[2] === 'Assets/Foo.prefab');
   expect(fooFetches).toHaveLength(2); // base + head の 2 回だけ
+});
+
+describe('semanticDiff with push (two-stage)', () => {
+  it('responds immediately with pending and pushes code-search results in the final json', async () => {
+    const { deps, guidCache } = makeDeps({ search: { g1: 'Assets/Scripts/S.cs' } });
+    const { res, pushes } = await serveAndResolve(createHandler(deps), REQ);
+    // 応答は即返り、resolved は空 + pending。名前は push で届く(B4 の核心)
+    expect(res).toEqual({ ok: true, json: { ...DIFF, resolved: {} }, pending: true });
+    const last = pushes.at(-1)!;
+    expect(last.done).toBe(true);
+    expect(last.json?.resolved).toEqual({ g1: 'Assets/Scripts/S.cs' });
+    expect(guidCache.save).toHaveBeenCalledWith('https://api.github.com/o/r', { g1: 'Assets/Scripts/S.cs' });
+  });
+
+  it('does not set pending when the pr meta index resolves everything', async () => {
+    const { deps } = makeDeps({
+      files: [
+        { path: 'Assets/Foo.prefab', status: 'modified' },
+        { path: 'Assets/S.cs.meta', status: 'modified' },
+      ],
+      contents: {
+        'Assets/Foo.prefab@base-sha': 'b',
+        'Assets/Foo.prefab@head-sha': 'a',
+        'Assets/S.cs.meta@head-sha': 'guid: g1\n',
+      },
+    });
+    const { res, pushes } = await serveAndResolve(createHandler(deps), REQ);
+    expect(res).toEqual({ ok: true, json: { ...DIFF, resolved: { g1: 'Assets/S.cs' } } });
+    expect(pushes).toEqual([]); // 全部解決済み・ソース合成も不要なら push は無い
+  });
+
+  it('resolves via the repo index and only searches the leftover', async () => {
+    const { deps, client } = makeDeps({ diff: () => ({ ...DIFF, unresolvedGuids: ['g1', 'g2'] }), search: { g2: 'Assets/Other.cs' } });
+    client.listMetaTree.mockResolvedValue({ truncated: false, metas: [{ path: 'Assets/S.cs.meta', sha: 'sha1' }] });
+    client.batchBlobTexts.mockResolvedValue({ sha1: 'guid: g1\n' });
+    const { pushes } = await serveAndResolve(createHandler(deps), REQ);
+    // 索引で g1 が先に届き(中間 push)、索引に無い g2 だけが Code Search に回る(3 段解決)
+    expect(pushes[0]).toMatchObject({ resolved: { g1: 'Assets/S.cs' }, done: false });
+    expect(pushes.at(-1)!.json?.resolved).toEqual({ g1: 'Assets/S.cs', g2: 'Assets/Other.cs' });
+    expect(client.searchMetaByGuid).toHaveBeenCalledTimes(1);
+    expect(client.searchMetaByGuid).toHaveBeenCalledWith('o', 'r', 'g2');
+  });
+
+  it('falls back to code search when the tree is truncated', async () => {
+    const { deps, client } = makeDeps({ search: { g1: 'Assets/S.cs' } });
+    client.listMetaTree.mockResolvedValue({ truncated: true, metas: [] });
+    const { pushes } = await serveAndResolve(createHandler(deps), REQ);
+    expect(pushes.at(-1)!.json?.resolved).toEqual({ g1: 'Assets/S.cs' });
+  });
+
+  it('stops retrying the index for the session after an index rate limit', async () => {
+    const { deps, client } = makeDeps();
+    client.listMetaTree.mockRejectedValue(new RateLimitError('x'));
+    const handler = createHandler(deps);
+    await serveAndResolve(handler, REQ);
+    await serveAndResolve(handler, REQ);
+    expect(client.listMetaTree).toHaveBeenCalledTimes(1); // SW 生存期間はフォールバック固定
+  });
+
+  it('re-merges sources in the async stage once the source guid resolves', async () => {
+    // mergeSources 整合の核心: stage 1 は未合成のまま即応答し、
+    // repo index でソース guid が解けたら合成し直した json が最終 push で届く
+    const withSource: DiffV2 = { ...DIFF, unresolvedGuids: ['src1'], neededSources: [{ guid: 'src1', side: 'after' }] };
+    const merged: DiffV2 = { ...DIFF, unresolvedGuids: ['src1'], resolved: { src1: 'Assets/Src.prefab' } };
+    const diffWithAssets = vi.fn(() => merged);
+    const { deps, client } = makeDeps({
+      contents: {
+        'Assets/Foo.prefab@base-sha': 'b',
+        'Assets/Foo.prefab@head-sha': 'a',
+        'Assets/Src.prefab@head-sha': 'source prefab',
+      },
+      diff: () => withSource,
+      diffWithAssets,
+    });
+    client.listMetaTree.mockResolvedValue({ truncated: false, metas: [{ path: 'Assets/Src.prefab.meta', sha: 'sha1' }] });
+    client.batchBlobTexts.mockResolvedValue({ sha1: 'guid: src1\n' });
+    // 注: serveAndResolve は done push を待つため、その後段では diffWithAssets が必ず既に呼ばれている
+    // (done:true は mergeSources 完了後にしか出ない)。「まだ呼ばれていない」の検証は
+    // 即応答の直後(push 完了を待つ前)に行う必要があるため、ここだけ手動で組み立てる。
+    const pushes: GuidResolvedPush[] = [];
+    const res = await createHandler(deps).semanticDiff(REQ, (m) => pushes.push(m));
+    expect(res.ok && res.pending).toBe(true);
+    expect(diffWithAssets).not.toHaveBeenCalled(); // stage 1 では合成しない(即応答優先)
+    await vi.waitFor(() => expect(diffWithAssets).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(pushes.at(-1)?.done).toBe(true));
+    expect(pushes.at(-1)!.json).toMatchObject({ resolved: { src1: 'Assets/Src.prefab' } });
+  });
+
+  it('kicks the repo index sync from prefetch', async () => {
+    const { deps, client } = makeDeps();
+    await createHandler(deps).prefetch({ type: 'prefetch', owner: 'o', repo: 'r', prNumber: 1 });
+    await vi.waitFor(() => expect(client.listMetaTree).toHaveBeenCalledWith('o', 'r', 'head-sha'));
+  });
 });

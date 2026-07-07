@@ -25,6 +25,7 @@ const STYLES = `
   .pl-after { color: var(--pl-added); }
   .pl-arrow { color: var(--pl-muted); margin: 0 4px; }
   .pl-empty, .pl-error, .pl-loading { color: var(--pl-muted); margin: 0; }
+  .pl-resolving { color: var(--pl-muted); margin: 0 0 4px; }
   .pl-error { color: var(--pl-removed); }
   .pl-render { font: inherit; margin-top: 4px; padding: 1px 8px; border: 1px solid var(--pl-border); background: transparent; color: inherit; cursor: pointer; }
   .pl-components { border-left: 1px solid var(--pl-border); margin: 2px 0 2px 4px; padding-left: 8px; }
@@ -40,8 +41,10 @@ export function detectTheme(doc: Document): 'light' | 'dark' {
   return doc.defaultView?.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
 }
 
-export function render(root: ShadowRoot, diff: DiffV2): void {
+export function render(root: ShadowRoot, diff: DiffV2, opts?: { resolving?: number }): void {
   const container = mount(root);
+  // 解決中の合図(spec B4): diff 本体は最初から正しく、参照名だけが後から埋まる
+  if (opts?.resolving) container.append(note('pl-resolving', `Resolving ${opts.resolving} reference(s)…`));
   for (const node of diff.roots) container.append(renderNode(node, diff));
   for (const c of diff.loose) container.append(renderComponent(c, diff));
   if (!diff.roots.length && !diff.loose.length) {

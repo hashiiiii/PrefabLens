@@ -68,8 +68,10 @@ const handler = createHandler({
 chrome.runtime.onMessage.addListener((msg: BackgroundRequest, sender, sendResponse) => {
   if (msg?.type === "semanticDiff") {
     const tabId = sender.tab?.id;
-    const push =
-      tabId === undefined ? undefined : (m: GuidResolvedPush) => void chrome.tabs.sendMessage(tabId, m).catch(() => {});
+    // semanticDiff requests always originate in a tab content script; guard defensively so a non-tab sender no-ops.
+    const push = (m: GuidResolvedPush) => {
+      if (tabId !== undefined) void chrome.tabs.sendMessage(tabId, m).catch(() => {});
+    };
     void handler.semanticDiff(msg, push).then(sendResponse);
     return true; // async response
   }

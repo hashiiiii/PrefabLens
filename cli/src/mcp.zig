@@ -5,8 +5,7 @@ const main = @import("main.zig");
 
 pub const default_protocol_version = "2025-06-18";
 // 2025-03-26 makes batch requests a MUST, but major clients don't send them, so we accept it while leaving batching unsupported.
-// 2024-10-07 is a prerelease, but the old TS SDK accepted it, so keep it for parity.
-const supported_versions = [_][]const u8{ "2025-06-18", "2025-03-26", "2024-11-05", "2024-10-07" };
+const supported_versions = [_][]const u8{ "2025-06-18", "2025-03-26", "2024-11-05" };
 
 /// result payload for tools/list. description and inputSchema are a faithful port of the old TS host
 /// (the zod definitions in mcp/src/index.ts). build.zig's smoke golden @embedFiles the same
@@ -387,14 +386,6 @@ test "mcp: truncateTree caps tree output like the ts host" {
     const cut = try truncateTree(arena, big);
     try testing.expect(std.mem.endsWith(u8, cut, "\n[truncated: 50001 chars total]\n"));
     try testing.expectEqual(tree_char_limit, std.mem.indexOf(u8, cut, "\n[truncated").?);
-}
-
-test "mcp: initialize echoes the legacy 2024-10-07 version like the ts sdk" {
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
-    const res = try roundtrip(arena, "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2024-10-07\"}}\n");
-    try testing.expect(std.mem.indexOf(u8, res, "\"protocolVersion\":\"2024-10-07\"") != null);
 }
 
 test "mcp: float and oversized integer ids are echoed verbatim" {

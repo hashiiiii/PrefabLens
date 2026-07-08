@@ -20,7 +20,7 @@ export type Deps = {
 };
 
 export type Handler = {
-  semanticDiff(req: SemanticDiffRequest, push?: (msg: GuidResolvedPush) => void): Promise<SemanticDiffResponse>;
+  semanticDiff(req: SemanticDiffRequest, push: (msg: GuidResolvedPush) => void): Promise<SemanticDiffResponse>;
   prefetch(req: PrefetchRequest): Promise<void>;
 };
 
@@ -285,7 +285,7 @@ export function createHandler(deps: Deps): Handler {
   }
 
   /** Runs the rest of the 3-stage resolution (index → Code Search) and source re-merge in the background, delivering results via push.
-   *  Unlike the push-less compatibility path, on failure it emits a done push in catch to release waiters. */
+   *  On failure it still emits a done push in catch to release waiters. */
   async function resolveRemaining(
     first: DiffV2,
     remaining: string[],
@@ -334,7 +334,7 @@ export function createHandler(deps: Deps): Handler {
 
   async function semanticDiff(
     req: SemanticDiffRequest,
-    push?: (msg: GuidResolvedPush) => void,
+    push: (msg: GuidResolvedPush) => void,
   ): Promise<SemanticDiffResponse> {
     try {
       const settings = await deps.getSettings();
@@ -344,20 +344,7 @@ export function createHandler(deps: Deps): Handler {
       const ctx = await loadContext(client, req.owner, req.repo, req.prNumber);
       const outcome = await getDiff(client, ctx, req.owner, req.repo, req.path, req.force === true);
       if (!outcome.ok) return outcome;
-      const repoKey = `${base}/${req.owner}/${req.repo}`;
       const withPr = applyResolved(outcome.json, ctx.guidIndex);
-
-      if (!push) {
-        // Compatibility path: the traditional synchronous full pipeline (doesn't change the behavior of existing tests/callers)
-        const first = await searchUnresolved(withPr, client, req.owner, req.repo, repoKey);
-        if (!first.neededSources?.length) return { ok: true, json: first };
-        const differ = await deps.getDiffer();
-        const [before, after] = await fetchPair(client, ctx, req.owner, req.repo, req.path);
-        return {
-          ok: true,
-          json: await mergeSources(first, differ, before, after, ctx, client, req.owner, req.repo, repoKey),
-        };
-      }
 
       // Two-stage path: return the diff immediately, continue resolution and source merging in the background, deliver via push (B4)
       const remaining = withPr.unresolvedGuids.filter((g) => !Object.hasOwn(withPr.resolved ?? {}, g));

@@ -12,7 +12,7 @@ namespace PrefabLens
     public static class Cli
     {
         /// Version of the CLI to download (kept in sync with the GitHub Releases tag v{Version}).
-        public const string Version = "0.3.0";
+        public const string Version = "0.4.0";
         public const string CliPathPref = "PrefabLens.CliPath";
 
         /// Upper bound on CLI execution. Set longer than the CLI's internal git timeout (60s) so that on a git hang

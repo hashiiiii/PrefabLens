@@ -18,7 +18,7 @@ describe("createToggle", () => {
   });
 
   it("starts on the given initial view", () => {
-    // 永続既定が semantic のとき、遅延ロードで現れたファイルのトグルも semantic 押下状態で生まれる
+    // When the persistent default is semantic, a lazy-loaded file's toggle is also born in the semantic pressed state
     const toggle = createToggle(vi.fn(), "semantic");
     document.body.append(toggle.element);
     const [raw, semantic] = [...toggle.element.querySelectorAll("button")];
@@ -27,7 +27,7 @@ describe("createToggle", () => {
   });
 
   it("updates visuals via set() without firing onSelect", () => {
-    // 全体トグルからの一括適用: 個別トグルの見た目だけ追随させ、onSelect の副作用(再フェッチ)は起こさない
+    // Bulk apply from the global toggle: only the per-file toggle's look follows along, without triggering onSelect's side effect (re-fetch)
     const onSelect = vi.fn();
     const toggle = createToggle(onSelect);
     document.body.append(toggle.element);

@@ -72,7 +72,7 @@ test "parseArgs: --git with two operands means ref vs working tree" {
     const opt = try parseArgs(&args);
     try testing.expect(opt.git_mode);
     try testing.expectEqualStrings("HEAD", opt.git_ref_before);
-    try testing.expectEqualStrings("", opt.git_ref_after); // 空 = 作業ツリー側
+    try testing.expectEqualStrings("", opt.git_ref_after); // empty = working-tree side
     try testing.expectEqualStrings("Foo.prefab", opt.git_path);
     try testing.expectEqual(Format.json, opt.format);
 }
@@ -416,7 +416,7 @@ test "run: --project supplies source prefabs for merged instance diffs" {
     const variant_path = try tmp.dir.realPathFileAlloc(testing.io, "Variant.prefab", arena);
     const empty_path = try tmp.dir.realPathFileAlloc(testing.io, "empty.prefab", arena);
 
-    // --project あり: ソースを供給して合成表示(Scale (1, 2, 1))。
+    // With --project: supply the source for a merged display (Scale (1, 2, 1)).
     var out: std.ArrayList(u8) = .empty;
     var aw = std.Io.Writer.Allocating.fromArrayList(arena, &out);
     var errbuf: std.ArrayList(u8) = .empty;
@@ -426,7 +426,7 @@ test "run: --project supplies source prefabs for merged instance diffs" {
     try testing.expectEqual(@as(u8, 0), code);
     try testing.expect(std.mem.indexOf(u8, output.items, "Scale: (1, 2, 1)") != null);
 
-    // --project なし: 縮退表示(記録済み override の列挙)のまま。
+    // Without --project: stays a degraded display (enumeration of recorded overrides).
     var out2: std.ArrayList(u8) = .empty;
     var aw2 = std.Io.Writer.Allocating.fromArrayList(arena, &out2);
     var errbuf2: std.ArrayList(u8) = .empty;
@@ -437,7 +437,7 @@ test "run: --project supplies source prefabs for merged instance diffs" {
     try testing.expect(std.mem.indexOf(u8, output2.items, "Scale.y: 2") != null);
 }
 
-/// リリースタグ v<version> と lockstep。単一ソースは build.zig.zon(release.yml が bump する)。
+/// Lockstep with the release tag v<version>. The single source is build.zig.zon (release.yml bumps it).
 pub const version = @import("build_options").version;
 
 test "run: --project points git mode at a repo outside the cwd" {
@@ -445,8 +445,8 @@ test "run: --project points git mode at a repo outside the cwd" {
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
-    // cwd の外に実 git リポジトリを作る。--project がその repo を指せば
-    // git show は成功する(cwd 固定 "." のままだと失敗する)。
+    // Create a real git repository outside the cwd. If --project points at that repo,
+    // git show succeeds (with the cwd fixed at "." it would fail).
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
     const dir = try tmp.dir.realPathFileAlloc(testing.io, ".", arena);
@@ -526,8 +526,8 @@ pub fn parseArgs(args: []const []const u8) ArgError!Options {
             if (i >= args.len) return ArgError.MissingOperands;
             project_root = args[i];
         } else if (std.mem.eql(u8, a, "--git")) {
-            // --git <beforeRef> [<afterRef>] <path>: 非フラグ operand を 2〜3 個消費し、
-            // 2 個なら after 側は作業ツリー(git_ref_after = "")。後続フラグは引き続き解釈する。
+            // --git <beforeRef> [<afterRef>] <path>: consumes 2-3 non-flag operands;
+            // with 2, the after side is the working tree (git_ref_after = ""). Trailing flags are still parsed.
             var ops: [3][]const u8 = undefined;
             var n: usize = 0;
             while (n < 3 and i + 1 < args.len and !std.mem.startsWith(u8, args[i + 1], "--")) : (n += 1) {
@@ -588,7 +588,7 @@ pub fn run(io: std.Io, arena: std.mem.Allocator, args: []const []const u8, stdou
         return 2;
     };
 
-    // --project は guid 解決の基点と git repo dir を兼ねる(未指定は従来どおり cwd)。
+    // --project doubles as the guid-resolution base and the git repo dir (unset falls back to cwd as before).
     const repo_dir = opt.project_root orelse ".";
     const before = if (opt.git_mode)
         input.showAtRef(io, arena, repo_dir, opt.git_ref_before, opt.git_path, input.default_git_timeout) catch |err| {
@@ -604,7 +604,7 @@ pub fn run(io: std.Io, arena: std.mem.Allocator, args: []const []const u8, stdou
             return 1;
         };
     const after = if (opt.git_mode and opt.git_ref_after.len == 0)
-        // ref 1 個 = 作業ツリーとの比較(ファイル不在は削除 = 空側)
+        // one ref = comparison against the working tree (a missing file is deletion = empty side)
         input.readWorktree(io, arena, repo_dir, opt.git_path) catch {
             try stderr.print("error: cannot read file '{s}'\n", .{opt.git_path});
             return 1;
@@ -639,9 +639,9 @@ pub fn run(io: std.Io, arena: std.mem.Allocator, args: []const []const u8, stdou
             return 1;
         };
         resolver_ptr = &idx;
-        // needed_sources をローカル資産で満たして再 diff(入れ子ソースで新たな
-        // 要求が出るため最大 3 周、進捗が無ければ打ち切り)。読めない資産は
-        // スキップして diff は落とさない。
+        // Satisfy needed_sources with local assets and re-diff (nested sources raise new
+        // requests, so up to 3 rounds; stop if there's no progress). Unreadable assets are
+        // skipped without failing the diff.
         var rounds: usize = 0;
         while (res.needed_sources.len != 0 and rounds < 3) : (rounds += 1) {
             var progressed = false;
@@ -684,7 +684,7 @@ pub fn main(init: std.process.Init) !u8 {
     if (user_args.len >= 1 and std.mem.eql(u8, user_args[0], "mcp")) {
         var stdin_buffer: [64 * 1024]u8 = undefined;
         var stdin_reader: std.Io.File.Reader = .init(.stdin(), init.io, &stdin_buffer);
-        // クライアント切断(broken pipe 等)は常態。スタックトレースを吐かず静かに終了する。
+        // Client disconnect (broken pipe, etc.) is normal. Exit quietly without emitting a stack trace.
         mcp.serve(init.io, std.heap.page_allocator, &stdin_reader.interface, stdout) catch {
             stdout.flush() catch {};
             return 1;

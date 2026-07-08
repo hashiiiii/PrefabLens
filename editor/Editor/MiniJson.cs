@@ -26,8 +26,8 @@
  * TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
-// PrefabLens への同梱元: https://gist.github.com/darktable/1411710(rev 513f1c0、MIT)
-// 変更点: namespace MiniJSON -> PrefabLens.MiniJson のみ。
+// Bundled into PrefabLens from: https://gist.github.com/darktable/1411710 (rev 513f1c0, MIT)
+// Change: namespace MiniJSON -> PrefabLens.MiniJson only.
 using System;
 using System.Collections;
 using System.Collections.Generic;

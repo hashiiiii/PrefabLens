@@ -1,7 +1,7 @@
 import type { DiffV2 } from "../types";
 import { type PrFile, RateLimitError } from "./client";
 
-/** cli/src/resolve.zig の parseGuid と同じ規則: 行頭(trim 後)の "guid:" を拾う。 */
+/** Same rule as parseGuid in cli/src/resolve.zig: picks up "guid:" at the start of a line (after trim). */
 export function parseGuidFromMeta(meta: string): string | undefined {
   for (const line of meta.split("\n")) {
     const t = line.trim();
@@ -12,8 +12,8 @@ export function parseGuidFromMeta(meta: string): string | undefined {
 
 export type MetaFetcher = (path: string, side: "base" | "head") => Promise<string | null>;
 
-/** Code Search で解決した guid→asset path の永続キャッシュ(repo キーは `<apiBase>/<owner>/<repo>`)。
- *  guid→path は安定なので TTL なし。save はマージ。 */
+/** Persistent cache of guid→asset path resolved via Code Search (repo key is `<apiBase>/<owner>/<repo>`).
+ *  guid→path is stable, so no TTL. save merges. */
 export type GuidCache = {
   load(repo: string): Promise<Record<string, string>>;
   save(repo: string, entries: Record<string, string>): Promise<void>;
@@ -21,15 +21,15 @@ export type GuidCache = {
 
 const MAX_CONCURRENT_META_FETCHES = 8;
 
-/** PR 内で変更された .meta のみから guid → asset path 索引を作る(設計スコープ)。removed は base 側から読む。
- *  同時フェッチ数を上限 8 に抑える(大量 .meta 変更での GitHub secondary rate limit 回避)。 */
+/** Builds a guid → asset path index only from .meta files changed in the PR (design scope). removed ones are read from the base side.
+ *  Caps concurrent fetches at 8 (avoids GitHub secondary rate limits on large .meta changes). */
 export async function buildGuidIndex(files: PrFile[], fetchMeta: MetaFetcher): Promise<Map<string, string>> {
   const index = new Map<string, string>();
   const metas = files.filter((f) => f.path.endsWith(".meta"));
 
   const indexOne = async (f: PrFile): Promise<void> => {
     const side = f.status === "removed" ? "base" : "head";
-    // rate limit だけは伝播させる: 握りつぶすと劣化インデックスが SW 生存期間キャッシュされる
+    // Only rate limits propagate: swallowing them would cache a degraded index for the SW's lifetime
     const text = await fetchMeta(f.path, side).catch((err) => {
       if (err instanceof RateLimitError) throw err;
       return null;
@@ -47,7 +47,7 @@ export async function buildGuidIndex(files: PrFile[], fetchMeta: MetaFetcher): P
   return index;
 }
 
-/** ホスト側解決の seam(親仕様 §4.3)。core の "resolved" と同じスコープ規則で付与する。 */
+/** Host-side resolution seam (parent spec §4.3). Attaches with the same scoping rule as core's "resolved". */
 export function applyResolved(diff: DiffV2, index: Map<string, string>): DiffV2 {
   const resolved: Record<string, string> = {};
   for (const g of diff.unresolvedGuids) {

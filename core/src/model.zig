@@ -1,6 +1,6 @@
 const std = @import("std");
 
-// 外部または内部への参照: `{fileID: N}` または `{fileID: N, guid: ..., type: N}`。
+// External or internal reference: `{fileID: N}` or `{fileID: N, guid: ..., type: N}`.
 pub const Ref = struct {
     file_id: i64,
     guid: ?[]const u8 = null,
@@ -8,11 +8,11 @@ pub const Ref = struct {
 };
 
 pub const Entry = struct {
-    key: []const u8, // 入力バッファへのスライス
+    key: []const u8, // slice into the input buffer
     value: *Node,
 };
 
-// パース済み Unity YAML の値。scalar/key/guid は入力バッファへのスライス。
+// A parsed Unity YAML value. scalar/key/guid are slices into the input buffer.
 pub const Node = union(enum) {
     map: []Entry,
     seq: []*Node,
@@ -54,36 +54,36 @@ fn strEqOpt(a: ?[]const u8, b: ?[]const u8) bool {
     return std.mem.eql(u8, a.?, b.?);
 }
 
-// map のエントリからキーで値を引く(線形探索。Unity の map は小さい)。
+// Look up a value by key in a map's entries (linear scan; Unity maps are small).
 pub fn findValue(entries: []const Entry, key: []const u8) ?*Node {
     for (entries) |e| if (std.mem.eql(u8, e.key, key)) return e.value;
     return null;
 }
 
-// Unity の 1 ドキュメント: `--- !u!<class_id> &<file_id>` + 本体の mapping。
+// One Unity document: `--- !u!<class_id> &<file_id>` + the body mapping.
 pub const Document = struct {
     class_id: u32,
     file_id: i64,
-    type_name: []const u8, // 唯一のトップレベルキー("GameObject" 等)
+    type_name: []const u8, // the sole top-level key ("GameObject" etc.)
     stripped: bool = false,
-    body: *Node, // ドキュメントのフィールドを持つ .map ノード
+    body: *Node, // the .map node holding the document's fields
 };
 
 pub const Status = enum { added, removed, modified, unchanged };
 
 pub const ObjectKind = enum { game_object, prefab_instance };
 
-// PrefabInstance の (target, propertyPath) 単位の override diff。
+// Per-(target, propertyPath) override diff for a PrefabInstance.
 pub const OverrideDiff = struct {
     group: []const u8, // "Transform" | "GameObject" | "Overrides"
-    label: []const u8, // humanize 済み ("Position.x")
+    label: []const u8, // humanized ("Position.x")
     status: Status,
     before: ?*const Node = null,
     after: ?*const Node = null,
 };
 
 pub const FieldDiff = struct {
-    path: []const u8, // ドット/添字区切りのパス(arena 上に構築)
+    path: []const u8, // dot/index-separated path (built on the arena)
     status: Status,
     before: ?*const Node = null,
     after: ?*const Node = null,
@@ -94,7 +94,7 @@ pub const ComponentDiff = struct {
     class_id: u32,
     type_name: []const u8,
     script_guid: ?[]const u8 = null,
-    // m_EditorClassIdentifier 末尾のクラス名 ("Cylinder1")。guid 解決の第 2 候補。
+    // Class name at the tail of m_EditorClassIdentifier ("Cylinder1"). Second candidate for guid resolution.
     class_name: ?[]const u8 = null,
     status: Status,
     fields: []FieldDiff,
@@ -105,16 +105,16 @@ pub const ObjectDiff = struct {
     file_id: i64,
     name: []const u8,
     status: Status,
-    // prefab_instance のみ: m_SourcePrefab の guid。
+    // prefab_instance only: the m_SourcePrefab guid.
     source_guid: ?[]const u8 = null,
-    // prefab_instance のみ: (target, propertyPath) キーの override diff。
+    // prefab_instance only: override diff keyed by (target, propertyPath).
     overrides: []OverrideDiff = &.{},
     components: []ComponentDiff,
     children: []ObjectDiff,
 };
 
-// ホストに内容の供給を求めるソースプレハブ。side は取得すべき ref
-// (added instance -> after/head、removed instance -> before/base)。
+// A source prefab whose content the host is asked to supply. side is the ref to fetch
+// (added instance -> after/head, removed instance -> before/base).
 pub const SourceSide = enum { before, after };
 pub const NeededSource = struct { guid: []const u8, side: SourceSide };
 
@@ -126,38 +126,38 @@ pub const DiffResult = struct {
 };
 
 test "Node.eql: scalars, refs, seqs, maps" {
-    // スカラー
+    // scalars
     var s1 = Node{ .scalar = "100" };
     var s2 = Node{ .scalar = "100" };
     var s3 = Node{ .scalar = "150" };
     try std.testing.expect(Node.eql(&s1, &s2));
     try std.testing.expect(!Node.eql(&s1, &s3));
 
-    // 参照
+    // refs
     var r1 = Node{ .ref = .{ .file_id = 234, .guid = "abc", .type_id = 3 } };
     var r2 = Node{ .ref = .{ .file_id = 234, .guid = "abc", .type_id = 3 } };
     var r3 = Node{ .ref = .{ .file_id = 234, .guid = "xyz", .type_id = 3 } };
     try std.testing.expect(Node.eql(&r1, &r2));
     try std.testing.expect(!Node.eql(&r1, &r3));
 
-    // 種別が異なるノードは常に不等
+    // nodes of different kinds are always unequal
     try std.testing.expect(!Node.eql(&s1, &r1));
 
-    // シーケンス(順序込みで比較)
+    // sequences (compared with order)
     var seq_a = [_]*Node{ &s1, &s3 };
     var seq_b = [_]*Node{ &s2, &s3 };
     var q1 = Node{ .seq = &seq_a };
     var q2 = Node{ .seq = &seq_b };
     try std.testing.expect(Node.eql(&q1, &q2));
 
-    // マップ(キー順序は不問)
+    // maps (key order irrelevant)
     var e_a = [_]Entry{ .{ .key = "x", .value = &s1 }, .{ .key = "y", .value = &s3 } };
     var e_b = [_]Entry{ .{ .key = "y", .value = &s3 }, .{ .key = "x", .value = &s2 } };
     var m1 = Node{ .map = &e_a };
     var m2 = Node{ .map = &e_b };
     try std.testing.expect(Node.eql(&m1, &m2));
 
-    // 要素数が同じでもキー集合が異なるマップは不等。
+    // maps with the same count but different key sets are unequal.
     var e_c = [_]Entry{ .{ .key = "x", .value = &s1 }, .{ .key = "z", .value = &s3 } };
     var m3 = Node{ .map = &e_c };
     try std.testing.expect(!Node.eql(&m1, &m3));

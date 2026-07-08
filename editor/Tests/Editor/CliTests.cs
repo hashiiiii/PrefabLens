@@ -59,7 +59,7 @@ namespace PrefabLens.Tests
         [Test]
         public void ParseSha256SumsFindsTheAssetLine()
         {
-            // release.yml の `sha256sum *.zip` が生成するそのままの形。
+            // Exactly the form release.yml's `sha256sum *.zip` produces.
             var sums =
                 "1111111111111111111111111111111111111111111111111111111111111111  prefablens-linux-x64.zip\n"
                 + "2222222222222222222222222222222222222222222222222222222222222222  prefablens-macos-arm64.zip\n";
@@ -73,7 +73,7 @@ namespace PrefabLens.Tests
         [Test]
         public void ParseSha256SumsHandlesCrlfAndBinaryMarker()
         {
-            // CRLF 改行と、sha256sum バイナリモードの "*" 前置も受理する。
+            // Also accepts CRLF line endings and sha256sum binary mode's leading "*".
             var sums = "cafe01 *prefablens-windows-x64.zip\r\n";
             Assert.AreEqual("cafe01", Cli.ParseSha256Sums(sums, "prefablens-windows-x64.zip"));
         }
@@ -81,7 +81,7 @@ namespace PrefabLens.Tests
         [Test]
         public void Sha256HexMatchesTheStandardTestVector()
         {
-            // FIPS 180-2 の既知ベクタ: sha256("abc")
+            // Known vector from FIPS 180-2: sha256("abc")
             Assert.AreEqual(
                 "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
                 Cli.Sha256Hex(Encoding.ASCII.GetBytes("abc"))
@@ -91,7 +91,7 @@ namespace PrefabLens.Tests
         [Test]
         public void RunProcessKillsAHungProcessAndReportsTimeout()
         {
-            // 実プロセス(sleep)で検証: タイムアウトで殺され、60 秒待たされないこと。
+            // Verify with a real process (sleep): it is killed on timeout and doesn't make us wait 60s.
             var isWindows = RuntimeInformation.IsOSPlatform(OSPlatform.Windows);
             var file = isWindows ? "cmd.exe" : "/bin/sh";
             var args = isWindows ? "/c ping -n 60 127.0.0.1 > NUL" : "-c \"sleep 60\"";
@@ -119,7 +119,7 @@ namespace PrefabLens.Tests
         [Test]
         public void RunProcessCapturesStderrAndExitCode()
         {
-            // ExitCode != 0 のとき Window は stderr を一次情報として表示する。その配線の検証。
+            // When ExitCode != 0 the Window shows stderr as the primary source. Verifies that wiring.
             var isWindows = RuntimeInformation.IsOSPlatform(OSPlatform.Windows);
             var file = isWindows ? "cmd.exe" : "/bin/sh";
             var args = isWindows ? "/c echo boom 1>&2 & exit 3" : "-c \"echo boom 1>&2; exit 3\"";
@@ -132,9 +132,9 @@ namespace PrefabLens.Tests
         [Test]
         public void RunProcessDrainsBothPipesPastTheOsBuffer()
         {
-            // stdout / stderr の両方を OS のパイプバッファ(通常 64KB)より多く書く子でも
-            // デッドロックせず全量読めること。RunProcess の非同期読みを同期 ReadToEnd ×2 に
-            // 「単純化」すると、子が stderr 書き込みでブロックしたままタイムアウトして fail する。
+            // Even a child that writes both stdout and stderr past the OS pipe buffer (typically 64KB)
+            // can be read in full without deadlock. "Simplifying" RunProcess's async reads into two synchronous
+            // ReadToEnd calls leaves the child blocked on the stderr write and the test fails on timeout.
             var isWindows = RuntimeInformation.IsOSPlatform(OSPlatform.Windows);
             var file = isWindows ? "cmd.exe" : "/bin/sh";
             var line = new string('x', 40);
@@ -144,7 +144,7 @@ namespace PrefabLens.Tests
             var res = Cli.RunProcess(file, args, ".", timeoutMs: Cli.RunTimeoutMs);
             Assert.IsFalse(res.TimedOut);
             Assert.AreEqual(0, res.ExitCode);
-            // 4000 行 × 41 バイト ≈ 160KB。バッファ超えを確実にしつつ取りこぼしも検出する。
+            // 4000 lines × 41 bytes ≈ 160KB. Reliably exceeds the buffer while also detecting dropped output.
             Assert.Greater(res.Stdout.Length, 100_000);
             Assert.Greater(res.Stderr.Length, 100_000);
         }

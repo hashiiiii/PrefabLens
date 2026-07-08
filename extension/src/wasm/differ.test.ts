@@ -62,11 +62,11 @@ Transform:
   m_GameObject: {fileID: 10}
   m_LocalScale: {x: 1, y: 1, z: 1}`);
 
-    // assets なし: core が供給を要求する。
+    // Without assets: core requests the supply.
     const first = differ.diff(new Uint8Array(0), variant);
     expect(first.neededSources).toEqual([{ guid: "srcguid", side: "after" }]);
 
-    // assets あり: 合成されて neededSources は消え、override 適用済みの全列挙になる。
+    // With assets: merged, so neededSources disappears and it becomes a full enumeration with overrides applied.
     const merged = differ.diffWithAssets(new Uint8Array(0), variant, new Map([["srcguid", source]]));
     expect(merged.neededSources).toBeUndefined();
     const inst = merged.roots[0]!;

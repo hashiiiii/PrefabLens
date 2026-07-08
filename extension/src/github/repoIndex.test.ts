@@ -37,13 +37,13 @@ describe("syncRepoIndex", () => {
   it("builds guid → asset path from meta blobs and persists both layers", async () => {
     const { client, store } = makeFakes({ texts: { sha1: "fileFormatVersion: 2\nguid: g1\n" } });
     const res = await syncRepoIndex(client, store, "o", "r", "repoKey", "H");
-    expect(res).toEqual({ g1: "Assets/S.cs" }); // .meta を剥いだパス
+    expect(res).toEqual({ g1: "Assets/S.cs" }); // path with .meta stripped
     expect(store.saveGuids).toHaveBeenCalledWith("repoKey", { sha1: "g1" });
     expect(store.saveIndex).toHaveBeenCalledWith("repoKey", { treeSha: "H", guids: { g1: "Assets/S.cs" } });
   });
 
   it("returns the stored index without any api call when the tree sha is unchanged", async () => {
-    // push が無ければ tree も blob も取り直さない(2 回目以降の訪問はゼロコスト)
+    // Without a push, neither the tree nor blobs are re-fetched (repeat visits are zero-cost)
     const stored = { treeSha: "H", guids: { g1: "Assets/S.cs" } };
     const { client, store } = makeFakes({ storedIndex: stored });
     const res = await syncRepoIndex(client, store, "o", "r", "repoKey", "H");
@@ -52,7 +52,7 @@ describe("syncRepoIndex", () => {
   });
 
   it("fetches only meta blobs missing from the persistent sha cache", async () => {
-    // blobSha → guid は内容由来の永久キャッシュ: 変わった .meta だけ GraphQL に回る
+    // blobSha → guid is a content-derived permanent cache: only changed .meta go through GraphQL
     const { client, store } = makeFakes({
       metas: [
         { path: "Assets/A.cs.meta", sha: "known-sha" },

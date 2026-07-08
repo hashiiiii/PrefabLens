@@ -10,11 +10,11 @@ export type RepoIndexStore = {
   saveIndex(repo: string, index: { treeSha: string; guids: Record<string, string> }): Promise<void>;
 };
 
-const INDEX_MAX_METAS = 50_000; // spec B3: これ超は storage quota 保護で索引を諦める
+const INDEX_MAX_METAS = 50_000; // spec B3: above this, give up on the index to protect the storage quota
 const GRAPHQL_BATCH = 100;
 
-/** repo 全体の guid → asset path 索引。索引不可(truncated / 上限超)は null で Code Search に委ねる。
- *  blobSha → guid は内容由来なので永久キャッシュでき、push 後は変わった .meta だけ取得する。 */
+/** Whole-repo guid → asset path index. Not indexable (truncated / over the cap) → null, deferring to Code Search.
+ *  blobSha → guid is content-derived, so it can be cached forever; after a push, only changed .meta are fetched. */
 export async function syncRepoIndex(
   client: ClientLike,
   store: RepoIndexStore,
@@ -28,7 +28,7 @@ export async function syncRepoIndex(
   const tree = await client.listMetaTree(owner, repo, ref);
   if (tree.truncated || tree.metas.length > INDEX_MAX_METAS) return null;
   const known = await store.loadGuids(repoKey);
-  // hasOwn: guid キャッシュ同様、プロトタイプ誤ヒットを避ける
+  // hasOwn: like the guid cache, avoids false prototype hits
   const missing = tree.metas.filter((m) => !Object.hasOwn(known, m.sha));
   const fetched: Record<string, string> = {};
   for (let i = 0; i < missing.length; i += GRAPHQL_BATCH) {
@@ -40,7 +40,7 @@ export async function syncRepoIndex(
     );
     for (const m of chunk) {
       const text = texts[m.sha];
-      if (!text) continue; // バイナリ・取得不可はスキップ
+      if (!text) continue; // skip binary / unfetchable
       const guid = parseGuidFromMeta(text);
       if (guid) fetched[m.sha] = guid;
     }

@@ -21,7 +21,7 @@ pub fn serialize(arena: std.mem.Allocator, res: model.DiffResult, resolved: ?*co
     }
     try w.writeByte(']');
 
-    // ホストに内容取得を求めるソースプレハブ。空なら省略(additive な拡張)。
+    // Source prefabs whose content the host is asked to fetch. Omitted when empty (additive extension).
     if (res.needed_sources.len != 0) {
         try w.writeAll(",\"neededSources\":[");
         for (res.needed_sources, 0..) |ns, i| {
@@ -34,8 +34,8 @@ pub fn serialize(arena: std.mem.Allocator, res: model.DiffResult, resolved: ?*co
     }
 
     if (resolved) |r| {
-        // diff が実際に参照した guid だけに絞る(プロジェクト index 全体を
-        // 出さない)。順序は unresolvedGuids と同じで決定的。
+        // Restrict to only the guids the diff actually referenced (don't emit the
+        // whole project index). Order matches unresolvedGuids and is deterministic.
         try w.writeAll(",\"resolved\":{");
         var first = true;
         for (res.unresolved_guids) |g| {
@@ -167,7 +167,7 @@ fn writeValue(w: *std.Io.Writer, node: ?*const Node) !void {
             if (r.type_id) |t| try w.print("{d}", .{t}) else try w.writeAll("null");
             try w.writeAll("}}");
         },
-        // map/seq が leaf に来るのは稀(通常は再帰される)。コンパクトに表現する。
+        // map/seq rarely reach a leaf (normally recursed into). Represent them compactly.
         .map => try w.writeAll("\"<map>\""),
         .seq => try w.writeAll("\"<seq>\""),
     }
@@ -248,11 +248,11 @@ test "json: needed sources are emitted only when unresolved" {
         \\      value: 2
         \\  m_SourcePrefab: {fileID: 100100000, guid: aaa, type: 3}
     ;
-    // assets 未供給: ホストへの取得要求として neededSources が載る。
+    // assets not supplied: neededSources appears as a fetch request to the host.
     const out = try root.diffToJson(arena, "", after);
     try testing.expect(std.mem.indexOf(u8, out, "\"neededSources\":[{\"guid\":\"aaa\",\"side\":\"after\"}]") != null);
 
-    // 供給済み: 展開されて neededSources は emit されない(空なら省略)。
+    // Supplied: expanded, so neededSources is not emitted (omitted when empty).
     var assets: root.Assets = .empty;
     try assets.put(arena, "aaa", "--- !u!1 &10\nGameObject:\n  m_Name: Src\n");
     const merged = try root.diffToJsonWithAssets(arena, "", after, &assets);
@@ -311,8 +311,8 @@ test "json: v2 root node shape matches golden" {
         \\  m_SourcePrefab: {fileID: 100100000, guid: aaa, type: 3}
     ;
     const out = try root.diffToJson(arena, before, after);
-    // roots 側のノード全形状 (gameObject + components + 子 prefabInstance +
-    // overrides + 構造サマリ) を byte-for-byte で固定する回帰ピン。
+    // Regression pin fixing the full node shape on the roots side (gameObject + components + child
+    // prefabInstance + overrides + structural summary) byte-for-byte.
     const golden =
         \\{"schema":"prefablens.diff.v2","unresolvedGuids":["def","aaa"],"neededSources":[{"guid":"aaa","side":"after"}],"roots":[{"kind":"gameObject","fileId":"1","name":"Plane","status":"unchanged","components":[{"kind":"component","fileId":"5","classId":114,"typeName":"MonoBehaviour","scriptGuid":"def","className":null,"status":"modified","fields":[{"path":"Hp","status":"modified","before":"1","after":"2"}]}],"children":[{"kind":"prefabInstance","fileId":"1001","name":"Cylinder","status":"added","sourceGuid":"aaa","overrides":[{"group":"Transform","label":"Scale.y","status":"added","before":null,"after":"2"},{"group":"Overrides","label":"Added Components (1)","status":"added","before":null,"after":null}],"components":[],"children":[]}]}],"loose":[]}
     ;
@@ -386,8 +386,8 @@ test "json: resolved is scoped to referenced guids, ordered like unresolvedGuids
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
-    // 2 つの .meta から構築したプロジェクト index。guidA と guidC はどちらも
-    // 解決可能だが、diff が参照するのは guidA のみ。
+    // A project index built from two .meta files. Both guidA and guidC are
+    // resolvable, but the diff references only guidA.
     var resolver = Resolver.init(arena);
     try resolver.put("guidA", "Assets/Scripts/A.cs");
     try resolver.put("guidC", "Assets/Scripts/C.cs");
@@ -400,9 +400,9 @@ test "json: resolved is scoped to referenced guids, ordered like unresolvedGuids
     };
 
     const out = try serialize(arena, res, &resolver);
-    // "resolved" には参照された guid だけが載り、
+    // "resolved" carries only the referenced guid,
     try testing.expect(std.mem.indexOf(u8, out, "\"resolved\":{\"guidA\":\"Assets/Scripts/A.cs\"}") != null);
-    // 参照されていない guidC は解決可能でも出力に漏れない。
+    // the unreferenced guidC does not leak into the output even though it is resolvable.
     try testing.expect(std.mem.indexOf(u8, out, "guidC") == null);
 }
 
@@ -415,7 +415,7 @@ test "json: resolved follows unresolvedGuids order, skipping guids the resolver 
     try resolver.put("guidA", "Assets/Scripts/A.cs");
     try resolver.put("guidB", "Assets/Scripts/B.cs");
 
-    // 参照順は B, A。guidX は参照されているがプロジェクト index に存在しない。
+    // Reference order is B, A. guidX is referenced but absent from the project index.
     var unresolved_guids = [_][]const u8{ "guidB", "guidA", "guidX" };
     const res: model.DiffResult = .{
         .roots = &.{},
@@ -426,7 +426,7 @@ test "json: resolved follows unresolvedGuids order, skipping guids the resolver 
     const out = try serialize(arena, res, &resolver);
     try testing.expect(std.mem.indexOf(u8, out, "\"resolved\":{\"guidB\":\"Assets/Scripts/B.cs\",\"guidA\":\"Assets/Scripts/A.cs\"}") != null);
     try testing.expect(std.mem.indexOf(u8, out, "guidX\":") == null);
-    // guidX は unresolved のまま残る。
+    // guidX stays unresolved.
     try testing.expect(std.mem.indexOf(u8, out, "\"unresolvedGuids\":[\"guidB\",\"guidA\",\"guidX\"]") != null);
 }
 
@@ -435,7 +435,7 @@ test "json: control characters are escaped" {
     defer arena_state.deinit();
     const arena = arena_state.allocator();
     var aw: std.Io.Writer.Allocating = .init(arena);
-    // 名前つきエスケープ(\n 等)はそれを、その他の制御文字は \u00XX を使う。
+    // Named escapes (\n etc.) use them; other control characters use \u00XX.
     try writeJsonString(&aw.writer, "a\nb\x01c");
     try testing.expectEqualStrings("\"a\\nb\\u0001c\"", aw.written());
 }
@@ -455,6 +455,6 @@ test "json: string escaping" {
         \\  m_Name: "a\"b"
     ;
     const out = try root.diffToJson(arena, before, after);
-    // 値の中の引用符は JSON 出力でエスケープされる。
+    // Quotes inside the value are escaped in the JSON output.
     try testing.expect(std.mem.indexOf(u8, out, "a\\\"b") != null);
 }

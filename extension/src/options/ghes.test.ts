@@ -48,7 +48,7 @@ describe("applyGhes", () => {
     const c = fakeChrome(false);
     expect(await applyGhes("ghe.corp.com", c)).toBe("declined");
     expect(c.scripting.registerContentScripts).not.toHaveBeenCalled();
-    // 拒否でも旧 GHES 向けの stale な登録は掃除する
+    // Even on denial, clean up stale registration for an old GHES
     expect(c.scripting.unregisterContentScripts).toHaveBeenCalledWith({ ids: ["prefablens-ghes"] });
   });
 

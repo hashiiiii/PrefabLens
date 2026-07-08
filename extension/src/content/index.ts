@@ -19,19 +19,19 @@ const ERROR_TEXT: Record<BackgroundError, string> = {
   "diff-failed": "Could not compute a semantic diff for this file.",
 };
 
-// path → 描画先。push(guidResolved)が届いたら resolved をマージして再描画する
+// path → render target. When a push (guidResolved) arrives, merge resolved and re-render
 const views = new Map<string, { root: ShadowRoot; json: DiffV2 }>();
 
 function countUnresolved(json: DiffV2): number {
   return json.unresolvedGuids.filter((g) => !Object.hasOwn(json.resolved ?? {}, g)).length;
 }
 
-// 全体切り替えの適用先: attach 済みファイルのトグル + 表示を外から駆動する
+// Targets of the global switch: drives the toggle + display of already-attached files from outside
 type Applier = { header: HTMLElement; apply(view: View): void };
 const appliers = new Set<Applier>();
 let globalToggle: Toggle | undefined;
-let currentPr = ""; // 上書きは PR 滞在中のみ有効: PR が変わったら捨てる
-let prefetchedPr = ""; // conversation タブ含む全 PR タブで 1 回だけプリフェッチを送る
+let currentPr = ""; // overrides are valid only while on the PR: discard when the PR changes
+let prefetchedPr = ""; // send prefetch just once across all PR tabs, including the conversation tab
 
 function attach(state: ViewState): void {
   const page = parsePrPage(location.pathname);
@@ -39,7 +39,7 @@ function attach(state: ViewState): void {
   const pageKey = `${page.owner}/${page.repo}#${page.prNumber}`;
   if (pageKey !== prefetchedPr) {
     prefetchedPr = pageKey;
-    // fire-and-forget: 応答は待たず、失敗も無視(手動トグル経路が別に生きている)
+    // fire-and-forget: don't wait on the response, ignore failures (the manual-toggle path is separately alive)
     void (
       chrome.runtime.sendMessage({ type: "prefetch", ...page } satisfies PrefetchRequest) as Promise<unknown>
     ).catch(() => {});
@@ -50,17 +50,17 @@ function attach(state: ViewState): void {
   if (key !== currentPr) {
     currentPr = key;
     state.clearOverrides();
-    // PR をまたいだら死んだ DOM への参照も捨てる(soft leak 防止)
+    // Crossing PRs also drops references to dead DOM (prevents a soft leak)
     for (const a of [...appliers]) if (!a.header.isConnected) appliers.delete(a);
-    for (const [k, v] of views) if (!v.root.host.isConnected) views.delete(k); // 遷移で死んだ view への late push を無視するだけでなく参照も切る
+    for (const [k, v] of views) if (!v.root.host.isConnected) views.delete(k); // not only ignore late pushes to views killed by navigation, but also cut the reference
   }
   const entries = scanUnityFiles(document);
   if (entries.length) ensureGlobalToggle(state, entries[0]!);
   for (const entry of entries) attachToggle(state, pr, entry);
 }
 
-/** 最初の Unity ファイルの .file コンテナ直前に全体トグルを 1 つだけ注入する。
- *  ツールバー DOM は GitHub 側の変更が激しいため、確実に存在する .file を錨にする。 */
+/** Injects exactly one global toggle right before the first Unity file's .file container.
+ *  The toolbar DOM changes heavily on GitHub's side, so anchor on the reliably-present .file. */
 function ensureGlobalToggle(state: ViewState, first: FileEntry): void {
   if (globalToggle?.element.closest("[data-prefablens-global]")?.isConnected) return;
   const container = first.header.closest(".file");
@@ -98,7 +98,7 @@ function attachToggle(state: ViewState, pr: { owner: string; repo: string; prNum
       entry.content.after(host);
     }
     host.style.display = "";
-    if (requested) return; // 成功結果のみファイル単位でキャッシュ(再トグルで再フェッチしない)
+    if (requested) return; // cache only successful results per file (re-toggle doesn't re-fetch)
     const root = host.shadowRoot!;
     const request = (force?: boolean): void => {
       requested = true;
@@ -106,10 +106,10 @@ function attachToggle(state: ViewState, pr: { owner: string; repo: string; prNum
       void requestDiff({ type: "semanticDiff", ...pr, path: entry.path, force }).then((res) => {
         if (res.ok) {
           views.set(viewKey, { root, json: res.json });
-          // pending の間は必ず表示する: 名前が全解決でもソース合成が残っていることがある
+          // Always show it while pending: even if all names are resolved, source merging may remain
           return render(root, res.json, { resolving: res.pending ? Math.max(countUnresolved(res.json), 1) : 0 });
         }
-        requested = false; // エラーはキャッシュしない: 次回トグルで再フェッチさせる
+        requested = false; // don't cache errors: let the next toggle re-fetch
         if (res.error === "too-large") renderTooLarge(root, res.bytes, () => request(true));
         else renderError(root, ERROR_TEXT[res.error]);
       });
@@ -118,7 +118,7 @@ function attachToggle(state: ViewState, pr: { owner: string; repo: string; prNum
   };
 
   const toggle = createToggle((view) => {
-    state.setOverride(entry.path, view); // クリックはこのファイルだけの上書き
+    state.setOverride(entry.path, view); // a click overrides just this file
     show(view);
   }, state.effective(entry.path));
   entry.header.append(toggle.element);
@@ -130,8 +130,8 @@ function attachToggle(state: ViewState, pr: { owner: string; repo: string; prNum
     },
   });
 
-  // 既定が semantic なら attach 時点で描画開始: 遅延ロードされたファイルもここを通るので
-  // 「全体は semantic なのに後から来たファイルだけ raw」は起きない
+  // If the default is semantic, start rendering at attach time: lazy-loaded files also pass through here, so
+  // "the global is semantic but a later-arriving file is raw" doesn't happen
   if (state.effective(entry.path) === "semantic") show("semantic");
 }
 
@@ -150,30 +150,30 @@ async function init(): Promise<void> {
     globalToggle?.set(view);
     for (const a of [...appliers]) {
       if (!a.header.isConnected) {
-        appliers.delete(a); // SPA 遷移で死んだ DOM の掃除
+        appliers.delete(a); // clean up DOM killed by an SPA navigation
         continue;
       }
       a.apply(view);
     }
   });
-  // 他タブでの既定変更に追随(set 元タブのエコーは applyExternal 側で無視される)
+  // Follow default changes in other tabs (the echo to the originating set tab is ignored inside applyExternal)
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== "local") return;
     const next = changes.viewMode?.newValue;
     if (next === "raw" || next === "semantic") state.applyExternal(next);
   });
 
-  // background からの guid 解決 push(2 段階応答の後段): 該当 view があれば再描画する
+  // guid resolution push from background (the second stage of the two-stage response): re-render if the matching view exists
   chrome.runtime.onMessage.addListener((msg: GuidResolvedPush) => {
     if (msg?.type !== "guidResolved") return;
     const view = views.get(`${msg.owner}/${msg.repo}#${msg.prNumber}:${msg.path}`);
-    if (!view) return; // 既に別 PR へ遷移した等: 黙って捨てる
-    // 最終 push は json 置換(mergeSources で構造が変わり得る)、中間 push は resolved のマージ
+    if (!view) return; // already navigated to a different PR, etc.: drop silently
+    // The final push replaces json (mergeSources may change the structure), an intermediate push merges resolved
     view.json = msg.json ?? { ...view.json, resolved: { ...view.json.resolved, ...msg.resolved } };
     render(view.root, view.json, { resolving: msg.done ? 0 : Math.max(countUnresolved(view.json), 1) });
   });
 
-  // GitHub は SPA: 初回スキャン + MutationObserver で遅延ロード・タブ遷移に追従(200ms デバウンス)。
+  // GitHub is an SPA: an initial scan + MutationObserver follows lazy loading and tab navigation (200ms debounce).
   attach(state);
   let scheduled = false;
   new MutationObserver(() => {

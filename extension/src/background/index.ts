@@ -7,8 +7,8 @@ import { createQueue } from "./queue";
 
 let differ: Promise<Differ> | undefined;
 
-// REST/GraphQL 全体で同時 6 本(spec B2)。GraphQL も fetchFn 経由なので同じ枠を共有する。
-// ユーザー操作由来は front で行列を追い越す
+// Six concurrent across all REST/GraphQL (spec B2). GraphQL also goes through fetchFn, so it shares the same budget.
+// User-action-originated requests jump the queue via front
 const queue = createQueue(6);
 const queuedFetch =
   (front: boolean): typeof fetch =>
@@ -22,7 +22,7 @@ const handler = createHandler({
   },
   makeClient: (base, token, lane) => new GithubClient(base, token, queuedFetch(lane === "user")),
   getDiffer() {
-    // 遅延シングルトン。SW が再起動したらフェッチし直すだけ。
+    // Lazy singleton. If the SW restarts, just re-fetch.
     differ ??= fetch(chrome.runtime.getURL("prefablens.wasm"))
       .then((r) => r.arrayBuffer())
       .then(createDiffer);
@@ -52,7 +52,7 @@ const handler = createHandler({
       const stored = await chrome.storage.local.get([key]);
       await chrome.storage.local
         .set({ [key]: { ...(stored[key] as Record<string, string> | undefined), ...entries } })
-        .catch(() => {}); // quota 超過はメモリのみで続行
+        .catch(() => {}); // on quota overflow, continue in memory only
     },
     async loadIndex(repo) {
       const key = `guidIndex:${repo}`;
@@ -71,8 +71,8 @@ chrome.runtime.onMessage.addListener((msg: BackgroundRequest, sender, sendRespon
     const push =
       tabId === undefined ? undefined : (m: GuidResolvedPush) => void chrome.tabs.sendMessage(tabId, m).catch(() => {});
     void handler.semanticDiff(msg, push).then(sendResponse);
-    return true; // 非同期応答
+    return true; // async response
   }
   if (msg?.type === "prefetch") void handler.prefetch(msg);
-  return undefined; // prefetch は応答しない(fire-and-forget)
+  return undefined; // prefetch doesn't respond (fire-and-forget)
 });

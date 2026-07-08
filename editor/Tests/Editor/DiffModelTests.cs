@@ -4,7 +4,7 @@ namespace PrefabLens.Tests
 {
     public class DiffModelTests
     {
-        // core/tests/wasm_golden.test.mjs の GOLDEN と同一(スキーマ互換の回帰点)
+        // Identical to the GOLDEN in core/tests/wasm_golden.test.mjs (a schema-compat regression point)
         const string Golden =
             "{\"schema\":\"prefablens.diff.v2\",\"unresolvedGuids\":[\"def\"],\"roots\":[],\"loose\":[{\"kind\":\"component\",\"fileId\":\"11400000\",\"classId\":114,\"typeName\":\"MonoBehaviour\",\"scriptGuid\":\"def\",\"className\":null,\"status\":\"modified\",\"fields\":[{\"path\":\"Volume\",\"status\":\"modified\",\"before\":\"0.5\",\"after\":\"0.8\"}]}]}";
 
@@ -74,7 +74,7 @@ namespace PrefabLens.Tests
                 ""loose"":[]
             }";
             var m = DiffModel.Parse(json);
-            Assert.AreEqual(1, m.Roots.Count); // 未知 kind は読み飛ばし、欠損フィールドは既定値
+            Assert.AreEqual(1, m.Roots.Count); // unknown kinds are skipped, missing fields default
             Assert.AreEqual("", m.Roots[0].Name);
             Assert.AreEqual(DiffStatus.Unchanged, m.Roots[0].Status);
         }
@@ -82,7 +82,7 @@ namespace PrefabLens.Tests
         [Test]
         public void EmptyDiffIsEmpty()
         {
-            // 変更なしのとき Window は IsEmpty を見て "No semantic changes" を出す。その分岐の根拠。
+            // On no changes the Window checks IsEmpty and shows "No semantic changes". The basis for that branch.
             var m = DiffModel.Parse(
                 @"{""schema"":""prefablens.diff.v2"",""unresolvedGuids"":[],""roots"":[],""loose"":[]}"
             );
@@ -92,8 +92,8 @@ namespace PrefabLens.Tests
         [Test]
         public void ParsesResolvedMapAndRemovedStatus()
         {
-            // resolved は CLI 側で解決済みの guid -> パス(ResolveWith が上書きしないのは別テストで検証)。
-            // removed は 4 status のうち他テストが通っていない残り 1 つ。
+            // resolved is the guid -> path already resolved by the CLI (that ResolveWith doesn't overwrite it is verified in another test).
+            // removed is the one remaining status of the four not covered by other tests.
             const string json =
                 @"{
                 ""unresolvedGuids"":[],
@@ -114,11 +114,11 @@ namespace PrefabLens.Tests
         [Test]
         public void ThrowsOnMalformedOrNonObjectJson()
         {
-            // 同梱の MiniJSON は不正入力で throw せず null を返す流儀だが、DiffModel.Parse は
-            // throw する契約(Window が「Could not parse CLI output」表示に変換する)を保つ。
+            // The bundled MiniJSON returns null on malformed input rather than throwing, but DiffModel.Parse
+            // keeps the contract of throwing (which the Window converts into the "Could not parse CLI output" display).
             Assert.That(() => DiffModel.Parse("not json at all"), Throws.Exception);
             Assert.That(() => DiffModel.Parse(""), Throws.Exception);
-            Assert.That(() => DiffModel.Parse("[]"), Throws.Exception); // ルートが object でない
+            Assert.That(() => DiffModel.Parse("[]"), Throws.Exception); // root is not an object
         }
 
         [Test]
@@ -127,14 +127,14 @@ namespace PrefabLens.Tests
             var m = DiffModel.Parse(Golden);
             m.Resolved["def"] = "Assets/Preexisting.cs";
             m.ResolveWith(_ => "Assets/FromAssetDatabase.cs");
-            Assert.AreEqual("Assets/Preexisting.cs", m.Resolved["def"]); // 既存の解決が先勝ち
+            Assert.AreEqual("Assets/Preexisting.cs", m.Resolved["def"]); // an existing resolution wins
 
             var fresh = DiffModel.Parse(Golden);
             fresh.ResolveWith(g => g == "def" ? "Assets/Scripts/Sound.cs" : "");
             Assert.AreEqual("Assets/Scripts/Sound.cs", fresh.Resolved["def"]);
 
             var none = DiffModel.Parse(Golden);
-            none.ResolveWith(_ => ""); // AssetDatabase が空を返したら未解決のまま
+            none.ResolveWith(_ => ""); // if AssetDatabase returns empty, it stays unresolved
             Assert.IsFalse(none.Resolved.ContainsKey("def"));
         }
     }

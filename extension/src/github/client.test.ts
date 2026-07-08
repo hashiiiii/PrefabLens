@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import { ApiError, AuthError, apiBase, GithubClient, graphqlUrl, RateLimitError } from "./client";
 
-// パス→レスポンスの固定表を返す fetch フェイク。呼び出しも記録する。
-// 照合は url.includes(key) なのでキーは一意な部分文字列にすること
-// (例: 'page=1' は 'per_page=100' にもマッチしてしまう — '&page=1' を使う)。
+// fetch fake that returns a fixed path→response table. It also records calls.
+// Matching is url.includes(key), so keys must be unique substrings
+// (e.g. 'page=1' also matches 'per_page=100' — use '&page=1').
 function fakeFetch(routes: Record<string, () => Response>) {
   const calls: Array<{ url: string; headers: Record<string, string> }> = [];
   const fn = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -29,7 +29,7 @@ describe("apiBase", () => {
     expect(apiBase("https://ghe.example.com")).toBe("https://ghe.example.com/api/v3");
   });
   it("tolerates scheme-less and trailing-slash input from the options form", () => {
-    // "github.com" と入力すると new URL が throw し fetch-failed に化けていた実障害の回帰テスト
+    // Regression test for a real bug where entering "github.com" made new URL throw and turned into fetch-failed
     expect(apiBase("github.com")).toBe("https://api.github.com");
     expect(apiBase("github.com/")).toBe("https://api.github.com");
     expect(apiBase("https://github.com/")).toBe("https://api.github.com");
@@ -39,8 +39,8 @@ describe("apiBase", () => {
 
 describe("GithubClient", () => {
   it("default fetchFn survives strict-this runtimes (Chrome Illegal invocation)", async () => {
-    // Chrome の fetch はグローバル以外の this で呼ばれると Illegal invocation を投げる。
-    // Node の fetch は this を無視するため、この strict スタブで実機挙動を模す。
+    // Chrome's fetch throws Illegal invocation when called with a non-global this.
+    // Node's fetch ignores this, so this strict stub mimics the real-runtime behavior.
     const realFetch = globalThis.fetch;
     function strictFetch(this: unknown, ..._args: Parameters<typeof fetch>) {
       if (this !== undefined && this !== globalThis) {
@@ -50,7 +50,7 @@ describe("GithubClient", () => {
     }
     globalThis.fetch = strictFetch as typeof fetch;
     try {
-      const client = new GithubClient("https://api.github.com", "tok"); // fetchFn 省略 = 既定値
+      const client = new GithubClient("https://api.github.com", "tok"); // fetchFn omitted = default
       await expect(client.getFileAtRef("o", "r", "a.prefab", "sha")).resolves.not.toBeNull();
     } finally {
       globalThis.fetch = realFetch;
@@ -127,7 +127,7 @@ describe("GithubClient", () => {
       fakeFetch({ "/search/code": () => json({ items: [{ path: "README.md" }] }) }).fn,
     );
     expect(await odd.searchMetaByGuid("o", "r", "g")).toBeNull();
-    // 422: リポジトリ未インデックス等。ApiError ではなく「未解決」として扱う
+    // 422: repository not indexed, etc. Treated as "unresolved" rather than an ApiError
     const unindexed = new GithubClient(
       "https://api.github.com",
       "tok",
@@ -146,9 +146,9 @@ describe("GithubClient", () => {
   });
 
   it("maps rate-limit responses to RateLimitError, not AuthError", async () => {
-    // GitHub の rate limit: primary は 403 + x-ratelimit-remaining: 0、
-    // secondary は 403 + retry-after、新しめの API は 429。
-    // secondary はヘッダなし(ボディの message のみ)のこともある — octokit も message で判定している。
+    // GitHub rate limits: primary is 403 + x-ratelimit-remaining: 0,
+    // secondary is 403 + retry-after, and newer APIs use 429.
+    // secondary sometimes has no header (only the body message) — octokit also decides by the message.
     const at = (status: number, headers: Record<string, string>, body = "") =>
       new GithubClient(
         "https://api.github.com",
@@ -167,7 +167,7 @@ describe("GithubClient", () => {
         1,
       ),
     ).rejects.toBeInstanceOf(RateLimitError);
-    // 権限系 403(rate limit ではない)は引き続き AuthError
+    // Permission-related 403 (not a rate limit) is still AuthError
     await expect(
       at(
         403,
@@ -194,9 +194,9 @@ describe("listMetaTree", () => {
             truncated: false,
             tree: [
               { path: "Assets/S.cs.meta", type: "blob", sha: "sha1" },
-              { path: "Assets/S.cs", type: "blob", sha: "sha2" }, // .meta 以外は除外
+              { path: "Assets/S.cs", type: "blob", sha: "sha2" }, // non-.meta is excluded
               { path: "Assets/Dir.meta", type: "blob", sha: "sha3" },
-              { path: "Assets", type: "tree", sha: "sha4" }, // tree ノードは除外
+              { path: "Assets", type: "tree", sha: "sha4" }, // tree nodes are excluded
             ],
           }),
           { status: 200 },
@@ -225,17 +225,17 @@ describe("batchBlobTexts", () => {
     );
     const client = new GithubClient("https://ghes.example.com/api/v3", "tok", fetchFn);
     const res = await client.batchBlobTexts("o", "r", ["sha1", "sha2"]);
-    expect(fetchFn.mock.calls[0]?.[0]).toBe("https://ghes.example.com/api/graphql"); // GHES は /api/graphql
+    expect(fetchFn.mock.calls[0]?.[0]).toBe("https://ghes.example.com/api/graphql"); // GHES uses /api/graphql
     const init = fetchFn.mock.calls[0]?.[1] as RequestInit;
     expect(init.method).toBe("POST");
     const body = JSON.parse(init.body as string) as { query: string };
     expect(body.query).toContain('b0: object(oid: "sha1")');
     expect(body.query).toContain('b1: object(oid: "sha2")');
-    expect(res).toEqual({ sha1: "guid: g1\n", sha2: null }); // 取得不可の blob は null
+    expect(res).toEqual({ sha1: "guid: g1\n", sha2: null }); // an unfetchable blob is null
   });
 
   it("maps graphql RATE_LIMITED errors to RateLimitError", async () => {
-    // GraphQL は HTTP 200 で errors 配列を返すことがある: ここを見逃すと索引が黙って空になる
+    // GraphQL can return an errors array with HTTP 200: missing this silently empties the index
     const fetchFn = vi.fn(
       async () => new Response(JSON.stringify({ errors: [{ type: "RATE_LIMITED" }] }), { status: 200 }),
     );

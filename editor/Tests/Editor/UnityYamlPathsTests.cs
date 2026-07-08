@@ -4,8 +4,8 @@ namespace PrefabLens.Tests
 {
     public class UnityYamlPathsTests
     {
-        // unityyamlmerge が対象とするテキストシリアライズ済み拡張子の全集合。
-        // Unity の実出力どおりの camelCase(.overrideController 等)で列挙する。
+        // The full set of text-serialized extensions unityyamlmerge targets.
+        // Listed in the camelCase Unity actually emits (.overrideController, etc.).
         static readonly string[] Supported =
         {
             ".prefab",
@@ -46,7 +46,7 @@ namespace PrefabLens.Tests
         [Test]
         public void IsCaseInsensitive()
         {
-            // Unity は小文字拡張子で書き出すが、手動リネームされたファイルも受け付ける
+            // Unity writes lowercase extensions, but manually renamed files are accepted too
             Assert.IsTrue(UnityYamlPaths.IsSupported("Assets/FOO.PREFAB"));
             Assert.IsTrue(UnityYamlPaths.IsSupported("Assets/Sample.Mat"));
         }
@@ -54,7 +54,7 @@ namespace PrefabLens.Tests
         [Test]
         public void RejectsNonUnityYamlPaths()
         {
-            // .meta は !u! ドキュメント形式でなく、.asmdef は JSON。部分一致(.matx)も不可
+            // .meta isn't !u! document format and .asmdef is JSON. A partial match (.matx) is rejected too
             Assert.IsFalse(UnityYamlPaths.IsSupported("Assets/Foo.prefab.meta"));
             Assert.IsFalse(UnityYamlPaths.IsSupported("Assets/Code.asmdef"));
             Assert.IsFalse(UnityYamlPaths.IsSupported("Assets/T.matx"));

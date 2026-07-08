@@ -2,9 +2,9 @@ using System;
 
 namespace PrefabLens
 {
-    /// Unity がテキストシリアライズ(UnityYAML)するアセット拡張子の判定。
-    /// unityyamlmerge の対象と同じ集合。.meta(!u! ドキュメント形式でない)と
-    /// .asmdef 等の JSON は対象外。
+    /// Decides which asset extensions Unity text-serializes (UnityYAML).
+    /// The same set as unityyamlmerge targets. Excludes .meta (not !u! document format) and
+    /// JSON such as .asmdef.
     public static class UnityYamlPaths
     {
         static readonly string[] Extensions =

@@ -31,8 +31,8 @@ const MAX_SEARCHES = 10; // Code Search is authenticated 10 req/min — don't bu
 const MAX_SOURCE_ROUNDS = 3; // re-diff cap for nested sources (independent of core's depth cap of 8)
 const CONTEXT_TTL_MS = 60_000; // PR context is short-lived because a push changes headSha
 const BLOB_CACHE_MAX = 32;
-const TOO_LARGE_BYTES = 25 * 1024 * 1024; // parent spec §5.7: over 25MB renders on click
-const PREFETCH_MAX = 100; // spec B2: prefetch cap per PR
+const TOO_LARGE_BYTES = 25 * 1024 * 1024; // over 25MB renders on click
+const PREFETCH_MAX = 100; // prefetch cap per PR (bounds API usage)
 const PREFETCH_CONCURRENCY = 4;
 
 type DiffOutcome = { ok: true; json: DiffV2 } | { ok: false; error: "too-large"; bytes: number };
@@ -48,7 +48,7 @@ export function createHandler(deps: Deps): Handler {
   const searches = new Map<string, Promise<string | null>>();
   // baseSha:headSha:path → raw diff computation Promise. Keeps only successes (too-large/failure allow recomputation)
   const diffs = new Map<string, Promise<DiffOutcome>>();
-  // repoKey@ref → whole-repo index Promise (Task 11). null means not indexable (truncated/over the cap/failure)
+  // repoKey@ref → whole-repo index Promise. null means not indexable (truncated/over the cap/failure)
   const indexes = new Map<string, Promise<Record<string, string> | null>>();
   // A repo that hit a rate limit falls back for the SW lifetime (gives up on the index and defers to Code Search only)
   const indexFallback = new Set<string>();
@@ -197,7 +197,7 @@ export function createHandler(deps: Deps): Handler {
         try {
           bytes = await fetchBlob(client, owner, repo, path, sha);
         } catch {
-          return current; // rate limit etc.: degrade to the phase 1 result
+          return current; // rate limit etc.: degrade to the first-pass diff
         }
         if (!bytes) continue;
         assets.set(s.guid, bytes);
@@ -316,7 +316,7 @@ export function createHandler(deps: Deps): Handler {
           push({ type: "guidResolved", ...at, resolved: fromIndex, done: false });
         }
       }
-      // Only guids that aren't indexable or aren't in the index go to Code Search (stage 3 of spec B3)
+      // Only guids that aren't indexable or aren't in the index go to Code Search
       const fromSearch = leftover.length ? await searchGuids(leftover, client, req.owner, req.repo, repoKey) : {};
       let json: DiffV2 = { ...first, resolved: { ...first.resolved, ...fromIndex, ...fromSearch } };
       if (json.neededSources?.length) {
@@ -346,7 +346,7 @@ export function createHandler(deps: Deps): Handler {
       if (!outcome.ok) return outcome;
       const withPr = applyResolved(outcome.json, ctx.guidIndex);
 
-      // Two-stage path: return the diff immediately, continue resolution and source merging in the background, deliver via push (B4)
+      // Two-stage path: return the diff immediately, continue resolution and source merging in the background, deliver via push
       const remaining = withPr.unresolvedGuids.filter((g) => !Object.hasOwn(withPr.resolved ?? {}, g));
       if (!remaining.length && !withPr.neededSources?.length) return { ok: true, json: withPr };
       void resolveRemaining(withPr, remaining, client, req, base, ctx, push);

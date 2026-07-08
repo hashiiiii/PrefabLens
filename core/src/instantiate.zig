@@ -1,4 +1,4 @@
-// Source-prefab merging for PrefabInstance (parent spec: docs/superpowers/specs/2026-07-06-prefab-source-resolution-design.md).
+// Source-prefab merging for PrefabInstance.
 // Merge = parse the source -> apply m_Modifications to the Document -> reuse the existing
 // one-sided compute + tree.build -> graft onto the instance node. core owns no I/O;
 // the host supplies guid -> bytes (Assets). Guids with no supply go into needed_sources.

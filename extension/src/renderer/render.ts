@@ -43,7 +43,7 @@ export function detectTheme(doc: Document): "light" | "dark" {
 
 export function render(root: ShadowRoot, diff: DiffV2, opts?: { resolving?: number }): void {
   const container = mount(root);
-  // Resolving indicator (spec B4): the diff body is correct from the start, only reference names fill in later
+  // Resolving indicator: the diff body is correct from the start, only reference names fill in later
   if (opts?.resolving) container.append(note("pl-resolving", `Resolving ${opts.resolving} reference(s)…`));
   for (const node of diff.roots) container.append(renderNode(node, diff));
   for (const c of diff.loose) container.append(renderComponent(c, diff));
@@ -60,7 +60,7 @@ export function renderLoading(root: ShadowRoot): void {
   mount(root).append(note("pl-loading", "Computing semantic diff…"));
 }
 
-/** Over-25MB guard (parent spec §5.7): doesn't auto-render, waits for an explicit click. */
+/** Over-25MB guard: doesn't auto-render, waits for an explicit click. */
 export function renderTooLarge(root: ShadowRoot, bytes: number, onRender: () => void): void {
   const container = mount(root);
   const button = document.createElement("button");

@@ -21,7 +21,7 @@ export type GuidCache = {
 
 const MAX_CONCURRENT_META_FETCHES = 8;
 
-/** Builds a guid → asset path index only from .meta files changed in the PR (design scope). removed ones are read from the base side.
+/** Builds a guid → asset path index only from .meta files changed in the PR. removed ones are read from the base side.
  *  Caps concurrent fetches at 8 (avoids GitHub secondary rate limits on large .meta changes). */
 export async function buildGuidIndex(files: PrFile[], fetchMeta: MetaFetcher): Promise<Map<string, string>> {
   const index = new Map<string, string>();
@@ -47,7 +47,7 @@ export async function buildGuidIndex(files: PrFile[], fetchMeta: MetaFetcher): P
   return index;
 }
 
-/** Host-side resolution seam (parent spec §4.3). Attaches with the same scoping rule as core's "resolved". */
+/** Host-side resolution seam. Attaches with the same scoping rule as core's "resolved". */
 export function applyResolved(diff: DiffV2, index: Map<string, string>): DiffV2 {
   const resolved: Record<string, string> = {};
   for (const g of diff.unresolvedGuids) {

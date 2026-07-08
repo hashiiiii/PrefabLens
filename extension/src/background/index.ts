@@ -7,7 +7,7 @@ import { createQueue } from "./queue";
 
 let differ: Promise<Differ> | undefined;
 
-// Six concurrent across all REST/GraphQL (spec B2). GraphQL also goes through fetchFn, so it shares the same budget.
+// Six concurrent across all REST/GraphQL. GraphQL also goes through fetchFn, so it shares the same budget.
 // User-action-originated requests jump the queue via front
 const queue = createQueue(6);
 const queuedFetch =

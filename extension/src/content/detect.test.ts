@@ -35,7 +35,7 @@ describe("parsePrUrl", () => {
 
 describe("parsePrPage", () => {
   it("matches every pr tab, not just files", () => {
-    // Prefetch starts on arrival at the conversation tab (spec B2)
+    // Prefetch starts on arrival at the conversation tab
     expect(parsePrPage("/o/r/pull/12")).toEqual({ owner: "o", repo: "r", prNumber: 12 });
     expect(parsePrPage("/o/r/pull/12/commits")).toEqual({ owner: "o", repo: "r", prNumber: 12 });
     expect(parsePrPage("/o/r/pull/12/files")).toEqual({ owner: "o", repo: "r", prNumber: 12 });

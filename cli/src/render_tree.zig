@@ -92,7 +92,7 @@ test "render: components label separates object and component dimensions" {
     var aw = std.Io.Writer.Allocating.fromArrayList(arena, &out);
     try render(&aw.writer, res, null, false);
     const text = aw.toArrayList().items;
-    // "  Player" → "    components" → "      ~ MonoBehaviour" の深度になる。
+    // The depths become "  Player" -> "    components" -> "      ~ MonoBehaviour".
     try testing.expect(std.mem.indexOf(u8, text, "\n    components\n") != null);
     try testing.expect(std.mem.indexOf(u8, text, "\n      ~ MonoBehaviour\n") != null);
 }
@@ -118,7 +118,7 @@ test "render: component shows editor class name when script is unresolved" {
     const res = try core.diffBytes(arena, before, after);
     var out: std.ArrayList(u8) = .empty;
     var aw = std.Io.Writer.Allocating.fromArrayList(arena, &out);
-    // resolver なし → guid は解決できないが、クラス名で MonoBehaviour より具体的に。
+    // No resolver -> the guid can't be resolved, but the class name is more specific than MonoBehaviour.
     try render(&aw.writer, res, null, false);
     const text = aw.toArrayList().items;
     try testing.expect(std.mem.indexOf(u8, text, "~ Cylinder1\n") != null);
@@ -139,8 +139,8 @@ test "render: mixed-status override group gets a modified heading" {
         \\      value: 0
         \\  m_SourcePrefab: {fileID: 100100000, guid: aaa, type: 3}
     ;
-    // 追加された mod が先頭に来る順にして、見出しが先頭行の status に
-    // 引きずられないことを見る。
+    // Order it so the added mod comes first, to check the heading isn't
+    // dragged by the first line's status.
     const after =
         \\--- !u!1001 &1001
         \\PrefabInstance:
@@ -197,7 +197,7 @@ test "render: structural summary row shows label only, no dangling value" {
     var aw = std.Io.Writer.Allocating.fromArrayList(arena, &out);
     try render(&aw.writer, res, null, false);
     const text = aw.toArrayList().items;
-    // 件数はラベルに含まれるので、値なし行はラベルだけで終わる。
+    // The count is included in the label, so a value-less row ends with just the label.
     try testing.expect(std.mem.indexOf(u8, text, "+ Added Components (1)\n") != null);
     try testing.expect(std.mem.indexOf(u8, text, "∅") == null);
 }
@@ -267,9 +267,9 @@ fn renderObject(
     try w.print(" {s}", .{display.objectName(o, resolved)});
     if (o.kind == .prefab_instance) try w.writeAll("  <Prefab>");
     try w.writeByte('\n');
-    // 表示次元の規則: コンポーネント/override は必ず components セクション配下。
-    // ラベル行には sign+space の 2 文字分の前置がないため、子オブジェクトの
-    // 名前列(depth+1 の indent + sign+space)に視覚的に揃うよう depth+2 を使う。
+    // Display-dimension rule: components/overrides always sit under the components section.
+    // The label line has no 2-char sign+space prefix, so use depth+2 to visually align with
+    // the child objects' name column (depth+1 indent + sign+space).
     if (o.overrides.len != 0 or o.components.len != 0) {
         try indent(w, depth + 2);
         try paint(w, color, Color.dim, "components");
@@ -280,7 +280,7 @@ fn renderObject(
     for (o.children) |child| try renderObject(w, child, resolved, color, depth + 1);
 }
 
-/// 見出しの status: グループ内で一様ならその status、混在なら modified。
+/// Heading status: that status if uniform within the group, modified if mixed.
 fn groupHeadingStatus(overrides: []const model.OverrideDiff, start: usize) model.Status {
     const first = overrides[start];
     for (overrides[start + 1 ..]) |ov| {
@@ -302,7 +302,7 @@ fn renderOverrides(w: *std.Io.Writer, overrides: []const model.OverrideDiff, col
         }
         try indent(w, depth + 1);
         try paint(w, color, statusColor(ov.status), statusSign(ov.status));
-        // 構造サマリ行 (before=after=null) は件数がラベルに含まれ、値を持たない。
+        // A structural summary row (before=after=null) has the count in the label and no value.
         if (ov.before == null and ov.after == null) {
             try w.print(" {s}\n", .{ov.label});
             continue;

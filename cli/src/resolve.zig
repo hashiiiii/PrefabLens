@@ -2,7 +2,7 @@ const std = @import("std");
 const core = @import("core");
 const testing = std.testing;
 
-/// guid -> asset path。core.json.Resolver と同一型なのでそのまま渡せる。
+/// guid -> asset path. Same type as core.json.Resolver, so it can be passed through directly.
 pub const Index = core.json.Resolver;
 
 pub fn buildIndex(io: std.Io, arena: std.mem.Allocator, project_root: []const u8) !Index {
@@ -58,7 +58,7 @@ test "buildIndex maps guid to asset path from .meta files" {
     const root = try tmp.dir.realPathFileAlloc(testing.io, ".", arena);
     var index = try buildIndex(testing.io, arena, root);
     const path = index.get("1234567890abcdef1234567890abcdef").?;
-    // Windows の walker/join は `\` 区切りを返すため、期待値もネイティブ区切りで組む。
+    // Windows's walker/join returns `\`-separated paths, so build the expected value with native separators too.
     const want = try std.fs.path.join(arena, &.{ "Assets", "Scripts", "Player.cs" });
     try testing.expect(std.mem.endsWith(u8, path, want));
 }

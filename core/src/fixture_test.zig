@@ -1,5 +1,5 @@
-// 検証 PR (hashiiiii/unity-yaml-playground#1) の実データに対する統合テスト。
-// 期待値は spec の承認済みモック(docs/superpowers/specs/2026-07-03-semantic-diff-inspector-model-design.md)。
+// Integration tests against real data from the verification PR (hashiiiii/unity-yaml-playground#1).
+// Expected values are the spec's approved mocks (docs/superpowers/specs/2026-07-03-semantic-diff-inspector-model-design.md).
 const std = @import("std");
 const root = @import("root.zig");
 const model = @import("model.zig");
@@ -22,13 +22,13 @@ test "fixture: Plane.prefab shows both cylinder instances under Plane" {
     const arena = arena_state.allocator();
     const res = try root.diffBytes(arena, plane_before, plane_after);
 
-    // stripped Transform や PrefabInstance が loose に漏れない。
+    // stripped Transform and PrefabInstance do not leak into loose.
     try testing.expectEqual(@as(usize, 0), res.loose.len);
     try testing.expectEqual(@as(usize, 1), res.roots.len);
     const plane = res.roots[0];
     try testing.expectEqualStrings("Plane", plane.name);
 
-    // 追加された Cylinder Variant: 記録済み placement を default 含め全表示。
+    // Added Cylinder Variant: all recorded placement shown, including defaults.
     const variant = childByName(plane, "Cylinder Variant").?;
     try testing.expectEqual(model.ObjectKind.prefab_instance, variant.kind);
     try testing.expectEqual(model.Status.added, variant.status);
@@ -39,7 +39,7 @@ test "fixture: Plane.prefab shows both cylinder instances under Plane" {
     try testing.expectEqualStrings("Rotation", variant.overrides[1].label);
     try testing.expectEqualStrings("(0, 0, 0, 1)", variant.overrides[1].after.?.scalar);
 
-    // 変更された Cylinder: Position.x の 1 override のみ。
+    // Modified Cylinder: only the single Position.x override.
     const cylinder = childByName(plane, "Cylinder").?;
     try testing.expectEqual(model.ObjectKind.prefab_instance, cylinder.kind);
     try testing.expectEqual(model.Status.modified, cylinder.status);
@@ -66,7 +66,7 @@ test "fixture: Cylinder.prefab shows added script and transform change" {
             saw_script = true;
             try testing.expectEqual(model.Status.added, c.status);
             try testing.expectEqualStrings("Cylinder1", c.class_name.?);
-            // 追加コンポーネントは初期値を全列挙している(空ではない)。
+            // The added component enumerates its initial values in full (not empty).
             try testing.expect(c.fields.len != 0);
         }
         if (c.class_id == 4) {
@@ -90,8 +90,8 @@ test "fixture: new Cylinder Variant.prefab shows all recorded placement values" 
     try testing.expectEqual(model.ObjectKind.prefab_instance, inst.kind);
     try testing.expectEqualStrings("Cylinder Variant", inst.name);
     try testing.expectEqual(model.Status.added, inst.status);
-    // ファイルに記録された placement は default でも全部出す。
-    // 出ないのは EulerAnglesHint(非表示)と m_Name(ノード名に吸収)のみ。
+    // Placement recorded in the file is all emitted, even at defaults.
+    // The only omissions are EulerAnglesHint (hidden) and m_Name (absorbed into the node name).
     try testing.expectEqual(@as(usize, 3), inst.overrides.len);
     try testing.expectEqualStrings("Position", inst.overrides[0].label);
     try testing.expectEqualStrings("(0, 0, 0)", inst.overrides[0].after.?.scalar);
@@ -105,7 +105,7 @@ test "fixture: deleted Cylinder Variant.prefab mirrors the added enumeration" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
-    // added(直前のテスト)の鏡像: 同じ 3 行が before 値・removed で出る。
+    // Mirror of added (the previous test): the same 3 rows appear with before values and removed.
     const res = try root.diffBytes(arena, cylinder_variant_after, "");
     try testing.expectEqual(@as(usize, 1), res.roots.len);
     const inst = res.roots[0];
@@ -125,7 +125,7 @@ test "fixture: variant merged with source shows Scale (1, 2, 1) and all componen
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
-    // ソース(Cylinder.prefab 相当)を supply すると Inspector と同じ合成状態になる。
+    // Supplying the source (equivalent to Cylinder.prefab) yields the same merged state as the Inspector.
     var assets: root.Assets = .empty;
     try assets.put(arena, "05ba59bdbdf954600a21005e3b7bf963", cylinder_after);
     const res = try root.diffBytesWithAssets(arena, "", cylinder_variant_after, &assets);
@@ -134,7 +134,7 @@ test "fixture: variant merged with source shows Scale (1, 2, 1) and all componen
     const inst = res.roots[0];
     try testing.expectEqualStrings("Cylinder Variant", inst.name);
     try testing.expectEqual(model.Status.added, inst.status);
-    // 展開成功: overrides は消え、ソースの全コンポーネントが added で並ぶ。
+    // Expansion succeeds: overrides vanish, all source components appear as added.
     try testing.expectEqual(@as(usize, 0), inst.overrides.len);
     var saw = [_]bool{false} ** 4; // Transform / MeshFilter / MeshRenderer / CapsuleCollider
     for (inst.components) |c| {
@@ -142,7 +142,7 @@ test "fixture: variant merged with source shows Scale (1, 2, 1) and all componen
         switch (c.class_id) {
             4 => {
                 saw[0] = true;
-                // override 適用済み: Scale.y=2 が (1, 2, 1) に、Position は (0, 0, 0)。
+                // Overrides applied: Scale.y=2 becomes (1, 2, 1), Position is (0, 0, 0).
                 var saw_scale = false;
                 var saw_pos = false;
                 for (c.fields) |f| {
@@ -170,9 +170,9 @@ test "fixture: Plane variant instance merges nested sources with outer placement
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
-    // Plane -> Cylinder Variant.prefab -> Cylinder.prefab の 2 段解決。
-    // Plane 側の配置 (2.03, 3.63, 1.11797) が XOR push-down で Transform に届き、
-    // Scale は variant の override (1, 2, 1) が残る = Inspector と同じ合成。
+    // Two-level resolution: Plane -> Cylinder Variant.prefab -> Cylinder.prefab.
+    // Plane's placement (2.03, 3.63, 1.11797) reaches the Transform via XOR push-down,
+    // and Scale keeps the variant's override (1, 2, 1) = the same merge as the Inspector.
     var assets: root.Assets = .empty;
     try assets.put(arena, "b01772ea746dd4b869440c40c8b1f48e", cylinder_variant_after);
     try assets.put(arena, "05ba59bdbdf954600a21005e3b7bf963", cylinder_after);
@@ -181,7 +181,7 @@ test "fixture: Plane variant instance merges nested sources with outer placement
     const plane = res.roots[0];
     const variant = childByName(plane, "Cylinder Variant").?;
     try testing.expectEqual(model.Status.added, variant.status);
-    // 二重ノードにならず、override は全部適用済みで行としては残らない。
+    // No duplicate node; all overrides are applied and none remain as rows.
     try testing.expectEqual(@as(usize, 0), variant.children.len);
     try testing.expectEqual(@as(usize, 0), variant.overrides.len);
     var saw_transform = false;
@@ -205,8 +205,8 @@ test "fixture: Plane variant instance merges nested sources with outer placement
     try testing.expect(saw_transform);
 }
 
-// ---- prefab/scene 以外の UnityYAML アセット(.mat / .controller)----
-// core は拡張子を見ないので既に diff できる。ここはその保証を固定する回帰点。
+// ---- UnityYAML assets other than prefab/scene (.mat / .controller) ----
+// core does not look at extensions, so these already diff. This is the regression point that pins that guarantee.
 
 const material_before = @embedFile("testdata/material_before.mat");
 const material_after = @embedFile("testdata/material_after.mat");
@@ -219,7 +219,7 @@ test "fixture: .mat diffs as a loose Material with nested property paths" {
     const arena = arena_state.allocator();
     const res = try root.diffBytes(arena, material_before, material_after);
 
-    // GameObject 階層を持たないので roots は空、Material 本体は loose に 1 件。
+    // No GameObject hierarchy, so roots is empty and the Material itself is a single loose entry.
     try testing.expectEqual(@as(usize, 0), res.roots.len);
     try testing.expectEqual(@as(usize, 1), res.loose.len);
     const mat = res.loose[0];
@@ -227,7 +227,7 @@ test "fixture: .mat diffs as a loose Material with nested property paths" {
     try testing.expectEqualStrings("Material", mat.type_name);
     try testing.expectEqual(model.Status.modified, mat.status);
 
-    // m_SavedProperties 配下の変更 2 件が Inspector 風パスで出る。
+    // Two changes under m_SavedProperties appear with Inspector-style paths.
     try testing.expectEqual(@as(usize, 2), mat.fields.len);
     try testing.expectEqualStrings("Saved Properties.Floats[1]._Metallic", mat.fields[0].path);
     try testing.expectEqualStrings("0", mat.fields[0].before.?.scalar);
@@ -243,11 +243,11 @@ test "fixture: .controller shows only the changed AnimatorState" {
     const arena = arena_state.allocator();
     const res = try root.diffBytes(arena, animator_before, animator_after);
 
-    // 3 ドキュメント(State / StateMachine / Controller)のうち変更は State のみ。
+    // Of the 3 documents (State / StateMachine / Controller), only State changed.
     try testing.expectEqual(@as(usize, 0), res.roots.len);
     try testing.expectEqual(@as(usize, 1), res.loose.len);
     const state = res.loose[0];
-    // 1102 は classid.zig のテーブルで AnimatorState に解決される。
+    // 1102 resolves to AnimatorState via the classid.zig table.
     try testing.expectEqual(@as(u32, 1102), state.class_id);
     try testing.expectEqualStrings("AnimatorState", state.type_name);
     try testing.expectEqual(model.Status.modified, state.status);

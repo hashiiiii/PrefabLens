@@ -6,8 +6,9 @@ const testing = std.testing;
 /// same way instead of diverging on an arbitrary limit.
 pub const max_input_bytes: usize = 64 * 1024 * 1024; // 64 MiB guard
 
-/// git 実行の既定タイムアウト。CLI 直叩きだけでなく、常駐 MCP サーバーと Unity Editor
-/// (WaitForExit で待つ)がハングした git に道連れにされないための上限。
+/// Default timeout for running git. An upper bound so that not just the direct CLI
+/// invocation but also the resident MCP server and Unity Editor (which waits with
+/// WaitForExit) aren't dragged down by a hung git.
 pub const default_git_timeout: std.Io.Timeout = .{ .duration = .{ .clock = .awake, .raw = .fromSeconds(60) } };
 
 pub fn showAtRef(io: std.Io, arena: std.mem.Allocator, repo_dir: []const u8, ref: []const u8, path: []const u8, timeout: std.Io.Timeout) ![]u8 {
@@ -24,7 +25,7 @@ pub fn showAtRef(io: std.Io, arena: std.mem.Allocator, repo_dir: []const u8, ref
         .environ_map = &env,
         .timeout = timeout,
     }) catch |err| switch (err) {
-        // std.process.run は deadline 超過で子プロセスを kill して error.Timeout を返す。
+        // std.process.run kills the child on deadline overrun and returns error.Timeout.
         error.Timeout => return error.GitTimeout,
         else => return err,
     };
@@ -42,7 +43,7 @@ pub fn showAtRef(io: std.Io, arena: std.mem.Allocator, repo_dir: []const u8, ref
     }
 }
 
-/// 作業ツリー側(--git REF PATH の after)。ファイル不在は「削除済み」= 空側として扱う。
+/// Working-tree side (the after of --git REF PATH). A missing file is treated as "deleted" = empty side.
 pub fn readWorktree(io: std.Io, arena: std.mem.Allocator, repo_dir: []const u8, path: []const u8) ![]u8 {
     const full = try std.fs.path.join(arena, &.{ repo_dir, path });
     return std.Io.Dir.cwd().readFileAlloc(io, full, arena, .limited(max_input_bytes)) catch |err| switch (err) {
@@ -70,7 +71,7 @@ test "readWorktree reads the file and treats absence as an empty side" {
     try tmp.dir.writeFile(testing.io, .{ .sub_path = "Foo.prefab", .data = "v2\n" });
 
     try testing.expectEqualStrings("v2\n", try readWorktree(testing.io, arena, dir, "Foo.prefab"));
-    // 作業ツリーで削除済み = 空側(エラーにしない)
+    // Deleted in the working tree = empty side (not an error)
     try testing.expectEqual(@as(usize, 0), (try readWorktree(testing.io, arena, dir, "Gone.prefab")).len);
 }
 
@@ -117,8 +118,8 @@ test "showAtRef kills git and errors when the timeout passes" {
     try git(testing.io, arena, dir, &.{ "add", "Foo.prefab" });
     try git(testing.io, arena, dir, &.{ "commit", "-q", "-m", "first" });
 
-    // 実 git でも 1µs では完了できない(spawn だけで ms かかる)。常駐 MCP セッションを
-    // ハングした git から守る打ち切りが、明確なエラーとして返ることを確認する。
+    // Even real git can't finish in 1µs (spawn alone takes ms). Confirm that the cutoff
+    // protecting a resident MCP session from a hung git returns as a clear error.
     const tiny: std.Io.Timeout = .{ .duration = .{ .clock = .awake, .raw = .fromMicroseconds(1) } };
     try testing.expectError(error.GitTimeout, showAtRef(testing.io, arena, dir, "HEAD", "Foo.prefab", tiny));
 }

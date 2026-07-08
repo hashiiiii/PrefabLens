@@ -4,7 +4,7 @@ import { createSessionDiffStore } from "./diffStore";
 
 const DIFF: DiffV2 = { schema: "prefablens.diff.v2", unresolvedGuids: [], roots: [], loose: [] };
 
-// chrome.storage.session の必要部分だけを Map で模した fake。set は failWhen で溢れを再現する。
+// A fake that mimics only the needed subset of chrome.storage.session with a Map. set reproduces overflow via failWhen.
 function fakeArea(failWhen?: () => boolean) {
   const data = new Map<string, unknown>();
   const area = {
@@ -42,7 +42,7 @@ describe("createSessionDiffStore", () => {
   });
 
   it("skips diffs larger than the session budget without touching storage", async () => {
-    // 大物はメモリキャッシュだけに任せる(session は 10MB しかない)
+    // Leave large ones to the memory cache only (session is only 10MB)
     const area = fakeArea();
     const store = createSessionDiffStore(area);
     const big: DiffV2 = { ...DIFF, unresolvedGuids: [" ".repeat(600 * 1024)] };
@@ -51,30 +51,30 @@ describe("createSessionDiffStore", () => {
   });
 
   it("flushes stale diff entries and retries once when the quota overflows", async () => {
-    // 一度埋まると以後 SW 再起動のたびに全再計算になる恒久劣化を防ぐ:
-    // 溢れたら溜まった diff を一掃して 1 回だけ書き直す
-    const area = fakeArea(); // 既定 set は成功。1 回目だけ下で溢れさせる
-    // 既存の diff エントリと、無関係なキーを 1 つ仕込む
+    // Prevents the permanent degradation where, once full, every SW restart recomputes everything:
+    // on overflow, wipe the accumulated diffs and rewrite once
+    const area = fakeArea(); // the default set succeeds. Only the first is made to overflow below
+    // Seed existing diff entries and one unrelated key
     area.data.set("diff:old1", DIFF);
     area.data.set("diff:old2", DIFF);
-    area.data.set("viewMode", "semantic"); // diff: 以外は消さない
+    area.data.set("viewMode", "semantic"); // don't delete anything but diff:
     const store = createSessionDiffStore(area);
 
-    // 1 回目の set は溢れる → flush → retry(既定 set)は通す
+    // The first set overflows → flush → retry (the default set) succeeds
     area.set.mockImplementationOnce(async () => {
       throw new Error("quota exceeded");
     });
     await store.save("new", DIFF);
 
-    expect(area.remove).toHaveBeenCalledWith(["diff:old1", "diff:old2"]); // diff: だけ一掃
-    expect(area.data.has("viewMode")).toBe(true); // 無関係キーは残す
-    expect(area.data.get("diff:new")).toEqual(DIFF); // 再試行で書けている
-    expect(area.set).toHaveBeenCalledTimes(2); // 溢れ 1 回 + retry 1 回だけ(ループ化への退行を固定)
+    expect(area.remove).toHaveBeenCalledWith(["diff:old1", "diff:old2"]); // wipe only diff:
+    expect(area.data.has("viewMode")).toBe(true); // keep unrelated keys
+    expect(area.data.get("diff:new")).toEqual(DIFF); // the retry wrote it
+    expect(area.set).toHaveBeenCalledTimes(2); // just 1 overflow + 1 retry (pins against a regression to looping)
   });
 
   it("gives up quietly if the retry also fails", async () => {
-    // flush しても書けない(単一 diff が quota 超): メモリキャッシュで続行、例外は投げない
-    const area = fakeArea(() => true); // 常に溢れる
+    // Still unwritable after flush (a single diff over quota): continue with the memory cache, don't throw
+    const area = fakeArea(() => true); // always overflows
     const store = createSessionDiffStore(area);
     await expect(store.save("k", DIFF)).resolves.toBeUndefined();
   });

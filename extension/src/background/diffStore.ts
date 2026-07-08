@@ -1,9 +1,9 @@
 import type { DiffV2 } from "../types";
 
 const PREFIX = "diff:";
-const MAX_BYTES = 512 * 1024; // storage.session は 10MB: 大物はメモリキャッシュだけに任せる(SW が死んだら再計算)
+const MAX_BYTES = 512 * 1024; // storage.session is 10MB: leave large ones to the memory cache only (recompute if the SW dies)
 
-// chrome.storage.session の必要部分だけを受ける(テストで fake に差し替え可能にするため)
+// Accepts only the needed subset of chrome.storage.session (so tests can swap in a fake)
 type Area = {
   get(keys: string | string[] | null): Promise<Record<string, unknown>>;
   set(items: Record<string, unknown>): Promise<void>;
@@ -15,9 +15,9 @@ export type DiffStore = {
   save(key: string, json: DiffV2): Promise<void>;
 };
 
-/** raw diff を sha キーで storage.session に載せ、SW 再起動をまたいで再利用する。
- *  quota が溢れたら溜まった diff を一掃して 1 回だけ書き直す: これをしないと一度埋まると
- *  以後 SW 再起動のたびに全再計算になり、無言で恒久劣化する(内容は sha キーで再計算可能)。 */
+/** Stores raw diffs in storage.session under a sha key, reusing them across SW restarts.
+ *  On quota overflow, wipe the accumulated diffs and rewrite once: without this, once it fills up
+ *  every SW restart thereafter recomputes everything and it silently degrades permanently (content is recomputable from the sha key). */
 export function createSessionDiffStore(area: Area): DiffStore {
   return {
     async load(key) {
@@ -31,14 +31,14 @@ export function createSessionDiffStore(area: Area): DiffStore {
       } catch {
         await flushDiffs(area);
         await area.set({ [PREFIX + key]: json }).catch(() => {
-          // flush しても書けない(単一 diff が quota 超など): メモリキャッシュで続行する
+          // Still unwritable after flush (a single diff over quota, etc.): continue with the memory cache
         });
       }
     },
   };
 }
 
-/** diff: 付きのキーだけを一掃する(viewMode など無関係な session キーは残す)。 */
+/** Wipes only keys with the diff: prefix (keeps unrelated session keys like viewMode). */
 async function flushDiffs(area: Area): Promise<void> {
   const all = await area.get(null).catch(() => ({}));
   const keys = Object.keys(all).filter((k) => k.startsWith(PREFIX));

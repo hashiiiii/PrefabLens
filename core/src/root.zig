@@ -16,8 +16,8 @@ pub fn diffBytes(arena: std.mem.Allocator, before_src: []const u8, after_src: []
     return diffBytesWithAssets(arena, before_src, after_src, &no_assets);
 }
 
-// assets(guid -> ソース prefab bytes)を供給された sole-status instance は
-// 合成ツリーへ展開される。供給が無い guid は needed_sources に載る。
+// A sole-status instance supplied with assets (guid -> source prefab bytes) is
+// expanded into the merged tree. Guids with no supply go into needed_sources.
 pub fn diffBytesWithAssets(arena: std.mem.Allocator, before_src: []const u8, after_src: []const u8, assets: *const Assets) !model.DiffResult {
     const fd = try diff.compute(arena, before_src, after_src);
     var res = try tree.build(arena, fd);

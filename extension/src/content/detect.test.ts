@@ -35,7 +35,7 @@ describe("parsePrUrl", () => {
 
 describe("parsePrPage", () => {
   it("matches every pr tab, not just files", () => {
-    // プリフェッチは conversation タブ到達時から始める(spec B2)
+    // Prefetch starts on arrival at the conversation tab (spec B2)
     expect(parsePrPage("/o/r/pull/12")).toEqual({ owner: "o", repo: "r", prNumber: 12 });
     expect(parsePrPage("/o/r/pull/12/commits")).toEqual({ owner: "o", repo: "r", prNumber: 12 });
     expect(parsePrPage("/o/r/pull/12/files")).toEqual({ owner: "o", repo: "r", prNumber: 12 });
@@ -61,8 +61,8 @@ describe("scanUnityFiles", () => {
   });
 
   it("finds every UnityYAML asset extension beyond the original trio", () => {
-    // unityyamlmerge が対象とするテキストシリアライズ済みアセット群。
-    // 大文字小文字は Unity の実出力(.overrideController 等の camelCase)に合わせる。
+    // The set of text-serialized assets that unityyamlmerge targets.
+    // Case matches Unity's actual output (camelCase like .overrideController).
     const paths = [
       "Assets/M.mat",
       "Assets/A.anim",
@@ -100,7 +100,7 @@ describe("scanUnityFiles", () => {
   });
 
   it("skips YAML-but-not-UnityYAML and JSON assets", () => {
-    // .meta は !u! ドキュメント形式でなく、.asmdef/.shadergraph は JSON。
+    // .meta is not !u! document format, and .asmdef/.shadergraph are JSON.
     const paths = ["Assets/Foo.prefab.meta", "Assets/Code.asmdef", "Assets/S.shadergraph", "Assets/T.png"];
     document.body.innerHTML = paths
       .map(

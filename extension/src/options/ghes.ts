@@ -10,7 +10,7 @@ export type ChromeGhes = {
 
 const ID = "prefablens-ghes";
 
-/** baseUrl が GHES を指すときの content script 注入対象。match pattern はポート不可(ポートなしは全ポート一致)。 */
+/** The content-script injection target when baseUrl points at GHES. A match pattern can't include a port (port-less matches all ports). */
 export function ghesOrigins(baseUrl: string): string[] | null {
   if (!baseUrl) return null;
   const origin = originOf(baseUrl);
@@ -19,12 +19,12 @@ export function ghesOrigins(baseUrl: string): string[] | null {
   return [`${u.protocol}//${u.hostname}/*`];
 }
 
-/** Save クリック(user gesture)内で呼ぶ: 権限要求 → content script 動的登録。登録は永続なので起動時処理は不要。
- *  permissions.request は gesture 失効を避けるため他の await より先に呼ぶ。 */
+/** Call inside the Save click (user gesture): permission request → dynamic content-script registration. Registration persists, so no startup handling is needed.
+ *  Call permissions.request before any other await to avoid the gesture expiring. */
 export async function applyGhes(baseUrl: string, c: ChromeGhes): Promise<"ok" | "declined"> {
-  const origins = ghesOrigins(baseUrl); // 不正 URL はここで throw → 呼び出し側が 'failed' 扱い
+  const origins = ghesOrigins(baseUrl); // an invalid URL throws here → the caller treats it as 'failed'
   const granted = !origins || (await c.permissions.request({ origins }));
-  await c.scripting.unregisterContentScripts({ ids: [ID] }).catch(() => {}); // 未登録だと reject する
+  await c.scripting.unregisterContentScripts({ ids: [ID] }).catch(() => {}); // rejects if not registered
   if (!origins) return "ok";
   if (!granted) return "declined";
   await c.scripting.registerContentScripts([{ id: ID, matches: origins, js: ["content.js"], runAt: "document_idle" }]);

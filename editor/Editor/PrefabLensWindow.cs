@@ -7,7 +7,7 @@ using UnityEngine.UIElements;
 
 namespace PrefabLens
 {
-    /// 選択アセットの「HEAD vs 作業ツリー」意味的 diff を表示する(Phase 3 ウォーキングスケルトン)。
+    /// Displays the "HEAD vs working tree" semantic diff of the selected asset (Phase 3 walking skeleton).
     public sealed class PrefabLensWindow : EditorWindow
     {
         [SerializeField]
@@ -92,7 +92,7 @@ namespace PrefabLens
             var res = Cli.Run(cli, assetPath);
             if (res.ExitCode != 0)
             {
-                // CLI の stderr が一次情報(非 git リポジトリ・不正 ref 等)
+                // The CLI's stderr is the primary source (non-git repository, invalid ref, etc.)
                 Note(string.IsNullOrEmpty(res.Stderr) ? $"prefablens exited with {res.ExitCode}" : res.Stderr.Trim());
                 return;
             }
@@ -149,8 +149,8 @@ namespace PrefabLens
             );
         }
 
-        // ---- ツリー描画(Chrome 版レンダラと同じ配色トーン・記法) ----
-        // rich text は使わない: リポジトリ由来文字列をマークアップ解釈させない(Chrome 版の XSS テストと同じ思想)。
+        // ---- Tree rendering (same color tone and notation as the Chrome renderer) ----
+        // No rich text: don't let repository-derived strings be interpreted as markup (same rationale as the Chrome build's XSS test).
 
         static class Palette
         {

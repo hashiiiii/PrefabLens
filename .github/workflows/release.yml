@@ -9,7 +9,7 @@ on:
 permissions:
   contents: write
 
-# release.yml の重複実行を防止する
+# Prevent overlapping runs of release.yml
 concurrency:
   group: release
 

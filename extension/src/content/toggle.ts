@@ -8,7 +8,7 @@ export function createToggle(onSelect: (view: View) => void, initial: View = "ra
   wrap.style.cssText = "display:inline-flex;gap:0;margin-left:8px;vertical-align:middle;";
 
   const buttons: HTMLButtonElement[] = [];
-  // set は表示のみ更新する: 全体適用時に onSelect(再フェッチ側)を巻き込まないため
+  // set updates only the display: to avoid pulling in onSelect (the re-fetch side) during a global apply
   const select = (view: View): void => {
     for (const b of buttons) {
       const active = b.dataset.view === view;

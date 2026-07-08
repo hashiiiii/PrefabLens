@@ -16,7 +16,7 @@
   "osvVulnerabilityAlerts": true,
   "packageRules": [
     {
-      "description": "extension の npm devDependencies は minor/patch をまとめて 1 本の PR にする",
+      "description": "Group extension npm devDependencies minor/patch updates into a single PR",
       "matchManagers": [
         "npm"
       ],
@@ -30,14 +30,14 @@
       "groupName": "extension devDependencies"
     },
     {
-      "description": "@types/node は mise の node runtime (24) に追従させ major を上げない。node のメジャーを上げたら allowedVersions も一緒に更新する",
+      "description": "Pin @types/node to the mise node runtime (24) and never bump its major; when the node major changes, update allowedVersions too",
       "matchPackageNames": [
         "@types/node"
       ],
       "allowedVersions": "24"
     },
     {
-      "description": "GitHub Actions は tag 運用を維持し SHA ピン留めせずまとめて更新する",
+      "description": "Keep GitHub Actions on tag references (no SHA pinning) and update them together",
       "matchManagers": [
         "github-actions"
       ],
@@ -48,7 +48,7 @@
       ]
     },
     {
-      "description": "mise のツールチェーン (zig/zls/node/dotnet/bump-my-version) は build 全体に影響するため automerge せず CI レビューを必須にする",
+      "description": "The mise toolchain (zig/zls/node/dotnet/bump-my-version) affects the whole build, so require CI review instead of automerge",
       "matchManagers": [
         "mise"
       ],
@@ -59,7 +59,7 @@
       ]
     },
     {
-      "description": "major はグループから外して個別 PR にし major ラベルで目立たせる",
+      "description": "Split major updates out of groups into individual PRs and flag them with the major label",
       "matchUpdateTypes": [
         "major"
       ],

@@ -16,8 +16,8 @@ await build({
   outdir: "dist",
 });
 
-// --e2e: full-stack E2E がローカル HTTP サーバを「GHES」として使えるよう 127.0.0.1 を事前許可する
-// (permissions.request は許可済みオリジンならプロンプトなしで true を返す)
+// --e2e: pre-grant 127.0.0.1 so full-stack E2E can use a local HTTP server as "GHES"
+// (permissions.request returns true without a prompt for an already-granted origin)
 const manifest = JSON.parse(readFileSync("manifest.json", "utf8"));
 if (process.argv.includes("--e2e")) manifest.host_permissions.push("http://127.0.0.1/*");
 writeFileSync("dist/manifest.json", JSON.stringify(manifest, null, 2));

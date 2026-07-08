@@ -4,25 +4,25 @@ const core = @import("core");
 const main = @import("main.zig");
 
 pub const default_protocol_version = "2025-06-18";
-// 2025-03-26 はバッチ要求を MUST とするが、主要クライアントは送らないため非対応のまま受理する。
-// 2024-10-07 はプレリリース版だが旧 TS SDK が受理していたためパリティで残す。
+// 2025-03-26 makes batch requests a MUST, but major clients don't send them, so we accept it while leaving batching unsupported.
+// 2024-10-07 is a prerelease, but the old TS SDK accepted it, so keep it for parity.
 const supported_versions = [_][]const u8{ "2025-06-18", "2025-03-26", "2024-11-05", "2024-10-07" };
 
-/// tools/list の result ペイロード。description と inputSchema は旧 TS ホスト
-/// (mcp/src/index.ts の zod 定義)の忠実な変換。build.zig の smoke golden も同じ
-/// tools_list.json を @embedFile するので、編集はそのファイル 1 箇所で済む。
+/// result payload for tools/list. description and inputSchema are a faithful port of the old TS host
+/// (the zod definitions in mcp/src/index.ts). build.zig's smoke golden @embedFiles the same
+/// tools_list.json, so edits are confined to that one file.
 pub const tools_list_result: []const u8 = std.mem.trimEnd(u8, @embedFile("tools_list.json"), "\r\n");
 
-/// MCP stdio transport: 改行区切り JSON-RPC 2.0。stdin EOF で正常終了。
-/// stdout はプロトコル専用(診断は stderr へ)。リクエストごとに arena を張る。
+/// MCP stdio transport: newline-delimited JSON-RPC 2.0. Exits cleanly on stdin EOF.
+/// stdout is protocol-only (diagnostics go to stderr). A fresh arena per request.
 pub fn serve(io: std.Io, gpa: std.mem.Allocator, reader: *std.Io.Reader, writer: *std.Io.Writer) !void {
     while (true) {
-        // takeDelimiterInclusive は改行を消費して返す(Exclusive はデリミタを消費せず
-        // 空スライスを返し続けるため、ここでは使えない)。
+        // takeDelimiterInclusive consumes the newline and returns it (Exclusive leaves the delimiter
+        // unconsumed and keeps returning an empty slice, so it can't be used here).
         const raw = reader.takeDelimiterInclusive('\n') catch |err| switch (err) {
             error.EndOfStream => return,
-            // 1 行が読み取りバッファを超えた。行の残りを読み捨てて再同期はできない
-            // (バッファが行の途中で詰まっている)ため、エラー応答を書いてから閉じる。
+            // One line exceeded the read buffer. We can't discard the rest of the line and resync
+            // (the buffer is stuck mid-line), so write an error response and then close.
             error.StreamTooLong => {
                 try writer.writeAll("{\"jsonrpc\":\"2.0\",\"id\":null,\"error\":{\"code\":-32600,\"message\":\"Request too large\"}}\n");
                 try writer.flush();
@@ -61,7 +61,7 @@ fn handleLine(io: std.Io, arena: std.mem.Allocator, line: []const u8, w: *std.Io
     }
     const method = method_v.string;
 
-    // 通知(id なし)には未知のものも含め一切応答しない(JSON-RPC 2.0)。
+    // Notifications (no id) get no response at all, unknown ones included (JSON-RPC 2.0).
     if (!has_id) return;
 
     if (std.mem.eql(u8, method, "initialize")) {
@@ -81,9 +81,9 @@ fn handleLine(io: std.Io, arena: std.mem.Allocator, line: []const u8, w: *std.Io
 
 pub const tree_char_limit: usize = 50_000;
 
-/// LLM コンテキスト保護(旧 diff.ts の truncateTree 相当、単位はバイト)。
-/// マルチバイト文字の途中で切ると応答が不正な UTF-8 になり strict なクライアントが
-/// セッションごと落ちるため、コードポイント境界まで戻してから切る。
+/// LLM context protection (equivalent to the old diff.ts truncateTree; units are bytes).
+/// Cutting mid-multibyte-character would make the response invalid UTF-8 and crash strict clients
+/// for the whole session, so back up to a code-point boundary before cutting.
 pub fn truncateTree(arena: std.mem.Allocator, text: []const u8) ![]const u8 {
     if (text.len <= tree_char_limit) return text;
     var end = tree_char_limit;
@@ -94,11 +94,11 @@ pub fn truncateTree(arena: std.mem.Allocator, text: []const u8) ![]const u8 {
 fn validationError(w: *std.Io.Writer, id: std.json.Value, msg: []const u8) !void {
     try writeEnvelopePrefix(w, id);
     try w.writeAll("\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"Input validation error: ");
-    try w.writeAll(msg); // msg は静的文字列のみ(必要なエスケープは呼び出し側リテラルで済ませる)
+    try w.writeAll(msg); // msg is static strings only (any needed escaping is handled in the caller's literal)
     try w.writeAll("\"}],\"isError\":true}}\n");
 }
 
-/// arguments から文字列を取り出す。キー欠落は null、型違いは error.Invalid。
+/// Extract a string from arguments. A missing key is null; a type mismatch is error.Invalid.
 fn getString(args: ?std.json.Value, key: []const u8) error{Invalid}!?[]const u8 {
     const a = args orelse return null;
     if (a != .object) return error.Invalid;
@@ -137,7 +137,7 @@ fn handleToolsCall(io: std.Io, arena: std.mem.Allocator, w: *std.Io.Writer, id: 
     if (!is_json and !std.mem.eql(u8, format, "tree"))
         return validationError(w, id, "format must be \\\"tree\\\" or \\\"json\\\"");
 
-    // 旧 TS ホストの buildArgs + cwd=projectRoot と同じ argv(--project が git repo dir を兼ねる)。
+    // Same argv as the old TS host's buildArgs + cwd=projectRoot (--project doubles as the git repo dir).
     var argv: std.ArrayList([]const u8) = .empty;
     try argv.append(arena, if (is_json) "--json" else "--no-color");
     try argv.appendSlice(arena, &.{ "--project", project_root orelse "." });
@@ -176,12 +176,12 @@ fn writeInitialize(w: *std.Io.Writer, id: std.json.Value, params: ?std.json.Valu
     try w.print("\"result\":{{\"protocolVersion\":\"{s}\",\"capabilities\":{{\"tools\":{{}}}},\"serverInfo\":{{\"name\":\"prefablens\",\"version\":\"{s}\"}}}}}}\n", .{ negotiated, main.version });
 }
 
-/// `{"jsonrpc":"2.0","id":<id>,` まで書く。呼び出し側が result/error 以降を続ける。
+/// Writes up to `{"jsonrpc":"2.0","id":<id>,`. The caller continues with result/error onward.
 fn writeEnvelopePrefix(w: *std.Io.Writer, id: std.json.Value) !void {
     try w.writeAll("{\"jsonrpc\":\"2.0\",\"id\":");
     switch (id) {
         .integer => |n| try w.print("{d}", .{n}),
-        // 小数・i64 超の整数も JSON-RPC では合法な id。素通しで相関を保つ。
+        // Floats and integers past i64 are also valid JSON-RPC ids. Pass through verbatim to preserve correlation.
         .float => |f| try w.print("{d}", .{f}),
         .number_string => |s| try w.writeAll(s),
         .string => |s| try core.json.writeJsonString(w, s),
@@ -195,7 +195,7 @@ fn writeError(w: *std.Io.Writer, id: std.json.Value, code: i32, msg: []const u8)
     try w.print("\"error\":{{\"code\":{d},\"message\":\"{s}\"}}}}\n", .{ code, msg });
 }
 
-/// テストヘルパー: 実 git を叩く(モックなし方針)。
+/// Test helper: invokes real git (no-mocks policy).
 fn gitc(io: std.Io, a: std.mem.Allocator, d: []const u8, argv: []const []const u8) !void {
     var full: std.ArrayList([]const u8) = .empty;
     try full.append(a, "git");
@@ -204,8 +204,8 @@ fn gitc(io: std.Io, a: std.mem.Allocator, d: []const u8, argv: []const []const u
     if (r.term != .exited or r.term.exited != 0) return error.GitFailed;
 }
 
-/// テストヘルパー: plane fixture の git リポジトリを組み、その絶対パスを返す。
-/// server.test.ts の beforeAll と同じ形(before をコミット、after を作業ツリーに)。
+/// Test helper: builds the git repository for the plane fixture and returns its absolute path.
+/// Same shape as server.test.ts's beforeAll (commit before, put after in the working tree).
 fn setupPlaneRepo(io: std.Io, arena: std.mem.Allocator, tmp: *std.testing.TmpDir) ![]const u8 {
     const dir = try tmp.dir.realPathFileAlloc(io, ".", arena);
     try tmp.dir.writeFile(io, .{ .sub_path = "Plane.prefab", .data = @embedFile("testdata_plane_before") });
@@ -218,7 +218,7 @@ fn setupPlaneRepo(io: std.Io, arena: std.mem.Allocator, tmp: *std.testing.TmpDir
     return dir;
 }
 
-/// テストヘルパー: 入力行をまとめて食わせ、応答全文を返す。
+/// Test helper: feeds the input lines all at once and returns the full response.
 fn roundtrip(arena: std.mem.Allocator, input_lines: []const u8) ![]const u8 {
     var reader = std.Io.Reader.fixed(input_lines);
     var out: std.ArrayList(u8) = .empty;
@@ -290,9 +290,9 @@ test "mcp: tools/list returns the single prefab_diff tool" {
     defer arena_state.deinit();
     const arena = arena_state.allocator();
     const res = try roundtrip(arena, "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\"}\n");
-    // golden: 実装の tools_list_result と envelope の結合そのもの
+    // golden: exactly the implementation's tools_list_result joined with the envelope
     try testing.expectEqualStrings("{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":" ++ tools_list_result ++ "}\n", res);
-    // スキーマの要点が入っていること(golden の自己一致だけにしない)
+    // The schema's key points must be present (not just self-consistency with the golden)
     try testing.expect(std.mem.indexOf(u8, res, "\"name\":\"prefab_diff\"") != null);
     try testing.expect(std.mem.indexOf(u8, res, "\"required\":[\"path\"]") != null);
     try testing.expect(std.mem.indexOf(u8, res, "\"enum\":[\"tree\",\"json\"]") != null);
@@ -302,7 +302,7 @@ test "mcp: tools/call validation errors match the ts host contract" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
-    // 空 path / 空 projectRoot / 不正 format / arguments 欠落 / 未知ツール
+    // empty path / empty projectRoot / invalid format / missing arguments / unknown tool
     const res = try roundtrip(arena, "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"prefab_diff\",\"arguments\":{\"path\":\"\"}}}\n" ++
         "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"prefab_diff\",\"arguments\":{\"path\":\"a.prefab\",\"projectRoot\":\"\"}}}\n" ++
         "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"prefab_diff\",\"arguments\":{\"path\":\"a.prefab\",\"format\":\"xml\"}}}\n" ++
@@ -326,7 +326,7 @@ test "mcp: tools/call diffs a real git fixture with the ts host golden" {
     defer tmp.cleanup();
     const dir = try setupPlaneRepo(testing.io, arena, &tmp);
 
-    // projectRoot は Windows パスを含み得るので JSON エスケープして埋め込む。
+    // projectRoot may contain a Windows path, so embed it JSON-escaped.
     var req: std.ArrayList(u8) = .empty;
     var req_w = std.Io.Writer.Allocating.fromArrayList(arena, &req);
     try req_w.writer.writeAll("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"prefab_diff\",\"arguments\":{\"path\":\"Plane.prefab\",\"projectRoot\":");
@@ -334,7 +334,7 @@ test "mcp: tools/call diffs a real git fixture with the ts host golden" {
     try req_w.writer.writeAll("}}}\n");
     const res = try roundtrip(arena, req_w.toArrayList().items);
 
-    // 応答をパースして text を server.test.ts の golden と一致比較する。
+    // Parse the response and compare text against server.test.ts's golden.
     const parsed = try std.json.parseFromSliceLeaky(std.json.Value, arena, std.mem.trimEnd(u8, res, "\n"), .{});
     const result = parsed.object.get("result").?.object;
     try testing.expect(result.get("isError") == null);
@@ -401,7 +401,7 @@ test "mcp: float and oversized integer ids are echoed verbatim" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
-    // JSON-RPC 2.0 は応答 id が要求 id と等しいことを要求する(小数も i64 超の整数も合法)。
+    // JSON-RPC 2.0 requires the response id to equal the request id (floats and integers past i64 are both valid).
     const res = try roundtrip(arena, "{\"jsonrpc\":\"2.0\",\"id\":1.5,\"method\":\"ping\"}\n" ++
         "{\"jsonrpc\":\"2.0\",\"id\":92233720368547758080,\"method\":\"ping\"}\n");
     try testing.expectEqualStrings("{\"jsonrpc\":\"2.0\",\"id\":1.5,\"result\":{}}\n" ++
@@ -412,15 +412,15 @@ test "mcp: truncateTree never splits a multibyte utf-8 character" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
-    // 50,000 バイト目が「あ」(3 バイト) の途中に落ちる入力を作る。
+    // Build input where byte 50,000 lands in the middle of a 3-byte '€'.
     var big: std.ArrayList(u8) = .empty;
     try big.appendNTimes(arena, 'x', tree_char_limit - 1);
-    try big.appendSlice(arena, "あああ");
+    try big.appendSlice(arena, "€€€");
     const cut = try truncateTree(arena, big.items);
-    // 分断された lead バイトが混じらず、全体が有効な UTF-8 であること。
+    // No split lead byte creeps in; the whole thing is valid UTF-8.
     try testing.expect(std.unicode.utf8ValidateSlice(cut));
     try testing.expect(std.mem.endsWith(u8, cut, "\n[truncated: 50008 chars total]\n"));
-    // カットは「あ」の手前(49,999 バイト)で止まる。
+    // The cut stops just before the '€' (byte 49,999).
     try testing.expectEqual(@as(usize, tree_char_limit - 1), std.mem.indexOf(u8, cut, "\n[truncated").?);
 }
 
@@ -428,8 +428,8 @@ test "mcp: oversized request line responds with an error before closing" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
-    // 読み取りバッファ(テストでは 32 バイト)を超える 1 行 → プロセスを殺さず
-    // エラー応答を書いてから閉じる。
+    // One line exceeding the read buffer (32 bytes in the test) -> without killing the process,
+    // write an error response and then close.
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
     const big_line = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\",\"padding\":\"" ++ ("x" ** 100) ++ "\"}\n";

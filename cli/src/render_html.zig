@@ -269,9 +269,9 @@ fn renderObject(w: *std.Io.Writer, o: model.ObjectDiff, resolved: ?*const core.j
     try writeEscaped(w, display.objectName(o, resolved));
     if (o.kind == .prefab_instance) try w.writeAll(" &lt;Prefab&gt;");
     try w.writeAll("</span>\n");
-    // 表示次元の規則: コンポーネント/override は必ず components セクション配下。
-    // ラベル行には sign+space の前置がないため、render_tree.zig と同様に
-    // depth+2 を使って子オブジェクトの名前列に視覚的に揃える。
+    // Display-dimension rule: components/overrides always sit under the components section.
+    // The label line has no sign+space prefix, so, as in render_tree.zig,
+    // use depth+2 to visually align with the child objects' name column.
     if (o.overrides.len != 0 or o.components.len != 0) {
         try pad(w, depth + 2);
         try w.writeAll("<span class=\"unchanged\">components</span>\n");

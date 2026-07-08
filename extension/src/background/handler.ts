@@ -27,34 +27,34 @@ export type Handler = {
 type PrContext = { refs: PrRefs; files: PrFile[]; guidIndex: Map<string, string> };
 
 const EMPTY = new Uint8Array(0);
-const MAX_SEARCHES = 10; // Code Search は認証済み 10 req/min — 1 応答で使い切らない
-const MAX_SOURCE_ROUNDS = 3; // 入れ子ソースの再 diff 上限(core 側の深さ上限 8 とは独立)
-const CONTEXT_TTL_MS = 60_000; // push で headSha が変わるため PR コンテキストは短命
+const MAX_SEARCHES = 10; // Code Search is authenticated 10 req/min — don't burn it all in one response
+const MAX_SOURCE_ROUNDS = 3; // re-diff cap for nested sources (independent of core's depth cap of 8)
+const CONTEXT_TTL_MS = 60_000; // PR context is short-lived because a push changes headSha
 const BLOB_CACHE_MAX = 32;
-const TOO_LARGE_BYTES = 25 * 1024 * 1024; // 親仕様 §5.7: 25MB 超はクリックで描画
-const PREFETCH_MAX = 100; // spec B2: 1 PR あたりの先読み上限
+const TOO_LARGE_BYTES = 25 * 1024 * 1024; // parent spec §5.7: over 25MB renders on click
+const PREFETCH_MAX = 100; // spec B2: prefetch cap per PR
 const PREFETCH_CONCURRENCY = 4;
 
 type DiffOutcome = { ok: true; json: DiffV2 } | { ok: false; error: "too-large"; bytes: number };
 
 export function createHandler(deps: Deps): Handler {
-  // PR 単位のコンテキストキャッシュ。SW はいつ殺されてもよく、その場合は再取得するだけ。
+  // Per-PR context cache. The SW may be killed at any time; then we just re-fetch.
   const contexts = new Map<string, { at: number; ctx: Promise<PrContext> }>();
-  // sha+path → bytes の Promise。格納が Promise なので prefetch と手動トグルの同時要求が 1 フェッチに畳まれる。
+  // sha+path → bytes Promise. Storing a Promise folds concurrent prefetch and manual-toggle requests into one fetch.
   const blobs = new Map<string, Promise<Uint8Array | null>>();
-  // Code Search の未ヒット guid。索引遅延があるため永続化せず SW 生存期間のみ
+  // guids that missed in Code Search. Indexing lag means we don't persist these — SW lifetime only
   const misses = new Set<string>();
-  // repoKey:guid → 実行中の検索。同時多発の同一 guid 検索を 1 回に畳む(10 req/min 保護)
+  // repoKey:guid → in-flight search. Folds concurrent searches for the same guid into one (protects the 10 req/min)
   const searches = new Map<string, Promise<string | null>>();
-  // baseSha:headSha:path → raw diff 計算の Promise。成功のみ保持(too-large/失敗は再計算を許す)
+  // baseSha:headSha:path → raw diff computation Promise. Keeps only successes (too-large/failure allow recomputation)
   const diffs = new Map<string, Promise<DiffOutcome>>();
-  // repoKey@ref → repo 全体索引の Promise(Task 11)。null は索引不可(truncated/上限超/失敗)
+  // repoKey@ref → whole-repo index Promise (Task 11). null means not indexable (truncated/over the cap/failure)
   const indexes = new Map<string, Promise<Record<string, string> | null>>();
-  // レート制限を踏んだ repo は SW 生存期間フォールバック(索引を諦めて Code Search のみに委ねる)
+  // A repo that hit a rate limit falls back for the SW lifetime (gives up on the index and defers to Code Search only)
   const indexFallback = new Set<string>();
 
-  /** guid[] をキャッシュ → Code Search の順で解決する(searchUnresolved の中身そのもの)。
-   *  検索の失敗(レート制限含む)で diff は落とさない: 解決できた分だけ返す。 */
+  /** Resolves guid[] in cache → Code Search order (the body of searchUnresolved itself).
+   *  A search failure (including rate limits) doesn't drop the diff: returns only what was resolved. */
   async function searchGuids(
     guids: string[],
     client: ClientLike,
@@ -63,9 +63,9 @@ export function createHandler(deps: Deps): Handler {
     repoKey: string,
   ): Promise<Record<string, string>> {
     if (!guids.length) return {};
-    // hasOwn: guid は任意文字列なので 'constructor' 等が Object.prototype に誤ヒットしない
-    // cached lookup は misses を経由しない全 guid が対象: 索引解決も guidCache に載るため、
-    // misses(検索の門番)に入っていてもキャッシュ済みの名前は必ず出す
+    // hasOwn: guids are arbitrary strings, so 'constructor' etc. don't falsely hit Object.prototype
+    // The cached lookup covers all guids without going through misses: since index resolutions also land in guidCache,
+    // a cached name is always emitted even if it's in misses (the search gatekeeper)
     const cached = await deps.guidCache.load(repoKey);
     const resolved: Record<string, string> = {};
     const unknown: string[] = [];
@@ -82,7 +82,7 @@ export function createHandler(deps: Deps): Handler {
         if (!p) {
           p = client.searchMetaByGuid(owner, repo, g);
           searches.set(key, p);
-          void p.catch(() => {}).then(() => searches.delete(key)); // 完了後は guidCache/misses が引き継ぐ
+          void p.catch(() => {}).then(() => searches.delete(key)); // after completion, guidCache/misses take over
         }
         const path = await p;
         if (path) resolved[g] = found[g] = path;
@@ -96,8 +96,8 @@ export function createHandler(deps: Deps): Handler {
     return resolved;
   }
 
-  /** PR 内 .meta で解決できなかった guid を キャッシュ → Code Search の順で解決する薄いラッパ。
-   *  mergeSources が内部で呼ぶため、シグネチャと挙動を変えない。 */
+  /** Thin wrapper that resolves guids unresolved by in-PR .meta in cache → Code Search order.
+   *  mergeSources calls it internally, so keep the signature and behavior unchanged. */
   async function searchUnresolved(
     json: DiffV2,
     client: ClientLike,
@@ -111,7 +111,7 @@ export function createHandler(deps: Deps): Handler {
     return { ...json, resolved: { ...resolved, ...found } };
   }
 
-  /** repo 全体の guid 索引を取得・メモ化する。レート制限を踏んだ repo は SW 生存期間フォールバック固定。 */
+  /** Fetches and memoizes the whole-repo guid index. A repo that hit a rate limit is pinned to fallback for the SW lifetime. */
   function getRepoIndex(
     client: ClientLike,
     owner: string,
@@ -124,7 +124,7 @@ export function createHandler(deps: Deps): Handler {
     const hit = indexes.get(key);
     if (hit) return hit;
     const p = syncRepoIndex(client, deps.repoIndexStore, owner, repo, repoKey, ref).catch((err: unknown) => {
-      indexes.delete(key); // 失敗はキャッシュしない: 次回訪問で再試行
+      indexes.delete(key); // don't cache failures: retry on the next visit
       if (err instanceof RateLimitError) indexFallback.add(repoKey);
       return null;
     });
@@ -140,16 +140,16 @@ export function createHandler(deps: Deps): Handler {
     sha: string,
   ): Promise<Uint8Array | null> {
     const key = `${sha}:${path}`;
-    const hit = blobs.get(key); // 格納値は Promise<Uint8Array | null> なので undefined = 未キャッシュ
+    const hit = blobs.get(key); // the stored value is Promise<Uint8Array | null>, so undefined = not cached
     if (hit !== undefined) return hit;
     const p = client.getFileAtRef(owner, repo, path, sha);
-    p.catch(() => blobs.delete(key)); // 失敗は残さない: 次回呼び出しで再フェッチできる
+    p.catch(() => blobs.delete(key)); // don't keep failures: the next call can re-fetch
     blobs.set(key, p);
     if (blobs.size > BLOB_CACHE_MAX) blobs.delete(blobs.keys().next().value!);
     return p;
   }
 
-  /** before/after の blob を取り出す(status/previousPath の規則は files API 準拠)。 */
+  /** Retrieves the before/after blobs (status/previousPath rules follow the files API). */
   async function fetchPair(
     client: ClientLike,
     ctx: PrContext,
@@ -168,10 +168,10 @@ export function createHandler(deps: Deps): Handler {
     ]);
   }
 
-  /** neededSources(added/removed instance のソース prefab)を resolved パス経由で
-   *  取得し、assets を添えて再 diff する。ソース guid は m_SourcePrefab 参照として
-   *  unresolvedGuids に載るため、パス解決は searchUnresolved が済ませている。
-   *  解決・取得・合成の失敗はその時点の diff で縮退する(全体は落とさない)。 */
+  /** Fetches neededSources (the source prefab of an added/removed instance) via the resolved
+   *  path and re-diffs with assets attached. The source guid rides on unresolvedGuids as an
+   *  m_SourcePrefab reference, so searchUnresolved has already done the path resolution.
+   *  Failure to resolve/fetch/merge degrades to the diff at that point (doesn't drop the whole thing). */
   async function mergeSources(
     first: DiffV2,
     differ: Differ,
@@ -197,7 +197,7 @@ export function createHandler(deps: Deps): Handler {
         try {
           bytes = await fetchBlob(client, owner, repo, path, sha);
         } catch {
-          return current; // rate limit 等: phase 1 の結果で縮退表示
+          return current; // rate limit etc.: degrade to the phase 1 result
         }
         if (!bytes) continue;
         assets.set(s.guid, bytes);
@@ -208,9 +208,9 @@ export function createHandler(deps: Deps): Handler {
       try {
         merged = differ.diffWithAssets(before, after, assets);
       } catch {
-        return current; // 合成失敗はその時点の結果で縮退
+        return current; // a merge failure degrades to the current result
       }
-      // 合成でソース内の外部参照(script/material)が新たに現れるので解決し直す。
+      // Merging surfaces new external references (script/material) inside the source, so resolve again.
       current = await searchUnresolved(applyResolved(merged, ctx.guidIndex), client, owner, repo, repoKey);
     }
     return current;
@@ -232,12 +232,12 @@ export function createHandler(deps: Deps): Handler {
       return { refs, files, guidIndex };
     })();
     contexts.set(key, { at: Date.now(), ctx });
-    ctx.catch(() => contexts.delete(key)); // 失敗はキャッシュしない
+    ctx.catch(() => contexts.delete(key)); // don't cache failures
     return ctx;
   }
 
-  /** blob 取得 → 25MB ガード → 素の diff まで。解決や mergeSources はここに入れない
-   *  (resolved は Code Search で後から良くなるため、sha だけで決まる raw diff がキャッシュ単位)。 */
+  /** blob fetch → 25MB guard → plain diff, no further. Don't put resolution or mergeSources here
+   *  (resolved improves later via Code Search, so the raw diff determined by sha alone is the cache unit). */
   async function computeDiff(
     client: ClientLike,
     ctx: PrContext,
@@ -246,7 +246,7 @@ export function createHandler(deps: Deps): Handler {
     path: string,
     force: boolean,
   ): Promise<DiffOutcome> {
-    // 一覧に無い場合(files API は 3000 件で打ち切り)は modified 扱い: 無い側は 404 → EMPTY に落ちるだけ(fetchPair 側の規則)
+    // If not in the listing (the files API cuts off at 3000 entries), treat as modified: the missing side just 404s → EMPTY (fetchPair's rule)
     const [before, after] = await fetchPair(client, ctx, owner, repo, path);
     if (!force && before.length + after.length > TOO_LARGE_BYTES) {
       return { ok: false, error: "too-large", bytes: before.length + after.length };
@@ -255,7 +255,7 @@ export function createHandler(deps: Deps): Handler {
     return { ok: true, json: differ.diff(before, after) };
   }
 
-  /** sha キーなので push されたら自然に別キーになる(無効化不要)。 */
+  /** sha-keyed, so a push naturally produces a different key (no invalidation needed). */
   function getDiff(
     client: ClientLike,
     ctx: PrContext,
@@ -268,7 +268,7 @@ export function createHandler(deps: Deps): Handler {
     const hit = diffs.get(key);
     if (hit) return hit;
     const p = (async (): Promise<DiffOutcome> => {
-      const stored = await deps.diffStore.load(key); // 前世の SW が残した結果
+      const stored = await deps.diffStore.load(key); // a result left by a prior SW life
       if (stored) return { ok: true, json: stored };
       const outcome = await computeDiff(client, ctx, owner, repo, path, force);
       if (outcome.ok) void deps.diffStore.save(key, outcome.json);
@@ -277,15 +277,15 @@ export function createHandler(deps: Deps): Handler {
     diffs.set(key, p);
     p.then(
       (o) => {
-        if (!o.ok) diffs.delete(key); // too-large は force 再計算を許す
+        if (!o.ok) diffs.delete(key); // too-large allows a force recomputation
       },
       () => diffs.delete(key),
     );
     return p;
   }
 
-  /** 3 段解決の続き(索引 → Code Search)とソース再合成を裏で走らせ、push で結果を届ける。
-   *  push 無しの互換経路とは異なり、失敗しても catch で done push を出して待ち手を解放する。 */
+  /** Runs the rest of the 3-stage resolution (index → Code Search) and source re-merge in the background, delivering results via push.
+   *  Unlike the push-less compatibility path, on failure it emits a done push in catch to release waiters. */
   async function resolveRemaining(
     first: DiffV2,
     remaining: string[],
@@ -298,7 +298,7 @@ export function createHandler(deps: Deps): Handler {
     const repoKey = `${base}/${req.owner}/${req.repo}`;
     const at = { owner: req.owner, repo: req.repo, prNumber: req.prNumber, path: req.path };
     try {
-      // remaining が空(ソース再合成のみ)なら索引を待たない: 初回索引構築は数十秒かかり得て解決に寄与しない
+      // If remaining is empty (source re-merge only), don't wait on the index: the first index build can take tens of seconds and doesn't help resolution
       const index = remaining.length
         ? await getRepoIndex(client, req.owner, req.repo, repoKey, ctx.refs.headSha)
         : null;
@@ -308,24 +308,24 @@ export function createHandler(deps: Deps): Handler {
         for (const g of remaining) if (Object.hasOwn(index, g)) fromIndex[g] = index[g]!;
         leftover = remaining.filter((g) => !Object.hasOwn(fromIndex, g));
         if (Object.keys(fromIndex).length) {
-          // guidCache にも載せる: mergeSources 内部の searchUnresolved は applyResolved で
-          // resolved を ctx.guidIndex ベースに作り直すため、guidCache 経由でないと索引由来の
-          // 解決がソース再合成後に消える(Code Search 由来が既にこの経路で復元されるのと同じ理屈)。
+          // Also land it in guidCache: searchUnresolved inside mergeSources rebuilds resolved
+          // from ctx.guidIndex via applyResolved, so without going through guidCache the index-derived
+          // resolutions would vanish after the source re-merge (same reasoning as Code-Search-derived ones already restored this way).
           await deps.guidCache.save(repoKey, fromIndex);
-          // 名前が既に出せる分は先に届ける(構造は後続の最終 push で確定)
+          // Deliver the already-available names first (the structure is finalized by the later final push)
           push({ type: "guidResolved", ...at, resolved: fromIndex, done: false });
         }
       }
-      // 索引不可、または索引に無い guid だけが Code Search に回る(spec B3 の 3 段目)
+      // Only guids that aren't indexable or aren't in the index go to Code Search (stage 3 of spec B3)
       const fromSearch = leftover.length ? await searchGuids(leftover, client, req.owner, req.repo, repoKey) : {};
       let json: DiffV2 = { ...first, resolved: { ...first.resolved, ...fromIndex, ...fromSearch } };
       if (json.neededSources?.length) {
-        // 解決が進んだのでソース合成をやり直す(ソース guid が今回解けたケースを拾う)
+        // Resolution advanced, so redo source merging (picks up the case where the source guid resolved this time)
         const differ = await deps.getDiffer();
         const [before, after] = await fetchPair(client, ctx, req.owner, req.repo, req.path);
         json = await mergeSources(json, differ, before, after, ctx, client, req.owner, req.repo, repoKey);
       }
-      push({ type: "guidResolved", ...at, resolved: {}, json, done: true }); // 最終 push は json 置換
+      push({ type: "guidResolved", ...at, resolved: {}, json, done: true }); // the final push replaces json
     } catch (err) {
       console.debug("prefablens: guid resolution aborted", err);
       push({ type: "guidResolved", ...at, resolved: {}, done: true });
@@ -348,7 +348,7 @@ export function createHandler(deps: Deps): Handler {
       const withPr = applyResolved(outcome.json, ctx.guidIndex);
 
       if (!push) {
-        // 互換経路: 従来の同期フルパイプライン(既存テスト・呼び出しの挙動を変えない)
+        // Compatibility path: the traditional synchronous full pipeline (doesn't change the behavior of existing tests/callers)
         const first = await searchUnresolved(withPr, client, req.owner, req.repo, repoKey);
         if (!first.neededSources?.length) return { ok: true, json: first };
         const differ = await deps.getDiffer();
@@ -359,7 +359,7 @@ export function createHandler(deps: Deps): Handler {
         };
       }
 
-      // 2 段階経路: diff は即返し、解決とソース合成は裏で続けて push で届ける(B4)
+      // Two-stage path: return the diff immediately, continue resolution and source merging in the background, deliver via push (B4)
       const remaining = withPr.unresolvedGuids.filter((g) => !Object.hasOwn(withPr.resolved ?? {}, g));
       if (!remaining.length && !withPr.neededSources?.length) return { ok: true, json: withPr };
       void resolveRemaining(withPr, remaining, client, req, base, ctx, push);
@@ -368,12 +368,12 @@ export function createHandler(deps: Deps): Handler {
       if (err instanceof RateLimitError) return { ok: false, error: "rate-limited" };
       if (err instanceof AuthError) return { ok: false, error: "auth-failed" };
       if (err instanceof DiffError) return { ok: false, error: "diff-failed" };
-      return { ok: false, error: "fetch-failed" }; // raw エラーは応答に載せない
+      return { ok: false, error: "fetch-failed" }; // don't put raw errors in the response
     }
   }
 
-  /** raw diff のプリコンピュートのみ。resolve/search/mergeSources は行わない
-   *  — Code Search は 10 req/min の希少資源で、mergeSources は解決結果依存のため serve 時に任せる。 */
+  /** Precomputes the raw diff only. No resolve/search/mergeSources
+   *  — Code Search is a scarce 10 req/min resource and mergeSources depends on resolution, so leave them to serve time. */
   async function prefetch(req: PrefetchRequest): Promise<void> {
     try {
       const settings = await deps.getSettings();
@@ -381,7 +381,7 @@ export function createHandler(deps: Deps): Handler {
       const base = apiBase(settings.baseUrl);
       const client = deps.makeClient(base, settings.pat, "prefetch");
       const ctx = await loadContext(client, req.owner, req.repo, req.prNumber);
-      // raw diff の先読みとは独立に走らせる(索引 sync は serve 時の 3 段解決を高速化する)
+      // Run independently of raw-diff prefetch (index sync speeds up the 3-stage resolution at serve time)
       void getRepoIndex(client, req.owner, req.repo, `${base}/${req.owner}/${req.repo}`, ctx.refs.headSha);
       const unity = ctx.files.filter((f) => isUnityPath(f.path)).slice(0, PREFETCH_MAX);
       for (let i = 0; i < unity.length; i += PREFETCH_CONCURRENCY) {
@@ -389,14 +389,14 @@ export function createHandler(deps: Deps): Handler {
         await Promise.all(
           chunk.map((f) =>
             getDiff(client, ctx, req.owner, req.repo, f.path, false).catch((err) => {
-              if (err instanceof RateLimitError) throw err; // レート制限だけは全体を止める
-              // ファイル単位の失敗は握りつぶす: 手動トグル時に改めてエラー表示される
+              if (err instanceof RateLimitError) throw err; // only a rate limit stops the whole thing
+              // Swallow per-file failures: the error is shown again on manual toggle
             }),
           ),
         );
       }
     } catch (err) {
-      // プリフェッチは静かに諦める。エラー UI はユーザー操作経路だけが出す
+      // Prefetch gives up quietly. Only the user-action path surfaces error UI
       console.debug("prefablens: prefetch aborted", err);
     }
   }

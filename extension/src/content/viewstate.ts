@@ -10,7 +10,7 @@ export type ViewState = {
   onDefaultChange(fn: (view: View) => void): void;
 };
 
-/** 既定モード(永続)+ ページ滞在中のファイル単位上書き。全体切り替えは上書きを必ずリセットする。 */
+/** Default mode (persistent) + per-file overrides while on the page. A global switch always resets the overrides. */
 export function createViewState(initial: View, persist: (view: View) => void): ViewState {
   let def = initial;
   const overrides = new Map<string, View>();
@@ -27,14 +27,14 @@ export function createViewState(initial: View, persist: (view: View) => void): V
     clearOverrides: () => overrides.clear(),
     setDefault: (view) => {
       if (view === def) {
-        // 同値クリックでも「全体を押したら必ず全部揃う」: 上書きを消して再適用し、storage には書かない
+        // Even a same-value click keeps "pressing global always lines everything up": clear overrides and re-apply, but don't write to storage
         if (overrides.size) change(view);
         return;
       }
       change(view);
       persist(view);
     },
-    // storage.onChanged は set 元のタブでも発火するため、同値は無視して永続化もしない
+    // storage.onChanged fires even on the originating set tab, so ignore a same value and don't persist
     applyExternal: (view) => {
       if (view !== def) change(view);
     },

@@ -7,7 +7,7 @@ using UnityEngine.UIElements;
 
 namespace PrefabLens
 {
-    /// Displays the "HEAD vs working tree" semantic diff of the selected asset (Phase 3 walking skeleton).
+    /// Displays the "HEAD vs working tree" semantic diff of the selected asset.
     public sealed class PrefabLensWindow : EditorWindow
     {
         [SerializeField]

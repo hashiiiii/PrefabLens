@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { gzipSync } from "node:zlib";
 
-const TARGET_KB = 80; // target from parent spec §5.7
+const TARGET_KB = 80; // WASM bundle size budget in KB
 const LIMIT_KB = 150; // CI fails if exceeded
 
 const wasmUrl = new URL("../../zig-out/bin/prefablens.wasm", import.meta.url);

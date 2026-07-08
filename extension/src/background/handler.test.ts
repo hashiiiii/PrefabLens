@@ -63,7 +63,7 @@ function makeDeps(overrides?: {
       diffStoreData[key] = json;
     }),
   };
-  // Same shape as Task 11's makeFakes (loadGuids/saveGuids/loadIndex/saveIndex). Starts empty per test.
+  // Mirrors the RepoIndexStore interface (loadGuids/saveGuids/loadIndex/saveIndex). Starts empty per test.
   const guidsData: Record<string, Record<string, string>> = {};
   const indexData: Record<string, { treeSha: string; guids: Record<string, string> }> = {};
   const repoIndexStore = {
@@ -394,7 +394,7 @@ describe("createHandler", () => {
   });
 
   describe("source prefab merging", () => {
-    // A diff where phase 1 requests source supply. src1's path is resolved via Code Search.
+    // A diff where the first pass requests source supply. src1's path is resolved via Code Search.
     const NEEDS: DiffV2 = {
       ...DIFF,
       unresolvedGuids: ["src1"],
@@ -439,11 +439,11 @@ describe("createHandler", () => {
       expect(client.getFileAtRef).toHaveBeenCalledWith("o", "r", "Assets/Cyl.prefab", "base-sha");
     });
 
-    it("keeps the phase-1 diff when the source path cannot be resolved", async () => {
+    it("keeps the first-pass diff when the source path cannot be resolved", async () => {
       const diffWithAssets = vi.fn<Differ["diffWithAssets"]>(() => MERGED);
       const { deps } = makeDeps({ diff: () => NEEDS, diffWithAssets }); // search misses
       const res = await resolveFully(createHandler(deps), REQ);
-      // An unknown-path source is given up on, returning the degraded view (phase 1's json) as-is.
+      // An unknown-path source is given up on, returning the degraded view (the first-pass json) as-is.
       expect(diffWithAssets).not.toHaveBeenCalled();
       expect(res).toEqual({ ok: true, json: { ...NEEDS, resolved: {} } });
     });
@@ -639,7 +639,7 @@ describe("semanticDiff with push (two-stage)", () => {
   });
 
   it("re-merges sources in the async stage once the source guid resolves", async () => {
-    // The crux of mergeSources consistency: stage 1 responds immediately without merging,
+    // The crux of mergeSources consistency: the immediate response comes back without merging,
     // and once the repo index resolves the source guid, the re-merged json arrives in the final push
     const withSource: DiffV2 = { ...DIFF, unresolvedGuids: ["src1"], neededSources: [{ guid: "src1", side: "after" }] };
     const merged: DiffV2 = { ...DIFF, unresolvedGuids: ["src1"], resolved: { src1: "Assets/Src.prefab" } };
@@ -664,7 +664,7 @@ describe("semanticDiff with push (two-stage)", () => {
     const pushes: GuidResolvedPush[] = [];
     const res = await createHandler(deps).semanticDiff(REQ, (m) => pushes.push(m));
     expect(res.ok && res.pending).toBe(true);
-    expect(diffWithAssets).not.toHaveBeenCalled(); // stage 1 doesn't merge (immediate response takes priority)
+    expect(diffWithAssets).not.toHaveBeenCalled(); // the immediate response doesn't merge (it takes priority)
     await vi.waitFor(() => expect(diffWithAssets).toHaveBeenCalledTimes(1));
     await vi.waitFor(() => expect(pushes.at(-1)?.done).toBe(true));
     expect(pushes.at(-1)?.json).toMatchObject({ resolved: { src1: "Assets/Src.prefab" } });

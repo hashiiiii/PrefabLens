@@ -8,7 +8,7 @@ using UnityEditor;
 
 namespace PrefabLens
 {
-    /// Locate, download, and run the prefablens CLI. All git logic lives in the CLI (parent spec §6.3).
+    /// Locate, download, and run the prefablens CLI. All git logic lives in the CLI.
     public static class Cli
     {
         /// Version of the CLI to download (kept in sync with the GitHub Releases tag v{Version}).

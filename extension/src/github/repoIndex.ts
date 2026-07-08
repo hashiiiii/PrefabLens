@@ -10,7 +10,7 @@ export type RepoIndexStore = {
   saveIndex(repo: string, index: { treeSha: string; guids: Record<string, string> }): Promise<void>;
 };
 
-const INDEX_MAX_METAS = 50_000; // spec B3: above this, give up on the index to protect the storage quota
+const INDEX_MAX_METAS = 50_000; // above this, give up on the index to protect the storage quota
 const GRAPHQL_BATCH = 100;
 
 /** Whole-repo guid → asset path index. Not indexable (truncated / over the cap) → null, deferring to Code Search.

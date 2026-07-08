@@ -2,11 +2,8 @@ using System;
 using System.Diagnostics;
 using System.IO;
 using System.IO.Compression;
-using System.Net;
 using System.Net.Http;
 using System.Runtime.InteropServices;
-using System.Security.Cryptography;
-using System.Text;
 using UnityEditor;
 
 namespace PrefabLens
@@ -47,32 +44,6 @@ namespace PrefabLens
             return string.Join(" ", quoted);
         }
 
-        /// Extract the hash of assetName's line from `sha256sum` format ("<hex>  <name>", binary mode "<hex> *<name>").
-        /// Returns null if not found.
-        public static string ParseSha256Sums(string sums, string assetName)
-        {
-            foreach (var raw in sums.Split('\n'))
-            {
-                var line = raw.Trim();
-                var sep = line.IndexOf(' ');
-                if (sep <= 0)
-                    continue;
-                var name = line.Substring(sep).Trim().TrimStart('*');
-                if (name == assetName)
-                    return line.Substring(0, sep);
-            }
-            return null;
-        }
-
-        public static string Sha256Hex(byte[] bytes)
-        {
-            using var sha = SHA256.Create();
-            var sb = new StringBuilder();
-            foreach (var b in sha.ComputeHash(bytes))
-                sb.Append(b.ToString("x2"));
-            return sb.ToString();
-        }
-
         // ---- Editor integration ----
 
         public static string BinaryName =>
@@ -107,7 +78,6 @@ namespace PrefabLens
                 EditorUtility.DisplayProgressBar("PrefabLens", $"Downloading {asset}…", 0.3f);
                 using var http = new HttpClient();
                 var bytes = http.GetByteArrayAsync(url).Result;
-                VerifyChecksum(http, asset, bytes);
                 using var zip = new ZipArchive(new MemoryStream(bytes));
                 foreach (var entry in zip.Entries)
                 {
@@ -126,22 +96,6 @@ namespace PrefabLens
             if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
                 RunProcess("chmod", "+x \"" + DefaultPath + "\"", ".", RunTimeoutMs);
             return DefaultPath;
-        }
-
-        /// Verify the zip against the release's SHA256SUMS. Skip only when SHA256SUMS is absent (404 = a release
-        /// before v0.2.0); any other fetch failure or mismatch throws.
-        static void VerifyChecksum(HttpClient http, string assetName, byte[] zipBytes)
-        {
-            var res = http.GetAsync(DownloadUrl(Version, "SHA256SUMS")).Result;
-            if (res.StatusCode == HttpStatusCode.NotFound)
-                return;
-            res.EnsureSuccessStatusCode();
-            var want = ParseSha256Sums(res.Content.ReadAsStringAsync().Result, assetName);
-            if (want == null)
-                throw new InvalidOperationException($"SHA256SUMS has no entry for {assetName}");
-            var got = Sha256Hex(zipBytes);
-            if (!string.Equals(want, got, StringComparison.OrdinalIgnoreCase))
-                throw new InvalidOperationException($"SHA256 mismatch for {assetName}: expected {want}, got {got}");
         }
 
         public struct Result

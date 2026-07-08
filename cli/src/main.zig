@@ -491,7 +491,7 @@ pub const Options = struct {
     before: []const u8,
     after: []const u8,
     format: Format = .tree,
-    project_root: ?[]const u8 = null, // for .meta resolution (Task 9)
+    project_root: ?[]const u8 = null, // for .meta resolution
     git_mode: bool = false,
     git_ref_before: []const u8 = "",
     git_ref_after: []const u8 = "",

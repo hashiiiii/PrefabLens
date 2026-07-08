@@ -1,6 +1,5 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
-using System.Text;
 using NUnit.Framework;
 
 namespace PrefabLens.Tests
@@ -54,38 +53,6 @@ namespace PrefabLens.Tests
                 Cli.QuoteArgs(Cli.BuildArgs("Assets/My Prefab.prefab"))
             );
             Assert.AreEqual("\"a\\\"b\"", Cli.QuoteArgs(new[] { "a\"b" }));
-        }
-
-        [Test]
-        public void ParseSha256SumsFindsTheAssetLine()
-        {
-            // Exactly the form release.yml's `sha256sum *.zip` produces.
-            var sums =
-                "1111111111111111111111111111111111111111111111111111111111111111  prefablens-linux-x64.zip\n"
-                + "2222222222222222222222222222222222222222222222222222222222222222  prefablens-macos-arm64.zip\n";
-            Assert.AreEqual(
-                "2222222222222222222222222222222222222222222222222222222222222222",
-                Cli.ParseSha256Sums(sums, "prefablens-macos-arm64.zip")
-            );
-            Assert.IsNull(Cli.ParseSha256Sums(sums, "prefablens-windows-x64.zip"));
-        }
-
-        [Test]
-        public void ParseSha256SumsHandlesCrlfAndBinaryMarker()
-        {
-            // Also accepts CRLF line endings and sha256sum binary mode's leading "*".
-            var sums = "cafe01 *prefablens-windows-x64.zip\r\n";
-            Assert.AreEqual("cafe01", Cli.ParseSha256Sums(sums, "prefablens-windows-x64.zip"));
-        }
-
-        [Test]
-        public void Sha256HexMatchesTheStandardTestVector()
-        {
-            // Known vector from FIPS 180-2: sha256("abc")
-            Assert.AreEqual(
-                "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
-                Cli.Sha256Hex(Encoding.ASCII.GetBytes("abc"))
-            );
         }
 
         [Test]

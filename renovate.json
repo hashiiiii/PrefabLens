@@ -16,7 +16,7 @@
   "osvVulnerabilityAlerts": true,
   "packageRules": [
     {
-      "description": "Group extension npm devDependencies minor/patch updates into a single PR",
+      "description": "Group extension devDependencies minor/patch updates into a single PR",
       "matchManagers": [
         "npm"
       ],

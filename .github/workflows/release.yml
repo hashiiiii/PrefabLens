@@ -58,7 +58,7 @@ jobs:
         run: |
           set -euo pipefail
           bump-my-version bump --new-version "$VERSION"
-          npm --prefix extension version "$VERSION" --no-git-tag-version --allow-same-version
+          pnpm -C extension version "$VERSION" --no-git-tag-version --allow-same-version --no-git-checks
           git add -u
           git diff --cached --quiet || git commit -m "chore: release v$VERSION"
           git tag "v$VERSION"

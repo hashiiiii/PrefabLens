@@ -39,17 +39,17 @@ jobs:
       - name: Extension checks
         working-directory: extension
         run: |
-          npm ci
-          npm run size
-          npm run lint
-          npm run typecheck
-          npm test
-          npm run build
+          pnpm install --frozen-lockfile
+          pnpm run size
+          pnpm run lint
+          pnpm run typecheck
+          pnpm test
+          pnpm run build
       - name: Extension E2E
         working-directory: extension
         run: |
-          npx playwright install --with-deps chromium
-          npm run e2e
+          pnpm exec playwright install --with-deps chromium
+          pnpm run e2e
 
   editor:
     runs-on: ubuntu-latest

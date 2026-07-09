@@ -1,5 +1,5 @@
 import type { ComponentDiff, DiffV2, FieldValue, NodeDiff, OverrideDiff, Status } from "../types";
-import { CHECK, CHEVRON, CUBE, GEAR } from "./icons";
+import { ALERT, CHECK, CHEVRON, CUBE, GEAR } from "./icons";
 import { STYLES } from "./styles";
 
 // Unchanged rows carry no chip: the absence of a badge is the "unchanged" signal.
@@ -15,7 +15,13 @@ export function detectTheme(doc: Document): "light" | "dark" {
 export function render(root: ShadowRoot, diff: DiffV2, opts?: { resolving?: number }): void {
   const container = mount(root);
   // Resolving indicator: the diff body is correct from the start, only reference names fill in later
-  if (opts?.resolving) container.append(note("pl-resolving", `Resolving ${opts.resolving} reference(s)…`));
+  if (opts?.resolving) {
+    const busy = note("pl-resolving", `Resolving ${opts.resolving} reference(s)…`);
+    const spin = document.createElement("span");
+    spin.className = "pl-spinner";
+    busy.prepend(spin);
+    container.append(busy);
+  }
   for (const node of diff.roots) container.append(renderNode(node, diff));
   for (const c of diff.loose) container.append(renderComponent(c, diff));
   if (!diff.roots.length && !diff.loose.length) {
@@ -24,7 +30,7 @@ export function render(root: ShadowRoot, diff: DiffV2, opts?: { resolving?: numb
 }
 
 export function renderError(root: ShadowRoot, message: string): void {
-  mount(root).append(note("pl-error", message));
+  mount(root).append(note("pl-error", message, ALERT));
 }
 
 // Deterministic tree-shaped placeholder: [indent level, name-bar width %]
@@ -65,7 +71,7 @@ export function renderTooLarge(root: ShadowRoot, bytes: number, onRender: () => 
   button.className = "pl-render";
   button.textContent = "Render anyway";
   button.addEventListener("click", onRender);
-  container.append(note("pl-empty", `Large file (${Math.round(bytes / (1024 * 1024))} MB).`), button);
+  container.append(note("pl-empty", `Large file (${Math.round(bytes / (1024 * 1024))} MB).`, ALERT), button);
 }
 
 function mount(root: ShadowRoot): HTMLElement {

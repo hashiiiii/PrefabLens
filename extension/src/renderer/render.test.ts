@@ -414,6 +414,18 @@ describe("render", () => {
     // The label lives in aria, not in visible text
     expect(box.textContent).toBe("");
   });
+
+  it("shows a spinner with the resolving indicator", () => {
+    const root = freshRoot();
+    render(root, { schema: "prefablens.diff.v2", unresolvedGuids: ["g1"], roots: [], loose: [] }, { resolving: 1 });
+    expect(root.querySelector(".pl-resolving .pl-spinner")).not.toBeNull();
+  });
+
+  it("shows an alert icon on errors", () => {
+    const root = freshRoot();
+    renderError(root, "Could not fetch file contents from GitHub.");
+    expect(root.querySelector(".pl-error .pl-note-icon svg")).not.toBeNull();
+  });
 });
 
 describe("detectTheme", () => {

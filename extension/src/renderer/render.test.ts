@@ -372,6 +372,36 @@ describe("render", () => {
     expect(summary?.textContent).toContain("Cylinder1");
     expect(summary?.textContent).not.toContain("MonoBehaviour");
   });
+
+  it("renders unity-style rows: chevron, icon and status badge", () => {
+    const root = freshRoot();
+    render(root, DIFF);
+    const summary = root.querySelector("details.pl-go > summary")!;
+    expect(summary.classList.contains("pl-row")).toBe(true);
+    expect(summary.querySelector(".pl-chevron svg")).not.toBeNull();
+    expect(summary.querySelector(".pl-icon svg")).not.toBeNull();
+    expect(summary.querySelector(".pl-badge")?.textContent).toBe("~");
+  });
+
+  it("skips the status badge on unchanged rows and tints the prefab icon", () => {
+    const root = freshRoot();
+    render(root, INSTANCE);
+    // Plane is unchanged: no badge chip at all, not a blank one
+    const plane = root.querySelector("details.pl-go > summary")!;
+    expect(plane.querySelector(".pl-badge")).toBeNull();
+    const icon = root.querySelector("details.pl-pi > summary .pl-icon")!;
+    expect(icon.classList.contains("pl-icon-prefab")).toBe(true);
+  });
+
+  it("marks rows without children as leaves (chevron slot hidden via CSS)", () => {
+    const root = freshRoot();
+    render(root, DIFF);
+    const summaries = [...root.querySelectorAll("details.pl-go > summary")];
+    const weapon = summaries.find((s) => s.textContent?.includes("Weapon"))!;
+    expect(weapon.classList.contains("pl-leaf")).toBe(true);
+    const player = summaries.find((s) => s.textContent?.includes("Player"))!;
+    expect(player.classList.contains("pl-leaf")).toBe(false);
+  });
 });
 
 describe("detectTheme", () => {

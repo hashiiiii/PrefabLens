@@ -67,8 +67,8 @@ function ensureGlobalToggle(state: ViewState, first: FileEntry): void {
   if (!container?.parentElement) return;
   const bar = document.createElement("div");
   bar.setAttribute("data-prefablens-global", "");
-  bar.style.cssText = "display:flex;align-items:center;gap:8px;margin:0 0 8px;font:12px system-ui;";
   const label = document.createElement("span");
+  label.className = "prefablens-eyebrow";
   label.textContent = "PrefabLens";
   const toggle = createToggle((view) => state.setDefault(view), state.defaultView());
   bar.append(label, toggle.element);

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { DiffV2 } from "../types";
-import { detectTheme, render, renderError, renderTooLarge } from "./render";
+import { detectTheme, render, renderError, renderLoading, renderTooLarge } from "./render";
 
 const DIFF: DiffV2 = {
   schema: "prefablens.diff.v2",
@@ -401,6 +401,18 @@ describe("render", () => {
     expect(weapon.classList.contains("pl-leaf")).toBe(true);
     const player = summaries.find((s) => s.textContent?.includes("Player"))!;
     expect(player.classList.contains("pl-leaf")).toBe(false);
+  });
+
+  it("renderLoading shows an accessible skeleton tree instead of text", () => {
+    const root = freshRoot();
+    renderLoading(root);
+    const box = root.querySelector(".pl-skeleton")!;
+    expect(box.getAttribute("role")).toBe("status");
+    expect(box.getAttribute("aria-busy")).toBe("true");
+    expect(box.getAttribute("aria-label")).toContain("Computing semantic diff");
+    expect(box.querySelectorAll(".pl-skel-row")).toHaveLength(5);
+    // The label lives in aria, not in visible text
+    expect(box.textContent).toBe("");
   });
 });
 

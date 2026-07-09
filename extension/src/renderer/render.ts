@@ -27,8 +27,34 @@ export function renderError(root: ShadowRoot, message: string): void {
   mount(root).append(note("pl-error", message));
 }
 
+// Deterministic tree-shaped placeholder: [indent level, name-bar width %]
+const SKELETON_ROWS: Array<[number, number]> = [
+  [0, 40],
+  [1, 55],
+  [2, 35],
+  [1, 60],
+  [0, 30],
+];
+
 export function renderLoading(root: ShadowRoot): void {
-  mount(root).append(note("pl-loading", "Computing semantic diff…"));
+  const box = document.createElement("div");
+  box.className = "pl-skeleton";
+  box.setAttribute("role", "status");
+  box.setAttribute("aria-label", "Computing semantic diff…");
+  box.setAttribute("aria-busy", "true");
+  for (const [indent, width] of SKELETON_ROWS) {
+    const row = document.createElement("div");
+    row.className = "pl-skel-row";
+    row.style.setProperty("--pl-indent", String(indent));
+    const icon = document.createElement("span");
+    icon.className = "pl-skel-icon";
+    const bar = document.createElement("span");
+    bar.className = "pl-skel-bar";
+    bar.style.setProperty("--pl-w", `${width}%`);
+    row.append(icon, bar);
+    box.append(row);
+  }
+  mount(root).append(box);
 }
 
 /** Over-25MB guard: doesn't auto-render, waits for an explicit click. */

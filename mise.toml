@@ -2,5 +2,6 @@
 zig = '0.16.0'
 zls = '0.16.0'
 node = '24'
+pnpm = '11.10.0'
 dotnet = '10'
 'pipx:bump-my-version' = '1.4.1'

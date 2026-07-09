@@ -59,7 +59,7 @@ zig build run -- before.prefab after.prefab
 zig build wasm
 
 # Extension
-cd extension && npm ci && npm run build && npm test
+cd extension && pnpm install && pnpm run build && pnpm test
 ```
 
 ## License

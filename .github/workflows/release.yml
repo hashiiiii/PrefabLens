@@ -24,45 +24,31 @@ jobs:
         with:
           client-id: ${{ secrets.APP_CLIENT_ID }}
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
-      - name: Set the release committer to the app identity
-        env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
-          APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
-        run: |
-          set -euo pipefail
-          # GitHub links a commit to the App only when the committer email is
-          # <app-user-id>+<slug>[bot]@users.noreply.github.com; resolve the id from the slug.
-          user_id=$(gh api "/users/${APP_SLUG}[bot]" --jq .id)
-          {
-            echo "GIT_AUTHOR_NAME=${APP_SLUG}[bot]"
-            echo "GIT_AUTHOR_EMAIL=${user_id}+${APP_SLUG}[bot]@users.noreply.github.com"
-            echo "GIT_COMMITTER_NAME=${APP_SLUG}[bot]"
-            echo "GIT_COMMITTER_EMAIL=${user_id}+${APP_SLUG}[bot]@users.noreply.github.com"
-          } >> "$GITHUB_ENV"
       - uses: actions/checkout@v7
         with:
           token: ${{ steps.app-token.outputs.token }}
       - name: Install tools
         uses: jdx/mise-action@v4
       - name: Validate input
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           [ "$GITHUB_REF_NAME" = "main" ] || { echo "::error::run this workflow from main (got $GITHUB_REF_NAME)"; exit 1; }
-          if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/v$VERSION" >/dev/null 2>&1; then
-            echo "::error::tag v$VERSION already exists; delete it first to re-release: git push origin :refs/tags/v$VERSION"
-            exit 1
-          fi
       - name: Bump, commit, and tag
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
         run: |
           set -euo pipefail
+          # Author the commit as the app; the +<id> email links it to the bot account.
+          user_id=$(gh api "/users/${APP_SLUG}[bot]" --jq .id)
+          git config user.name "${APP_SLUG}[bot]"
+          git config user.email "${user_id}+${APP_SLUG}[bot]@users.noreply.github.com"
           bump-my-version bump --new-version "$VERSION"
           pnpm -C extension version "$VERSION" --no-git-tag-version --allow-same-version --no-git-checks
           git add -u
           git diff --cached --quiet || git commit -m "chore: release v$VERSION"
           git tag "v$VERSION"
-          git push origin main "v$VERSION"
+          git push --atomic origin main "v$VERSION"
       - name: Build CLI for all targets
         run: |
           set -euo pipefail

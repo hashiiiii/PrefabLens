@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { DiffV2 } from "../types";
-import { detectTheme, render, renderError, renderTooLarge } from "./render";
+import { detectTheme, render, renderError, renderLoading, renderTooLarge } from "./render";
 
 const DIFF: DiffV2 = {
   schema: "prefablens.diff.v2",
@@ -371,6 +371,60 @@ describe("render", () => {
     const summary = root.querySelector("details > summary");
     expect(summary?.textContent).toContain("Cylinder1");
     expect(summary?.textContent).not.toContain("MonoBehaviour");
+  });
+
+  it("renders unity-style rows: chevron, icon and status badge", () => {
+    const root = freshRoot();
+    render(root, DIFF);
+    const summary = root.querySelector("details.pl-go > summary")!;
+    expect(summary.classList.contains("pl-row")).toBe(true);
+    expect(summary.querySelector(".pl-chevron svg")).not.toBeNull();
+    expect(summary.querySelector(".pl-icon svg")).not.toBeNull();
+    expect(summary.querySelector(".pl-badge")?.textContent).toBe("~");
+  });
+
+  it("skips the status badge on unchanged rows and tints the prefab icon", () => {
+    const root = freshRoot();
+    render(root, INSTANCE);
+    // Plane is unchanged: no badge chip at all, not a blank one
+    const plane = root.querySelector("details.pl-go > summary")!;
+    expect(plane.querySelector(".pl-badge")).toBeNull();
+    const icon = root.querySelector("details.pl-pi > summary .pl-icon")!;
+    expect(icon.classList.contains("pl-icon-prefab")).toBe(true);
+  });
+
+  it("marks rows without children as leaves (chevron slot hidden via CSS)", () => {
+    const root = freshRoot();
+    render(root, DIFF);
+    const summaries = [...root.querySelectorAll("details.pl-go > summary")];
+    const weapon = summaries.find((s) => s.textContent?.includes("Weapon"))!;
+    expect(weapon.classList.contains("pl-leaf")).toBe(true);
+    const player = summaries.find((s) => s.textContent?.includes("Player"))!;
+    expect(player.classList.contains("pl-leaf")).toBe(false);
+  });
+
+  it("renderLoading shows an accessible skeleton tree instead of text", () => {
+    const root = freshRoot();
+    renderLoading(root);
+    const box = root.querySelector(".pl-skeleton")!;
+    expect(box.getAttribute("role")).toBe("status");
+    expect(box.getAttribute("aria-busy")).toBe("true");
+    expect(box.getAttribute("aria-label")).toContain("Computing semantic diff");
+    expect(box.querySelectorAll(".pl-skel-row")).toHaveLength(5);
+    // The label lives in aria, not in visible text
+    expect(box.textContent).toBe("");
+  });
+
+  it("shows a spinner with the resolving indicator", () => {
+    const root = freshRoot();
+    render(root, { schema: "prefablens.diff.v2", unresolvedGuids: ["g1"], roots: [], loose: [] }, { resolving: 1 });
+    expect(root.querySelector(".pl-resolving .pl-spinner")).not.toBeNull();
+  });
+
+  it("shows an alert icon on errors", () => {
+    const root = freshRoot();
+    renderError(root, "Could not fetch file contents from GitHub.");
+    expect(root.querySelector(".pl-error .pl-note-icon svg")).not.toBeNull();
   });
 });
 

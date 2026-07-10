@@ -13,7 +13,7 @@ import { createViewState, type ViewState } from "./viewstate";
 
 const ERROR_TEXT: Record<BackgroundError, string> = {
   "pat-missing": "Sign in with GitHub in the PrefabLens options page.",
-  "auth-failed": "GitHub authentication failed. Check your token in the PrefabLens options page.",
+  "auth-failed": "GitHub authentication failed. Sign in again in the PrefabLens options page.",
   "rate-limited": "GitHub rate limit exceeded. Wait a while and toggle again.",
   "fetch-failed": "Could not fetch file contents from GitHub.",
   "diff-failed": "Could not compute a semantic diff for this file.",

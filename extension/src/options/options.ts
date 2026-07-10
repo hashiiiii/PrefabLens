@@ -61,7 +61,6 @@ export async function initOptions(doc: Document, storage: StorageLike, flow: Sig
         if (result.status === "ok") {
           await storage.set({ pat: result.token });
           showSignedIn(result.token);
-          flowArea.hidden = true;
         } else if (result.status === "denied") {
           status.textContent = "Authorization denied";
         } else {
@@ -70,6 +69,8 @@ export async function initOptions(doc: Document, storage: StorageLike, flow: Sig
       } catch {
         status.textContent = "Sign-in failed";
       } finally {
+        // The code is consumed once the poll ends, whatever the outcome: hide it and allow a retry
+        flowArea.hidden = true;
         signinButton.disabled = false;
       }
     })();

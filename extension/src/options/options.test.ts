@@ -96,6 +96,8 @@ describe("initOptions", () => {
     await flush();
     expect(document.querySelector("#status")?.textContent).toBe("Authorization denied");
     expect(storage.data.pat).toBeUndefined();
+    // The denied code is consumed: the flow area must not keep showing it
+    expect(document.querySelector<HTMLElement>("#flow")?.hidden).toBe(true);
   });
 
   it("shows an expiry message when the code times out", async () => {
@@ -110,18 +112,18 @@ describe("initOptions", () => {
     await flush();
     expect(document.querySelector("#status")?.textContent).toBe("Code expired — try again");
     expect(storage.data.pat).toBeUndefined();
+    // The expired code is consumed: the flow area must not keep showing it
+    expect(document.querySelector<HTMLElement>("#flow")?.hidden).toBe(true);
   });
 
-  it("shows a failure message when the flow throws", async () => {
+  it("shows a failure message when requesting the device code throws", async () => {
     document.body.innerHTML = OPTIONS_BODY;
     const storage = fakeStorage();
     await initOptions(
       document,
       storage,
       fakeFlow(
-        async () => {
-          throw new Error("network down");
-        },
+        async () => ({ status: "ok", token: "unreached" }),
         async () => {
           throw new Error("network down");
         },
@@ -131,6 +133,32 @@ describe("initOptions", () => {
     await flush();
     expect(document.querySelector("#status")?.textContent).toBe("Sign-in failed");
     expect(storage.data.pat).toBeUndefined();
+  });
+
+  it("hides the flow area and reports failure when the poll throws after the code rendered", async () => {
+    document.body.innerHTML = OPTIONS_BODY;
+    const storage = fakeStorage();
+    // Hand-rolled deferred: lets the test observe the visible flow area before failing the poll
+    let rejectPoll!: (err: Error) => void;
+    const pending = new Promise<PollResult>((_resolve, reject) => {
+      rejectPoll = reject;
+    });
+    await initOptions(
+      document,
+      storage,
+      fakeFlow(() => pending),
+    );
+    document.querySelector<HTMLButtonElement>("#signin")?.click();
+    await flush();
+    // Device code succeeded: the code is rendered and the flow area is visible while the poll runs
+    expect(document.querySelector("#user-code")?.textContent).toBe("ABCD-1234");
+    expect(document.querySelector<HTMLElement>("#flow")?.hidden).toBe(false);
+    rejectPoll(new Error("network down"));
+    await flush();
+    expect(document.querySelector("#status")?.textContent).toBe("Sign-in failed");
+    expect(storage.data.pat).toBeUndefined();
+    // The consumed code must disappear once the flow ends
+    expect(document.querySelector<HTMLElement>("#flow")?.hidden).toBe(true);
   });
 
   it("disables the sign-in button while the poll is in flight and re-enables it on failure", async () => {

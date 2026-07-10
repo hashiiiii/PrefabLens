@@ -99,6 +99,9 @@ export const STYLES = `
     background: transparent; color: var(--pl-fg); cursor: pointer;
   }
   .pl-render:hover { background: var(--pl-hover); }
+  .pl-signin { flex-wrap: wrap; }
+  .pl-signin a.pl-render { text-decoration: none; color: inherit; }
+  .pl-user-code { font-weight: 600; user-select: all; }
   .pl-skel-row {
     display: flex; align-items: center; gap: 6px;
     min-height: 24px; padding-left: calc(var(--pl-indent) * 16px + 4px);

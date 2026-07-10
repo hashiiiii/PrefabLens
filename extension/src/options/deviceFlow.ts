@@ -1,5 +1,5 @@
-// Public client id of the GitHub OAuth App (device flow enabled). Replace once the app is registered.
-export const CLIENT_ID = "REPLACE_WITH_OAUTH_APP_CLIENT_ID";
+// Public client id of the GitHub OAuth App (device flow enabled).
+export const CLIENT_ID = "Ov23liYYM6t34p7Hxkc1";
 
 export type DeviceCode = {
   deviceCode: string;

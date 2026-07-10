@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { DiffV2 } from "../types";
-import { detectTheme, render, renderError, renderLoading, renderTooLarge } from "./render";
+import { detectTheme, render, renderError, renderLoading, renderSignIn, renderSignInPending, renderTooLarge } from "./render";
 
 const DIFF: DiffV2 = {
   schema: "prefablens.diff.v2",
@@ -449,5 +449,37 @@ describe("detectTheme", () => {
     } finally {
       delete (win as { matchMedia?: unknown }).matchMedia;
     }
+  });
+});
+
+describe("renderSignIn", () => {
+  it("renders the message and a sign-in button that invokes the callback", () => {
+    const root = freshRoot();
+    let clicks = 0;
+    renderSignIn(root, "Sign in with GitHub to view semantic diffs.", () => clicks++);
+    expect(root.querySelector(".pl-error")?.textContent).toContain("Sign in with GitHub to view semantic diffs.");
+    const button = root.querySelector<HTMLButtonElement>("button.pl-render");
+    expect(button?.textContent).toBe("Sign in with GitHub");
+    button?.click();
+    expect(clicks).toBe(1);
+  });
+});
+
+describe("renderSignInPending", () => {
+  it("shows the user code, a copy button, and a link to the verification page", () => {
+    const root = freshRoot();
+    let copies = 0;
+    renderSignInPending(root, "ABCD-1234", "https://github.com/login/device", () => copies++);
+    expect(root.querySelector(".pl-user-code")?.textContent).toBe("ABCD-1234");
+    const copy = root.querySelector<HTMLButtonElement>("button.pl-render");
+    expect(copy?.textContent).toBe("Copy code");
+    copy?.click();
+    expect(copies).toBe(1);
+    const link = root.querySelector<HTMLAnchorElement>("a.pl-render");
+    expect(link?.href).toBe("https://github.com/login/device");
+    // New tab without opener: the PR tab must keep polling while the user authorizes.
+    expect(link?.target).toBe("_blank");
+    expect(link?.rel).toBe("noopener noreferrer");
+    expect(root.querySelector(".pl-signin-wait .pl-spinner")).not.toBeNull();
   });
 });

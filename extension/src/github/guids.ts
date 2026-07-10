@@ -12,7 +12,7 @@ export function parseGuidFromMeta(meta: string): string | undefined {
 
 export type MetaFetcher = (path: string, side: "base" | "head") => Promise<string | null>;
 
-/** Persistent cache of guid→asset path resolved via Code Search (repo key is `<apiBase>/<owner>/<repo>`).
+/** Persistent cache of guid→asset path resolved via Code Search (repo key is `<API_BASE>/<owner>/<repo>`).
  *  guid→path is stable, so no TTL. save merges. */
 export type GuidCache = {
   load(repo: string): Promise<Record<string, string>>;

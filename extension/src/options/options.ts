@@ -1,4 +1,4 @@
-import { type DeviceCode, type PollResult, pollForToken, requestDeviceCode } from "./deviceFlow";
+import { type DeviceCode, type PollResult, pollForToken, requestDeviceCode } from "../github/deviceFlow";
 
 // Keep the form body on the TS side: options.html and the jsdom tests share the same markup.
 export const OPTIONS_BODY = `

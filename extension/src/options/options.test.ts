@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
-import type { DeviceCode, PollResult } from "./deviceFlow";
+import type { DeviceCode, PollResult } from "../github/deviceFlow";
 import { initOptions, OPTIONS_BODY, type SignInFlow } from "./options";
 
 function fakeStorage(initial: Record<string, unknown> = {}) {

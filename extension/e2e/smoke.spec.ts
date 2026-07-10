@@ -164,7 +164,7 @@ test("recovers after an error response", async ({ page }) => {
 
   // First toggle: shows the error
   await unityHeader.getByRole("button", { name: "Semantic" }).click();
-  await expect(view).toContainText("Set a GitHub token");
+  await expect(view).toContainText("Sign in with GitHub");
 
   // Re-toggling Raw → Semantic re-fetches and recovers to the normal result
   await unityHeader.getByRole("button", { name: "Raw" }).click();

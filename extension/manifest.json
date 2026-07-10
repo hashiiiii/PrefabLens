@@ -4,7 +4,7 @@
   "version": "0.4.0",
   "description": "Semantic diffs for Unity YAML files in GitHub pull requests",
   "permissions": ["storage"],
-  "host_permissions": ["https://api.github.com/*"],
+  "host_permissions": ["https://api.github.com/*", "https://github.com/*"],
   "background": { "service_worker": "background.js" },
   "content_scripts": [
     {

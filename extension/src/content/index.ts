@@ -12,7 +12,7 @@ import { createToggle, type Toggle, type View } from "./toggle";
 import { createViewState, type ViewState } from "./viewstate";
 
 const ERROR_TEXT: Record<BackgroundError, string> = {
-  "pat-missing": "Set a GitHub token in the PrefabLens options page.",
+  "pat-missing": "Sign in with GitHub in the PrefabLens options page.",
   "auth-failed": "GitHub authentication failed. Check your token in the PrefabLens options page.",
   "rate-limited": "GitHub rate limit exceeded. Wait a while and toggle again.",
   "fetch-failed": "Could not fetch file contents from GitHub.",

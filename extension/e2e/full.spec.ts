@@ -77,12 +77,10 @@ test.beforeAll(async () => {
   sw ??= await context.waitForEvent("serviceworker");
   const extensionId = new URL(sw.url()).host;
 
-  // Save the PAT in Options (the API base is now baked in at build time, not entered here)
+  // Seed the token directly in storage (sign-in is the only UI path; the fake server ignores its value)
   const options = await context.newPage();
   await options.goto(`chrome-extension://${extensionId}/options.html`);
-  await options.fill("#pat", "tok");
-  await options.click("#save");
-  await expect(options.locator("#status")).toHaveText("Saved");
+  await options.evaluate(() => chrome.storage.local.set({ pat: "tok" }));
   await options.close();
 });
 

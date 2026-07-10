@@ -1,7 +1,15 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { DiffV2 } from "../types";
-import { detectTheme, render, renderError, renderLoading, renderSignIn, renderSignInPending, renderTooLarge } from "./render";
+import {
+  detectTheme,
+  render,
+  renderError,
+  renderLoading,
+  renderSignIn,
+  renderSignInPending,
+  renderTooLarge,
+} from "./render";
 
 const DIFF: DiffV2 = {
   schema: "prefablens.diff.v2",

@@ -221,7 +221,9 @@ function renderComponent(c: ComponentDiff, diff: DiffV2): HTMLElement {
   const details = openDetails("pl-comp", c.status);
   const resolved = c.scriptGuid ? diff.resolved?.[c.scriptGuid] : undefined;
   const display = resolved ? stem(resolved) : (c.className ?? c.typeName);
-  const summary = summaryRow(c.status, GEAR, "pl-icon", display, c.scriptGuid ? "‹Script›" : undefined);
+  // Mirror the ‹Prefab: …› meta on instances: full source path once the guid resolves.
+  const meta = c.scriptGuid ? (resolved ? `‹Script: ${resolved}›` : "‹Script›") : undefined;
+  const summary = summaryRow(c.status, GEAR, "pl-icon", display, meta);
   const kids = kidsBox();
   for (const f of c.fields) kids.append(fieldRow(f.path, f.status, f.before, f.after, diff));
   return finish(details, summary, kids);

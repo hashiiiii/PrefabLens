@@ -98,8 +98,9 @@ describe("render", () => {
     expect(text).toContain("volume");
     expect(text).toContain("0.5");
     expect(text).toContain("0.8");
-    expect(text).toContain("Sound"); // resolved guid → file stem, not the full path
-    expect(text).toContain("‹Script›");
+    expect(text).toContain("Sound"); // resolved guid → file stem as the display name
+    // The meta carries the full source path (mirrors the ‹Prefab: …› form on instances).
+    expect(text).toContain("‹Script: Assets/Scripts/Sound.cs›");
   });
 
   it("shows only the current value for added fields, without a before placeholder", () => {
@@ -371,6 +372,8 @@ describe("render", () => {
     const summary = root.querySelector("details.pl-comp > summary");
     expect(summary?.textContent).toContain("Cylinder1");
     expect(summary?.textContent).not.toContain("MonoBehaviour");
+    // No resolved path yet → the meta stays the bare ‹Script› tag.
+    expect(summary?.textContent).toContain("‹Script›");
   });
 
   it("renders the components group as an open collapsible with chevron and count", () => {

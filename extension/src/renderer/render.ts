@@ -23,7 +23,8 @@ export function render(root: ShadowRoot, diff: DiffV2, opts?: { resolving?: numb
     container.append(busy);
   }
   for (const node of diff.roots) container.append(renderNode(node, diff));
-  for (const c of diff.loose) container.append(renderComponent(c, diff));
+  const loose = diff.loose.map((c) => renderComponent(c, diff));
+  if (loose.length) container.append(componentsSection(loose));
   if (!diff.roots.length && !diff.loose.length) {
     container.append(note("pl-empty", "No semantic changes", CHECK));
   }
@@ -216,17 +217,27 @@ function renderNode(node: NodeDiff, diff: DiffV2): HTMLElement {
   const cards: HTMLElement[] = [];
   if (node.kind === "prefabInstance") cards.push(...renderOverrideGroups(node.overrides, diff));
   cards.push(...node.components.map((c) => renderComponent(c, diff)));
-  if (cards.length) {
-    const section = document.createElement("div");
-    section.className = "pl-components";
-    const label = document.createElement("div");
-    label.className = "pl-components-label";
-    label.textContent = "components";
-    section.append(label, ...cards);
-    kids.append(section);
-  }
+  if (cards.length) kids.append(componentsSection(cards));
   for (const child of node.children) kids.append(renderNode(child, diff));
   return finish(details, summary, kids);
+}
+
+/** Components fold as their own group one level below the object row, so cube rows
+ *  alone form the hierarchy spine (Unity puts components in the Inspector, not the tree). */
+function componentsSection(cards: HTMLElement[]): HTMLElement {
+  const details = document.createElement("details");
+  details.open = true;
+  details.className = "pl-components";
+  const summary = document.createElement("summary");
+  summary.className = "pl-components-label";
+  summary.append(glyph(CHEVRON, "pl-chevron"));
+  const label = document.createElement("span");
+  label.textContent = `components (${cards.length})`;
+  summary.append(label);
+  const kids = kidsBox();
+  kids.append(...cards);
+  details.append(summary, kids);
+  return details;
 }
 
 function renderOverrideGroups(overrides: OverrideDiff[], diff: DiffV2): HTMLElement[] {
@@ -252,7 +263,9 @@ function renderComponent(c: ComponentDiff, diff: DiffV2): HTMLElement {
   const details = openDetails("pl-comp", c.status);
   const resolved = c.scriptGuid ? diff.resolved?.[c.scriptGuid] : undefined;
   const display = resolved ? stem(resolved) : (c.className ?? c.typeName);
-  const summary = summaryRow(c.status, GEAR, "pl-icon", display, c.scriptGuid ? "‹Script›" : undefined);
+  // Mirror the ‹Prefab: …› meta on instances: full source path once the guid resolves.
+  const meta = c.scriptGuid ? (resolved ? `‹Script: ${resolved}›` : "‹Script›") : undefined;
+  const summary = summaryRow(c.status, GEAR, "pl-icon", display, meta);
   const kids = kidsBox();
   for (const f of c.fields) kids.append(fieldRow(f.path, f.status, f.before, f.after, diff));
   return finish(details, summary, kids);

@@ -133,6 +133,29 @@ describe("initOptions", () => {
     expect(storage.data.pat).toBeUndefined();
   });
 
+  it("disables the sign-in button while the poll is in flight and re-enables it on failure", async () => {
+    document.body.innerHTML = OPTIONS_BODY;
+    // Hand-rolled deferred: keeps the poll unresolved so the mid-flight disabled state is observable
+    let resolvePoll!: (result: PollResult) => void;
+    const pending = new Promise<PollResult>((resolve) => {
+      resolvePoll = resolve;
+    });
+    await initOptions(
+      document,
+      fakeStorage(),
+      fakeFlow(() => pending),
+    );
+    const signin = document.querySelector<HTMLButtonElement>("#signin")!;
+    signin.click();
+    await flush();
+    // Poll still unresolved: a second click must be impossible
+    expect(signin.disabled).toBe(true);
+    resolvePoll({ status: "denied" });
+    await flush();
+    // Flow ended (failure outcome): the user can try again
+    expect(signin.disabled).toBe(false);
+  });
+
   it("copies the user code to the clipboard", async () => {
     document.body.innerHTML = OPTIONS_BODY;
     const flow = fakeFlow(async () => ({ status: "denied" }));

@@ -48,6 +48,8 @@ export async function initOptions(doc: Document, storage: StorageLike, flow: Sig
 
   signinButton.addEventListener("click", () => {
     void (async () => {
+      // The poll can run for minutes; disabling the button while in flight makes concurrent flows impossible
+      signinButton.disabled = true;
       status.textContent = "";
       try {
         const code = await flow.requestDeviceCode();
@@ -67,6 +69,8 @@ export async function initOptions(doc: Document, storage: StorageLike, flow: Sig
         }
       } catch {
         status.textContent = "Sign-in failed";
+      } finally {
+        signinButton.disabled = false;
       }
     })();
   });

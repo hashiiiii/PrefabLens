@@ -230,3 +230,85 @@ test("global toggle switches all files and resets per-file overrides", async ({ 
   await global.getByRole("button", { name: "Semantic" }).click();
   await expect(page.locator('.file:has(.file-header[data-path="Assets/Foo.prefab"]) .js-file-content')).toBeHidden();
 });
+
+test("signs in with the device flow from the PR page and auto-recovers", async ({ page }) => {
+  await page.route("**/pull/1/files", (route) => route.fulfill({ body: fixture, contentType: "text/html" }));
+  // GitHub OAuth endpoints stubbed at the network layer (the content script calls them same-origin in production).
+  // The token stays pending until the test flips `authorized`, playing the user's Authorize click on GitHub.
+  let authorized = false;
+  await page.route("**/login/device/code", (route) =>
+    route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        device_code: "dc1",
+        user_code: "ABCD-1234",
+        verification_uri: "https://github.com/login/device",
+        interval: 0,
+        expires_in: 900,
+      }),
+    }),
+  );
+  await page.route("**/login/oauth/access_token", (route) =>
+    route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify(authorized ? { access_token: "tok123" } : { error: "authorization_pending" }),
+    }),
+  );
+  // Stateful chrome stub: pat-gated responses like the real background, and set() fires onChanged
+  // listeners so the auto-retry path is exercised end to end.
+  await page.addInitScript((res) => {
+    const data: Record<string, unknown> = {};
+    const listeners: Array<(changes: Record<string, { newValue?: unknown }>, area: string) => void> = [];
+    const w = window as unknown as Record<string, unknown>;
+    w.__opened = [];
+    window.open = (url?: string | URL) => {
+      (w.__opened as string[]).push(String(url));
+      return null;
+    };
+    w.chrome = {
+      runtime: {
+        sendMessage: (msg: { type?: string }) => {
+          if (msg?.type !== "semanticDiff") return Promise.resolve();
+          return Promise.resolve(data.pat ? res : { ok: false, error: "pat-missing" });
+        },
+        onMessage: { addListener: () => {} },
+      },
+      storage: {
+        local: {
+          get: (keys: string[]) =>
+            Promise.resolve(Object.fromEntries(keys.filter((k) => k in data).map((k) => [k, data[k]]))),
+          set: (items: Record<string, unknown>) => {
+            const changes = Object.fromEntries(Object.entries(items).map(([k, v]) => [k, { newValue: v }]));
+            Object.assign(data, items);
+            for (const listener of listeners) listener(changes, "local");
+            return Promise.resolve();
+          },
+          remove: (key: string) => {
+            delete data[key];
+            return Promise.resolve();
+          },
+        },
+        onChanged: { addListener: (listener: (typeof listeners)[number]) => void listeners.push(listener) },
+      },
+    };
+  }, cannedResponse);
+
+  await page.goto("https://prefablens.test/owner/repo/pull/1/files");
+  await page.addScriptTag({ path: "dist/content.js" });
+
+  const unityHeader = page.locator('.file-header[data-path="Assets/Foo.prefab"]');
+  const view = page.locator("[data-prefablens-view]");
+
+  await unityHeader.getByRole("button", { name: "Semantic" }).click();
+  await view.getByRole("button", { name: "Sign in with GitHub" }).click();
+
+  // While polling: the user code stays visible and the verification tab was opened.
+  await expect(view).toContainText("ABCD-1234");
+  await expect
+    .poll(() => page.evaluate(() => (window as unknown as { __opened: string[] }).__opened))
+    .toEqual(["https://github.com/login/device"]);
+
+  // The user authorizes on GitHub → token lands → the stuck panel retries without any manual toggle.
+  authorized = true;
+  await expect(view).toContainText("MonoBehaviour");
+});

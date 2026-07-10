@@ -4,86 +4,76 @@ import { fillDeviceCode } from "./devicePage";
 
 const PENDING = { userCode: "ABCD-1234", expiresAt: 10_000 };
 
-// GitHub's real form (shape as of 2026-07) carries hidden honeypot text inputs
-// next to the visible code input; the selector must skip them.
+// Trimmed copy of the real Device Activation form (captured 2026-07-11): eight fillable
+// boxes marked js-user-code-field plus a ninth CSS-hidden readonly input holding the hyphen.
+function box(n: number): string {
+  return `<input type="text" name="user-code-${n}" id="user-code-${n}" class="form-control js-user-code-field h1" maxlength="1" aria-label="User code ${n}">`;
+}
 const FORM =
-  '<form><input class="form-control" type="text" name="required_field_fdc0" hidden="hidden" />' +
-  '<input type="text" name="user_code" /></form>';
-
-// The live Device Activation page renders one single-character box per code character
-// (eight boxes for XXXX-XXXX; the hyphen is a visual separator, not a box).
-const SEGMENTED_FORM =
-  '<form><input class="form-control" type="text" name="required_field_fdc0" hidden="hidden" />' +
-  Array.from({ length: 8 }, (_, i) => `<input type="text" maxlength="1" name="seg${i}" />`).join("") +
+  '<form action="/login/device/confirmation" method="post">' +
+  '<input type="hidden" name="authenticity_token" value="tok">' +
+  box(0) +
+  box(1) +
+  box(2) +
+  box(3) +
+  '<input type="text" name="user-code-4" id="user-code-4" class="d-none" aria-label="User code 4" value="-" readonly="">' +
+  box(5) +
+  box(6) +
+  box(7) +
+  box(8) +
+  '<input type="submit" name="commit" value="Continue">' +
   "</form>";
 
-function segments(): HTMLInputElement[] {
-  return [...document.querySelectorAll<HTMLInputElement>('input[name^="seg"]')];
+function boxes(): HTMLInputElement[] {
+  return [...document.querySelectorAll<HTMLInputElement>("input.js-user-code-field")];
 }
 
 describe("fillDeviceCode", () => {
-  it("fills the visible text input and fires an input event", () => {
+  it("fills the eight code boxes in order, skipping the hyphen, and fires input on each", () => {
     document.body.innerHTML = FORM;
-    const input = document.querySelector<HTMLInputElement>('input[name="user_code"]')!;
-    // GitHub enhances the form with JS; dispatching input keeps its listeners in sync.
-    let fired = false;
-    input.addEventListener("input", () => {
-      fired = true;
-    });
+    // GitHub enhances the boxes with JS (auto-advance via data-next); input events keep it in sync.
+    let fired = 0;
+    for (const b of boxes()) {
+      b.addEventListener("input", () => {
+        fired += 1;
+      });
+    }
     expect(fillDeviceCode(document, PENDING, 5_000)).toBe(true);
-    expect(input.value).toBe("ABCD-1234");
-    expect(fired).toBe(true);
-    // The hidden honeypot must stay empty or GitHub rejects the submission.
-    expect(document.querySelector<HTMLInputElement>('input[name="required_field_fdc0"]')!.value).toBe("");
+    expect(boxes().map((b) => b.value)).toEqual(["A", "B", "C", "D", "1", "2", "3", "4"]);
+    expect(fired).toBe(8);
+  });
+
+  it("leaves the readonly hyphen placeholder and the csrf token untouched", () => {
+    document.body.innerHTML = FORM;
+    expect(fillDeviceCode(document, PENDING, 5_000)).toBe(true);
+    // The hyphen input carries value "-" from the server; it must neither block the fill nor be overwritten.
+    expect(document.querySelector<HTMLInputElement>('input[name="user-code-4"]')!.value).toBe("-");
+    expect(document.querySelector<HTMLInputElement>('input[name="authenticity_token"]')!.value).toBe("tok");
   });
 
   it("does not touch anything once the pending code expired", () => {
     document.body.innerHTML = FORM;
     expect(fillDeviceCode(document, PENDING, 10_001)).toBe(false);
-    expect(document.querySelector<HTMLInputElement>('input[name="user_code"]')!.value).toBe("");
-  });
-
-  it("does not clobber a code the user already typed", () => {
-    document.body.innerHTML = FORM;
-    const input = document.querySelector<HTMLInputElement>('input[name="user_code"]')!;
-    input.value = "WXYZ-9876";
-    expect(fillDeviceCode(document, PENDING, 5_000)).toBe(false);
-    expect(input.value).toBe("WXYZ-9876");
-  });
-
-  it("no-ops when the expected form is absent", () => {
-    document.body.innerHTML = "<p>redesigned page</p>";
-    expect(fillDeviceCode(document, PENDING, 5_000)).toBe(false);
-  });
-});
-
-describe("fillDeviceCode on the segmented layout", () => {
-  it("distributes one character per box, skipping the hyphen, and fires input on each", () => {
-    document.body.innerHTML = SEGMENTED_FORM;
-    let fired = 0;
-    for (const box of segments()) {
-      box.addEventListener("input", () => {
-        fired += 1;
-      });
-    }
-    expect(fillDeviceCode(document, PENDING, 5_000)).toBe(true);
-    expect(segments().map((box) => box.value)).toEqual(["A", "B", "C", "D", "1", "2", "3", "4"]);
-    expect(fired).toBe(8);
-    expect(document.querySelector<HTMLInputElement>('input[name="required_field_fdc0"]')!.value).toBe("");
-  });
-
-  it("no-ops when the box count does not match the code length (unknown layout)", () => {
-    document.body.innerHTML = SEGMENTED_FORM;
-    segments()[7]!.remove(); // 7 boxes for 8 characters: do not guess
-    expect(fillDeviceCode(document, PENDING, 5_000)).toBe(false);
-    expect(segments().every((box) => box.value === "")).toBe(true);
+    expect(boxes().every((b) => b.value === "")).toBe(true);
   });
 
   it("does not clobber a box the user already typed into", () => {
-    document.body.innerHTML = SEGMENTED_FORM;
-    segments()[2]!.value = "X";
+    document.body.innerHTML = FORM;
+    boxes()[2]!.value = "X";
     expect(fillDeviceCode(document, PENDING, 5_000)).toBe(false);
-    expect(segments()[0]!.value).toBe("");
-    expect(segments()[2]!.value).toBe("X");
+    expect(boxes()[0]!.value).toBe("");
+    expect(boxes()[2]!.value).toBe("X");
+  });
+
+  it("no-ops when the box count does not match the code length (unknown layout)", () => {
+    document.body.innerHTML = FORM;
+    boxes()[7]!.remove();
+    expect(fillDeviceCode(document, PENDING, 5_000)).toBe(false);
+    expect(boxes().every((b) => b.value === "")).toBe(true);
+  });
+
+  it("no-ops when the boxes are absent (redesigned page)", () => {
+    document.body.innerHTML = "<form><input type='text' name='something-else'></form>";
+    expect(fillDeviceCode(document, PENDING, 5_000)).toBe(false);
   });
 });

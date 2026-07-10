@@ -1,4 +1,4 @@
-import { AuthError, apiBase, type GithubClient, type PrFile, type PrRefs, RateLimitError } from "../github/client";
+import { API_BASE, AuthError, type GithubClient, type PrFile, type PrRefs, RateLimitError } from "../github/client";
 import { applyResolved, buildGuidIndex, type GuidCache } from "../github/guids";
 import { type RepoIndexStore, syncRepoIndex } from "../github/repoIndex";
 import type { DiffV2, GuidResolvedPush, PrefetchRequest, SemanticDiffRequest, SemanticDiffResponse } from "../types";
@@ -11,7 +11,7 @@ type ClientLike = Pick<
 >;
 
 export type Deps = {
-  getSettings(): Promise<{ pat?: string; baseUrl?: string }>;
+  getSettings(): Promise<{ pat?: string }>;
   makeClient(base: string, token: string, lane: "user" | "prefetch"): ClientLike;
   getDiffer(): Promise<Differ>;
   guidCache: GuidCache;
@@ -339,7 +339,7 @@ export function createHandler(deps: Deps): Handler {
     try {
       const settings = await deps.getSettings();
       if (!settings.pat) return { ok: false, error: "pat-missing" };
-      const base = apiBase(settings.baseUrl);
+      const base = API_BASE;
       const client = deps.makeClient(base, settings.pat, "user");
       const ctx = await loadContext(client, req.owner, req.repo, req.prNumber);
       const outcome = await getDiff(client, ctx, req.owner, req.repo, req.path, req.force === true);
@@ -365,7 +365,7 @@ export function createHandler(deps: Deps): Handler {
     try {
       const settings = await deps.getSettings();
       if (!settings.pat) return;
-      const base = apiBase(settings.baseUrl);
+      const base = API_BASE;
       const client = deps.makeClient(base, settings.pat, "prefetch");
       const ctx = await loadContext(client, req.owner, req.repo, req.prNumber);
       // Run independently of raw-diff prefetch (index sync speeds up the 3-stage resolution at serve time)

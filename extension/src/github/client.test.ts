@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { ApiError, AuthError, apiBase, GithubClient, graphqlUrl, RateLimitError } from "./client";
+import { ApiError, AuthError, GithubClient, graphqlUrl, RateLimitError } from "./client";
 
 // fetch fake that returns a fixed path→response table. It also records calls.
 // Matching is url.includes(key), so keys must be unique substrings
@@ -19,23 +19,6 @@ function fakeFetch(routes: Record<string, () => Response>) {
 
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
-
-describe("apiBase", () => {
-  it("defaults to api.github.com", () => {
-    expect(apiBase(undefined)).toBe("https://api.github.com");
-    expect(apiBase("https://github.com")).toBe("https://api.github.com");
-  });
-  it("maps GHES origins to <origin>/api/v3", () => {
-    expect(apiBase("https://ghe.example.com")).toBe("https://ghe.example.com/api/v3");
-  });
-  it("tolerates scheme-less and trailing-slash input from the options form", () => {
-    // Regression test for a real bug where entering "github.com" made new URL throw and turned into fetch-failed
-    expect(apiBase("github.com")).toBe("https://api.github.com");
-    expect(apiBase("github.com/")).toBe("https://api.github.com");
-    expect(apiBase("https://github.com/")).toBe("https://api.github.com");
-    expect(apiBase("ghe.example.com")).toBe("https://ghe.example.com/api/v3");
-  });
-});
 
 describe("GithubClient", () => {
   it("default fetchFn survives strict-this runtimes (Chrome Illegal invocation)", async () => {
@@ -179,9 +162,8 @@ describe("GithubClient", () => {
 });
 
 describe("graphqlUrl", () => {
-  it("maps github.com and GHES api bases to their graphql endpoints", () => {
+  it("appends /graphql to the REST base", () => {
     expect(graphqlUrl("https://api.github.com")).toBe("https://api.github.com/graphql");
-    expect(graphqlUrl("https://ghes.example.com/api/v3")).toBe("https://ghes.example.com/api/graphql");
   });
 });
 
@@ -223,9 +205,9 @@ describe("batchBlobTexts", () => {
           status: 200,
         }),
     );
-    const client = new GithubClient("https://ghes.example.com/api/v3", "tok", fetchFn);
+    const client = new GithubClient("https://api.github.com", "tok", fetchFn);
     const res = await client.batchBlobTexts("o", "r", ["sha1", "sha2"]);
-    expect(fetchFn.mock.calls[0]?.[0]).toBe("https://ghes.example.com/api/graphql"); // GHES uses /api/graphql
+    expect(fetchFn.mock.calls[0]?.[0]).toBe("https://api.github.com/graphql");
     const init = fetchFn.mock.calls[0]?.[1] as RequestInit;
     expect(init.method).toBe("POST");
     const body = JSON.parse(init.body as string) as { query: string };

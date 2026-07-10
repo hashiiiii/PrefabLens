@@ -79,7 +79,6 @@ function makeDeps(overrides?: {
   const deps: Deps = {
     getSettings: async () => ({
       pat: Object.hasOwn(overrides ?? {}, "pat") ? overrides?.pat : "tok",
-      baseUrl: undefined,
     }),
     makeClient: (_base: string, _token: string, _lane: "user" | "prefetch") => client,
     getDiffer: async () => differ,

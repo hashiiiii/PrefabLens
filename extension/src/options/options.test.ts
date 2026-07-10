@@ -1,6 +1,5 @@
 // @vitest-environment jsdom
-import { describe, expect, it, vi } from "vitest";
-import type { ChromeGhes } from "./ghes";
+import { describe, expect, it } from "vitest";
 import { initOptions, OPTIONS_BODY } from "./options";
 
 function fakeStorage(initial: Record<string, unknown> = {}) {
@@ -16,28 +15,17 @@ function fakeStorage(initial: Record<string, unknown> = {}) {
   };
 }
 
-function fakeGhes(granted = true) {
-  return {
-    permissions: { request: vi.fn(async () => granted) },
-    scripting: {
-      registerContentScripts: vi.fn(async () => {}),
-      unregisterContentScripts: vi.fn(async () => {}),
-    },
-  } satisfies ChromeGhes;
-}
-
 // Wait until the click handler's async chain finishes writing status (flush via a macrotask)
 const flush = () => new Promise((r) => setTimeout(r, 0));
 
 describe("initOptions", () => {
-  it("loads stored values into the form", async () => {
+  it("loads the stored pat into the form", async () => {
     document.body.innerHTML = OPTIONS_BODY;
-    await initOptions(document, fakeStorage({ pat: "tok", baseUrl: "https://ghe.example.com" }));
+    await initOptions(document, fakeStorage({ pat: "tok" }));
     expect(document.querySelector<HTMLInputElement>("#pat")?.value).toBe("tok");
-    expect(document.querySelector<HTMLInputElement>("#baseUrl")?.value).toBe("https://ghe.example.com");
   });
 
-  it("saves trimmed values and confirms", async () => {
+  it("saves the trimmed pat and confirms", async () => {
     document.body.innerHTML = OPTIONS_BODY;
     const storage = fakeStorage();
     await initOptions(document, storage);
@@ -46,56 +34,6 @@ describe("initOptions", () => {
     await flush();
     expect(storage.data.pat).toBe("tok");
     expect(document.querySelector("#status")?.textContent).toBe("Saved");
-  });
-
-  it("applies ghes registration with the trimmed base url on save", async () => {
-    document.body.innerHTML = OPTIONS_BODY;
-    const ghes = fakeGhes();
-    await initOptions(document, fakeStorage(), ghes);
-    document.querySelector<HTMLInputElement>("#baseUrl")!.value = "  ghe.corp.com  ";
-    document.querySelector<HTMLButtonElement>("#save")?.click();
-    await flush();
-    expect(ghes.permissions.request).toHaveBeenCalledWith({ origins: ["https://ghe.corp.com/*"] });
-    expect(document.querySelector("#status")?.textContent).toBe("Saved");
-  });
-
-  it("saves but reports when the host permission is declined", async () => {
-    document.body.innerHTML = OPTIONS_BODY;
-    const storage = fakeStorage();
-    await initOptions(document, storage, fakeGhes(false));
-    document.querySelector<HTMLInputElement>("#baseUrl")!.value = "ghe.corp.com";
-    document.querySelector<HTMLButtonElement>("#save")?.click();
-    await flush();
-    expect(storage.data.baseUrl).toBe("ghe.corp.com");
-    expect(document.querySelector("#status")?.textContent).toBe("Saved (host permission declined)");
-  });
-
-  it("still saves settings when ghes setup itself fails", async () => {
-    document.body.innerHTML = OPTIONS_BODY;
-    const storage = fakeStorage();
-    await initOptions(document, storage, fakeGhes());
-    document.querySelector<HTMLInputElement>("#pat")!.value = "tok";
-    document.querySelector<HTMLInputElement>("#baseUrl")!.value = "https://"; // an invalid URL that makes originOf throw
-    document.querySelector<HTMLButtonElement>("#save")?.click();
-    await flush();
-    expect(storage.data.pat).toBe("tok"); // don't discard the PAT
-    expect(document.querySelector("#status")?.textContent).toBe("Saved (GHES setup failed)");
-  });
-
-  it("does not touch ghes registration when storage fails", async () => {
-    document.body.innerHTML = OPTIONS_BODY;
-    const storage = fakeStorage();
-    storage.set = async () => {
-      throw new Error("quota exceeded");
-    };
-    const ghes = fakeGhes();
-    await initOptions(document, storage, ghes);
-    document.querySelector<HTMLInputElement>("#baseUrl")!.value = "ghe.corp.com";
-    document.querySelector<HTMLButtonElement>("#save")?.click();
-    await flush();
-    // Don't create a half-done state where the save fails but registration proceeds anyway
-    expect(ghes.scripting.registerContentScripts).not.toHaveBeenCalled();
-    expect(document.querySelector("#status")?.textContent).toBe("Save failed");
   });
 
   it("reports a failed save instead of staying silent", async () => {

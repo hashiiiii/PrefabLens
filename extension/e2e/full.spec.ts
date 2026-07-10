@@ -1,6 +1,7 @@
 /// <reference types="node" />
 // Runs detection → real background → real WASM → render end-to-end with the actual extension (--load-extension).
-// Uses a local HTTP server as "GitHub" via A1's GHES dynamic registration (the --e2e build pre-grants 127.0.0.1).
+// Uses a local HTTP server as "GitHub": the --e2e build bakes __API_BASE__ to this fixed port and
+// statically registers the content script for it (see build.mjs), so no dynamic permission grant is needed.
 
 import { readFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
@@ -9,6 +10,9 @@ import { type BrowserContext, chromium, expect, test } from "@playwright/test";
 
 const DIST = fileURLToPath(new URL("../dist", import.meta.url));
 const fixture = readFileSync(new URL("./fixtures/pr-files.html", import.meta.url), "utf8");
+
+// Matches the port baked into __API_BASE__ by build.mjs --e2e
+const PORT = 8471;
 
 // Same minimal prefab as core/tests/wasm_golden.test.mjs: the output is pinned by the golden
 const BEFORE = `--- !u!114 &11400000
@@ -20,7 +24,7 @@ const AFTER = BEFORE.replace("0.5", "0.8");
 // 26MB with no documents trips the 25MB guard; after force it finishes cheaply with an empty diff
 const BIG = "x".repeat(26 * 1024 * 1024);
 
-function startServer(): Promise<{ server: Server; port: number }> {
+function startServer(): Promise<Server> {
   const server = createServer((req, res) => {
     const url = new URL(req.url!, "http://127.0.0.1");
     const send = (body: string, type: string): void => {
@@ -31,41 +35,40 @@ function startServer(): Promise<{ server: Server; port: number }> {
     switch (url.pathname) {
       case "/o/r/pull/1/files":
         return send(fixture, "text/html");
-      case "/api/v3/repos/o/r/pulls/1/files":
+      case "/repos/o/r/pulls/1/files":
         return json([
           { filename: "Assets/Foo.prefab", status: "modified" },
           { filename: "Assets/Big.unity", status: "modified" },
         ]);
-      case "/api/v3/repos/o/r/pulls/1":
+      case "/repos/o/r/pulls/1":
         return json({ base: { sha: "B" }, head: { sha: "H" } });
-      case "/api/v3/repos/o/r/compare/B...H":
+      case "/repos/o/r/compare/B...H":
         return json({ merge_base_commit: { sha: "MB" } });
-      case "/api/v3/repos/o/r/git/trees/H":
+      case "/repos/o/r/git/trees/H":
         return json({ truncated: false, tree: [] });
-      case "/api/v3/repos/o/r/contents/Assets/Foo.prefab":
+      case "/repos/o/r/contents/Assets/Foo.prefab":
         return send(url.searchParams.get("ref") === "MB" ? BEFORE : AFTER, "application/vnd.github.raw+json");
-      case "/api/v3/repos/o/r/contents/Assets/Big.unity":
+      case "/repos/o/r/contents/Assets/Big.unity":
         return send(BIG, "application/vnd.github.raw+json");
-      case "/api/v3/search/code":
+      case "/search/code":
         return json({ items: [{ path: "Assets/Scripts/Sound.cs.meta" }] });
+      case "/graphql":
+        return json({ data: { repository: {} } });
       default:
         res.writeHead(404);
         res.end();
     }
   });
   return new Promise((resolve) => {
-    server.listen(0, "127.0.0.1", () => {
-      resolve({ server, port: (server.address() as { port: number }).port });
-    });
+    server.listen(PORT, "127.0.0.1", () => resolve(server));
   });
 }
 
 let context: BrowserContext;
 let server: Server;
-let port: number;
 
 test.beforeAll(async () => {
-  ({ server, port } = await startServer());
+  server = await startServer();
   context = await chromium.launchPersistentContext("", {
     channel: "chromium", // the chromium channel is required to use extensions headlessly
     args: [`--disable-extensions-except=${DIST}`, `--load-extension=${DIST}`],
@@ -74,11 +77,10 @@ test.beforeAll(async () => {
   sw ??= await context.waitForEvent("serviceworker");
   const extensionId = new URL(sw.url()).host;
 
-  // Save the PAT and local server in Options → applyGhes dynamically registers 127.0.0.1
+  // Save the PAT in Options (the API base is now baked in at build time, not entered here)
   const options = await context.newPage();
   await options.goto(`chrome-extension://${extensionId}/options.html`);
   await options.fill("#pat", "tok");
-  await options.fill("#baseUrl", `http://127.0.0.1:${port}`);
   await options.click("#save");
   await expect(options.locator("#status")).toHaveText("Saved");
   await options.close();
@@ -91,7 +93,7 @@ test.afterAll(async () => {
 
 test("renders a real wasm diff with code-search guid resolution", async () => {
   const page = await context.newPage();
-  await page.goto(`http://127.0.0.1:${port}/o/r/pull/1/files`);
+  await page.goto(`http://127.0.0.1:${PORT}/o/r/pull/1/files`);
 
   const header = page.locator('.file-header[data-path="Assets/Foo.prefab"]');
   await header.getByRole("button", { name: "Semantic" }).click();
@@ -107,7 +109,7 @@ test("renders a real wasm diff with code-search guid resolution", async () => {
 
 test("gates oversized files behind an explicit render click", async () => {
   const page = await context.newPage();
-  await page.goto(`http://127.0.0.1:${port}/o/r/pull/1/files`);
+  await page.goto(`http://127.0.0.1:${PORT}/o/r/pull/1/files`);
 
   const header = page.locator('.file-header[data-path="Assets/Big.unity"]');
   await header.getByRole("button", { name: "Semantic" }).click();

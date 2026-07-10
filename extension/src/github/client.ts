@@ -9,23 +9,12 @@ export class ApiError extends Error {
 export type PrFile = { path: string; status: string; previousPath?: string };
 export type PrRefs = { baseSha: string; headSha: string };
 
-// Input from the Options form may be scheme-less ("github.com").
-// A bare new URL throws and gets swallowed into fetch-failed, so we fill in the scheme.
-export function originOf(baseUrl: string): string {
-  const withScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(baseUrl) ? baseUrl : `https://${baseUrl}`;
-  return new URL(withScheme).origin;
-}
+// The REST base is fixed at build time (see build.mjs's esbuild define).
+export const API_BASE = __API_BASE__;
 
-export function apiBase(baseUrl: string | undefined): string {
-  if (!baseUrl) return "https://api.github.com";
-  const origin = originOf(baseUrl);
-  return origin === "https://github.com" ? "https://api.github.com" : `${origin}/api/v3`;
-}
-
-/** Derives the GraphQL endpoint from the REST base. GHES: /api/v3 → /api/graphql.
- *  The argument is named restBase to avoid confusion with the apiBase function. */
+/** Derives the GraphQL endpoint from the REST base. */
 export function graphqlUrl(restBase: string): string {
-  return restBase.endsWith("/api/v3") ? `${restBase.slice(0, -"/api/v3".length)}/api/graphql` : `${restBase}/graphql`;
+  return `${restBase}/graphql`;
 }
 
 export class GithubClient {
@@ -94,7 +83,7 @@ export class GithubClient {
   }
 
   /** Looks up guid → asset path (with .meta stripped) via Code Search. No hit / not indexed (422) → null.
-   *  legacy syntax (extension:meta) = GHES-compatible. The index covers only the default branch, authenticated 10 req/min. */
+   *  The index covers only the default branch, authenticated 10 req/min. */
   async searchMetaByGuid(owner: string, repo: string, guid: string): Promise<string | null> {
     const q = encodeURIComponent(`"${guid}" repo:${owner}/${repo} extension:meta`);
     const res = await this.request(`/search/code?q=${q}&per_page=1`, "application/vnd.github+json");

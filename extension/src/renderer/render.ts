@@ -75,6 +75,48 @@ export function renderTooLarge(root: ShadowRoot, bytes: number, onRender: () => 
   container.append(note("pl-empty", `Large file (${Math.round(bytes / (1024 * 1024))} MB).`, ALERT), button);
 }
 
+/** Auth-error panel: the message plus a button that starts the GitHub device flow in place. */
+export function renderSignIn(root: ShadowRoot, message: string, onSignIn: () => void): void {
+  const container = mount(root);
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "pl-render";
+  button.textContent = "Sign in with GitHub";
+  button.addEventListener("click", onSignIn);
+  container.append(note("pl-error", message, ALERT), button);
+}
+
+/** Device-flow pending state: keeps the user code visible while the user authorizes on GitHub. */
+export function renderSignInPending(
+  root: ShadowRoot,
+  userCode: string,
+  verificationUri: string,
+  onCopy: () => void,
+): void {
+  const container = mount(root);
+  const row = note("pl-signin", "Enter this code on GitHub:");
+  const code = document.createElement("code");
+  code.className = "pl-user-code";
+  code.textContent = userCode;
+  const copy = document.createElement("button");
+  copy.type = "button";
+  copy.className = "pl-render";
+  copy.textContent = "Copy code";
+  copy.addEventListener("click", onCopy);
+  const link = document.createElement("a");
+  link.className = "pl-render";
+  link.href = verificationUri;
+  link.target = "_blank";
+  link.rel = "noopener noreferrer";
+  link.textContent = "Open GitHub";
+  row.append(code, copy, link);
+  const busy = note("pl-signin-wait", "Waiting for GitHub authorization…");
+  const spin = document.createElement("span");
+  spin.className = "pl-spinner";
+  busy.prepend(spin);
+  container.append(row, busy);
+}
+
 function mount(root: ShadowRoot): HTMLElement {
   root.replaceChildren();
   const style = document.createElement("style");

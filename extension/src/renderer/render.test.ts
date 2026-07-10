@@ -273,7 +273,7 @@ describe("render", () => {
       loose: [],
     };
     render(root, diff);
-    const cards = [...root.querySelectorAll(".pl-components > details")] as HTMLDetailsElement[];
+    const cards = [...root.querySelectorAll(".pl-components .pl-kids > details")] as HTMLDetailsElement[];
     expect(cards).toHaveLength(2);
     // Closing added would look asymmetric ("only Cylinder1 collapsed"), so always open regardless of status
     expect(cards[0]?.open).toBe(true); // added Cylinder1 is open too
@@ -368,9 +368,60 @@ describe("render", () => {
       ],
     };
     render(root, diff);
-    const summary = root.querySelector("details > summary");
+    const summary = root.querySelector("details.pl-comp > summary");
     expect(summary?.textContent).toContain("Cylinder1");
     expect(summary?.textContent).not.toContain("MonoBehaviour");
+  });
+
+  it("renders the components group as an open collapsible with chevron and count", () => {
+    const root = freshRoot();
+    render(root, DIFF);
+    // The group folds independently of the GameObject row, so the hierarchy can be
+    // scanned with all component noise collapsed.
+    const group = root.querySelector<HTMLDetailsElement>("details.pl-components");
+    expect(group).not.toBeNull();
+    expect(group?.open).toBe(true); // open by default: a diff view must show its changes
+    const head = group?.querySelector("summary.pl-components-label");
+    expect(head).not.toBeNull();
+    expect(head?.querySelector(".pl-chevron svg")).not.toBeNull();
+    // The count keeps the collapsed state informative ("1 changed component hidden").
+    expect(head?.textContent).toContain("components (1)");
+  });
+
+  it("indents component cards one level deeper than child GameObjects", () => {
+    const root = freshRoot();
+    render(root, DIFF);
+    const kids = root.querySelector("details.pl-go > .pl-kids")!;
+    // Gear cards live inside the group's own kids box (extra indent + guide line)...
+    expect(kids.querySelector("details.pl-components > .pl-kids > details.pl-comp")).not.toBeNull();
+    // ...while the child GameObject stays directly on the hierarchy spine.
+    const childGo = kids.querySelector("details.pl-go");
+    expect(childGo?.parentElement).toBe(kids);
+    expect(kids.querySelector("details.pl-components details.pl-go")).toBeNull();
+  });
+
+  it("wraps root-level loose components in a components group", () => {
+    const root = freshRoot();
+    const diff: DiffV2 = {
+      schema: "prefablens.diff.v2",
+      unresolvedGuids: [],
+      roots: [],
+      loose: [
+        {
+          kind: "component",
+          fileId: "5",
+          classId: 114,
+          typeName: "MonoBehaviour",
+          scriptGuid: null,
+          className: "Cylinder1",
+          status: "modified",
+          fields: [{ path: "Hp", status: "modified", before: "1", after: "2" }],
+        },
+      ],
+    };
+    render(root, diff);
+    // Consistent visual language: gear rows always appear inside a components group.
+    expect(root.querySelector(".pl-root > details.pl-components details.pl-comp")).not.toBeNull();
   });
 
   it("renders unity-style rows: chevron, icon and status badge", () => {

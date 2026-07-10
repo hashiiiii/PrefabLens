@@ -70,10 +70,13 @@ export const STYLES = `
   details.pl-modified > summary > .pl-badge { color: var(--pl-modified); background: var(--pl-modified-bg); }
   .pl-kids { margin-left: 11px; border-left: 1px solid var(--pl-hairline); padding-left: 8px; }
   .pl-components-label {
+    display: grid; grid-template-columns: 16px 1fr; align-items: center;
+    min-height: 22px; padding: 0 4px; border-radius: 4px;
+    cursor: pointer; user-select: none;
     color: var(--pl-muted); font-size: 10px; font-weight: 600;
-    text-transform: uppercase; letter-spacing: 0.6px; user-select: none;
-    margin: 2px 0 0 4px;
+    text-transform: uppercase; letter-spacing: 0.6px;
   }
+  .pl-components-label:hover { background: var(--pl-hover); }
   .pl-field {
     display: flex; align-items: center; flex-wrap: wrap; column-gap: 6px;
     min-height: 22px; padding: 0 4px 0 38px; border-radius: 4px;

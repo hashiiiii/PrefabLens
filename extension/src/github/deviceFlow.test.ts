@@ -51,6 +51,8 @@ describe("requestDeviceCode", () => {
     expect(calls[0]?.init.method).toBe("POST");
     expect((calls[0]?.init.headers as Record<string, string>).accept).toBe("application/json");
     expect(String(calls[0]?.init.body)).toBe(`client_id=${CLIENT_ID}&scope=repo`);
+    // Cookie-less like a CLI: the content-script call is same-origin on github.com and must not carry session state.
+    expect(calls[0]?.init.credentials).toBe("omit");
   });
 
   it("throws on a non-OK response", async () => {
@@ -76,6 +78,7 @@ describe("pollForToken", () => {
     expect(String(calls[0]?.init.body)).toBe(
       `client_id=${CLIENT_ID}&device_code=dc1&grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Adevice_code`,
     );
+    expect(calls[0]?.init.credentials).toBe("omit");
   });
 
   it("keeps polling through authorization_pending until the token arrives", async () => {

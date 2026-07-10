@@ -22,6 +22,9 @@ export async function requestDeviceCode(fetchFn: typeof fetch): Promise<DeviceCo
     method: "POST",
     headers: { accept: "application/json" },
     body: new URLSearchParams({ client_id: CLIENT_ID, scope: "repo" }),
+    // OAuth device endpoints need no cookies: staying cookie-less keeps the same-origin
+    // call from the github.com content script free of session state.
+    credentials: "omit",
   });
   if (!res.ok) throw new Error(`device code request failed (HTTP ${res.status})`);
   const body = (await res.json()) as DeviceCodeResponse;
@@ -51,6 +54,7 @@ export async function pollForToken(
         device_code: code.deviceCode,
         grant_type: "urn:ietf:params:oauth:grant-type:device_code",
       }),
+      credentials: "omit",
     });
     if (!res.ok) throw new Error(`device token poll failed (HTTP ${res.status})`);
     const body = (await res.json()) as TokenResponse;

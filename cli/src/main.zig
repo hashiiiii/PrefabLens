@@ -9,6 +9,10 @@ pub const render_tree = @import("render_tree.zig");
 pub const render_html = @import("render_html.zig");
 pub const mcp = @import("mcp.zig");
 
+comptime {
+    _ = @import("unity_path.zig");
+}
+
 test {
     std.testing.refAllDecls(@This());
     _ = resolve;

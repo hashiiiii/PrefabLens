@@ -71,6 +71,12 @@ pub fn changedPaths(
     var argv: std.ArrayList([]const u8) = .empty;
     try argv.appendSlice(arena, &.{ "git", "diff", "--name-only", "-z", "--end-of-options", before_ref });
     if (after_ref.len != 0) try argv.append(arena, after_ref);
+    // No pathspec follows the refs, but the trailing "--" still matters: without it, a ref
+    // operand that fails to resolve as a revision but happens to name a file in the working
+    // tree (e.g. a caller passing a non-Unity path like "Note.txt" as if it were a ref) would
+    // have git silently reinterpret it as a pathspec instead of failing. The explicit "--"
+    // forces every operand before it to be resolved strictly as a revision.
+    try argv.append(arena, "--");
     const res = std.process.run(arena, io, .{
         .argv = argv.items,
         .cwd = .{ .path = repo_dir },
@@ -243,6 +249,30 @@ test "changedPaths lists changes between two refs" {
     const paths = try changedPaths(testing.io, arena, dir, "HEAD~1", "HEAD", default_git_timeout);
     try testing.expectEqual(@as(usize, 1), paths.len);
     try testing.expectEqualStrings("Foo.prefab", paths[0]);
+}
+
+test "changedPaths surfaces a file-named operand as GitDiffFailed" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const dir = try tmp.dir.realPathFileAlloc(testing.io, ".", arena);
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "Foo.prefab", .data = "v1\n" });
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "Note.txt", .data = "n1\n" });
+    try git(testing.io, arena, dir, &.{ "init", "-q" });
+    try git(testing.io, arena, dir, &.{ "config", "user.email", "t@t.t" });
+    try git(testing.io, arena, dir, &.{ "config", "user.name", "t" });
+    try git(testing.io, arena, dir, &.{ "add", "." });
+    try git(testing.io, arena, dir, &.{ "commit", "-q", "-m", "first" });
+
+    // Note.txt fails the CLI's Unity extension gate (main.zig's parseArgs), so it gets
+    // classified as a second ref operand rather than a path. Without a trailing "--",
+    // git would fail to resolve "Note.txt" as a revision and silently fall back to
+    // binding it as a pathspec instead, succeeding at exit 0 (diff restricted to that
+    // one file) rather than surfacing the unresolvable ref as an error.
+    try testing.expectError(error.GitDiffFailed, changedPaths(testing.io, arena, dir, "HEAD", "Note.txt", default_git_timeout));
 }
 
 test "changedPaths surfaces a bad ref as GitDiffFailed" {

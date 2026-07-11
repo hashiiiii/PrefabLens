@@ -2,6 +2,7 @@ const std = @import("std");
 const testing = std.testing;
 const core = @import("core");
 const main = @import("main.zig");
+const unity_path = @import("unity_path.zig");
 
 pub const default_protocol_version = "2025-06-18";
 // 2025-03-26 makes batch requests a MUST, but major clients don't send them, so we accept it while leaving batching unsupported.
@@ -127,6 +128,9 @@ fn handleToolsCall(io: std.Io, arena: std.mem.Allocator, w: *std.Io.Writer, id: 
     const args: ?std.json.Value = if (p == .object) p.object.get("arguments") else null;
     const path = getString(args, "path") catch return validationError(w, id, "path must be a non-empty string");
     if (path == null or path.?.len == 0) return validationError(w, id, "path must be a non-empty string");
+    // Same gate main.zig's parseArgs applies to CLI path operands (unity_path.isUnityPath):
+    // reject anything that isn't a Unity YAML asset before it ever reaches git/the CLI argv.
+    if (!unity_path.isUnityPath(path.?)) return validationError(w, id, "path must end in a Unity YAML extension");
     const before = (getString(args, "before") catch return validationError(w, id, "before must be a string")) orelse "HEAD";
     const after = getString(args, "after") catch return validationError(w, id, "after must be a string");
     const project_root = getString(args, "projectRoot") catch return validationError(w, id, "projectRoot must be a non-empty string");
@@ -305,12 +309,13 @@ test "mcp: tools/call validation errors match the ts host contract" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
-    // empty path / empty projectRoot / invalid format / missing arguments / unknown tool
+    // empty path / empty projectRoot / invalid format / missing arguments / unknown tool / non-Unity path extension
     const res = try roundtrip(arena, "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"prefab_diff\",\"arguments\":{\"path\":\"\"}}}\n" ++
         "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"prefab_diff\",\"arguments\":{\"path\":\"a.prefab\",\"projectRoot\":\"\"}}}\n" ++
         "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"prefab_diff\",\"arguments\":{\"path\":\"a.prefab\",\"format\":\"xml\"}}}\n" ++
         "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tools/call\",\"params\":{\"name\":\"prefab_diff\"}}\n" ++
-        "{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"tools/call\",\"params\":{\"name\":\"nope\",\"arguments\":{}}}\n");
+        "{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"tools/call\",\"params\":{\"name\":\"nope\",\"arguments\":{}}}\n" ++
+        "{\"jsonrpc\":\"2.0\",\"id\":6,\"method\":\"tools/call\",\"params\":{\"name\":\"prefab_diff\",\"arguments\":{\"path\":\"Foo.txt\"}}}\n");
     var lines = std.mem.splitScalar(u8, std.mem.trimEnd(u8, res, "\n"), '\n');
     const l1 = lines.next().?;
     try testing.expectEqualStrings("{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"Input validation error: path must be a non-empty string\"}],\"isError\":true}}", l1);
@@ -318,6 +323,10 @@ test "mcp: tools/call validation errors match the ts host contract" {
     try testing.expect(std.mem.indexOf(u8, lines.next().?, "format must be \\\"tree\\\" or \\\"json\\\"") != null);
     try testing.expect(std.mem.indexOf(u8, lines.next().?, "path must be a non-empty string") != null);
     try testing.expect(std.mem.indexOf(u8, lines.next().?, "-32602") != null);
+    // Foo.txt is well-formed but not a Unity YAML asset -- same response shape as the other
+    // validation errors above (validationError()'s envelope), not a git/CLI failure.
+    const l6 = lines.next().?;
+    try testing.expectEqualStrings("{\"jsonrpc\":\"2.0\",\"id\":6,\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"Input validation error: path must end in a Unity YAML extension\"}],\"isError\":true}}", l6);
 }
 
 test "mcp: tools/call diffs a real git fixture with the ts host golden" {

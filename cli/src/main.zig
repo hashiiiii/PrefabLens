@@ -767,6 +767,30 @@ fn writeJsonString(w: *std.Io.Writer, s: []const u8) !void {
     try w.writeByte('"');
 }
 
+/// Looks up an environment variable, treating a set-but-empty value the same as unset.
+/// Some shells/CI configs export TMPDIR="" rather than leaving it undefined, and an empty
+/// directory string would otherwise win the `orelse` fallback chain below with a bogus path.
+fn envDir(env: *const std.process.Environ.Map, key: []const u8) ?[]const u8 {
+    const v = env.get(key) orelse return null;
+    return if (v.len == 0) null else v;
+}
+
+test "envDir treats a set-but-empty variable as unset and falls through" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var env = std.process.Environ.Map.init(arena);
+    try env.put("TMPDIR", "");
+    try env.put("TEMP", "/tmp/real");
+
+    try testing.expectEqual(@as(?[]const u8, null), envDir(&env, "TMPDIR"));
+    try testing.expectEqualStrings("/tmp/real", envDir(&env, "TEMP").?);
+    // The same fallback chain run() uses: empty TMPDIR must not win over TEMP.
+    try testing.expectEqualStrings("/tmp/real", envDir(&env, "TMPDIR") orelse envDir(&env, "TEMP") orelse "/tmp");
+    // A key missing from the map entirely also falls through to "/tmp".
+    try testing.expectEqualStrings("/tmp", envDir(&env, "NOPE") orelse "/tmp");
+}
+
 pub fn run(io: std.Io, arena: std.mem.Allocator, args: []const []const u8, stdout: *std.Io.Writer, stderr: *std.Io.Writer, color: bool, environ: ?*const std.process.Environ.Map) !u8 {
     const opt = parseArgs(args) catch |err| {
         switch (err) {
@@ -903,7 +927,7 @@ pub fn run(io: std.Io, arena: std.mem.Allocator, args: []const []const u8, stdou
                 var aw = std.Io.Writer.Allocating.fromArrayList(arena, &buf);
                 try render_html.render(&aw.writer, files.items, resolver_ptr);
                 const tmp_dir = if (environ) |env|
-                    env.get("TMPDIR") orelse env.get("TEMP") orelse "/tmp"
+                    envDir(env, "TMPDIR") orelse envDir(env, "TEMP") orelse "/tmp"
                 else
                     "/tmp";
                 // Single-file reports carry the file stem; bulk mode is just "report".
@@ -911,7 +935,10 @@ pub fn run(io: std.Io, arena: std.mem.Allocator, args: []const []const u8, stdou
                     .files => |f| std.fs.path.stem(f.after),
                     .git => |g| if (g.path) |p| std.fs.path.stem(p) else "report",
                 };
-                const report = try writeReportFile(io, arena, tmp_dir, stem, aw.toArrayList().items);
+                const report = writeReportFile(io, arena, tmp_dir, stem, aw.toArrayList().items) catch {
+                    try stderr.print("error: cannot write report to '{s}'\n", .{tmp_dir});
+                    return 1;
+                };
                 try stdout.print("{s}\n", .{report});
                 openInBrowser(io, arena, report) catch {
                     // The path is already printed; failing to launch a

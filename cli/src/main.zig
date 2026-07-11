@@ -8,7 +8,6 @@ pub const input = @import("input.zig");
 pub const display = @import("display.zig");
 pub const render_tree = @import("render_tree.zig");
 pub const render_html = @import("render_html.zig");
-pub const mcp = @import("mcp.zig");
 const unity_path = @import("unity_path.zig");
 
 test {
@@ -18,7 +17,6 @@ test {
     _ = display;
     _ = render_tree;
     _ = render_html;
-    _ = mcp;
     _ = unity_path;
 }
 
@@ -619,7 +617,6 @@ const help_text = usage_line ++
     \\  <ref> [<path>]         ref vs working tree
     \\  <ref> <ref> [<path>]   ref vs ref
     \\  <before> <after>       compare two files directly (no git)
-    \\  mcp                    run as an MCP server on stdio
     \\
     \\options:
     \\  --json         prefablens.diff.v2 JSON ({path, diff} array in bulk mode)
@@ -970,18 +967,6 @@ pub fn main(init: std.process.Init) !u8 {
     var stdout_buffer: [4096]u8 = undefined;
     var stdout_file_writer: std.Io.File.Writer = .init(.stdout(), init.io, &stdout_buffer);
     const stdout = &stdout_file_writer.interface;
-
-    if (user_args.len >= 1 and std.mem.eql(u8, user_args[0], "mcp")) {
-        var stdin_buffer: [64 * 1024]u8 = undefined;
-        var stdin_reader: std.Io.File.Reader = .init(.stdin(), init.io, &stdin_buffer);
-        // Client disconnect (broken pipe, etc.) is normal. Exit quietly without emitting a stack trace.
-        mcp.serve(init.io, std.heap.page_allocator, &stdin_reader.interface, stdout) catch {
-            stdout.flush() catch {};
-            return 1;
-        };
-        stdout.flush() catch {};
-        return 0;
-    }
 
     var stderr_buffer: [4096]u8 = undefined;
     var stderr_file_writer: std.Io.File.Writer = .init(.stderr(), init.io, &stderr_buffer);

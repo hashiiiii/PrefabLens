@@ -7,8 +7,8 @@ const testing = std.testing;
 pub const max_input_bytes: usize = 64 * 1024 * 1024; // 64 MiB guard
 
 /// Default timeout for running git. An upper bound so that not just the direct CLI
-/// invocation but also the resident MCP server and Unity Editor (which waits with
-/// WaitForExit) aren't dragged down by a hung git.
+/// invocation but also the Unity Editor (which waits with WaitForExit) isn't
+/// dragged down by a hung git.
 pub const default_git_timeout: std.Io.Timeout = .{ .duration = .{ .clock = .awake, .raw = .fromSeconds(60) } };
 
 pub fn showAtRef(io: std.Io, arena: std.mem.Allocator, repo_dir: []const u8, ref: []const u8, path: []const u8, timeout: std.Io.Timeout) ![]u8 {
@@ -163,7 +163,7 @@ test "showAtRef kills git and errors when the timeout passes" {
     try git(testing.io, arena, dir, &.{ "commit", "-q", "-m", "first" });
 
     // Even real git can't finish in 1µs (spawn alone takes ms). Confirm that the cutoff
-    // protecting a resident MCP session from a hung git returns as a clear error.
+    // protecting a long-lived caller from a hung git returns as a clear error.
     const tiny: std.Io.Timeout = .{ .duration = .{ .clock = .awake, .raw = .fromMicroseconds(1) } };
     try testing.expectError(error.GitTimeout, showAtRef(testing.io, arena, dir, "HEAD", "Foo.prefab", tiny));
 }

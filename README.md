@@ -30,8 +30,6 @@ prefablens --open main                  # write the report to a temp file and op
 Operands ending in a Unity YAML extension (`.prefab`, `.unity`, `.asset`, ...) are
 treated as paths; everything else is a git ref.
 
-Also runs as an MCP server: `prefablens mcp`.
-
 ### Chrome extension
 
 Shows semantic diffs for UnityYAML files on the GitHub pull request Files changed tab. Requires a GitHub Personal Access Token (configure on the extension options page).

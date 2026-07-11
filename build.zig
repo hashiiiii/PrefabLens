@@ -15,10 +15,6 @@ pub fn build(b: *std.Build) void {
         .target = target,
     });
 
-    // Wiring so the mcp parity test can @embedFile the same plane fixture as server.test.ts.
-    const plane_before = b.createModule(.{ .root_source_file = b.path("core/src/testdata/plane_before.prefab") });
-    const plane_after = b.createModule(.{ .root_source_file = b.path("core/src/testdata/plane_after.prefab") });
-
     const exe = b.addExecutable(.{
         .name = "prefablens",
         .root_module = b.createModule(.{
@@ -27,8 +23,6 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
             .imports = &.{
                 .{ .name = "core", .module = core_mod },
-                .{ .name = "testdata_plane_before", .module = plane_before },
-                .{ .name = "testdata_plane_after", .module = plane_after },
                 .{ .name = "build_options", .module = build_options_mod },
             },
         }),
@@ -51,8 +45,6 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
             .imports = &.{
                 .{ .name = "core", .module = core_mod },
-                .{ .name = "testdata_plane_before", .module = plane_before },
-                .{ .name = "testdata_plane_after", .module = plane_after },
                 .{ .name = "build_options", .module = build_options_mod },
             },
         }),
@@ -61,21 +53,6 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run all unit tests");
     test_step.dependOn(&b.addRunArtifact(core_tests).step);
     test_step.dependOn(&b.addRunArtifact(cli_tests).step);
-
-    // MCP protocol smoke against the real binary; exact-match only the static, git-free responses.
-    // The tools/list expectation embeds the same tools_list.json as cli/src/mcp.zig.
-    const tools_list_json = comptime std.mem.trimEnd(u8, @embedFile("cli/src/tools_list.json"), "\r\n");
-    const mcp_smoke = b.addRunArtifact(exe);
-    mcp_smoke.addArg("mcp");
-    mcp_smoke.setStdIn(.{ .bytes = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}\n" ++
-        "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\"}\n" ++
-        "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"prefab_diff\",\"arguments\":{\"path\":\"\"}}}\n" ++
-        "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"nope\"}\n" });
-    mcp_smoke.expectStdOutEqual("{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{}}\n" ++
-        "{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":" ++ tools_list_json ++ "}\n" ++
-        "{\"jsonrpc\":\"2.0\",\"id\":3,\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"Input validation error: path must be a non-empty string\"}],\"isError\":true}}\n" ++
-        "{\"jsonrpc\":\"2.0\",\"id\":4,\"error\":{\"code\":-32601,\"message\":\"Method not found\"}}\n");
-    test_step.dependOn(&mcp_smoke.step);
 
     const perf_exe = b.addExecutable(.{
         .name = "perf",

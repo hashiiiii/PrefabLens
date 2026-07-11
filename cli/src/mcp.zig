@@ -333,21 +333,22 @@ test "mcp: tools/call diffs a real git fixture with the ts host golden" {
     try req_w.writer.writeAll("}}}\n");
     const res = try roundtrip(arena, req_w.toArrayList().items);
 
-    // Parse the response and compare text against server.test.ts's golden.
+    // Parse the response and compare text against the box-drawing spine layout
+    // (render_tree.zig; formerly matched server.test.ts's now-removed TS host golden).
     const parsed = try std.json.parseFromSliceLeaky(std.json.Value, arena, std.mem.trimEnd(u8, res, "\n"), .{});
     const result = parsed.object.get("result").?.object;
     try testing.expect(result.get("isError") == null);
     const text = result.get("content").?.array.items[0].object.get("text").?.string;
-    try testing.expectEqualStrings("  Plane\n" ++
-        "  ~ Cylinder  <Prefab>\n" ++
-        "      components\n" ++
-        "        ~ Transform\n" ++
-        "          ~ Position.x: 0.41646004 -> 1\n" ++
-        "  + Cylinder Variant  <Prefab>\n" ++
-        "      components\n" ++
-        "        + Transform\n" ++
-        "          + Position: (2.03, 3.63, 1.11797)\n" ++
-        "          + Rotation: (0, 0, 0, 1)\n", text);
+    try testing.expectEqualStrings("◆ Plane\n" ++
+        "├─ ◆ ~ Cylinder ‹Prefab›\n" ++
+        "│  └─ components (1)\n" ++
+        "│     └─ ~ Transform\n" ++
+        "│          Position.x: 0.41646004 → 1\n" ++
+        "└─ ◆ + Cylinder Variant ‹Prefab›\n" ++
+        "   └─ components (1)\n" ++
+        "      └─ + Transform\n" ++
+        "           Position: (2.03, 3.63, 1.11797)\n" ++
+        "           Rotation: (0, 0, 0, 1)\n", text);
 }
 
 test "mcp: tools/call format json returns diff v2 and bad refs surface as isError" {

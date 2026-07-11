@@ -2,7 +2,7 @@ const std = @import("std");
 const core = @import("core");
 const testing = std.testing;
 
-test "render: modified field shown old -> new without color" {
+test "render: modified loose component under a counted components group" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
@@ -21,18 +21,18 @@ test "render: modified field shown old -> new without color" {
     const res = try core.diffBytes(arena, before, after);
     var out: std.ArrayList(u8) = .empty;
     var aw = std.Io.Writer.Allocating.fromArrayList(arena, &out);
-    try render(&aw.writer, res, null, false);
+    try render(arena, &aw.writer, res, null, false);
     const text = aw.toArrayList().items;
-    try testing.expect(std.mem.indexOf(u8, text, "MonoBehaviour") != null);
-    try testing.expect(std.mem.indexOf(u8, text, "Volume") != null);
-    try testing.expect(std.mem.indexOf(u8, text, "0.5") != null);
-    try testing.expect(std.mem.indexOf(u8, text, "0.8") != null);
-    try testing.expect(std.mem.indexOf(u8, text, "->") != null);
+    try testing.expect(std.mem.indexOf(u8, text, "components (1)\n") != null);
+    try testing.expect(std.mem.indexOf(u8, text, "└─ ~ MonoBehaviour") != null);
+    // Field status equals the card status, so the per-field sign is omitted.
+    try testing.expect(std.mem.indexOf(u8, text, "Volume: 0.5 → 0.8") != null);
+    try testing.expect(std.mem.indexOf(u8, text, "~ Volume") == null);
     // No ANSI escape when color is disabled.
     try testing.expect(std.mem.indexOf(u8, text, "\x1b[") == null);
 }
 
-test "render: prefab instance shows name, components label and grouped overrides" {
+test "render: prefab instance shows cube glyph, meta marker and overrides" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
@@ -53,15 +53,16 @@ test "render: prefab instance shows name, components label and grouped overrides
     const res = try core.diffBytes(arena, "", after);
     var out: std.ArrayList(u8) = .empty;
     var aw = std.Io.Writer.Allocating.fromArrayList(arena, &out);
-    try render(&aw.writer, res, null, false);
+    try render(arena, &aw.writer, res, null, false);
     const text = aw.toArrayList().items;
-    try testing.expect(std.mem.indexOf(u8, text, "+ Cylinder Variant  <Prefab>") != null);
-    try testing.expect(std.mem.indexOf(u8, text, "components") != null);
+    try testing.expect(std.mem.indexOf(u8, text, "◆ + Cylinder Variant ‹Prefab›") != null);
+    try testing.expect(std.mem.indexOf(u8, text, "components (") != null);
     try testing.expect(std.mem.indexOf(u8, text, "+ Transform") != null);
+    // Row status (added) matches the group heading, so no per-row sign.
     try testing.expect(std.mem.indexOf(u8, text, "Scale.y: 2") != null);
 }
 
-test "render: components label separates object and component dimensions" {
+test "render: spine glyphs connect object, components node and cards" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
@@ -90,11 +91,65 @@ test "render: components label separates object and component dimensions" {
     const res = try core.diffBytes(arena, before, after);
     var out: std.ArrayList(u8) = .empty;
     var aw = std.Io.Writer.Allocating.fromArrayList(arena, &out);
-    try render(&aw.writer, res, null, false);
+    try render(arena, &aw.writer, res, null, false);
     const text = aw.toArrayList().items;
-    // The depths become "  Player" -> "    components" -> "      ~ MonoBehaviour".
-    try testing.expect(std.mem.indexOf(u8, text, "\n    components\n") != null);
-    try testing.expect(std.mem.indexOf(u8, text, "\n      ~ MonoBehaviour\n") != null);
+    // Player has no children, so components is its last (only) spine node,
+    // and the single card closes the inner spine.
+    try testing.expect(std.mem.indexOf(u8, text, "◆ Player\n└─ components (1)\n   └─ ~ MonoBehaviour\n") != null);
+    try testing.expect(std.mem.indexOf(u8, text, "Hp: 100 → 250") != null);
+}
+
+test "render: child object hangs off the parent spine after components" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const before =
+        \\--- !u!1 &1
+        \\GameObject:
+        \\  m_Name: Parent
+        \\  m_Component:
+        \\  - component: {fileID: 4}
+        \\--- !u!4 &4
+        \\Transform:
+        \\  m_GameObject: {fileID: 1}
+        \\  m_Father: {fileID: 0}
+        \\--- !u!1 &2
+        \\GameObject:
+        \\  m_Name: Child
+        \\  m_Component:
+        \\  - component: {fileID: 5}
+        \\--- !u!4 &5
+        \\Transform:
+        \\  m_GameObject: {fileID: 2}
+        \\  m_Father: {fileID: 4}
+    ;
+    const after =
+        \\--- !u!1 &1
+        \\GameObject:
+        \\  m_Name: Parent
+        \\  m_Component:
+        \\  - component: {fileID: 4}
+        \\--- !u!4 &4
+        \\Transform:
+        \\  m_GameObject: {fileID: 1}
+        \\  m_Father: {fileID: 0}
+        \\--- !u!1 &2
+        \\GameObject:
+        \\  m_Name: ChildRenamed
+        \\  m_Component:
+        \\  - component: {fileID: 5}
+        \\--- !u!4 &5
+        \\Transform:
+        \\  m_GameObject: {fileID: 2}
+        \\  m_Father: {fileID: 4}
+    ;
+    const res = try core.diffBytes(arena, before, after);
+    var out: std.ArrayList(u8) = .empty;
+    var aw = std.Io.Writer.Allocating.fromArrayList(arena, &out);
+    try render(arena, &aw.writer, res, null, false);
+    const text = aw.toArrayList().items;
+    // The child is the parent's last spine node.
+    try testing.expect(std.mem.indexOf(u8, text, "└─ ◆ ~ ChildRenamed") != null);
 }
 
 test "render: component shows editor class name when script is unresolved" {
@@ -118,14 +173,15 @@ test "render: component shows editor class name when script is unresolved" {
     const res = try core.diffBytes(arena, before, after);
     var out: std.ArrayList(u8) = .empty;
     var aw = std.Io.Writer.Allocating.fromArrayList(arena, &out);
-    // No resolver -> the guid can't be resolved, but the class name is more specific than MonoBehaviour.
-    try render(&aw.writer, res, null, false);
+    // No resolver -> the guid can't be resolved, but the class name is more
+    // specific than MonoBehaviour. The unresolved script keeps a bare marker.
+    try render(arena, &aw.writer, res, null, false);
     const text = aw.toArrayList().items;
-    try testing.expect(std.mem.indexOf(u8, text, "~ Cylinder1\n") != null);
+    try testing.expect(std.mem.indexOf(u8, text, "~ Cylinder1 ‹Script›") != null);
     try testing.expect(std.mem.indexOf(u8, text, "MonoBehaviour") == null);
 }
 
-test "render: mixed-status override group gets a modified heading" {
+test "render: mixed-status override group keeps signs only where they differ" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
@@ -139,8 +195,6 @@ test "render: mixed-status override group gets a modified heading" {
         \\      value: 0
         \\  m_SourcePrefab: {fileID: 100100000, guid: aaa, type: 3}
     ;
-    // Order it so the added mod comes first, to check the heading isn't
-    // dragged by the first line's status.
     const after =
         \\--- !u!1001 &1001
         \\PrefabInstance:
@@ -157,12 +211,15 @@ test "render: mixed-status override group gets a modified heading" {
     const res = try core.diffBytes(arena, before, after);
     var out: std.ArrayList(u8) = .empty;
     var aw = std.Io.Writer.Allocating.fromArrayList(arena, &out);
-    try render(&aw.writer, res, null, false);
+    try render(arena, &aw.writer, res, null, false);
     const text = aw.toArrayList().items;
-    try testing.expect(std.mem.indexOf(u8, text, "~ Transform\n") != null);
-    try testing.expect(std.mem.indexOf(u8, text, "+ Transform\n") == null);
+    // Mixed group -> modified heading; the added row differs so it keeps +,
+    // the modified row matches so its sign is dropped.
+    try testing.expect(std.mem.indexOf(u8, text, "~ Transform") != null);
+    try testing.expect(std.mem.indexOf(u8, text, "+ Transform") == null);
     try testing.expect(std.mem.indexOf(u8, text, "+ Scale.y: 2") != null);
-    try testing.expect(std.mem.indexOf(u8, text, "~ Position.x: 0 -> 1") != null);
+    try testing.expect(std.mem.indexOf(u8, text, "Position.x: 0 → 1") != null);
+    try testing.expect(std.mem.indexOf(u8, text, "~ Position.x") == null);
 }
 
 test "render: structural summary row shows label only, no dangling value" {
@@ -195,22 +252,24 @@ test "render: structural summary row shows label only, no dangling value" {
     const res = try core.diffBytes(arena, before, after);
     var out: std.ArrayList(u8) = .empty;
     var aw = std.Io.Writer.Allocating.fromArrayList(arena, &out);
-    try render(&aw.writer, res, null, false);
+    try render(arena, &aw.writer, res, null, false);
     const text = aw.toArrayList().items;
-    // The count is included in the label, so a value-less row ends with just the label.
-    try testing.expect(std.mem.indexOf(u8, text, "+ Added Components (1)\n") != null);
+    // The count is included in the label, so a value-less row ends with just
+    // the label.
+    try testing.expect(std.mem.indexOf(u8, text, "Added Components (1)\n") != null);
     try testing.expect(std.mem.indexOf(u8, text, "∅") == null);
 }
 
 const model = core.model;
 const display = @import("display.zig");
 
-const Color = struct {
-    const reset = "\x1b[0m";
-    const green = "\x1b[32m";
-    const red = "\x1b[31m";
-    const yellow = "\x1b[33m";
-    const dim = "\x1b[2m";
+pub const Color = struct {
+    pub const reset = "\x1b[0m";
+    pub const green = "\x1b[32m";
+    pub const red = "\x1b[31m";
+    pub const yellow = "\x1b[33m";
+    pub const dim = "\x1b[2m";
+    pub const bold = "\x1b[1m";
 };
 
 fn statusColor(s: model.Status) []const u8 {
@@ -227,26 +286,30 @@ fn statusSign(s: model.Status) []const u8 {
         .added => "+",
         .removed => "-",
         .modified => "~",
-        .unchanged => " ",
+        .unchanged => "",
     };
 }
 
 pub fn render(
+    arena: std.mem.Allocator,
     w: *std.Io.Writer,
     res: model.DiffResult,
     resolved: ?*const core.json.Resolver,
     color: bool,
 ) !void {
-    for (res.roots) |o| try renderObject(w, o, resolved, color, 0);
-    for (res.loose) |c| try renderComponent(w, c, resolved, color, 0);
+    var prefix: std.ArrayList(u8) = .empty;
+    for (res.roots) |o| try renderObject(arena, w, o, resolved, color, &prefix, "");
+    if (res.loose.len != 0) {
+        // Loose components form a root-level components group, mirroring the
+        // extension's diff.loose section.
+        try paintLabel(w, color, res.loose.len);
+        for (res.loose, 0..) |c, i| {
+            try renderCard(arena, w, .{ .component = c }, resolved, color, &prefix, i + 1 == res.loose.len);
+        }
+    }
     if (res.unresolved_guids.len != 0 and resolved == null) {
         try w.print("\n({d} unresolved guid reference(s); pass --project DIR to resolve)\n", .{res.unresolved_guids.len});
     }
-}
-
-fn indent(w: *std.Io.Writer, depth: usize) !void {
-    var i: usize = 0;
-    while (i < depth) : (i += 1) try w.writeAll("  ");
 }
 
 fn paint(w: *std.Io.Writer, color: bool, code: []const u8, text: []const u8) !void {
@@ -255,88 +318,169 @@ fn paint(w: *std.Io.Writer, color: bool, code: []const u8, text: []const u8) !vo
     if (color) try w.writeAll(Color.reset);
 }
 
+fn paintLabel(w: *std.Io.Writer, color: bool, count: usize) !void {
+    if (color) try w.writeAll(Color.dim);
+    try w.print("components ({d})", .{count});
+    if (color) try w.writeAll(Color.reset);
+    try w.writeByte('\n');
+}
+
+fn signed(w: *std.Io.Writer, color: bool, status: model.Status) !void {
+    if (status == .unchanged) return;
+    try paint(w, color, statusColor(status), statusSign(status));
+    try w.writeByte(' ');
+}
+
 fn renderObject(
+    arena: std.mem.Allocator,
     w: *std.Io.Writer,
     o: model.ObjectDiff,
     resolved: ?*const core.json.Resolver,
     color: bool,
-    depth: usize,
+    prefix: *std.ArrayList(u8),
+    branch: []const u8,
 ) anyerror!void {
-    try indent(w, depth);
-    try paint(w, color, statusColor(o.status), statusSign(o.status));
-    try w.print(" {s}", .{display.objectName(o, resolved)});
-    if (o.kind == .prefab_instance) try w.writeAll("  <Prefab>");
+    try w.writeAll(prefix.items);
+    try w.writeAll(branch);
+    try w.writeAll("◆ ");
+    try signed(w, color, o.status);
+    try w.writeAll(display.objectName(o, resolved));
+    if (o.kind == .prefab_instance) {
+        if (color) try w.writeAll(Color.dim);
+        try w.writeAll(" ‹Prefab");
+        if (o.source_guid) |g| if (resolved) |r| if (r.get(g)) |p| try w.print(": {s}", .{p});
+        try w.writeAll("›");
+        if (color) try w.writeAll(Color.reset);
+    }
     try w.writeByte('\n');
-    // Display-dimension rule: components/overrides always sit under the components section.
-    // The label line has no 2-char sign+space prefix, so use depth+2 to visually align with
-    // the child objects' name column (depth+1 indent + sign+space).
-    if (o.overrides.len != 0 or o.components.len != 0) {
-        try indent(w, depth + 2);
-        try paint(w, color, Color.dim, "components");
-        try w.writeByte('\n');
-        try renderOverrides(w, o.overrides, color, depth + 3);
-        for (o.components) |c| try renderComponent(w, c, resolved, color, depth + 3);
-    }
-    for (o.children) |child| try renderObject(w, child, resolved, color, depth + 1);
-}
 
-fn renderOverrides(w: *std.Io.Writer, overrides: []const model.OverrideDiff, color: bool, depth: usize) !void {
-    var current: []const u8 = "";
-    for (overrides, 0..) |ov, i| {
-        if (!std.mem.eql(u8, current, ov.group)) {
-            current = ov.group;
-            const hs = display.groupHeadingStatus(overrides, i);
-            try indent(w, depth);
-            try paint(w, color, statusColor(hs), statusSign(hs));
-            try w.print(" {s}\n", .{ov.group});
+    // Below this row the spine continues for our own kids: components group
+    // first (if any), then child objects.
+    const mark = prefix.items.len;
+    try prefix.appendSlice(arena, continuation(branch));
+    defer prefix.shrinkRetainingCapacity(mark);
+
+    const card_count = display.overrideGroupCount(o.overrides) + o.components.len;
+    if (card_count != 0) {
+        const label_last = o.children.len == 0;
+        try w.writeAll(prefix.items);
+        try w.writeAll(if (label_last) "└─ " else "├─ ");
+        try paintLabel(w, color, card_count);
+
+        const inner_mark = prefix.items.len;
+        try prefix.appendSlice(arena, if (label_last) "   " else "│  ");
+        defer prefix.shrinkRetainingCapacity(inner_mark);
+
+        var idx: usize = 0;
+        var current: []const u8 = "";
+        var i: usize = 0;
+        while (i < o.overrides.len) : (i += 1) {
+            if (!std.mem.eql(u8, current, o.overrides[i].group)) {
+                current = o.overrides[i].group;
+                idx += 1;
+                try renderCard(arena, w, .{ .group = .{ .overrides = o.overrides, .start = i } }, resolved, color, prefix, idx == card_count);
+            }
         }
-        try indent(w, depth + 1);
-        try paint(w, color, statusColor(ov.status), statusSign(ov.status));
-        // A structural summary row (before=after=null) has the count in the label and no value.
-        if (ov.before == null and ov.after == null) {
-            try w.print(" {s}\n", .{ov.label});
-            continue;
+        for (o.components) |c| {
+            idx += 1;
+            try renderCard(arena, w, .{ .component = c }, resolved, color, prefix, idx == card_count);
         }
-        try w.print(" {s}: ", .{ov.label});
-        switch (ov.status) {
-            .modified => {
-                try writeValueText(w, ov.before);
-                try w.writeAll(" -> ");
-                try writeValueText(w, ov.after);
-            },
-            .added => try writeValueText(w, ov.after),
-            .removed => try writeValueText(w, ov.before),
-            .unchanged => {},
-        }
-        try w.writeByte('\n');
+    }
+    for (o.children, 0..) |child, i| {
+        try renderObject(arena, w, child, resolved, color, prefix, if (i + 1 == o.children.len) "└─ " else "├─ ");
     }
 }
 
-fn renderComponent(
+fn continuation(branch: []const u8) []const u8 {
+    if (branch.len == 0) return "";
+    if (std.mem.eql(u8, branch, "├─ ")) return "│  ";
+    return "   ";
+}
+
+const Card = union(enum) {
+    component: model.ComponentDiff,
+    group: struct { overrides: []const model.OverrideDiff, start: usize },
+};
+
+fn renderCard(
+    arena: std.mem.Allocator,
     w: *std.Io.Writer,
-    c: model.ComponentDiff,
+    card: Card,
     resolved: ?*const core.json.Resolver,
     color: bool,
-    depth: usize,
+    prefix: *std.ArrayList(u8),
+    last: bool,
 ) !void {
-    try indent(w, depth);
-    try paint(w, color, statusColor(c.status), statusSign(c.status));
-    try w.print(" {s}\n", .{display.componentName(c, resolved)});
-    for (c.fields) |f| try renderField(w, f, color, depth + 1);
+    try w.writeAll(prefix.items);
+    try w.writeAll(if (last) "└─ " else "├─ ");
+    const status: model.Status = switch (card) {
+        .component => |c| c.status,
+        .group => |g| display.groupHeadingStatus(g.overrides, g.start),
+    };
+    try signed(w, color, status);
+    switch (card) {
+        .component => |c| {
+            try w.writeAll(display.componentName(c, resolved));
+            if (c.script_guid) |g| {
+                if (color) try w.writeAll(Color.dim);
+                try w.writeAll(" ‹Script");
+                if (resolved) |r| if (r.get(g)) |p| try w.print(": {s}", .{p});
+                try w.writeAll("›");
+                if (color) try w.writeAll(Color.reset);
+            }
+        },
+        .group => |g| try w.writeAll(g.overrides[g.start].group),
+    }
+    try w.writeByte('\n');
+
+    // Field rows sit under the card without glyphs of their own.
+    const mark = prefix.items.len;
+    try prefix.appendSlice(arena, if (last) "     " else "│    ");
+    defer prefix.shrinkRetainingCapacity(mark);
+
+    switch (card) {
+        .component => |c| for (c.fields) |f| {
+            try renderFieldRow(w, f.path, f.status, status, f.before, f.after, color, prefix);
+        },
+        .group => |g| {
+            const group_name = g.overrides[g.start].group;
+            for (g.overrides[g.start..]) |ov| {
+                if (!std.mem.eql(u8, ov.group, group_name)) break;
+                try renderFieldRow(w, ov.label, ov.status, status, ov.before, ov.after, color, prefix);
+            }
+        },
+    }
 }
 
-fn renderField(w: *std.Io.Writer, f: model.FieldDiff, color: bool, depth: usize) !void {
-    try indent(w, depth);
-    try paint(w, color, statusColor(f.status), statusSign(f.status));
-    try w.print(" {s}: ", .{f.path});
-    switch (f.status) {
+fn renderFieldRow(
+    w: *std.Io.Writer,
+    label: []const u8,
+    status: model.Status,
+    parent: model.Status,
+    before: ?*const model.Node,
+    after: ?*const model.Node,
+    color: bool,
+    prefix: *std.ArrayList(u8),
+) !void {
+    try w.writeAll(prefix.items);
+    // The sign repeats only when it adds information over the card's status.
+    if (status != parent) try signed(w, color, status);
+    try w.writeAll(label);
+    // A structural summary row (before=after=null) has the count in the
+    // label and no value.
+    if (before == null and after == null) {
+        try w.writeByte('\n');
+        return;
+    }
+    try w.writeAll(": ");
+    switch (status) {
         .modified => {
-            try writeValueText(w, f.before);
-            try w.writeAll(" -> ");
-            try writeValueText(w, f.after);
+            try writeValueText(w, before);
+            try w.writeAll(" → ");
+            try writeValueText(w, after);
         },
-        .added => try writeValueText(w, f.after),
-        .removed => try writeValueText(w, f.before),
+        .added => try writeValueText(w, after),
+        .removed => try writeValueText(w, before),
         .unchanged => {},
     }
     try w.writeByte('\n');
@@ -344,7 +488,7 @@ fn renderField(w: *std.Io.Writer, f: model.FieldDiff, color: bool, depth: usize)
 
 fn writeValueText(w: *std.Io.Writer, node: ?*const model.Node) !void {
     const n = node orelse {
-        try w.writeAll("∅");
+        try w.writeAll("—");
         return;
     };
     switch (n.*) {

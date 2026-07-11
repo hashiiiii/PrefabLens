@@ -667,7 +667,7 @@ pub fn run(io: std.Io, arena: std.mem.Allocator, args: []const []const u8, stdou
             try stdout.writeByte('\n');
         },
         // Color when stdout is a TTY is decided in main(); --no-color forces it off.
-        .tree => try render_tree.render(stdout, res, resolver_ptr, color and !opt.no_color),
+        .tree => try render_tree.render(arena, stdout, res, resolver_ptr, color and !opt.no_color),
         .html => try render_html.render(stdout, &.{.{ .path = null, .res = res }}, resolver_ptr),
     }
     return 0;

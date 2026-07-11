@@ -150,7 +150,9 @@ fn handleToolsCall(io: std.Io, arena: std.mem.Allocator, w: *std.Io.Writer, id: 
     var aw = std.Io.Writer.Allocating.fromArrayList(arena, &out);
     var errbuf: std.ArrayList(u8) = .empty;
     var aw_err = std.Io.Writer.Allocating.fromArrayList(arena, &errbuf);
-    const code = main.run(io, arena, argv.items, &aw.writer, &aw_err.writer, false) catch |err| {
+    // The MCP tool never emits --open, so there's no browser to launch and
+    // no need for the real process environment here.
+    const code = main.run(io, arena, argv.items, &aw.writer, &aw_err.writer, false, null) catch |err| {
         const msg = try std.fmt.allocPrint(arena, "prefablens failed: {s}", .{@errorName(err)});
         try writeToolText(w, id, msg, true);
         return;

@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const core = @import("core");
 const testing = std.testing;
 
@@ -82,6 +83,29 @@ test "parseArgs: --help short-circuits" {
     try testing.expect(short.help);
 }
 
+test "parseArgs: --open implies html and rejects --json" {
+    const opt = try parseArgs(&.{ "--open", "main" });
+    try testing.expect(opt.open);
+    try testing.expectEqual(Format.html, opt.format);
+    try testing.expectError(ArgError.ConflictingFlags, parseArgs(&.{ "--open", "--json", "main" }));
+    try testing.expectError(ArgError.ConflictingFlags, parseArgs(&.{ "--json", "--open", "main" }));
+}
+
+test "writeReportFile writes the html into the given directory" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const dir = try tmp.dir.realPathFileAlloc(testing.io, ".", arena);
+
+    const path = try writeReportFile(testing.io, arena, dir, "Robot", "<!DOCTYPE html>x");
+    try testing.expect(std.mem.indexOf(u8, path, "prefablens-Robot-") != null);
+    try testing.expect(std.mem.endsWith(u8, path, ".html"));
+    const back = try std.Io.Dir.cwd().readFileAlloc(testing.io, path, arena, .limited(1024));
+    try testing.expectEqualStrings("<!DOCTYPE html>x", back);
+}
+
 test "run: bulk mode diffs every changed Unity file and skips others" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
@@ -106,7 +130,7 @@ test "run: bulk mode diffs every changed Unity file and skips others" {
     var err_out: std.ArrayList(u8) = .empty;
     var aw_err = std.Io.Writer.Allocating.fromArrayList(arena, &err_out);
     // No operands: HEAD vs worktree over all changed supported files.
-    const code = try run(testing.io, arena, &.{ "--project", dir }, &aw.writer, &aw_err.writer, false);
+    const code = try run(testing.io, arena, &.{ "--project", dir }, &aw.writer, &aw_err.writer, false, null);
     try testing.expectEqual(@as(u8, 0), code);
     const text = aw.toArrayList().items;
     // The Unity file appears as a header; the text file is filtered out.
@@ -130,7 +154,7 @@ test "run: bulk mode with no matching files reports and exits 0" {
     var aw = std.Io.Writer.Allocating.fromArrayList(arena, &out);
     var err_out: std.ArrayList(u8) = .empty;
     var aw_err = std.Io.Writer.Allocating.fromArrayList(arena, &err_out);
-    const code = try run(testing.io, arena, &.{ "--project", dir }, &aw.writer, &aw_err.writer, false);
+    const code = try run(testing.io, arena, &.{ "--project", dir }, &aw.writer, &aw_err.writer, false, null);
     try testing.expectEqual(@as(u8, 0), code);
     try testing.expect(std.mem.indexOf(u8, aw.toArrayList().items, "no Unity YAML changes") != null);
 }
@@ -151,7 +175,7 @@ test "run: bulk json emits an array of path/diff objects" {
     var aw = std.Io.Writer.Allocating.fromArrayList(arena, &out);
     var err_out: std.ArrayList(u8) = .empty;
     var aw_err = std.Io.Writer.Allocating.fromArrayList(arena, &err_out);
-    const code = try run(testing.io, arena, &.{ "--json", "--project", dir }, &aw.writer, &aw_err.writer, false);
+    const code = try run(testing.io, arena, &.{ "--json", "--project", dir }, &aw.writer, &aw_err.writer, false, null);
     try testing.expectEqual(@as(u8, 0), code);
     const text = aw.toArrayList().items;
     try testing.expect(std.mem.startsWith(u8, text, "["));
@@ -167,7 +191,7 @@ test "run: --help prints usage on stdout and exits 0" {
     var aw = std.Io.Writer.Allocating.fromArrayList(arena, &out);
     var err_out: std.ArrayList(u8) = .empty;
     var aw_err = std.Io.Writer.Allocating.fromArrayList(arena, &err_out);
-    const code = try run(testing.io, arena, &.{"--help"}, &aw.writer, &aw_err.writer, false);
+    const code = try run(testing.io, arena, &.{"--help"}, &aw.writer, &aw_err.writer, false, null);
     try testing.expectEqual(@as(u8, 0), code);
     try testing.expect(std.mem.indexOf(u8, aw.toArrayList().items, "usage: prefablens") != null);
     try testing.expectEqual(@as(usize, 0), aw_err.toArrayList().items.len);
@@ -191,7 +215,7 @@ test "run: no operands in a repo with no commits fails with a git error" {
     var aw = std.Io.Writer.Allocating.fromArrayList(arena, &out);
     var err_out: std.ArrayList(u8) = .empty;
     var aw_err = std.Io.Writer.Allocating.fromArrayList(arena, &err_out);
-    const code = try run(testing.io, arena, &.{ "--project", dir }, &aw.writer, &aw_err.writer, false);
+    const code = try run(testing.io, arena, &.{ "--project", dir }, &aw.writer, &aw_err.writer, false, null);
     try testing.expectEqual(@as(u8, 1), code);
     try testing.expect(std.mem.indexOf(u8, aw_err.toArrayList().items, "git diff failed") != null);
 }
@@ -223,7 +247,7 @@ test "run: --json with two real files prints core JSON" {
     var aw = std.Io.Writer.Allocating.fromArrayList(arena, &out);
     var errbuf: std.ArrayList(u8) = .empty;
     var aw_err = std.Io.Writer.Allocating.fromArrayList(arena, &errbuf);
-    const code = try run(testing.io, arena, &.{ "--json", before_path, after_path }, &aw.writer, &aw_err.writer, false);
+    const code = try run(testing.io, arena, &.{ "--json", before_path, after_path }, &aw.writer, &aw_err.writer, false, null);
     const output = aw.toArrayList();
     try testing.expectEqual(@as(u8, 0), code);
     try testing.expect(std.mem.indexOf(u8, output.items, "\"schema\":\"prefablens.diff.v2\"") != null);
@@ -239,7 +263,7 @@ test "run: unreadable input file reports error and exits 1" {
     var aw = std.Io.Writer.Allocating.fromArrayList(arena, &out);
     var errbuf: std.ArrayList(u8) = .empty;
     var aw_err = std.Io.Writer.Allocating.fromArrayList(arena, &errbuf);
-    const code = try run(testing.io, arena, &.{ "--json", "/no/such/file.asset", "/no/such/other.asset" }, &aw.writer, &aw_err.writer, false);
+    const code = try run(testing.io, arena, &.{ "--json", "/no/such/file.asset", "/no/such/other.asset" }, &aw.writer, &aw_err.writer, false, null);
     const err_output = aw_err.toArrayList();
     try testing.expectEqual(@as(u8, 1), code);
     // Exact match: one clean line, no stack trace or extra noise.
@@ -276,7 +300,7 @@ test "run: hostile deeply-nested input reports a clean error and exits 1" {
     var aw = std.Io.Writer.Allocating.fromArrayList(arena, &out);
     var errbuf: std.ArrayList(u8) = .empty;
     var aw_err = std.Io.Writer.Allocating.fromArrayList(arena, &errbuf);
-    const code = try run(testing.io, arena, &.{ hostile_path, other_path }, &aw.writer, &aw_err.writer, false);
+    const code = try run(testing.io, arena, &.{ hostile_path, other_path }, &aw.writer, &aw_err.writer, false, null);
     const err_output = aw_err.toArrayList();
     try testing.expectEqual(@as(u8, 1), code);
     // Exact match: one clean line, no stack trace or extra noise.
@@ -308,7 +332,7 @@ test "run: unreadable --project directory reports error and exits 1" {
     var aw = std.Io.Writer.Allocating.fromArrayList(arena, &out);
     var errbuf: std.ArrayList(u8) = .empty;
     var aw_err = std.Io.Writer.Allocating.fromArrayList(arena, &errbuf);
-    const code = try run(testing.io, arena, &.{ "--json", "--project", "/no/such/project", before_path, after_path }, &aw.writer, &aw_err.writer, false);
+    const code = try run(testing.io, arena, &.{ "--json", "--project", "/no/such/project", before_path, after_path }, &aw.writer, &aw_err.writer, false, null);
     const err_output = aw_err.toArrayList();
     try testing.expectEqual(@as(u8, 1), code);
     // Exact match: one clean line, no stack trace or extra noise.
@@ -341,7 +365,7 @@ test "run: unreadable --project directory reports error and exits 1 in tree mode
     var errbuf: std.ArrayList(u8) = .empty;
     var aw_err = std.Io.Writer.Allocating.fromArrayList(arena, &errbuf);
     // No --json: the default tree format must honor the same error contract.
-    const code = try run(testing.io, arena, &.{ "--project", "/no/such/project", before_path, after_path }, &aw.writer, &aw_err.writer, false);
+    const code = try run(testing.io, arena, &.{ "--project", "/no/such/project", before_path, after_path }, &aw.writer, &aw_err.writer, false, null);
     const err_output = aw_err.toArrayList();
     try testing.expectEqual(@as(u8, 1), code);
     // Exact match: one clean line, no stack trace or extra noise.
@@ -373,7 +397,7 @@ test "run: unreadable --project directory reports error and exits 1 in html mode
     var aw = std.Io.Writer.Allocating.fromArrayList(arena, &out);
     var errbuf: std.ArrayList(u8) = .empty;
     var aw_err = std.Io.Writer.Allocating.fromArrayList(arena, &errbuf);
-    const code = try run(testing.io, arena, &.{ "--html", "--project", "/no/such/project", before_path, after_path }, &aw.writer, &aw_err.writer, false);
+    const code = try run(testing.io, arena, &.{ "--html", "--project", "/no/such/project", before_path, after_path }, &aw.writer, &aw_err.writer, false, null);
     const err_output = aw_err.toArrayList();
     try testing.expectEqual(@as(u8, 1), code);
     // Exact match: one clean line, no stack trace or extra noise.
@@ -391,7 +415,7 @@ test "run: bad ref reports error and exits 1" {
     var aw = std.Io.Writer.Allocating.fromArrayList(arena, &out);
     var errbuf: std.ArrayList(u8) = .empty;
     var aw_err = std.Io.Writer.Allocating.fromArrayList(arena, &errbuf);
-    const code = try run(testing.io, arena, &.{ "--json", "bogus-ref", "HEAD", "Foo.prefab" }, &aw.writer, &aw_err.writer, false);
+    const code = try run(testing.io, arena, &.{ "--json", "bogus-ref", "HEAD", "Foo.prefab" }, &aw.writer, &aw_err.writer, false, null);
     const err_output = aw_err.toArrayList();
     try testing.expectEqual(@as(u8, 1), code);
     // Exact match: one clean line, no stack trace or extra noise.
@@ -407,7 +431,7 @@ test "run: unknown flag prints error and exits 2" {
     var aw = std.Io.Writer.Allocating.fromArrayList(arena, &out);
     var errbuf: std.ArrayList(u8) = .empty;
     var aw_err = std.Io.Writer.Allocating.fromArrayList(arena, &errbuf);
-    const code = try run(testing.io, arena, &.{ "--bogus", "a.prefab", "b.prefab" }, &aw.writer, &aw_err.writer, false);
+    const code = try run(testing.io, arena, &.{ "--bogus", "a.prefab", "b.prefab" }, &aw.writer, &aw_err.writer, false, null);
     const err_output = aw_err.toArrayList();
     try testing.expectEqual(@as(u8, 2), code);
     try testing.expect(std.mem.indexOf(u8, err_output.items, "unknown flag") != null);
@@ -438,7 +462,7 @@ test "run: color=true colors tree output, --no-color forces it back off" {
     var aw = std.Io.Writer.Allocating.fromArrayList(arena, &out);
     var errbuf: std.ArrayList(u8) = .empty;
     var aw_err = std.Io.Writer.Allocating.fromArrayList(arena, &errbuf);
-    const code = try run(testing.io, arena, &.{ before_path, after_path }, &aw.writer, &aw_err.writer, true);
+    const code = try run(testing.io, arena, &.{ before_path, after_path }, &aw.writer, &aw_err.writer, true, null);
     const output = aw.toArrayList();
     try testing.expectEqual(@as(u8, 0), code);
     try testing.expect(std.mem.indexOf(u8, output.items, "\x1b[") != null);
@@ -448,7 +472,7 @@ test "run: color=true colors tree output, --no-color forces it back off" {
     var aw2 = std.Io.Writer.Allocating.fromArrayList(arena, &out2);
     var errbuf2: std.ArrayList(u8) = .empty;
     var aw_err2 = std.Io.Writer.Allocating.fromArrayList(arena, &errbuf2);
-    const code2 = try run(testing.io, arena, &.{ "--no-color", before_path, after_path }, &aw2.writer, &aw_err2.writer, true);
+    const code2 = try run(testing.io, arena, &.{ "--no-color", before_path, after_path }, &aw2.writer, &aw_err2.writer, true, null);
     const output2 = aw2.toArrayList();
     try testing.expectEqual(@as(u8, 0), code2);
     try testing.expect(std.mem.indexOf(u8, output2.items, "\x1b[") == null);
@@ -496,7 +520,7 @@ test "run: --project supplies source prefabs for merged instance diffs" {
     var aw = std.Io.Writer.Allocating.fromArrayList(arena, &out);
     var errbuf: std.ArrayList(u8) = .empty;
     var aw_err = std.Io.Writer.Allocating.fromArrayList(arena, &errbuf);
-    const code = try run(testing.io, arena, &.{ "--no-color", "--project", dir, empty_path, variant_path }, &aw.writer, &aw_err.writer, false);
+    const code = try run(testing.io, arena, &.{ "--no-color", "--project", dir, empty_path, variant_path }, &aw.writer, &aw_err.writer, false, null);
     const output = aw.toArrayList();
     try testing.expectEqual(@as(u8, 0), code);
     try testing.expect(std.mem.indexOf(u8, output.items, "Scale: (1, 2, 1)") != null);
@@ -506,7 +530,7 @@ test "run: --project supplies source prefabs for merged instance diffs" {
     var aw2 = std.Io.Writer.Allocating.fromArrayList(arena, &out2);
     var errbuf2: std.ArrayList(u8) = .empty;
     var aw_err2 = std.Io.Writer.Allocating.fromArrayList(arena, &errbuf2);
-    const code2 = try run(testing.io, arena, &.{ "--no-color", empty_path, variant_path }, &aw2.writer, &aw_err2.writer, false);
+    const code2 = try run(testing.io, arena, &.{ "--no-color", empty_path, variant_path }, &aw2.writer, &aw_err2.writer, false, null);
     const output2 = aw2.toArrayList();
     try testing.expectEqual(@as(u8, 0), code2);
     try testing.expect(std.mem.indexOf(u8, output2.items, "Scale.y: 2") != null);
@@ -556,7 +580,7 @@ test "run: --project points git mode at a repo outside the cwd" {
     var aw = std.Io.Writer.Allocating.fromArrayList(arena, &out);
     var errbuf: std.ArrayList(u8) = .empty;
     var aw_err = std.Io.Writer.Allocating.fromArrayList(arena, &errbuf);
-    const code = try run(testing.io, arena, &.{ "--json", "--project", dir, "HEAD", "Foo.asset" }, &aw.writer, &aw_err.writer, false);
+    const code = try run(testing.io, arena, &.{ "--json", "--project", dir, "HEAD", "Foo.asset" }, &aw.writer, &aw_err.writer, false, null);
     const output = aw.toArrayList();
     try testing.expectEqual(@as(u8, 0), code);
     try testing.expect(std.mem.indexOf(u8, output.items, "\"after\":\"2\"") != null);
@@ -578,11 +602,12 @@ pub const Options = struct {
     project_root: ?[]const u8 = null, // guid-resolution base and the git repo dir
     no_color: bool = false,
     help: bool = false,
+    open: bool = false,
 };
 
-pub const ArgError = error{ MissingOperands, UnknownFlag, TooManyArguments };
+pub const ArgError = error{ MissingOperands, UnknownFlag, TooManyArguments, ConflictingFlags };
 
-const usage_line = "usage: prefablens [--json|--html] [--project DIR] [--no-color] [<ref>] [<ref>] [<path>] | <before> <after>\n";
+const usage_line = "usage: prefablens [--json|--html] [--open] [--project DIR] [--no-color] [<ref>] [<ref>] [<path>] | <before> <after>\n";
 
 const help_text = usage_line ++
     \\
@@ -599,6 +624,7 @@ const help_text = usage_line ++
     \\options:
     \\  --json         prefablens.diff.v2 JSON ({path, diff} array in bulk mode)
     \\  --html         self-contained HTML report on stdout
+    \\  --open         write the HTML report to a temp file and open it in a browser
     \\  --project DIR  Unity project root for guid resolution (and git repo dir)
     \\  --no-color     disable ANSI colors in tree output
     \\  -h, --help     show this help
@@ -609,6 +635,7 @@ pub fn parseArgs(args: []const []const u8) ArgError!Options {
     var format: Format = .tree;
     var project_root: ?[]const u8 = null;
     var no_color = false;
+    var open = false;
     var refs: [2][]const u8 = undefined;
     var n_refs: usize = 0;
     var paths: [2][]const u8 = undefined;
@@ -623,6 +650,8 @@ pub fn parseArgs(args: []const []const u8) ArgError!Options {
             format = .html;
         } else if (std.mem.eql(u8, a, "--no-color")) {
             no_color = true;
+        } else if (std.mem.eql(u8, a, "--open")) {
+            open = true;
         } else if (std.mem.eql(u8, a, "--help") or std.mem.eql(u8, a, "-h")) {
             return .{ .target = .{ .git = .{ .before_ref = "HEAD", .after_ref = "", .path = null } }, .help = true };
         } else if (std.mem.eql(u8, a, "--project")) {
@@ -641,6 +670,10 @@ pub fn parseArgs(args: []const []const u8) ArgError!Options {
             n_refs += 1;
         }
     }
+    if (open) {
+        if (format == .json) return ArgError.ConflictingFlags;
+        format = .html;
+    }
     if (n_paths == 2) {
         // Plain two-file compare; mixing it with refs has no meaning.
         if (n_refs != 0) return ArgError.TooManyArguments;
@@ -649,6 +682,7 @@ pub fn parseArgs(args: []const []const u8) ArgError!Options {
             .format = format,
             .project_root = project_root,
             .no_color = no_color,
+            .open = open,
         };
     }
     return .{
@@ -660,11 +694,32 @@ pub fn parseArgs(args: []const []const u8) ArgError!Options {
         .format = format,
         .project_root = project_root,
         .no_color = no_color,
+        .open = open,
     };
 }
 
 fn readFile(io: std.Io, arena: std.mem.Allocator, path: []const u8) ![]u8 {
     return std.Io.Dir.cwd().readFileAlloc(io, path, arena, .limited(input.max_input_bytes));
+}
+
+/// Writes the report under `dir` with a collision-resistant name and
+/// returns the full path.
+pub fn writeReportFile(io: std.Io, arena: std.mem.Allocator, dir: []const u8, name_stem: []const u8, html: []const u8) ![]const u8 {
+    // Zig 0.16 clocks go through Io: no std.time.milliTimestamp anymore.
+    const millis: u64 = @intCast(std.Io.Clock.now(.real, io).toMilliseconds());
+    const path = try std.fmt.allocPrint(arena, "{s}/prefablens-{s}-{d}.html", .{ dir, name_stem, millis });
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = html });
+    return path;
+}
+
+fn openInBrowser(io: std.Io, arena: std.mem.Allocator, path: []const u8) !void {
+    const argv: []const []const u8 = switch (builtin.os.tag) {
+        .macos => &.{ "open", path },
+        .windows => &.{ "cmd", "/c", "start", "", path },
+        else => &.{ "xdg-open", path },
+    };
+    const res = try std.process.run(arena, io, .{ .argv = argv });
+    if (res.term != .exited or res.term.exited != 0) return error.OpenFailed;
 }
 
 const model = core.model;
@@ -712,12 +767,13 @@ fn writeJsonString(w: *std.Io.Writer, s: []const u8) !void {
     try w.writeByte('"');
 }
 
-pub fn run(io: std.Io, arena: std.mem.Allocator, args: []const []const u8, stdout: *std.Io.Writer, stderr: *std.Io.Writer, color: bool) !u8 {
+pub fn run(io: std.Io, arena: std.mem.Allocator, args: []const []const u8, stdout: *std.Io.Writer, stderr: *std.Io.Writer, color: bool, environ: ?*const std.process.Environ.Map) !u8 {
     const opt = parseArgs(args) catch |err| {
         switch (err) {
             ArgError.MissingOperands => try stderr.writeAll(usage_line),
             ArgError.UnknownFlag => try stderr.writeAll("error: unknown flag (see --help)\n"),
             ArgError.TooManyArguments => try stderr.writeAll("error: too many arguments (see --help)\n"),
+            ArgError.ConflictingFlags => try stderr.writeAll("error: --open conflicts with --json\n"),
         }
         return 2;
     };
@@ -840,7 +896,29 @@ pub fn run(io: std.Io, arena: std.mem.Allocator, args: []const []const u8, stdou
         .html => {
             var files: std.ArrayList(render_html.FileDiff) = .empty;
             for (diffs.items) |d| try files.append(arena, .{ .path = d.path, .res = d.res });
-            try render_html.render(stdout, files.items, resolver_ptr);
+            if (!opt.open) {
+                try render_html.render(stdout, files.items, resolver_ptr);
+            } else {
+                var buf: std.ArrayList(u8) = .empty;
+                var aw = std.Io.Writer.Allocating.fromArrayList(arena, &buf);
+                try render_html.render(&aw.writer, files.items, resolver_ptr);
+                const tmp_dir = if (environ) |env|
+                    env.get("TMPDIR") orelse env.get("TEMP") orelse "/tmp"
+                else
+                    "/tmp";
+                // Single-file reports carry the file stem; bulk mode is just "report".
+                const stem = switch (opt.target) {
+                    .files => |f| std.fs.path.stem(f.after),
+                    .git => |g| if (g.path) |p| std.fs.path.stem(p) else "report",
+                };
+                const report = try writeReportFile(io, arena, tmp_dir, stem, aw.toArrayList().items);
+                try stdout.print("{s}\n", .{report});
+                openInBrowser(io, arena, report) catch {
+                    // The path is already printed; failing to launch a
+                    // browser must not fail the diff.
+                    try stderr.print("warning: could not open a browser for '{s}'\n", .{report});
+                };
+            }
         },
     }
     return 0;
@@ -884,7 +962,7 @@ pub fn main(init: std.process.Init) !u8 {
 
     const color = std.Io.File.stdout().isTty(init.io) catch false;
 
-    const code = try run(init.io, arena, user_args, stdout, stderr, color);
+    const code = try run(init.io, arena, user_args, stdout, stderr, color, init.environ_map);
     try stdout.flush();
     try stderr.flush();
     return code;

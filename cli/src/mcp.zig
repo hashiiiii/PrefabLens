@@ -137,10 +137,12 @@ fn handleToolsCall(io: std.Io, arena: std.mem.Allocator, w: *std.Io.Writer, id: 
         return validationError(w, id, "format must be \\\"tree\\\" or \\\"json\\\"");
 
     // Same argv as the old TS host's buildArgs + cwd=projectRoot (--project doubles as the git repo dir).
+    // `--git` is gone from the grammar (Task 5): a bare ref operand is enough, `path` is
+    // classified as a path by its Unity extension.
     var argv: std.ArrayList([]const u8) = .empty;
     try argv.append(arena, if (is_json) "--json" else "--no-color");
     try argv.appendSlice(arena, &.{ "--project", project_root orelse "." });
-    try argv.appendSlice(arena, &.{ "--git", before });
+    try argv.append(arena, before);
     if (after) |a| try argv.append(arena, a);
     try argv.append(arena, path.?);
 

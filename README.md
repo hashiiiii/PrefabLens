@@ -16,19 +16,19 @@ Semantic diff tools for UnityYAML assets. Instead of raw text diffs, PrefabLens 
 ### CLI
 
 ```bash
-# Compare two files (tree output)
-prefablens before.prefab after.prefab
+prefablens                              # HEAD vs working tree, all changed Unity files
+prefablens Assets/Foo.prefab            # HEAD vs working tree, one file
+prefablens main                         # ref vs working tree, all changed Unity files
+prefablens HEAD~1 HEAD Assets/Foo.prefab  # ref vs ref, one file
+prefablens before.prefab after.prefab   # plain two-file compare (no git)
 
-# JSON / HTML output
 prefablens --json before.prefab after.prefab
-prefablens --html before.prefab after.prefab
-
-# Compare two git revisions
-prefablens --git HEAD~1 HEAD Assets/Foo.prefab
-
-# Compare a revision against the working tree (omit afterRef)
-prefablens --git HEAD Assets/Foo.prefab
+prefablens --html main                  # self-contained HTML report on stdout
+prefablens --open main                  # write the report to a temp file and open it
 ```
+
+Operands ending in a Unity YAML extension (`.prefab`, `.unity`, `.asset`, ...) are
+treated as paths; everything else is a git ref.
 
 Also runs as an MCP server: `prefablens mcp`.
 

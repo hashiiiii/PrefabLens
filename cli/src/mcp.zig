@@ -2,6 +2,7 @@ const std = @import("std");
 const testing = std.testing;
 const core = @import("core");
 const main = @import("main.zig");
+const unity_path = @import("unity_path.zig");
 
 pub const default_protocol_version = "2025-06-18";
 // 2025-03-26 makes batch requests a MUST, but major clients don't send them, so we accept it while leaving batching unsupported.
@@ -127,6 +128,9 @@ fn handleToolsCall(io: std.Io, arena: std.mem.Allocator, w: *std.Io.Writer, id: 
     const args: ?std.json.Value = if (p == .object) p.object.get("arguments") else null;
     const path = getString(args, "path") catch return validationError(w, id, "path must be a non-empty string");
     if (path == null or path.?.len == 0) return validationError(w, id, "path must be a non-empty string");
+    // Same gate main.zig's parseArgs applies to CLI path operands (unity_path.isUnityPath):
+    // reject anything that isn't a Unity YAML asset before it ever reaches git/the CLI argv.
+    if (!unity_path.isUnityPath(path.?)) return validationError(w, id, "path must end in a Unity YAML extension");
     const before = (getString(args, "before") catch return validationError(w, id, "before must be a string")) orelse "HEAD";
     const after = getString(args, "after") catch return validationError(w, id, "after must be a string");
     const project_root = getString(args, "projectRoot") catch return validationError(w, id, "projectRoot must be a non-empty string");
@@ -137,10 +141,12 @@ fn handleToolsCall(io: std.Io, arena: std.mem.Allocator, w: *std.Io.Writer, id: 
         return validationError(w, id, "format must be \\\"tree\\\" or \\\"json\\\"");
 
     // Same argv as the old TS host's buildArgs + cwd=projectRoot (--project doubles as the git repo dir).
+    // `--git` is gone from the grammar (Task 5): a bare ref operand is enough, `path` is
+    // classified as a path by its Unity extension.
     var argv: std.ArrayList([]const u8) = .empty;
     try argv.append(arena, if (is_json) "--json" else "--no-color");
     try argv.appendSlice(arena, &.{ "--project", project_root orelse "." });
-    try argv.appendSlice(arena, &.{ "--git", before });
+    try argv.append(arena, before);
     if (after) |a| try argv.append(arena, a);
     try argv.append(arena, path.?);
 
@@ -148,7 +154,9 @@ fn handleToolsCall(io: std.Io, arena: std.mem.Allocator, w: *std.Io.Writer, id: 
     var aw = std.Io.Writer.Allocating.fromArrayList(arena, &out);
     var errbuf: std.ArrayList(u8) = .empty;
     var aw_err = std.Io.Writer.Allocating.fromArrayList(arena, &errbuf);
-    const code = main.run(io, arena, argv.items, &aw.writer, &aw_err.writer, false) catch |err| {
+    // The MCP tool never emits --open, so there's no browser to launch and
+    // no need for the real process environment here.
+    const code = main.run(io, arena, argv.items, &aw.writer, &aw_err.writer, false, null) catch |err| {
         const msg = try std.fmt.allocPrint(arena, "prefablens failed: {s}", .{@errorName(err)});
         try writeToolText(w, id, msg, true);
         return;
@@ -301,12 +309,13 @@ test "mcp: tools/call validation errors match the ts host contract" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
-    // empty path / empty projectRoot / invalid format / missing arguments / unknown tool
+    // empty path / empty projectRoot / invalid format / missing arguments / unknown tool / non-Unity path extension
     const res = try roundtrip(arena, "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"prefab_diff\",\"arguments\":{\"path\":\"\"}}}\n" ++
         "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"prefab_diff\",\"arguments\":{\"path\":\"a.prefab\",\"projectRoot\":\"\"}}}\n" ++
         "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"prefab_diff\",\"arguments\":{\"path\":\"a.prefab\",\"format\":\"xml\"}}}\n" ++
         "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tools/call\",\"params\":{\"name\":\"prefab_diff\"}}\n" ++
-        "{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"tools/call\",\"params\":{\"name\":\"nope\",\"arguments\":{}}}\n");
+        "{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"tools/call\",\"params\":{\"name\":\"nope\",\"arguments\":{}}}\n" ++
+        "{\"jsonrpc\":\"2.0\",\"id\":6,\"method\":\"tools/call\",\"params\":{\"name\":\"prefab_diff\",\"arguments\":{\"path\":\"Foo.txt\"}}}\n");
     var lines = std.mem.splitScalar(u8, std.mem.trimEnd(u8, res, "\n"), '\n');
     const l1 = lines.next().?;
     try testing.expectEqualStrings("{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"Input validation error: path must be a non-empty string\"}],\"isError\":true}}", l1);
@@ -314,6 +323,10 @@ test "mcp: tools/call validation errors match the ts host contract" {
     try testing.expect(std.mem.indexOf(u8, lines.next().?, "format must be \\\"tree\\\" or \\\"json\\\"") != null);
     try testing.expect(std.mem.indexOf(u8, lines.next().?, "path must be a non-empty string") != null);
     try testing.expect(std.mem.indexOf(u8, lines.next().?, "-32602") != null);
+    // Foo.txt is well-formed but not a Unity YAML asset -- same response shape as the other
+    // validation errors above (validationError()'s envelope), not a git/CLI failure.
+    const l6 = lines.next().?;
+    try testing.expectEqualStrings("{\"jsonrpc\":\"2.0\",\"id\":6,\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"Input validation error: path must end in a Unity YAML extension\"}],\"isError\":true}}", l6);
 }
 
 test "mcp: tools/call diffs a real git fixture with the ts host golden" {
@@ -333,21 +346,22 @@ test "mcp: tools/call diffs a real git fixture with the ts host golden" {
     try req_w.writer.writeAll("}}}\n");
     const res = try roundtrip(arena, req_w.toArrayList().items);
 
-    // Parse the response and compare text against server.test.ts's golden.
+    // Parse the response and compare text against the box-drawing spine layout
+    // (render_tree.zig; formerly matched server.test.ts's now-removed TS host golden).
     const parsed = try std.json.parseFromSliceLeaky(std.json.Value, arena, std.mem.trimEnd(u8, res, "\n"), .{});
     const result = parsed.object.get("result").?.object;
     try testing.expect(result.get("isError") == null);
     const text = result.get("content").?.array.items[0].object.get("text").?.string;
-    try testing.expectEqualStrings("  Plane\n" ++
-        "  ~ Cylinder  <Prefab>\n" ++
-        "      components\n" ++
-        "        ~ Transform\n" ++
-        "          ~ Position.x: 0.41646004 -> 1\n" ++
-        "  + Cylinder Variant  <Prefab>\n" ++
-        "      components\n" ++
-        "        + Transform\n" ++
-        "          + Position: (2.03, 3.63, 1.11797)\n" ++
-        "          + Rotation: (0, 0, 0, 1)\n", text);
+    try testing.expectEqualStrings("◆ Plane\n" ++
+        "├─ ◆ ~ Cylinder ‹Prefab›\n" ++
+        "│  └─ components (1)\n" ++
+        "│     └─ ~ Transform\n" ++
+        "│          Position.x: 0.41646004 → 1\n" ++
+        "└─ ◆ + Cylinder Variant ‹Prefab›\n" ++
+        "   └─ components (1)\n" ++
+        "      └─ + Transform\n" ++
+        "           Position: (2.03, 3.63, 1.11797)\n" ++
+        "           Rotation: (0, 0, 0, 1)\n", text);
 }
 
 test "mcp: tools/call format json returns diff v2 and bad refs surface as isError" {

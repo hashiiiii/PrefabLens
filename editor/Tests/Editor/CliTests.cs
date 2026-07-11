@@ -39,17 +39,14 @@ namespace PrefabLens.Tests
         [Test]
         public void BuildArgsDiffsHeadAgainstTheWorktreeAsJson()
         {
-            Assert.AreEqual(
-                new[] { "--git", "HEAD", "Assets/Foo.prefab", "--json" },
-                Cli.BuildArgs("Assets/Foo.prefab")
-            );
+            Assert.AreEqual(new[] { "HEAD", "Assets/Foo.prefab", "--json" }, Cli.BuildArgs("Assets/Foo.prefab"));
         }
 
         [Test]
         public void QuoteArgsSurvivesSpacesAndQuotes()
         {
             Assert.AreEqual(
-                "\"--git\" \"HEAD\" \"Assets/My Prefab.prefab\" \"--json\"",
+                "\"HEAD\" \"Assets/My Prefab.prefab\" \"--json\"",
                 Cli.QuoteArgs(Cli.BuildArgs("Assets/My Prefab.prefab"))
             );
             Assert.AreEqual("\"a\\\"b\"", Cli.QuoteArgs(new[] { "a\"b" }));

@@ -43,7 +43,7 @@ pub fn showAtRef(io: std.Io, arena: std.mem.Allocator, repo_dir: []const u8, ref
     }
 }
 
-/// Working-tree side (the after of --git REF PATH). A missing file is treated as "deleted" = empty side.
+/// Working-tree side (the after side when only one ref is given). A missing file is treated as "deleted" = empty side.
 pub fn readWorktree(io: std.Io, arena: std.mem.Allocator, repo_dir: []const u8, path: []const u8) ![]u8 {
     const full = try std.fs.path.join(arena, &.{ repo_dir, path });
     return std.Io.Dir.cwd().readFileAlloc(io, full, arena, .limited(max_input_bytes)) catch |err| switch (err) {

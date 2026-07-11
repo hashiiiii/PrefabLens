@@ -33,7 +33,7 @@ namespace PrefabLens
         public static string DownloadUrl(string version, string assetName) =>
             $"https://github.com/hashiiiii/PrefabLens/releases/download/v{version}/{assetName}";
 
-        public static string[] BuildArgs(string assetPath) => new[] { "--git", "HEAD", assetPath, "--json" };
+        public static string[] BuildArgs(string assetPath) => new[] { "HEAD", assetPath, "--json" };
 
         /// Minimal quoting for ProcessStartInfo.Arguments (handles asset paths with spaces).
         public static string QuoteArgs(string[] args)
@@ -106,7 +106,7 @@ namespace PrefabLens
             public bool TimedOut;
         }
 
-        /// Run the CLI with the project root as cwd (--git looks at the repository in cwd).
+        /// Run the CLI with the project root as cwd (git refs are resolved against the repository in cwd).
         public static Result Run(string cliPath, string assetPath)
         {
             return RunProcess(cliPath, QuoteArgs(BuildArgs(assetPath)), Directory.GetCurrentDirectory(), RunTimeoutMs);

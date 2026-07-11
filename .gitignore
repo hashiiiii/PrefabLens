@@ -1,6 +1,7 @@
 .DS_Store
 *.swp
-.superpowers
+.superpowers/
+.playwright-mcp/
 .zig-cache/
 zig-out/
 docs/superpowers/

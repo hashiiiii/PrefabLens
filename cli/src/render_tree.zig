@@ -280,22 +280,12 @@ fn renderObject(
     for (o.children) |child| try renderObject(w, child, resolved, color, depth + 1);
 }
 
-/// Heading status: that status if uniform within the group, modified if mixed.
-fn groupHeadingStatus(overrides: []const model.OverrideDiff, start: usize) model.Status {
-    const first = overrides[start];
-    for (overrides[start + 1 ..]) |ov| {
-        if (!std.mem.eql(u8, ov.group, first.group)) break;
-        if (ov.status != first.status) return .modified;
-    }
-    return first.status;
-}
-
 fn renderOverrides(w: *std.Io.Writer, overrides: []const model.OverrideDiff, color: bool, depth: usize) !void {
     var current: []const u8 = "";
     for (overrides, 0..) |ov, i| {
         if (!std.mem.eql(u8, current, ov.group)) {
             current = ov.group;
-            const hs = groupHeadingStatus(overrides, i);
+            const hs = display.groupHeadingStatus(overrides, i);
             try indent(w, depth);
             try paint(w, color, statusColor(hs), statusSign(hs));
             try w.print(" {s}\n", .{ov.group});

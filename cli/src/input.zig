@@ -52,6 +52,42 @@ pub fn readWorktree(io: std.Io, arena: std.mem.Allocator, repo_dir: []const u8, 
     };
 }
 
+/// Paths changed between before_ref and after_ref (empty after_ref = the
+/// working tree), one repo-relative path per git output line. Untracked
+/// files are not listed — same semantics as `git diff --name-only`.
+pub fn changedPaths(
+    io: std.Io,
+    arena: std.mem.Allocator,
+    repo_dir: []const u8,
+    before_ref: []const u8,
+    after_ref: []const u8,
+    timeout: std.Io.Timeout,
+) ![][]const u8 {
+    var env = std.process.Environ.Map.init(arena);
+    try env.put("LC_ALL", "C");
+    try env.put("LANG", "C");
+    var argv: std.ArrayList([]const u8) = .empty;
+    try argv.appendSlice(arena, &.{ "git", "diff", "--name-only", "--end-of-options", before_ref });
+    if (after_ref.len != 0) try argv.append(arena, after_ref);
+    const res = std.process.run(arena, io, .{
+        .argv = argv.items,
+        .cwd = .{ .path = repo_dir },
+        .stdout_limit = .limited(max_input_bytes),
+        .environ_map = &env,
+        .timeout = timeout,
+    }) catch |err| switch (err) {
+        error.Timeout => return error.GitTimeout,
+        else => return err,
+    };
+    if (res.term != .exited or res.term.exited != 0) return error.GitDiffFailed;
+    var out: std.ArrayList([]const u8) = .empty;
+    var it = std.mem.splitScalar(u8, res.stdout, '\n');
+    while (it.next()) |line| {
+        if (line.len != 0) try out.append(arena, line);
+    }
+    return out.items;
+}
+
 fn git(io: std.Io, arena: std.mem.Allocator, dir: []const u8, argv: []const []const u8) !void {
     var full: std.ArrayList([]const u8) = .empty;
     try full.append(arena, "git");
@@ -154,4 +190,68 @@ test "showAtRef does not let a dash-prefixed ref be parsed as a git option" {
         return;
     };
     try testing.expect(false); // file was created -- injection succeeded
+}
+
+test "changedPaths lists worktree changes against a ref, including deletions" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const dir = try tmp.dir.realPathFileAlloc(testing.io, ".", arena);
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "Foo.prefab", .data = "v1\n" });
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "Note.txt", .data = "n1\n" });
+    try git(testing.io, arena, dir, &.{ "init", "-q" });
+    try git(testing.io, arena, dir, &.{ "config", "user.email", "t@t.t" });
+    try git(testing.io, arena, dir, &.{ "config", "user.name", "t" });
+    try git(testing.io, arena, dir, &.{ "add", "." });
+    try git(testing.io, arena, dir, &.{ "commit", "-q", "-m", "first" });
+
+    // Modify one file, delete the other: both must be listed. Extension
+    // filtering is the caller's job, so Note.txt appears here too.
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "Foo.prefab", .data = "v2\n" });
+    try tmp.dir.deleteFile(testing.io, "Note.txt");
+
+    const paths = try changedPaths(testing.io, arena, dir, "HEAD", "", default_git_timeout);
+    try testing.expectEqual(@as(usize, 2), paths.len);
+    // git emits paths sorted; rely on that for a stable assertion.
+    try testing.expectEqualStrings("Foo.prefab", paths[0]);
+    try testing.expectEqualStrings("Note.txt", paths[1]);
+}
+
+test "changedPaths lists changes between two refs" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const dir = try tmp.dir.realPathFileAlloc(testing.io, ".", arena);
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "Foo.prefab", .data = "v1\n" });
+    try git(testing.io, arena, dir, &.{ "init", "-q" });
+    try git(testing.io, arena, dir, &.{ "config", "user.email", "t@t.t" });
+    try git(testing.io, arena, dir, &.{ "config", "user.name", "t" });
+    try git(testing.io, arena, dir, &.{ "add", "." });
+    try git(testing.io, arena, dir, &.{ "commit", "-q", "-m", "first" });
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "Foo.prefab", .data = "v2\n" });
+    try git(testing.io, arena, dir, &.{ "add", "." });
+    try git(testing.io, arena, dir, &.{ "commit", "-q", "-m", "second" });
+
+    const paths = try changedPaths(testing.io, arena, dir, "HEAD~1", "HEAD", default_git_timeout);
+    try testing.expectEqual(@as(usize, 1), paths.len);
+    try testing.expectEqualStrings("Foo.prefab", paths[0]);
+}
+
+test "changedPaths surfaces a bad ref as GitDiffFailed" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const dir = try tmp.dir.realPathFileAlloc(testing.io, ".", arena);
+    try git(testing.io, arena, dir, &.{ "init", "-q" });
+
+    try testing.expectError(error.GitDiffFailed, changedPaths(testing.io, arena, dir, "bogus-ref", "", default_git_timeout));
 }

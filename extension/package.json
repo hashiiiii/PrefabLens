@@ -8,6 +8,7 @@
     "build": "node build.mjs",
     "typecheck": "tsc --noEmit",
     "lint": "biome ci .",
+    "fmt": "biome check --write .",
     "test": "vitest run",
     "size": "node scripts/check-wasm-size.mjs",
     "e2e": "node build.mjs --e2e && playwright test"

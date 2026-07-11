@@ -130,6 +130,9 @@ function attachToggle(state: ViewState, pr: { owner: string; repo: string; prNum
     if (!host) {
       host = document.createElement("div");
       host.setAttribute("data-prefablens-view", "");
+      // Same Primer class github puts on .js-file-content: the chevron / Viewed collapse
+      // only toggles Details--on on .file, so the host must opt into that CSS itself
+      host.classList.add("Details-content--hidden");
       host.attachShadow({ mode: "open" });
       entry.content.after(host);
     }

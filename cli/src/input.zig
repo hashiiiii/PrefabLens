@@ -53,8 +53,10 @@ pub fn readWorktree(io: std.Io, arena: std.mem.Allocator, repo_dir: []const u8, 
 }
 
 /// Paths changed between before_ref and after_ref (empty after_ref = the
-/// working tree), one repo-relative path per git output line. Untracked
-/// files are not listed — same semantics as `git diff --name-only`.
+/// working tree), one repo-relative path per git output NUL-separated entry.
+/// Untracked files are not listed — same semantics as `git diff --name-only`.
+/// The -z flag both NUL-separates the output and disables git's quotepath
+/// C-quoting mangling, so non-ASCII filenames come through as literal UTF-8.
 pub fn changedPaths(
     io: std.Io,
     arena: std.mem.Allocator,
@@ -67,7 +69,7 @@ pub fn changedPaths(
     try env.put("LC_ALL", "C");
     try env.put("LANG", "C");
     var argv: std.ArrayList([]const u8) = .empty;
-    try argv.appendSlice(arena, &.{ "git", "diff", "--name-only", "--end-of-options", before_ref });
+    try argv.appendSlice(arena, &.{ "git", "diff", "--name-only", "-z", "--end-of-options", before_ref });
     if (after_ref.len != 0) try argv.append(arena, after_ref);
     const res = std.process.run(arena, io, .{
         .argv = argv.items,
@@ -81,9 +83,9 @@ pub fn changedPaths(
     };
     if (res.term != .exited or res.term.exited != 0) return error.GitDiffFailed;
     var out: std.ArrayList([]const u8) = .empty;
-    var it = std.mem.splitScalar(u8, res.stdout, '\n');
-    while (it.next()) |line| {
-        if (line.len != 0) try out.append(arena, line);
+    var it = std.mem.splitScalar(u8, res.stdout, 0);
+    while (it.next()) |entry| {
+        if (entry.len != 0) try out.append(arena, entry);
     }
     return out.items;
 }
@@ -254,4 +256,29 @@ test "changedPaths surfaces a bad ref as GitDiffFailed" {
     try git(testing.io, arena, dir, &.{ "init", "-q" });
 
     try testing.expectError(error.GitDiffFailed, changedPaths(testing.io, arena, dir, "bogus-ref", "", default_git_timeout));
+}
+
+test "changedPaths preserves non-ASCII filenames (quotepath protection)" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const dir = try tmp.dir.realPathFileAlloc(testing.io, ".", arena);
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "素材.prefab", .data = "v1\n" });
+    try git(testing.io, arena, dir, &.{ "init", "-q" });
+    try git(testing.io, arena, dir, &.{ "config", "user.email", "t@t.t" });
+    try git(testing.io, arena, dir, &.{ "config", "user.name", "t" });
+    try git(testing.io, arena, dir, &.{ "add", "." });
+    try git(testing.io, arena, dir, &.{ "commit", "-q", "-m", "first" });
+
+    // Modify the non-ASCII file. Without -z flag, git would emit the C-quoted
+    // form like "\347\264\240\346\235\220.prefab", breaking downstream git show
+    // and file reads. With -z, we get the literal UTF-8 filename back.
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "素材.prefab", .data = "v2\n" });
+
+    const paths = try changedPaths(testing.io, arena, dir, "HEAD", "", default_git_timeout);
+    try testing.expectEqual(@as(usize, 1), paths.len);
+    try testing.expectEqualStrings("素材.prefab", paths[0]);
 }

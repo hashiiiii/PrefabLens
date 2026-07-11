@@ -79,6 +79,29 @@ test("detects a Unity file, toggles to Semantic, renders the tree", async ({ pag
   await expect(view).toBeHidden();
 });
 
+test("github's file collapse hides the semantic view too", async ({ page }) => {
+  await page.route("**/pull/1/files", (route) => route.fulfill({ body: fixture, contentType: "text/html" }));
+  await stubChrome(page, cannedResponse);
+
+  await page.goto("https://prefablens.test/owner/repo/pull/1/files");
+  await page.addScriptTag({ path: "dist/content.js" });
+
+  const unityHeader = page.locator('.file-header[data-path="Assets/Foo.prefab"]');
+  await unityHeader.getByRole("button", { name: "Semantic" }).click();
+  const view = page.locator("[data-prefablens-view]");
+  await expect(view).toContainText("MonoBehaviour");
+
+  // Collapse: github's details-behavior only toggles these classes on .file, so the
+  // semantic host must opt into the same Primer CSS that hides .js-file-content
+  const file = page.locator('.file:has(.file-header[data-path="Assets/Foo.prefab"])');
+  await file.evaluate((el) => el.classList.remove("Details--on", "open"));
+  await expect(view).toBeHidden();
+
+  // Expand again: the semantic view comes back without touching the toggle
+  await file.evaluate((el) => el.classList.add("Details--on", "open"));
+  await expect(view).toBeVisible();
+});
+
 test("sends a prefetch message on pr page arrival", async ({ page }) => {
   await page.route("**/pull/1/files", (route) => route.fulfill({ body: fixture, contentType: "text/html" }));
   await stubChrome(page, cannedResponse);

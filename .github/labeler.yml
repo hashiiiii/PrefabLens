@@ -18,6 +18,11 @@ extension:
       - any-glob-to-any-file:
           - "extension/**"
 
+site:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "site/**"
+
 ci:
   - changed-files:
       - any-glob-to-any-file:

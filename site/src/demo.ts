@@ -1,29 +1,22 @@
 // Live demo for extension.html: the mock PR page runs the extension's real
 // renderer, toggle, and WASM diff engine, wired the same way as
 // extension/src/content/index.ts minus the GitHub API and auth layers.
-// Diff inputs are fixture files served next to the page instead of API blobs.
+// Diff inputs are fixture files served next to the page instead of API blobs;
+// build.mjs marks each Unity file header with data-before/data-after URLs
+// (empty on the added/removed side, matching the CLI's empty-side semantics).
 import { createToggle, injectPageStyles, type View } from "../../extension/src/content/toggle";
 import { createViewState } from "../../extension/src/content/viewstate";
 import { render, renderError, renderLoading } from "../../extension/src/renderer/render";
 import { createDiffer, type Differ } from "../../extension/src/wasm/differ";
 
-const FILES: Record<string, { before: string; after: string }> = {
-  "Assets/Cylinder.prefab": { before: "fixtures/cylinder_before.prefab", after: "fixtures/cylinder_after.prefab" },
-  "Assets/Materials/Rock.mat": { before: "fixtures/material_before.mat", after: "fixtures/material_after.mat" },
-  "Assets/Animations/Player.controller": {
-    before: "fixtures/animator_before.controller",
-    after: "fixtures/animator_after.controller",
-  },
-};
-
 async function fetchBytes(url: string): Promise<Uint8Array> {
+  if (!url) return new Uint8Array();
   const res = await fetch(url);
   if (!res.ok) throw new Error(`${url}: HTTP ${res.status}`);
   return new Uint8Array(await res.arrayBuffer());
 }
 
-function attachFile(header: HTMLElement, path: string, differ: Differ, initial: View): (view: View) => void {
-  const fixture = FILES[path]!;
+function attachFile(header: HTMLElement, differ: Differ, initial: View): (view: View) => void {
   const content = header.parentElement!.querySelector<HTMLElement>(".js-file-content")!;
   let host: HTMLElement | undefined;
   let rendered = false;
@@ -49,7 +42,7 @@ function attachFile(header: HTMLElement, path: string, differ: Differ, initial: 
     rendered = true;
     const root = host.shadowRoot!;
     renderLoading(root);
-    void Promise.all([fetchBytes(fixture.before), fetchBytes(fixture.after)])
+    void Promise.all([fetchBytes(header.dataset.before!), fetchBytes(header.dataset.after!)])
       .then(([before, after]) => render(root, differ.diff(before, after)))
       .catch((err: unknown) => renderError(root, String(err)));
   };
@@ -69,9 +62,7 @@ async function main(): Promise<void> {
     });
   }
 
-  const headers = [...document.querySelectorAll<HTMLElement>(".file-header[data-path]")].filter(
-    (h) => h.dataset.path! in FILES,
-  );
+  const headers = [...document.querySelectorAll<HTMLElement>(".file-header[data-before]")];
   if (!headers.length) return;
 
   const differ = await createDiffer(await fetchBytes("prefablens.wasm"));
@@ -97,7 +88,7 @@ async function main(): Promise<void> {
 
   for (const header of headers) {
     const path = header.dataset.path!;
-    const show = attachFile(header, path, differ, state.effective(path));
+    const show = attachFile(header, differ, state.effective(path));
     const toggle = createToggle((view) => {
       state.setOverride(path, view); // a click overrides just this file
       show(view);

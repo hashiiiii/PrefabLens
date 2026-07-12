@@ -210,7 +210,7 @@ main { max-width: 980px; margin: 0 auto; padding: 24px 24px 64px; }
 .terminal-bar span:nth-child(1) { background: #ff5f57; }
 .terminal-bar span:nth-child(2) { background: #febc2e; }
 .terminal-bar span:nth-child(3) { background: #28c840; }
-.terminal pre { margin: 0; padding: 14px 16px; overflow-x: auto; font-size: 12px; line-height: 1.6; color: #f0f6fc; }
+.terminal pre { margin: 0; padding: 14px 16px; overflow: auto; max-height: 560px; font-size: 12px; line-height: 1.6; color: #f0f6fc; }
 .terminal .prompt { color: #9198a1; }
 .terminal .b { font-weight: 600; }
 .terminal .dim { color: #9198a1; }

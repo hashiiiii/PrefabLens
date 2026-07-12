@@ -3,7 +3,7 @@
 // bundled as-is for the mock PR page, and git provides the raw diffs. Run
 // `zig build && zig build wasm` first.
 import { execFileSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -14,18 +14,20 @@ const SITE = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(SITE, "..");
 const BIN = join(ROOT, "zig-out", "bin", process.platform === "win32" ? "prefablens.exe" : "prefablens");
 const WASM = join(ROOT, "zig-out", "bin", "prefablens.wasm");
-const TESTDATA = join(ROOT, "core", "src", "testdata");
+const FIXTURES = join(SITE, "fixtures");
 const DIST = join(SITE, "dist");
 
-// Demo-repo layout: fixture pairs from the test corpus placed at Unity-project
-// paths, plus one non-Unity file to show the tools leave it alone.
-const FIXTURES = [
-  { repoPath: "Assets/Cylinder.prefab", before: "cylinder_before.prefab", after: "cylinder_after.prefab" },
-  { repoPath: "Assets/Materials/Rock.mat", before: "material_before.mat", after: "material_after.mat" },
-  { repoPath: "Assets/Animations/Player.controller", before: "animator_before.controller", after: "animator_after.controller" },
+// Mirror of the UnityYAML extension gate in cli/src/unity_path.zig (and the
+// extension's detect.ts): only these paths get semantic views; .meta and other
+// files keep GitHub's plain diff in the mock.
+const UNITY_EXTENSIONS = [
+  ".prefab", ".unity", ".asset", ".mat", ".anim", ".controller",
+  ".overridecontroller", ".physicmaterial", ".physicsmaterial2d", ".playable",
+  ".mask", ".brush", ".flare", ".fontsettings", ".guiskin", ".giparams",
+  ".rendertexture", ".spriteatlas", ".spriteatlasv2", ".terrainlayer",
+  ".mixer", ".shadervariants", ".preset", ".signal", ".lighting", ".scenetemplate",
 ];
-const README_BEFORE = "# Demo Project\n\nFixture assets for the PrefabLens demo.\n";
-const README_AFTER = `${README_BEFORE}\nTuned the cylinder physics and the rock material.\n`;
+const isUnityPath = (path) => UNITY_EXTENSIONS.some((ext) => path.toLowerCase().endsWith(ext));
 
 function assertBuilt(path, hint) {
   if (!existsSync(path)) throw new Error(`${path} not found — run \`${hint}\` first`);
@@ -38,21 +40,34 @@ function git(cwd, ...args) {
   });
 }
 
-/** Builds the demo repo: main holds the before state, the worktree the after state.
+/** Builds the demo repo: main holds fixtures/before, the worktree fixtures/after.
  *  One ref vs worktree is exactly `prefablens main` semantics (cli/src/input.zig). */
 function makeDemoRepo() {
   const repo = mkdtempSync(join(tmpdir(), "prefablens-site-"));
   git(repo, "init", "-q", "-b", "main");
-  writeFileSync(join(repo, "README.md"), README_BEFORE);
-  for (const f of FIXTURES) {
-    mkdirSync(dirname(join(repo, f.repoPath)), { recursive: true });
-    cpSync(join(TESTDATA, f.before), join(repo, f.repoPath));
-  }
+  cpSync(join(FIXTURES, "before"), repo, { recursive: true });
   git(repo, "add", "-A");
   git(repo, "commit", "-q", "-m", "before");
-  writeFileSync(join(repo, "README.md"), README_AFTER);
-  for (const f of FIXTURES) cpSync(join(TESTDATA, f.after), join(repo, f.repoPath));
+  // Swap the worktree to the after state: deletions of tracked files show up in
+  // `git diff main` on their own; added files need intent-to-add to be listed.
+  for (const entry of readdirSync(repo)) if (entry !== ".git") rmSync(join(repo, entry), { recursive: true });
+  cpSync(join(FIXTURES, "after"), repo, { recursive: true });
+  git(repo, "add", "-A", "-N");
   return repo;
+}
+
+/** Changed files as {before, after} path pairs (null on the added/removed side),
+ *  from `git diff --name-status` with rename detection, GitHub-like order. */
+function changedFiles(repo) {
+  const files = [];
+  for (const line of git(repo, "diff", "--name-status", "-M", "main").trimEnd().split("\n")) {
+    const [st, a, b] = line.split("\t");
+    if (st.startsWith("R")) files.push({ before: a, after: b });
+    else if (st === "A") files.push({ before: null, after: a });
+    else if (st === "D") files.push({ before: a, after: null });
+    else files.push({ before: a, after: a });
+  }
+  return files.sort((x, y) => (x.after ?? x.before).localeCompare(y.after ?? y.before));
 }
 
 function escapeHtml(text) {
@@ -88,8 +103,40 @@ function diffTable(unified) {
       rows.push(`<tr><td class="num">${oldN++}</td><td class="num">${newN++}</td><td class="code"> ${escapeHtml(line.slice(1))}</td></tr>`);
     }
   }
+  const body = rows.length
+    ? `<table class="diff-table">${rows.join("")}</table>`
+    : '<p class="hint file-empty">File renamed without changes.</p>';
   const stat = `<span class="added">+${added}</span> <span class="removed">−${removed}</span>`;
-  return { table: `<table class="diff-table">${rows.join("")}</table>`, stat };
+  return { table: body, stat };
+}
+
+const COLLAPSE_BUTTON =
+  '<button type="button" class="file-collapse" aria-label="Collapse file">' +
+  '<svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">' +
+  '<path d="M6.22 3.22a.75.75 0 0 1 1.06 0l4.25 4.25a.75.75 0 0 1 0 1.06l-4.25 4.25a.75.75 0 0 1-1.06-1.06L9.94 8 6.22 4.28a.75.75 0 0 1 0-1.06Z"/></svg></button>';
+
+/** One GitHub-style file container. Unity files carry data-before/data-after
+ *  fixture URLs; demo.js turns exactly those into semantic views. */
+function fileSection(repo, file) {
+  const path = file.after ?? file.before;
+  const renamed = file.before !== null && file.after !== null && file.before !== file.after;
+  const args = ["diff", "-M", "main", "--"];
+  args.push(file.before ?? file.after);
+  if (renamed) args.push(file.after);
+  const { table, stat } = diffTable(git(repo, ...args));
+  const label = renamed ? `${escapeHtml(file.before)} → ${escapeHtml(path)}` : escapeHtml(path);
+  const sources = isUnityPath(path)
+    ? ` data-before="${file.before ? `fixtures/before/${escapeHtml(file.before)}` : ""}"` +
+      ` data-after="${file.after ? `fixtures/after/${escapeHtml(file.after)}` : ""}"`
+    : "";
+  return `      <div class="file js-details-container Details Details--on open">
+        <div class="file-header" data-path="${escapeHtml(path)}"${sources}>
+          ${COLLAPSE_BUTTON}
+          <span class="file-info">${label}</span>
+          <span class="file-stat">${stat}</span>
+        </div>
+        <div class="js-file-content Details-content--hidden">${table}</div>
+      </div>`;
 }
 
 function inject(html, token, replacement) {
@@ -101,43 +148,42 @@ function inject(html, token, replacement) {
 assertBuilt(BIN, "zig build");
 assertBuilt(WASM, "zig build wasm");
 rmSync(DIST, { recursive: true, force: true });
-mkdirSync(join(DIST, "fixtures"), { recursive: true });
+mkdirSync(DIST, { recursive: true });
 
 const repo = makeDemoRepo();
+let report;
+let tree;
+let extension;
 try {
   // CLI outputs: the --open report page, and the tree view (--color because
   // stdout is a pipe here; a terminal gets color automatically).
-  const report = execFileSync(BIN, ["--html", "main"], { cwd: repo, encoding: "utf8" });
-  const tree = execFileSync(BIN, ["--color", "main"], { cwd: repo, encoding: "utf8" });
+  report = execFileSync(BIN, ["--html", "main"], { cwd: repo, encoding: "utf8" });
+  tree = execFileSync(BIN, ["--color", "main"], { cwd: repo, encoding: "utf8" });
 
-  writeFileSync(join(DIST, "cli-report.html"), report);
-  let cli = readFileSync(join(SITE, "static", "cli.html"), "utf8");
-  cli = inject(cli, "TERMINAL", ansiToHtml(tree.trimEnd()));
-  writeFileSync(join(DIST, "cli.html"), cli);
-
-  let extension = readFileSync(join(SITE, "static", "extension.html"), "utf8");
-  for (const path of [...FIXTURES.map((f) => f.repoPath), "README.md"]) {
-    const unified = git(repo, "diff", "main", "--", path);
-    const { table, stat } = diffTable(unified);
-    extension = inject(extension, `DIFF:${path}`, table);
-    extension = inject(extension, `STAT:${path}`, stat);
-  }
-  writeFileSync(join(DIST, "extension.html"), extension);
+  const files = changedFiles(repo);
+  extension = readFileSync(join(SITE, "static", "extension.html"), "utf8");
+  extension = inject(extension, "FILECOUNT", String(files.length));
+  extension = inject(extension, "FILES", files.map((f) => fileSection(repo, f)).join("\n\n"));
 
   // Smoke asserts: a palette or renderer change must fail the build, not ship a
   // silently broken page.
   if (!report.includes("pl-")) throw new Error("CLI report lost its pl- classes");
-  for (const f of FIXTURES) if (!report.includes(f.repoPath)) throw new Error(`report is missing ${f.repoPath}`);
+  if (!report.includes("Robot.prefab")) throw new Error("report is missing Robot.prefab");
   if (!ansiToHtml(tree).includes("<span")) throw new Error("tree output lost its ANSI colors");
-  for (const page of [cli, extension]) if (page.includes("{{")) throw new Error("unreplaced template token");
+  if (files.length < 20) throw new Error(`expected the full fixture PR, got ${files.length} files`);
 } finally {
   rmSync(repo, { recursive: true, force: true });
 }
 
-for (const f of FIXTURES) {
-  cpSync(join(TESTDATA, f.before), join(DIST, "fixtures", f.before));
-  cpSync(join(TESTDATA, f.after), join(DIST, "fixtures", f.after));
-}
+writeFileSync(join(DIST, "cli-report.html"), report);
+let cli = readFileSync(join(SITE, "static", "cli.html"), "utf8");
+cli = inject(cli, "TERMINAL", ansiToHtml(tree.trimEnd()));
+writeFileSync(join(DIST, "cli.html"), cli);
+writeFileSync(join(DIST, "extension.html"), extension);
+for (const page of [cli, extension]) if (page.includes("{{")) throw new Error("unreplaced template token");
+
+cpSync(join(FIXTURES, "before"), join(DIST, "fixtures", "before"), { recursive: true });
+cpSync(join(FIXTURES, "after"), join(DIST, "fixtures", "after"), { recursive: true });
 cpSync(WASM, join(DIST, "prefablens.wasm"));
 for (const file of ["index.html", "site.css", "favicon.svg"]) cpSync(join(SITE, "static", file), join(DIST, file));
 

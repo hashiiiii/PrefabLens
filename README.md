@@ -11,6 +11,31 @@ Semantic diff tools for UnityYAML assets. Instead of raw text diffs, PrefabLens 
 | `extension/` | Chrome extension for semantic diffs on GitHub pull requests |
 | `editor/` | Unity Editor package for semantic UnityYAML diffs |
 
+## Installation
+
+### Homebrew (macOS / Linux)
+
+```bash
+brew install hashiiiii/tap/prefablens
+```
+
+### Scoop (Windows)
+
+```bash
+scoop bucket add hashiiiii https://github.com/hashiiiii/scoop-bucket
+scoop install prefablens
+```
+
+### mise
+
+```bash
+mise use -g github:hashiiiii/PrefabLens
+```
+
+### Manual
+
+Download the zip for your platform from [GitHub Releases](https://github.com/hashiiiii/PrefabLens/releases).
+
 ## Usage
 
 ### CLI

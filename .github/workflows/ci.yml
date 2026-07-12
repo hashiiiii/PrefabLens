@@ -62,3 +62,10 @@ jobs:
         run: |
           dotnet tool restore
           dotnet csharpier check . --no-msbuild-check
+
+  packaging:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Render test
+        run: packaging/render_test.sh

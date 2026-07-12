@@ -27,11 +27,12 @@ jobs:
         run: |
           zig build
           zig build wasm
+      - name: Install esbuild
+        working-directory: extension
+        run: pnpm install --frozen-lockfile
       - name: Build site
         working-directory: site
-        run: |
-          pnpm install --frozen-lockfile
-          node build.mjs
+        run: node build.mjs
       - uses: actions/upload-pages-artifact@v5
         with:
           path: site/dist

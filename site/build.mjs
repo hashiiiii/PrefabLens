@@ -4,11 +4,15 @@
 // `zig build && zig build wasm` first.
 import { execFileSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { build } from "esbuild";
 import { ansiToHtml } from "./src/ansi.mjs";
+
+// The site has no package of its own: the only build dependency is esbuild,
+// borrowed from the extension package (run `pnpm install` in extension/ first).
+const { build } = createRequire(new URL("../extension/package.json", import.meta.url))("esbuild");
 
 const SITE = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(SITE, "..");

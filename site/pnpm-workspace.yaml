@@ -1,5 +1,0 @@
-allowBuilds:
-  esbuild: true
-
-# Same supply-chain cooldown as extension/pnpm-workspace.yaml; see the rationale there.
-minimumReleaseAge: 4320

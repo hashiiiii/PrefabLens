@@ -8,3 +8,5 @@ docs/superpowers/
 extension/node_modules/
 extension/dist/
 extension/test-results/
+site/node_modules/
+site/dist/

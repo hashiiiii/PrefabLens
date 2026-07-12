@@ -4,5 +4,6 @@
 // API instead of reaching into extension sources.
 export { createToggle, injectPageStyles, type View } from "./content/toggle";
 export { createViewState } from "./content/viewstate";
+export { applyResolved } from "./github/resolved";
 export { render, renderError, renderLoading } from "./renderer/render";
 export { createDiffer } from "./wasm/differ";

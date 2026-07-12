@@ -1,4 +1,3 @@
-import type { DiffV2 } from "../types";
 import { type PrFile, RateLimitError } from "./client";
 
 /** Same rule as parseGuid in cli/src/resolve.zig: picks up "guid:" at the start of a line (after trim). */
@@ -47,12 +46,4 @@ export async function buildGuidIndex(files: PrFile[], fetchMeta: MetaFetcher): P
   return index;
 }
 
-/** Host-side resolution seam. Attaches with the same scoping rule as core's "resolved". */
-export function applyResolved(diff: DiffV2, index: Map<string, string>): DiffV2 {
-  const resolved: Record<string, string> = {};
-  for (const g of diff.unresolvedGuids) {
-    const path = index.get(g);
-    if (path !== undefined) resolved[g] = path;
-  }
-  return { ...diff, resolved };
-}
+export { applyResolved } from "./resolved";

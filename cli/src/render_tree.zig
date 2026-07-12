@@ -32,6 +32,35 @@ test "render: modified loose component under a counted components group" {
     try testing.expect(std.mem.indexOf(u8, text, "\x1b[") == null);
 }
 
+test "render: colored values follow the extension's before/after palette" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const before =
+        \\--- !u!114 &5
+        \\MonoBehaviour:
+        \\  hp: 100
+        \\  m_OldFlag: 1
+    ;
+    const after =
+        \\--- !u!114 &5
+        \\MonoBehaviour:
+        \\  hp: 250
+        \\  m_NewFlag: 1
+    ;
+    const res = try core.diffBytes(arena, before, after);
+    var out: std.ArrayList(u8) = .empty;
+    var aw = std.Io.Writer.Allocating.fromArrayList(arena, &out);
+    try render(arena, &aw.writer, res, null, true);
+    const text = aw.toArrayList().items;
+    // Modified field: before value red, arrow dim, after value green — the
+    // terminal reading of the extension's pl-before/pl-arrow/pl-after spans.
+    try testing.expect(std.mem.indexOf(u8, text, "Hp: \x1b[31m100\x1b[0m\x1b[2m → \x1b[0m\x1b[32m250\x1b[0m") != null);
+    // One-sided fields paint their single value in the side's color.
+    try testing.expect(std.mem.indexOf(u8, text, "New Flag: \x1b[32m1\x1b[0m") != null);
+    try testing.expect(std.mem.indexOf(u8, text, "Old Flag: \x1b[31m1\x1b[0m") != null);
+}
+
 test "render: prefab instance shows cube glyph, meta marker and overrides" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
@@ -473,17 +502,25 @@ fn renderFieldRow(
         return;
     }
     try w.writeAll(": ");
+    // Values carry the same red→green reading as the extension's
+    // pl-before/pl-arrow/pl-after spans: before red, arrow dim, after green.
     switch (status) {
         .modified => {
-            try writeValueText(w, before);
-            try w.writeAll(" → ");
-            try writeValueText(w, after);
+            try paintValue(w, color, Color.red, before);
+            try paint(w, color, Color.dim, " → ");
+            try paintValue(w, color, Color.green, after);
         },
-        .added => try writeValueText(w, after),
-        .removed => try writeValueText(w, before),
+        .added => try paintValue(w, color, Color.green, after),
+        .removed => try paintValue(w, color, Color.red, before),
         .unchanged => {},
     }
     try w.writeByte('\n');
+}
+
+fn paintValue(w: *std.Io.Writer, color: bool, code: []const u8, node: ?*const model.Node) !void {
+    if (color) try w.writeAll(code);
+    try writeValueText(w, node);
+    if (color) try w.writeAll(Color.reset);
 }
 
 fn writeValueText(w: *std.Io.Writer, node: ?*const model.Node) !void {

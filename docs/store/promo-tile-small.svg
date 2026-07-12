@@ -1,18 +1,14 @@
 <!-- Source of promo-tile-small.png (Chrome Web Store small promo tile, 440x280).
      Regenerate with: rsvg-convert -w 440 -h 280 promo-tile-small.svg -o promo-tile-small.png -->
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 440 280">
-  <rect width="440" height="280" fill="#0D1117"/>
-  <!-- Mark: isometric cube with lens, same geometry as extension/icons/icon.svg -->
-  <g transform="translate(52,76) scale(1)">
-    <polygon points="60,12 104,34 60,56 16,34" fill="#9ECBFF"/>
-    <polygon points="16,34 60,56 60,104 16,82" fill="#4493F8"/>
-    <polygon points="60,56 104,34 104,82 60,104" fill="#1F6FEB"/>
-    <g stroke="#F78166" fill="none" stroke-linecap="round">
-      <circle cx="86" cy="86" r="26" stroke-width="11"/>
-      <line x1="105" y1="105" x2="120" y2="120" stroke-width="13"/>
-    </g>
+  <rect width="440" height="280" fill="#000"/>
+  <!-- Mark: diff cube, same geometry as extension/icons/icon.svg (white faces on dark) -->
+  <g transform="translate(52,80) scale(1.2)">
+    <polygon points="50,9.08 82.77,28 50,46.92 17.23,28" fill="#fff"/>
+    <polygon points="14.57,32.62 47.33,51.54 47.33,89.38 14.57,70.46" fill="#fff"/>
+    <polygon points="52.67,51.54 85.43,32.62 85.43,70.46 52.67,89.38" fill="#14c6cb"/>
   </g>
-  <text x="196" y="132" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="36" font-weight="700" fill="#F0F6FC">PrefabLens</text>
-  <text x="197" y="162" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="15" fill="#8B949E">Semantic diffs for Unity YAML</text>
-  <text x="197" y="184" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="15" fill="#8B949E">in GitHub pull requests</text>
+  <text x="196" y="132" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="36" font-weight="700" fill="#ffffff">PrefabLens</text>
+  <text x="197" y="162" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="15" fill="#b2b6bd">Semantic diffs for Unity YAML</text>
+  <text x="197" y="184" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="15" fill="#b2b6bd">in GitHub pull requests</text>
 </svg>

@@ -115,6 +115,51 @@ main { max-width: 1024px; margin: 0 auto; padding: 24px 32px 96px; }
   color: var(--ink-muted);
 }
 
+.hero-actions { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 32px; }
+.button {
+  padding: 10px 20px;
+  border: 1px solid var(--hairline);
+  border-radius: 8px;
+  background: var(--surface-1);
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.button:hover { background: var(--surface-2); text-decoration: none; }
+.button.ext { border-color: var(--accent-ext); }
+.button.cli { border-color: var(--accent-cli); }
+
+/* Landing hero visual: the same prefab change as a raw diff and as the
+ * semantic view, side by side. */
+.compare {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(380px, 1fr));
+  gap: 24px;
+  margin: 56px 0 0;
+}
+.compare .window { margin: 0; }
+.pane-label {
+  margin: 0 0 10px;
+  font: 600 12px/1.23 var(--font);
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+}
+/* Compound selector: .gh-page (defined later) supplies the Primer palette the
+ * diff table reads, but its 24px padding must lose to this pane's edge-to-edge
+ * layout. */
+.gh-page.raw-pane { height: 440px; overflow: auto; padding: 0; }
+.hero-frame {
+  display: block;
+  width: 100%;
+  height: 440px;
+  border: none;
+  background: #ffffff;
+}
+@media (prefers-color-scheme: dark) {
+  .hero-frame { background: #0d1117; }
+}
+
 .demo-cards {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));

@@ -19,8 +19,8 @@ const FIXTURES = join(SITE, "fixtures");
 const DIST = join(SITE, "dist");
 
 // Mirror of the UnityYAML extension gate in cli/src/unity_path.zig (and the
-// extension's detect.ts): only these paths get semantic views; .meta and other
-// files keep GitHub's plain diff in the mock.
+// extension's detect.ts): only these paths get semantic views; anything else
+// (e.g. .meta) would keep GitHub's plain diff in the mock.
 const UNITY_EXTENSIONS = [
   ".prefab", ".unity", ".asset", ".mat", ".anim", ".controller",
   ".overridecontroller", ".physicmaterial", ".physicsmaterial2d", ".playable",
@@ -29,6 +29,19 @@ const UNITY_EXTENSIONS = [
   ".mixer", ".shadervariants", ".preset", ".signal", ".lighting", ".scenetemplate",
 ];
 const isUnityPath = (path) => UNITY_EXTENSIONS.some((ext) => path.toLowerCase().endsWith(ext));
+
+// The demos show exactly these fixtures, top to bottom: .asset, .unity, then
+// .prefab. The CLI orders its bulk output by path, which matches because the
+// fixture names sort the same way — renaming a fixture must keep that true.
+const DEMO_FILES = [
+  "Assets/Fixtures/Fixture.asset",
+  "Assets/Fixtures/Playground.unity",
+  "Assets/Fixtures/Robot.prefab",
+  "Assets/Fixtures/RobotVariant.prefab",
+];
+// Robot.prefab is the landing-page hero: a compact diff with modified, added,
+// and removed components plus a child object.
+const HERO_FILE = "Assets/Fixtures/Robot.prefab";
 
 function assertBuilt(path, hint) {
   if (!existsSync(path)) throw new Error(`${path} not found — run \`${hint}\` first`);
@@ -58,7 +71,7 @@ function makeDemoRepo() {
 }
 
 /** Changed files as {before, after} path pairs (null on the added/removed side),
- *  from `git diff --name-status` with rename detection, GitHub-like order. */
+ *  from `git diff --name-status` with rename detection, in DEMO_FILES order. */
 function changedFiles(repo) {
   const files = [];
   for (const line of git(repo, "diff", "--name-status", "-M", "main").trimEnd().split("\n")) {
@@ -68,7 +81,8 @@ function changedFiles(repo) {
     else if (st === "D") files.push({ before: a, after: null });
     else files.push({ before: a, after: a });
   }
-  return files.sort((x, y) => (x.after ?? x.before).localeCompare(y.after ?? y.before));
+  const rank = (f) => DEMO_FILES.indexOf(f.after ?? f.before);
+  return files.sort((x, y) => rank(x) - rank(y));
 }
 
 function escapeHtml(text) {
@@ -154,40 +168,52 @@ mkdirSync(DIST, { recursive: true });
 
 const repo = makeDemoRepo();
 let report;
+let heroReport;
 let tree;
 let extension;
+let index;
 try {
-  // CLI outputs: the --open report page, and the tree view (--color because
-  // stdout is a pipe here; a terminal gets color automatically).
+  // CLI outputs: the --open report page, the tree view (--color because stdout
+  // is a pipe here; a terminal gets color automatically), and the single-file
+  // hero report the landing page frames next to the raw diff.
   report = execFileSync(BIN, ["--html", "main"], { cwd: repo, encoding: "utf8" });
   tree = execFileSync(BIN, ["--color", "main"], { cwd: repo, encoding: "utf8" });
+  heroReport = execFileSync(BIN, ["--html", "main", HERO_FILE], { cwd: repo, encoding: "utf8" });
 
   const files = changedFiles(repo);
   extension = readFileSync(join(SITE, "static", "extension.html"), "utf8");
   extension = inject(extension, "FILECOUNT", String(files.length));
   extension = inject(extension, "FILES", files.map((f) => fileSection(repo, f)).join("\n\n"));
 
-  // Smoke asserts: a palette or renderer change must fail the build, not ship a
-  // silently broken page.
+  index = readFileSync(join(SITE, "static", "index.html"), "utf8");
+  index = inject(index, "HERODIFF", diffTable(git(repo, "diff", "main", "--", HERO_FILE)).table);
+
+  // Smoke asserts: a palette, renderer, or fixture change must fail the build,
+  // not ship a silently broken page.
   if (!report.includes("pl-")) throw new Error("CLI report lost its pl- classes");
-  if (!report.includes("Robot.prefab")) throw new Error("report is missing Robot.prefab");
+  if (!heroReport.includes("Rigidbody")) throw new Error("hero report is missing the Robot diff");
   if (!ansiToHtml(tree).includes("<span")) throw new Error("tree output lost its ANSI colors");
-  if (files.length < 20) throw new Error(`expected the full fixture PR, got ${files.length} files`);
+  const paths = files.map((f) => f.after ?? f.before);
+  if (paths.join("\n") !== DEMO_FILES.join("\n")) {
+    throw new Error(`demo files drifted from DEMO_FILES:\n${paths.join("\n")}`);
+  }
 } finally {
   rmSync(repo, { recursive: true, force: true });
 }
 
 writeFileSync(join(DIST, "cli-report.html"), report);
+writeFileSync(join(DIST, "hero-report.html"), heroReport);
 let cli = readFileSync(join(SITE, "static", "cli.html"), "utf8");
 cli = inject(cli, "TERMINAL", ansiToHtml(tree.trimEnd()));
 writeFileSync(join(DIST, "cli.html"), cli);
 writeFileSync(join(DIST, "extension.html"), extension);
-for (const page of [cli, extension]) if (page.includes("{{")) throw new Error("unreplaced template token");
+writeFileSync(join(DIST, "index.html"), index);
+for (const page of [cli, extension, index]) if (page.includes("{{")) throw new Error("unreplaced template token");
 
 cpSync(join(FIXTURES, "before"), join(DIST, "fixtures", "before"), { recursive: true });
 cpSync(join(FIXTURES, "after"), join(DIST, "fixtures", "after"), { recursive: true });
 cpSync(WASM, join(DIST, "prefablens.wasm"));
 cpSync(VIEWER, join(DIST, "viewer.js"));
-for (const file of ["index.html", "site.css", "favicon.svg", "demo.js"]) cpSync(join(SITE, "static", file), join(DIST, file));
+for (const file of ["site.css", "favicon.svg", "demo.js"]) cpSync(join(SITE, "static", file), join(DIST, file));
 
 console.log(`site built at ${DIST}`);

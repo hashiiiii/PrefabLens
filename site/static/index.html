@@ -21,10 +21,41 @@
         <span class="eyebrow">Semantic diffs for UnityYAML</span>
         <h1>Review prefabs, not YAML noise.</h1>
         <p>
-          PrefabLens shows Unity asset changes at the GameObject, component, and field level —
-          on GitHub pull requests and in your terminal. Try both below; every demo runs the real
-          diff engine, nothing is a screenshot.
+          PrefabLens shows Unity asset changes as a GameObject / component / field tree —
+          on GitHub pull requests and in your terminal.
         </p>
+        <div class="hero-actions">
+          <a class="button ext" href="extension.html">Try the extension demo</a>
+          <a class="button cli" href="cli.html">Try the CLI demo</a>
+        </div>
+      </section>
+
+      <!-- Same Robot.prefab change, both views produced by the real tooling at
+           build time: git for the raw diff, the prefablens binary for the
+           semantic report. -->
+      <section class="compare">
+        <div class="compare-pane">
+          <p class="pane-label">What GitHub shows you</p>
+          <div class="window">
+            <div class="window-bar">
+              <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+              <span class="address">git diff — Robot.prefab</span>
+            </div>
+            <div class="gh-page raw-pane">
+<!--{{HERODIFF}}-->
+            </div>
+          </div>
+        </div>
+        <div class="compare-pane">
+          <p class="pane-label">What PrefabLens shows you</p>
+          <div class="window">
+            <div class="window-bar">
+              <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+              <span class="address">prefablens — Robot.prefab</span>
+            </div>
+            <iframe class="hero-frame" src="hero-report.html" title="PrefabLens semantic diff"></iframe>
+          </div>
+        </div>
       </section>
 
       <section class="demo-cards">
@@ -32,15 +63,15 @@
           <span class="eyebrow ext">Chrome extension</span>
           <h2>On GitHub pull requests</h2>
           <p>
-            A simulated Files changed page running the real PrefabLens renderer and WASM diff
-            engine. Toggle each file between GitHub's raw diff and the semantic view.
+            A simulated Files changed page running the real renderer and WASM diff engine.
+            Toggle each Unity file between the raw diff and the semantic view.
           </p>
         </a>
         <a class="demo-card" href="cli.html">
           <span class="eyebrow cli">CLI</span>
           <h2>In your terminal</h2>
           <p>
-            The colored tree view the <code>prefablens</code> command prints locally, and the
+            The colored tree the <code>prefablens</code> command prints locally, and the
             self-contained HTML report that <code>--open</code> pops into your browser.
           </p>
         </a>

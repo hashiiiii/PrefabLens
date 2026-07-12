@@ -1,0 +1,13 @@
+<!-- Source of the committed PNGs. Regenerate with:
+     for s in 16 32 48 128; do rsvg-convert -w $s -h $s icon.svg -o icon$s.png; done -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <!-- Isometric cube: top / left / right faces -->
+  <polygon points="60,12 104,34 60,56 16,34" fill="#9ECBFF"/>
+  <polygon points="16,34 60,56 60,104 16,82" fill="#4493F8"/>
+  <polygon points="60,56 104,34 104,82 60,104" fill="#1F6FEB"/>
+  <!-- Lens ring with handle, bottom-right -->
+  <g stroke="#F78166" fill="none" stroke-linecap="round">
+    <circle cx="86" cy="86" r="26" stroke-width="11"/>
+    <line x1="105" y1="105" x2="120" y2="120" stroke-width="13"/>
+  </g>
+</svg>

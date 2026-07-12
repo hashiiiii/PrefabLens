@@ -1,0 +1,227 @@
+/* Demo-site stylesheet. The custom properties below are the Primer variables the
+ * PrefabLens renderer and toggle read on github.com; values are the exact fallback
+ * palette from extension/src/renderer/styles.ts, so the shadow-DOM views inherit
+ * the same theme here as on GitHub. */
+
+:root {
+  --fgColor-default: #1f2328;
+  --fgColor-muted: #59636e;
+  --fgColor-accent: #0969da;
+  --fgColor-success: #1a7f37;
+  --fgColor-danger: #cf222e;
+  --fgColor-attention: #9a6700;
+  --borderColor-default: #d1d9e0;
+  --borderColor-muted: #d8dee4;
+  --bgColor-default: #ffffff;
+  --bgColor-muted: #f6f8fa;
+  --bgColor-neutral-muted: rgba(129, 139, 152, 0.18);
+  --bgColor-success-muted: #dafbe1;
+  --bgColor-danger-muted: #ffebe9;
+  --bgColor-attention-muted: #fff8c5;
+  --bgColor-accent-muted: #ddf4ff;
+  --font: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --fgColor-default: #f0f6fc;
+    --fgColor-muted: #9198a1;
+    --fgColor-accent: #4493f8;
+    --fgColor-success: #3fb950;
+    --fgColor-danger: #f85149;
+    --fgColor-attention: #d29922;
+    --borderColor-default: #3d444d;
+    --borderColor-muted: #3d444d;
+    --bgColor-default: #0d1117;
+    --bgColor-muted: #151b23;
+    --bgColor-neutral-muted: rgba(101, 108, 118, 0.25);
+    --bgColor-success-muted: rgba(46, 160, 67, 0.15);
+    --bgColor-danger-muted: rgba(248, 81, 73, 0.15);
+    --bgColor-attention-muted: rgba(187, 128, 9, 0.15);
+    --bgColor-accent-muted: rgba(56, 139, 253, 0.15);
+  }
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font: 14px/1.5 var(--font);
+  color: var(--fgColor-default);
+  background: var(--bgColor-default);
+}
+
+a { color: var(--fgColor-accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+code, pre { font-family: var(--mono); }
+
+/* --- Site chrome ------------------------------------------------------- */
+
+.site-header {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 12px 24px;
+  border-bottom: 1px solid var(--borderColor-muted);
+}
+.site-header .wordmark { font-weight: 700; color: var(--fgColor-default); }
+.site-header nav { display: flex; gap: 16px; margin-left: auto; }
+.site-header nav a { color: var(--fgColor-muted); }
+.site-header nav a:hover { color: var(--fgColor-default); text-decoration: none; }
+
+main { max-width: 980px; margin: 0 auto; padding: 24px 24px 64px; }
+
+.site-footer {
+  max-width: 980px;
+  margin: 0 auto;
+  padding: 16px 24px 40px;
+  color: var(--fgColor-muted);
+  border-top: 1px solid var(--borderColor-muted);
+}
+
+/* Banner marking the demo pages as simulations, not real GitHub. */
+.demo-banner {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 0 0 20px;
+  padding: 10px 14px;
+  border: 1px solid var(--borderColor-muted);
+  border-radius: 6px;
+  background: var(--bgColor-accent-muted);
+}
+.demo-banner strong { white-space: nowrap; }
+.demo-banner span { color: var(--fgColor-muted); }
+
+/* --- Landing ----------------------------------------------------------- */
+
+.hero { padding: 40px 0 8px; }
+.hero h1 { margin: 0; font-size: 40px; }
+.hero p { max-width: 640px; font-size: 18px; color: var(--fgColor-muted); }
+
+.demo-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; margin: 24px 0 8px; }
+.demo-card {
+  display: block;
+  padding: 20px;
+  border: 1px solid var(--borderColor-default);
+  border-radius: 8px;
+  color: inherit;
+}
+.demo-card:hover { border-color: var(--fgColor-accent); text-decoration: none; }
+.demo-card h2 { margin: 0 0 6px; font-size: 18px; color: var(--fgColor-accent); }
+.demo-card p { margin: 0; color: var(--fgColor-muted); }
+
+.install { margin-top: 40px; }
+.install h2 { font-size: 20px; }
+.install dl { margin: 0; }
+.install dt { font-weight: 600; margin-top: 14px; }
+.install dd { margin: 6px 0 0; }
+.install pre {
+  margin: 6px 0 0;
+  padding: 10px 14px;
+  border: 1px solid var(--borderColor-muted);
+  border-radius: 6px;
+  background: var(--bgColor-muted);
+  overflow-x: auto;
+}
+
+/* --- Mock pull-request page -------------------------------------------- */
+
+.pr-header { margin: 0 0 4px; font-size: 24px; font-weight: 400; }
+.pr-header .pr-number { color: var(--fgColor-muted); }
+.pr-meta { margin: 0 0 16px; color: var(--fgColor-muted); }
+.pr-meta .branch {
+  font: 12px/1.8 var(--mono);
+  padding: 1px 6px;
+  border-radius: 6px;
+  color: var(--fgColor-accent);
+  background: var(--bgColor-accent-muted);
+}
+
+.file {
+  margin: 0 0 16px;
+  border: 1px solid var(--borderColor-default);
+  border-radius: 6px;
+  background: var(--bgColor-default);
+}
+.file-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--borderColor-default);
+  border-radius: 6px 6px 0 0;
+  background: var(--bgColor-muted);
+}
+.file:not(.Details--on) .file-header { border-bottom: none; border-radius: 6px; }
+.file-collapse {
+  display: inline-flex;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--fgColor-muted);
+  cursor: pointer;
+}
+.file-collapse svg { transition: transform 120ms ease; }
+.file.Details--on .file-collapse svg { transform: rotate(90deg); }
+.file-info { font: 600 12px/1.8 var(--mono); }
+.file-stat { font: 12px/1.8 var(--mono); }
+.file-stat .added { color: var(--fgColor-success); }
+.file-stat .removed { color: var(--fgColor-danger); }
+
+/* Primer's collapse rule from github.com: the chevron toggles Details--on on
+ * .file, and this hides anything carrying the class (including the shadow host
+ * the demo script inserts, exactly like the extension on github.com). */
+.Details:not(.Details--on) .Details-content--hidden { display: none !important; }
+
+.diff-table { width: 100%; border-collapse: collapse; font: 12px/1.7 var(--mono); }
+.diff-table td { padding: 0; }
+.diff-table td.num {
+  width: 1%;
+  min-width: 44px;
+  padding: 0 10px;
+  text-align: right;
+  color: var(--fgColor-muted);
+  user-select: none;
+}
+.diff-table td.code { white-space: pre-wrap; word-break: break-all; padding-right: 10px; }
+.diff-table tr.add { background: var(--bgColor-success-muted); }
+.diff-table tr.del { background: var(--bgColor-danger-muted); }
+.diff-table tr.hunk td { background: var(--bgColor-accent-muted); color: var(--fgColor-muted); padding: 2px 10px; }
+.diff-table tr:last-child td:first-child { border-bottom-left-radius: 6px; }
+
+/* --- CLI page ----------------------------------------------------------- */
+
+.cli-section { margin: 0 0 40px; }
+.cli-section h2 { font-size: 20px; }
+.cli-section .hint { color: var(--fgColor-muted); }
+
+/* The terminal stays dark in both themes, like a real terminal window. */
+.terminal {
+  border: 1px solid var(--borderColor-default);
+  border-radius: 8px;
+  background: #0d1117;
+  overflow: hidden;
+}
+.terminal-bar { display: flex; gap: 6px; padding: 10px 12px; background: #151b23; }
+.terminal-bar span { width: 12px; height: 12px; border-radius: 50%; }
+.terminal-bar span:nth-child(1) { background: #ff5f57; }
+.terminal-bar span:nth-child(2) { background: #febc2e; }
+.terminal-bar span:nth-child(3) { background: #28c840; }
+.terminal pre { margin: 0; padding: 14px 16px; overflow-x: auto; font-size: 12px; line-height: 1.6; color: #f0f6fc; }
+.terminal .prompt { color: #9198a1; }
+.terminal .b { font-weight: 600; }
+.terminal .dim { color: #9198a1; }
+.terminal .red { color: #f85149; }
+.terminal .green { color: #3fb950; }
+.terminal .yellow { color: #d29922; }
+
+.report-frame {
+  width: 100%;
+  height: 720px;
+  border: 1px solid var(--borderColor-default);
+  border-radius: 8px;
+  background: var(--bgColor-default);
+}

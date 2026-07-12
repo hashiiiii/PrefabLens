@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>PrefabLens — semantic diffs for Unity YAML</title>
+    <link rel="stylesheet" href="site.css" />
+  </head>
+  <body>
+    <header class="site-header">
+      <span class="wordmark">PrefabLens</span>
+      <nav>
+        <a href="extension.html">Extension demo</a>
+        <a href="cli.html">CLI demo</a>
+        <a href="https://github.com/hashiiiii/PrefabLens">GitHub</a>
+      </nav>
+    </header>
+    <main>
+      <section class="hero">
+        <h1>PrefabLens</h1>
+        <p>
+          Semantic diff tools for UnityYAML assets. Instead of raw text diffs, PrefabLens shows
+          changes at the GameObject, component, and field level — on GitHub pull requests and in
+          your terminal.
+        </p>
+      </section>
+
+      <section class="demo-cards">
+        <a class="demo-card" href="extension.html">
+          <h2>Chrome extension on GitHub</h2>
+          <p>
+            A simulated pull request page running the real PrefabLens renderer and WASM diff
+            engine. Toggle each file between GitHub's raw diff and the semantic view.
+          </p>
+        </a>
+        <a class="demo-card" href="cli.html">
+          <h2>CLI in your terminal</h2>
+          <p>
+            The colored tree view the <code>prefablens</code> command prints locally, and the
+            self-contained HTML report that <code>--open</code> pops into your browser.
+          </p>
+        </a>
+      </section>
+
+      <section class="install">
+        <h2>Install</h2>
+        <dl>
+          <dt>Chrome extension</dt>
+          <dd>
+            <a href="https://chromewebstore.google.com/search/PrefabLens">Chrome Web Store</a> —
+            adds the Raw / Semantic toggle to Unity files on GitHub pull requests.
+          </dd>
+          <dt>CLI — Homebrew</dt>
+          <dd><pre><code>brew install hashiiiii/tap/prefablens</code></pre></dd>
+          <dt>CLI — Scoop</dt>
+          <dd><pre><code>scoop bucket add hashiiiii https://github.com/hashiiiii/scoop-bucket
+scoop install prefablens</code></pre></dd>
+          <dt>CLI — mise</dt>
+          <dd><pre><code>mise use -g github:hashiiiii/PrefabLens</code></pre></dd>
+          <dt>Everything else</dt>
+          <dd>
+            Prebuilt binaries and the Unity Editor package are on the
+            <a href="https://github.com/hashiiiii/PrefabLens/releases">releases page</a>.
+          </dd>
+        </dl>
+      </section>
+    </main>
+    <footer class="site-footer">
+      MIT licensed. Source and issues on
+      <a href="https://github.com/hashiiiii/PrefabLens">github.com/hashiiiii/PrefabLens</a>.
+    </footer>
+  </body>
+</html>

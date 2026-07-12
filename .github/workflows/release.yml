@@ -61,6 +61,14 @@ jobs:
           build x86_64-macos     macos-x64    prefablens
           build x86_64-linux-gnu linux-x64    prefablens
           build x86_64-windows   windows-x64  prefablens.exe
+      - name: Build and package extension
+        run: |
+          set -euo pipefail
+          zig build wasm
+          pnpm -C extension install --frozen-lockfile
+          pnpm -C extension build
+          # Zip the dist contents (not the directory) so manifest.json sits at the zip root
+          (cd extension/dist && zip -r "../../dist/prefablens-extension-$VERSION.zip" .)
       - name: Create release
         env:
           # Publish as the App so the release isn't attributed to github-actions[bot].

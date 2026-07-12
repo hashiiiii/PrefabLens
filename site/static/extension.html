@@ -18,6 +18,7 @@
       </nav>
     </header>
     <main>
+      <span class="eyebrow ext">Chrome extension</span>
       <div class="demo-banner">
         <strong>Simulated pull request page.</strong>
         <span>
@@ -27,13 +28,21 @@
         </span>
       </div>
 
-      <h1 class="pr-header">Regenerate fixture assets across every UnityYAML type <span class="pr-number">#2</span></h1>
-      <p class="pr-meta">
-        <!--{{FILECOUNT}}--> files changed, merging <span class="branch">feat/fixture-refresh</span> into
-        <span class="branch">main</span>
-      </p>
+      <div class="window">
+        <div class="window-bar">
+          <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+          <span class="address">github.com/you/unity-project/pull/2/files</span>
+        </div>
+        <div class="gh-page">
+          <h1 class="pr-header">Regenerate fixture assets across every UnityYAML type <span class="pr-number">#2</span></h1>
+          <p class="pr-meta">
+            <!--{{FILECOUNT}}--> files changed, merging <span class="branch">feat/fixture-refresh</span> into
+            <span class="branch">main</span>
+          </p>
 
 <!--{{FILES}}-->
+        </div>
+      </div>
 
       <p class="hint">
         The .meta files keep GitHub's plain diff: the extension only touches UnityYAML documents.

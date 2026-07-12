@@ -1,9 +1,205 @@
-/* Demo-site stylesheet. The custom properties below are the Primer variables the
- * PrefabLens renderer and toggle read on github.com; values are the exact fallback
- * palette from extension/src/renderer/styles.ts, so the shadow-DOM views inherit
- * the same theme here as on GitHub. */
+/* Demo-site stylesheet.
+ *
+ * Site chrome follows a HashiCorp-style system: near-black canvas, charcoal
+ * surfaces, 1px translucent hairlines, tight 600/700 display type over relaxed
+ * body type, and one identity accent per demo (extension purple, CLI green).
+ *
+ * The simulated GitHub page lives inside a .gh-frame browser window; the
+ * .gh-page scope defines the Primer variables the PrefabLens renderer and
+ * toggle read on github.com (exact fallback palette from
+ * extension/src/renderer/styles.ts), switched by prefers-color-scheme. */
 
 :root {
+  color-scheme: dark;
+  --canvas: #000000;
+  --surface-1: #15181e;
+  --surface-2: #1f232b;
+  --ink: #ffffff;
+  --ink-muted: #b2b6bd;
+  --ink-subtle: #656a76;
+  --hairline: rgba(178, 182, 189, 0.18);
+  --hairline-soft: rgba(178, 182, 189, 0.1);
+  --link: #2b89ff;
+  --accent-ext: #a06be6;
+  --accent-ext-deep: #7b42bc;
+  --accent-cli: #00ca8e;
+  --font: system-ui, -apple-system, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font: 500 16px/1.5 var(--font);
+  color: var(--ink);
+  background: var(--canvas);
+}
+
+a { color: var(--link); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+code, pre { font-family: var(--mono); }
+
+.eyebrow {
+  display: block;
+  margin: 0 0 12px;
+  font: 600 12px/1.23 var(--font);
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+}
+.eyebrow.ext { color: var(--accent-ext); }
+.eyebrow.cli { color: var(--accent-cli); }
+
+/* --- Site chrome ------------------------------------------------------- */
+
+.site-header {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  height: 64px;
+  padding: 0 32px;
+  border-bottom: 1px solid var(--hairline-soft);
+}
+.site-header .wordmark { font-weight: 600; color: var(--ink); }
+.site-header nav { display: flex; gap: 24px; margin-left: auto; }
+.site-header nav a { font-size: 14px; color: var(--ink-muted); }
+.site-header nav a:hover { color: var(--ink); text-decoration: none; }
+
+main { max-width: 1024px; margin: 0 auto; padding: 24px 32px 96px; }
+
+.site-footer {
+  max-width: 1024px;
+  margin: 0 auto;
+  padding: 24px 32px 64px;
+  font-size: 13px;
+  color: var(--ink-subtle);
+  border-top: 1px solid var(--hairline-soft);
+}
+.site-footer a { color: var(--ink-muted); }
+
+/* Banner marking the demo pages as simulations, not real GitHub. */
+.demo-banner {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 24px 0;
+  padding: 12px 16px;
+  border: 1px solid var(--hairline);
+  border-radius: 8px;
+  background: var(--surface-1);
+  font-size: 14px;
+  line-height: 1.6;
+}
+.demo-banner strong { white-space: nowrap; color: var(--ink); }
+.demo-banner span { color: var(--ink-muted); }
+
+.hint { font-size: 14px; line-height: 1.7; color: var(--ink-muted); }
+
+/* --- Landing ----------------------------------------------------------- */
+
+.hero { padding: 72px 0 24px; }
+.hero h1 {
+  margin: 0 0 16px;
+  font-size: 56px;
+  font-weight: 700;
+  line-height: 1.18;
+  letter-spacing: -1.6px;
+}
+.hero p {
+  margin: 0;
+  max-width: 640px;
+  font-size: 18px;
+  line-height: 1.69;
+  color: var(--ink-muted);
+}
+
+.demo-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 16px;
+  margin: 48px 0 0;
+}
+.demo-card {
+  display: block;
+  padding: 24px;
+  border: 1px solid var(--hairline);
+  border-radius: 12px;
+  background: var(--surface-1);
+  color: inherit;
+}
+.demo-card:hover { background: var(--surface-2); text-decoration: none; }
+.demo-card .eyebrow { margin-bottom: 16px; }
+.demo-card h2 {
+  margin: 0 0 8px;
+  font-size: 22px;
+  font-weight: 600;
+  line-height: 1.18;
+  letter-spacing: -0.4px;
+  color: var(--ink);
+}
+.demo-card p { margin: 0; font-size: 14px; line-height: 1.71; color: var(--ink-muted); }
+.demo-card code { color: var(--ink); }
+
+.install { margin-top: 96px; }
+.install h2 {
+  margin: 0 0 24px;
+  font-size: 28px;
+  font-weight: 600;
+  line-height: 1.21;
+  letter-spacing: -0.6px;
+}
+.install dl { margin: 0; }
+.install dt { font-weight: 600; margin-top: 24px; }
+.install dd { margin: 8px 0 0; font-size: 14px; line-height: 1.71; color: var(--ink-muted); }
+.install pre {
+  margin: 8px 0 0;
+  padding: 12px 16px;
+  border: 1px solid var(--hairline-soft);
+  border-radius: 8px;
+  background: var(--surface-1);
+  color: var(--ink);
+  font-size: 13px;
+  line-height: 1.7;
+  overflow-x: auto;
+}
+
+/* --- Framed windows (browser / terminal) -------------------------------- */
+
+.window {
+  margin: 24px 0;
+  border: 1px solid var(--hairline);
+  border-radius: 12px;
+  background: var(--surface-1);
+  overflow: hidden;
+}
+.window-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--hairline-soft);
+}
+.window-bar .dot { width: 12px; height: 12px; border-radius: 50%; background: var(--surface-2); flex: none; }
+.window-bar .address {
+  flex: 1;
+  max-width: 480px;
+  margin-left: 8px;
+  padding: 3px 12px;
+  border-radius: 6px;
+  background: var(--surface-2);
+  font: 500 12px/1.6 var(--mono);
+  color: var(--ink-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* --- Simulated GitHub page (inside a .window) ---------------------------- */
+
+.gh-page {
+  color-scheme: light;
   --fgColor-default: #1f2328;
   --fgColor-muted: #59636e;
   --fgColor-accent: #0969da;
@@ -19,12 +215,15 @@
   --bgColor-danger-muted: #ffebe9;
   --bgColor-attention-muted: #fff8c5;
   --bgColor-accent-muted: #ddf4ff;
-  --font: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif;
-  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  padding: 24px;
+  background: var(--bgColor-default);
+  color: var(--fgColor-default);
+  font-size: 14px;
 }
 
 @media (prefers-color-scheme: dark) {
-  :root {
+  .gh-page {
+    color-scheme: dark;
     --fgColor-default: #f0f6fc;
     --fgColor-muted: #9198a1;
     --fgColor-accent: #4493f8;
@@ -43,93 +242,7 @@
   }
 }
 
-* { box-sizing: border-box; }
-
-body {
-  margin: 0;
-  font: 14px/1.5 var(--font);
-  color: var(--fgColor-default);
-  background: var(--bgColor-default);
-}
-
-a { color: var(--fgColor-accent); text-decoration: none; }
-a:hover { text-decoration: underline; }
-
-code, pre { font-family: var(--mono); }
-
-/* --- Site chrome ------------------------------------------------------- */
-
-.site-header {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  padding: 12px 24px;
-  border-bottom: 1px solid var(--borderColor-muted);
-}
-.site-header .wordmark { font-weight: 700; color: var(--fgColor-default); }
-.site-header nav { display: flex; gap: 16px; margin-left: auto; }
-.site-header nav a { color: var(--fgColor-muted); }
-.site-header nav a:hover { color: var(--fgColor-default); text-decoration: none; }
-
-main { max-width: 980px; margin: 0 auto; padding: 24px 24px 64px; }
-
-.site-footer {
-  max-width: 980px;
-  margin: 0 auto;
-  padding: 16px 24px 40px;
-  color: var(--fgColor-muted);
-  border-top: 1px solid var(--borderColor-muted);
-}
-
-/* Banner marking the demo pages as simulations, not real GitHub. */
-.demo-banner {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  margin: 0 0 20px;
-  padding: 10px 14px;
-  border: 1px solid var(--borderColor-muted);
-  border-radius: 6px;
-  background: var(--bgColor-accent-muted);
-}
-.demo-banner strong { white-space: nowrap; }
-.demo-banner span { color: var(--fgColor-muted); }
-
-/* --- Landing ----------------------------------------------------------- */
-
-.hero { padding: 40px 0 8px; }
-.hero h1 { margin: 0; font-size: 40px; }
-.hero p { max-width: 640px; font-size: 18px; color: var(--fgColor-muted); }
-
-.demo-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; margin: 24px 0 8px; }
-.demo-card {
-  display: block;
-  padding: 20px;
-  border: 1px solid var(--borderColor-default);
-  border-radius: 8px;
-  color: inherit;
-}
-.demo-card:hover { border-color: var(--fgColor-accent); text-decoration: none; }
-.demo-card h2 { margin: 0 0 6px; font-size: 18px; color: var(--fgColor-accent); }
-.demo-card p { margin: 0; color: var(--fgColor-muted); }
-
-.install { margin-top: 40px; }
-.install h2 { font-size: 20px; }
-.install dl { margin: 0; }
-.install dt { font-weight: 600; margin-top: 14px; }
-.install dd { margin: 6px 0 0; }
-.install pre {
-  margin: 6px 0 0;
-  padding: 10px 14px;
-  border: 1px solid var(--borderColor-muted);
-  border-radius: 6px;
-  background: var(--bgColor-muted);
-  overflow-x: auto;
-}
-
-/* --- Mock pull-request page -------------------------------------------- */
-
-.pr-header { margin: 0 0 4px; font-size: 24px; font-weight: 400; }
+.pr-header { margin: 0 0 4px; font-size: 22px; font-weight: 400; line-height: 1.3; }
 .pr-header .pr-number { color: var(--fgColor-muted); }
 .pr-meta { margin: 0 0 16px; color: var(--fgColor-muted); }
 .pr-meta .branch {
@@ -166,10 +279,11 @@ main { max-width: 980px; margin: 0 auto; padding: 24px 24px 64px; }
 }
 .file-collapse svg { transition: transform 120ms ease; }
 .file.Details--on .file-collapse svg { transform: rotate(90deg); }
-.file-info { font: 600 12px/1.8 var(--mono); }
-.file-stat { font: 12px/1.8 var(--mono); }
+.file-info { font: 600 12px/1.8 var(--mono); overflow-wrap: anywhere; }
+.file-stat { font: 12px/1.8 var(--mono); white-space: nowrap; }
 .file-stat .added { color: var(--fgColor-success); }
 .file-stat .removed { color: var(--fgColor-danger); }
+.file-empty { padding: 8px 10px; margin: 0; color: var(--fgColor-muted); }
 
 /* Primer's collapse rule from github.com: the chevron toggles Details--on on
  * .file, and this hides anything carrying the class (including the shadow host
@@ -190,38 +304,43 @@ main { max-width: 980px; margin: 0 auto; padding: 24px 24px 64px; }
 .diff-table tr.add { background: var(--bgColor-success-muted); }
 .diff-table tr.del { background: var(--bgColor-danger-muted); }
 .diff-table tr.hunk td { background: var(--bgColor-accent-muted); color: var(--fgColor-muted); padding: 2px 10px; }
-.diff-table tr:last-child td:first-child { border-bottom-left-radius: 6px; }
 
 /* --- CLI page ----------------------------------------------------------- */
 
-.cli-section { margin: 0 0 40px; }
-.cli-section h2 { font-size: 20px; }
-.cli-section .hint { color: var(--fgColor-muted); }
-
-/* The terminal stays dark in both themes, like a real terminal window. */
-.terminal {
-  border: 1px solid var(--borderColor-default);
-  border-radius: 8px;
-  background: #0d1117;
-  overflow: hidden;
+.cli-section { margin: 0 0 64px; }
+.cli-section h2 {
+  margin: 32px 0 8px;
+  font-size: 28px;
+  font-weight: 600;
+  line-height: 1.21;
+  letter-spacing: -0.6px;
 }
-.terminal-bar { display: flex; gap: 6px; padding: 10px 12px; background: #151b23; }
-.terminal-bar span { width: 12px; height: 12px; border-radius: 50%; }
-.terminal-bar span:nth-child(1) { background: #ff5f57; }
-.terminal-bar span:nth-child(2) { background: #febc2e; }
-.terminal-bar span:nth-child(3) { background: #28c840; }
-.terminal pre { margin: 0; padding: 14px 16px; overflow: auto; max-height: 560px; font-size: 12px; line-height: 1.6; color: #f0f6fc; }
-.terminal .prompt { color: #9198a1; }
+.cli-section .hint { max-width: 720px; }
+
+.terminal pre {
+  margin: 0;
+  padding: 16px;
+  overflow: auto;
+  max-height: 560px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--ink);
+  background: var(--canvas);
+}
+.terminal .prompt { color: var(--ink-subtle); }
 .terminal .b { font-weight: 600; }
-.terminal .dim { color: #9198a1; }
+.terminal .dim { color: var(--ink-subtle); }
 .terminal .red { color: #f85149; }
-.terminal .green { color: #3fb950; }
-.terminal .yellow { color: #d29922; }
+.terminal .green { color: var(--accent-cli); }
+.terminal .yellow { color: #ffcf25; }
 
 .report-frame {
+  display: block;
   width: 100%;
   height: 720px;
-  border: 1px solid var(--borderColor-default);
-  border-radius: 8px;
-  background: var(--bgColor-default);
+  border: none;
+  background: #ffffff;
+}
+@media (prefers-color-scheme: dark) {
+  .report-frame { background: #0d1117; }
 }

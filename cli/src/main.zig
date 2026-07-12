@@ -476,6 +476,47 @@ test "run: color=true colors tree output, --no-color forces it back off" {
     try testing.expect(std.mem.indexOf(u8, output2.items, "\x1b[") == null);
 }
 
+test "run: --color forces ANSI output on even when stdout is not a TTY" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "before.asset", .data =
+        \\--- !u!114 &11400000
+        \\MonoBehaviour:
+        \\  volume: 0.5
+    });
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "after.asset", .data =
+        \\--- !u!114 &11400000
+        \\MonoBehaviour:
+        \\  volume: 0.8
+    });
+    const before_path = try tmp.dir.realPathFileAlloc(testing.io, "before.asset", arena);
+    const after_path = try tmp.dir.realPathFileAlloc(testing.io, "after.asset", arena);
+
+    // color=false is the piped-stdout default; --color must paint the output anyway.
+    var out: std.ArrayList(u8) = .empty;
+    var aw = std.Io.Writer.Allocating.fromArrayList(arena, &out);
+    var errbuf: std.ArrayList(u8) = .empty;
+    var aw_err = std.Io.Writer.Allocating.fromArrayList(arena, &errbuf);
+    const code = try run(testing.io, arena, &.{ "--color", before_path, after_path }, &aw.writer, &aw_err.writer, false, null);
+    const output = aw.toArrayList();
+    try testing.expectEqual(@as(u8, 0), code);
+    try testing.expect(std.mem.indexOf(u8, output.items, "\x1b[") != null);
+
+    // --no-color still wins when both flags are given.
+    var out2: std.ArrayList(u8) = .empty;
+    var aw2 = std.Io.Writer.Allocating.fromArrayList(arena, &out2);
+    var errbuf2: std.ArrayList(u8) = .empty;
+    var aw_err2 = std.Io.Writer.Allocating.fromArrayList(arena, &errbuf2);
+    const code2 = try run(testing.io, arena, &.{ "--color", "--no-color", before_path, after_path }, &aw2.writer, &aw_err2.writer, false, null);
+    const output2 = aw2.toArrayList();
+    try testing.expectEqual(@as(u8, 0), code2);
+    try testing.expect(std.mem.indexOf(u8, output2.items, "\x1b[") == null);
+}
+
 test "run: --project supplies source prefabs for merged instance diffs" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
@@ -599,13 +640,14 @@ pub const Options = struct {
     format: Format = .tree,
     project_root: ?[]const u8 = null, // guid-resolution base and the git repo dir
     no_color: bool = false,
+    force_color: bool = false,
     help: bool = false,
     open: bool = false,
 };
 
 pub const ArgError = error{ MissingOperands, UnknownFlag, TooManyArguments, ConflictingFlags };
 
-const usage_line = "usage: prefablens [--json|--html] [--open] [--project DIR] [--no-color] [<ref>] [<ref>] [<path>] | <before> <after>\n";
+const usage_line = "usage: prefablens [--json|--html] [--open] [--project DIR] [--color|--no-color] [<ref>] [<ref>] [<path>] | <before> <after>\n";
 
 const help_text = usage_line ++
     \\
@@ -623,6 +665,7 @@ const help_text = usage_line ++
     \\  --html         self-contained HTML report on stdout
     \\  --open         write the HTML report to a temp file and open it in a browser
     \\  --project DIR  Unity project root for guid resolution (and git repo dir)
+    \\  --color        force ANSI colors on in tree output (useful when piping)
     \\  --no-color     disable ANSI colors in tree output
     \\  -h, --help     show this help
     \\
@@ -632,6 +675,7 @@ pub fn parseArgs(args: []const []const u8) ArgError!Options {
     var format: Format = .tree;
     var project_root: ?[]const u8 = null;
     var no_color = false;
+    var force_color = false;
     var open = false;
     var refs: [2][]const u8 = undefined;
     var n_refs: usize = 0;
@@ -647,6 +691,8 @@ pub fn parseArgs(args: []const []const u8) ArgError!Options {
             format = .html;
         } else if (std.mem.eql(u8, a, "--no-color")) {
             no_color = true;
+        } else if (std.mem.eql(u8, a, "--color")) {
+            force_color = true;
         } else if (std.mem.eql(u8, a, "--open")) {
             open = true;
         } else if (std.mem.eql(u8, a, "--help") or std.mem.eql(u8, a, "-h")) {
@@ -679,6 +725,7 @@ pub fn parseArgs(args: []const []const u8) ArgError!Options {
             .format = format,
             .project_root = project_root,
             .no_color = no_color,
+            .force_color = force_color,
             .open = open,
         };
     }
@@ -691,6 +738,7 @@ pub fn parseArgs(args: []const []const u8) ArgError!Options {
         .format = format,
         .project_root = project_root,
         .no_color = no_color,
+        .force_color = force_color,
         .open = open,
     };
 }
@@ -901,9 +949,10 @@ pub fn run(io: std.Io, arena: std.mem.Allocator, args: []const []const u8, stdou
                 try stdout.writeAll("]\n");
             }
         },
-        // Color when stdout is a TTY is decided in main(); --no-color forces it off.
+        // Color when stdout is a TTY is decided in main(); --color forces it on
+        // for pipes, and --no-color wins over both.
         .tree => {
-            const use_color = color and !opt.no_color;
+            const use_color = (color or opt.force_color) and !opt.no_color;
             for (diffs.items, 0..) |d, i| {
                 if (d.path) |p| {
                     if (i != 0) try stdout.writeByte('\n');

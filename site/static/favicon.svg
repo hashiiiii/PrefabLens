@@ -1,0 +1,11 @@
+<!-- "diff cube" mark, same geometry as extension/icons/icon.svg.
+     Faces flip to white on dark browser themes via prefers-color-scheme. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <style>
+    .face { fill: #15181e }
+    @media (prefers-color-scheme: dark) { .face { fill: #fff } }
+  </style>
+  <polygon class="face" points="50,9.08 82.77,28 50,46.92 17.23,28"/>
+  <polygon class="face" points="14.57,32.62 47.33,51.54 47.33,89.38 14.57,70.46"/>
+  <polygon points="52.67,51.54 85.43,32.62 85.43,70.46 52.67,89.38" fill="#14c6cb"/>
+</svg>

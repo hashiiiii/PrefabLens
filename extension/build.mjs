@@ -5,6 +5,21 @@ mkdirSync("dist", { recursive: true });
 
 const e2e = process.argv.includes("--e2e");
 
+// --viewer: build only the embeddable viewer artifact (see src/viewer.ts).
+// Kept out of the default build so the extension's shipped dist stays lean.
+if (process.argv.includes("--viewer")) {
+  await build({
+    entryPoints: { viewer: "src/viewer.ts" },
+    bundle: true,
+    format: "iife",
+    globalName: "PrefabLensViewer",
+    target: "chrome120",
+    minify: true,
+    outdir: "dist",
+  });
+  process.exit(0);
+}
+
 await build({
   entryPoints: {
     content: "src/content/index.ts",

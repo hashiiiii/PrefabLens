@@ -27,9 +27,11 @@ jobs:
         run: |
           zig build
           zig build wasm
-      - name: Install esbuild
+      - name: Build viewer artifact
         working-directory: extension
-        run: pnpm install --frozen-lockfile
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm run viewer
       - name: Build site
         working-directory: site
         run: node build.mjs

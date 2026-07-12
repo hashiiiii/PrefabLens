@@ -1,23 +1,20 @@
-// Demo-site build. Everything visitors see is produced by the real product code:
-// the CLI binary renders the report and terminal tree, the extension renderer is
-// bundled as-is for the mock PR page, and git provides the raw diffs. Run
-// `zig build && zig build wasm` first.
+// Demo-site build. Everything visitors see is produced by the real product
+// code, and the site consumes only built artifacts: the CLI binary renders the
+// report and terminal tree, the extension's viewer artifact powers the mock PR
+// page, and git provides the raw diffs. Run `zig build && zig build wasm` and
+// `pnpm run viewer` (in extension/) first. The site itself needs no toolchain.
 import { execFileSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ansiToHtml } from "./src/ansi.mjs";
 
-// The site has no package of its own: the only build dependency is esbuild,
-// borrowed from the extension package (run `pnpm install` in extension/ first).
-const { build } = createRequire(new URL("../extension/package.json", import.meta.url))("esbuild");
-
 const SITE = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(SITE, "..");
 const BIN = join(ROOT, "zig-out", "bin", process.platform === "win32" ? "prefablens.exe" : "prefablens");
 const WASM = join(ROOT, "zig-out", "bin", "prefablens.wasm");
+const VIEWER = join(ROOT, "extension", "dist", "viewer.js");
 const FIXTURES = join(SITE, "fixtures");
 const DIST = join(SITE, "dist");
 
@@ -151,6 +148,7 @@ function inject(html, token, replacement) {
 
 assertBuilt(BIN, "zig build");
 assertBuilt(WASM, "zig build wasm");
+assertBuilt(VIEWER, "pnpm run viewer (in extension/)");
 rmSync(DIST, { recursive: true, force: true });
 mkdirSync(DIST, { recursive: true });
 
@@ -189,16 +187,7 @@ for (const page of [cli, extension]) if (page.includes("{{")) throw new Error("u
 cpSync(join(FIXTURES, "before"), join(DIST, "fixtures", "before"), { recursive: true });
 cpSync(join(FIXTURES, "after"), join(DIST, "fixtures", "after"), { recursive: true });
 cpSync(WASM, join(DIST, "prefablens.wasm"));
-for (const file of ["index.html", "site.css", "favicon.svg"]) cpSync(join(SITE, "static", file), join(DIST, file));
+cpSync(VIEWER, join(DIST, "viewer.js"));
+for (const file of ["index.html", "site.css", "favicon.svg", "demo.js"]) cpSync(join(SITE, "static", file), join(DIST, file));
 
-await build({
-  entryPoints: { demo: join(SITE, "src", "demo.ts") },
-  bundle: true,
-  format: "iife",
-  target: "chrome120",
-  minify: true,
-  outdir: DIST,
-});
-
-assertBuilt(join(DIST, "demo.js"), "esbuild bundle");
 console.log(`site built at ${DIST}`);

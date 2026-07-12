@@ -61,6 +61,32 @@ test "render: colored values follow the extension's before/after palette" {
     try testing.expect(std.mem.indexOf(u8, text, "Old Flag: \x1b[31m1\x1b[0m") != null);
 }
 
+test "render: resolved ref values read as asset paths, like the extension" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const before =
+        \\--- !u!114 &5
+        \\MonoBehaviour:
+        \\  m_Material: {fileID: 2100000, guid: abc123, type: 2}
+    ;
+    const after =
+        \\--- !u!114 &5
+        \\MonoBehaviour:
+        \\  m_Material: {fileID: 0}
+    ;
+    const res = try core.diffBytes(arena, before, after);
+    var resolver = core.json.Resolver.init(arena);
+    try resolver.put("abc123", "Assets/Materials/Fixture.mat");
+    var out: std.ArrayList(u8) = .empty;
+    var aw = std.Io.Writer.Allocating.fromArrayList(arena, &out);
+    try render(arena, &aw.writer, res, &resolver, false);
+    const text = aw.toArrayList().items;
+    // The external ref shows its resolved path instead of the raw guid tuple.
+    try testing.expect(std.mem.indexOf(u8, text, "Material: Assets/Materials/Fixture.mat → {fileID:0}") != null);
+    try testing.expect(std.mem.indexOf(u8, text, "guid:abc123") == null);
+}
+
 test "render: prefab instance shows cube glyph, meta marker and overrides" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
@@ -469,13 +495,13 @@ fn renderCard(
 
     switch (card) {
         .component => |c| for (c.fields) |f| {
-            try renderFieldRow(w, f.path, f.status, status, f.before, f.after, color, prefix);
+            try renderFieldRow(w, f.path, f.status, status, f.before, f.after, resolved, color, prefix);
         },
         .group => |g| {
             const group_name = g.overrides[g.start].group;
             for (g.overrides[g.start..]) |ov| {
                 if (!std.mem.eql(u8, ov.group, group_name)) break;
-                try renderFieldRow(w, ov.label, ov.status, status, ov.before, ov.after, color, prefix);
+                try renderFieldRow(w, ov.label, ov.status, status, ov.before, ov.after, resolved, color, prefix);
             }
         },
     }
@@ -488,6 +514,7 @@ fn renderFieldRow(
     parent: model.Status,
     before: ?*const model.Node,
     after: ?*const model.Node,
+    resolved: ?*const core.json.Resolver,
     color: bool,
     prefix: *std.ArrayList(u8),
 ) !void {
@@ -506,24 +533,30 @@ fn renderFieldRow(
     // pl-before/pl-arrow/pl-after spans: before red, arrow dim, after green.
     switch (status) {
         .modified => {
-            try paintValue(w, color, Color.red, before);
+            try paintValue(w, color, Color.red, before, resolved);
             try paint(w, color, Color.dim, " → ");
-            try paintValue(w, color, Color.green, after);
+            try paintValue(w, color, Color.green, after, resolved);
         },
-        .added => try paintValue(w, color, Color.green, after),
-        .removed => try paintValue(w, color, Color.red, before),
+        .added => try paintValue(w, color, Color.green, after, resolved),
+        .removed => try paintValue(w, color, Color.red, before, resolved),
         .unchanged => {},
     }
     try w.writeByte('\n');
 }
 
-fn paintValue(w: *std.Io.Writer, color: bool, code: []const u8, node: ?*const model.Node) !void {
+fn paintValue(
+    w: *std.Io.Writer,
+    color: bool,
+    code: []const u8,
+    node: ?*const model.Node,
+    resolved: ?*const core.json.Resolver,
+) !void {
     if (color) try w.writeAll(code);
-    try writeValueText(w, node);
+    try writeValueText(w, node, resolved);
     if (color) try w.writeAll(Color.reset);
 }
 
-fn writeValueText(w: *std.Io.Writer, node: ?*const model.Node) !void {
+fn writeValueText(w: *std.Io.Writer, node: ?*const model.Node, resolved: ?*const core.json.Resolver) !void {
     const n = node orelse {
         try w.writeAll("—");
         return;
@@ -532,6 +565,14 @@ fn writeValueText(w: *std.Io.Writer, node: ?*const model.Node) !void {
         .scalar => |s| try w.writeAll(s),
         .ref => |r| {
             if (r.guid) |g| {
+                // Same rule as render_html's writeValue (and the extension's
+                // formatValue): a resolved external ref reads as its asset path.
+                if (resolved) |rr| {
+                    if (rr.get(g)) |p| {
+                        try w.writeAll(p);
+                        return;
+                    }
+                }
                 try w.print("{{guid:{s}, fileID:{d}}}", .{ g, r.file_id });
             } else {
                 try w.print("{{fileID:{d}}}", .{r.file_id});

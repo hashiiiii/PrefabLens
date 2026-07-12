@@ -30,18 +30,21 @@ const UNITY_EXTENSIONS = [
 ];
 const isUnityPath = (path) => UNITY_EXTENSIONS.some((ext) => path.toLowerCase().endsWith(ext));
 
-// The demos show exactly these fixtures, top to bottom: .asset, .unity, then
-// .prefab. The CLI orders its bulk output by path, which matches because the
-// fixture names sort the same way — renaming a fixture must keep that true.
+// The demos show exactly these fixtures, top to bottom: .prefab, .unity, then
+// .asset. The CLI orders its bulk output by path, which matches because the
+// fixture folders sort the same way (Prefabs < Scenes < Settings) — moving or
+// renaming a fixture must keep that true. The unchanged companions next to
+// them (.meta, .cs, .mat) never appear in the diff; they exist so guid
+// references resolve to asset paths, exactly like in a real Unity project.
 const DEMO_FILES = [
-  "Assets/Fixtures/Fixture.asset",
-  "Assets/Fixtures/Playground.unity",
-  "Assets/Fixtures/Robot.prefab",
-  "Assets/Fixtures/RobotVariant.prefab",
+  "Assets/Prefabs/Robot.prefab",
+  "Assets/Prefabs/RobotVariant.prefab",
+  "Assets/Scenes/Playground.unity",
+  "Assets/Settings/Fixture.asset",
 ];
 // Robot.prefab is the landing-page hero: a compact diff with modified, added,
 // and removed components plus a child object.
-const HERO_FILE = "Assets/Fixtures/Robot.prefab";
+const HERO_FILE = "Assets/Prefabs/Robot.prefab";
 
 function assertBuilt(path, hint) {
   if (!existsSync(path)) throw new Error(`${path} not found — run \`${hint}\` first`);
@@ -160,6 +163,22 @@ function inject(html, token, replacement) {
   return html.replace(needle, replacement);
 }
 
+/** guid → asset path from the fixture .meta files — the demo's stand-in for the
+ *  extension's repo guid index (same "guid:" line rule as parseGuidFromMeta in
+ *  extension/src/github/guids.ts and cli/src/resolve.zig). */
+function guidIndex(side) {
+  const root = join(FIXTURES, side);
+  const index = {};
+  for (const entry of readdirSync(root, { recursive: true })) {
+    const path = String(entry);
+    if (!path.endsWith(".meta")) continue;
+    const meta = readFileSync(join(root, path), "utf8");
+    const guid = meta.split("\n").map((l) => l.trim()).find((l) => l.startsWith("guid:"));
+    if (guid) index[guid.slice("guid:".length).trim()] = path.slice(0, -".meta".length).replaceAll("\\", "/");
+  }
+  return index;
+}
+
 assertBuilt(BIN, "zig build");
 assertBuilt(WASM, "zig build wasm");
 assertBuilt(VIEWER, "pnpm run viewer (in extension/)");
@@ -175,10 +194,11 @@ let index;
 try {
   // CLI outputs: the --open report page, the tree view (--color because stdout
   // is a pipe here; a terminal gets color automatically), and the single-file
-  // hero report the landing page frames next to the raw diff.
-  report = execFileSync(BIN, ["--html", "main"], { cwd: repo, encoding: "utf8" });
-  tree = execFileSync(BIN, ["--color", "main"], { cwd: repo, encoding: "utf8" });
-  heroReport = execFileSync(BIN, ["--html", "main", HERO_FILE], { cwd: repo, encoding: "utf8" });
+  // hero report the landing page frames next to the raw diff. --project .
+  // resolves guid references against the fixture .meta files.
+  report = execFileSync(BIN, ["--html", "--project", ".", "main"], { cwd: repo, encoding: "utf8" });
+  tree = execFileSync(BIN, ["--color", "--project", ".", "main"], { cwd: repo, encoding: "utf8" });
+  heroReport = execFileSync(BIN, ["--html", "--project", ".", "main", HERO_FILE], { cwd: repo, encoding: "utf8" });
 
   const files = changedFiles(repo);
   extension = readFileSync(join(SITE, "static", "extension.html"), "utf8");
@@ -192,6 +212,8 @@ try {
   // not ship a silently broken page.
   if (!report.includes("pl-")) throw new Error("CLI report lost its pl- classes");
   if (!heroReport.includes("Rigidbody")) throw new Error("hero report is missing the Robot diff");
+  if (!heroReport.includes("Assets/Scripts/FixtureBehaviour.cs")) throw new Error("hero report lost guid resolution");
+  if (tree.includes("unresolved")) throw new Error("tree output has unresolved guid references");
   if (!ansiToHtml(tree).includes("<span")) throw new Error("tree output lost its ANSI colors");
   const paths = files.map((f) => f.after ?? f.before);
   if (paths.join("\n") !== DEMO_FILES.join("\n")) {
@@ -212,6 +234,9 @@ for (const page of [cli, extension, index]) if (page.includes("{{")) throw new E
 
 cpSync(join(FIXTURES, "before"), join(DIST, "fixtures", "before"), { recursive: true });
 cpSync(join(FIXTURES, "after"), join(DIST, "fixtures", "after"), { recursive: true });
+// demo.js resolves guid references and fetches needed source prefabs by path
+// through this index, standing in for the extension's GitHub-backed one.
+writeFileSync(join(DIST, "fixtures", "guids.json"), JSON.stringify(guidIndex("after"), null, 2));
 cpSync(WASM, join(DIST, "prefablens.wasm"));
 cpSync(VIEWER, join(DIST, "viewer.js"));
 for (const file of ["site.css", "favicon.svg", "demo.js"]) cpSync(join(SITE, "static", file), join(DIST, file));

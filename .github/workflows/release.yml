@@ -149,20 +149,14 @@ jobs:
           CWS_REFRESH_TOKEN: ${{ secrets.CWS_REFRESH_TOKEN }}
         run: |
           set -euo pipefail
-          access_token=$(curl -fsS https://oauth2.googleapis.com/token \
-            -d client_id="$CWS_CLIENT_ID" \
-            -d client_secret="$CWS_CLIENT_SECRET" \
-            -d refresh_token="$CWS_REFRESH_TOKEN" \
-            -d grant_type=refresh_token | jq -er .access_token)
-          upload=$(curl -fsS -X PUT "https://www.googleapis.com/upload/chromewebstore/v1.1/items/$CWS_EXTENSION_ID" \
-            -H "Authorization: Bearer $access_token" \
-            -H "x-goog-api-version: 2" \
-            -T "dist/prefablens-extension-$VERSION.zip")
-          echo "$upload"
-          jq -e '.uploadState == "SUCCESS"' <<<"$upload" >/dev/null
-          result=$(curl -fsS -X POST "https://www.googleapis.com/chromewebstore/v1.1/items/$CWS_EXTENSION_ID/publish" \
-            -H "Authorization: Bearer $access_token" \
-            -H "x-goog-api-version: 2" \
-            -H "Content-Length: 0")
-          echo "$result"
-          jq -e '.status == ["OK"]' <<<"$result" >/dev/null
+          token=$(curl -fsS https://oauth2.googleapis.com/token \
+            -d client_id="$CWS_CLIENT_ID" -d client_secret="$CWS_CLIENT_SECRET" \
+            -d refresh_token="$CWS_REFRESH_TOKEN" -d grant_type=refresh_token | jq -er .access_token)
+          # cws <curl args...>: call the API, log the response, and pass it to the jq assertion
+          cws() { curl -fsS -H "Authorization: Bearer $token" -H "x-goog-api-version: 2" "$@" | tee /dev/stderr; }
+          cws -X PUT -T "dist/prefablens-extension-$VERSION.zip" \
+            "https://www.googleapis.com/upload/chromewebstore/v1.1/items/$CWS_EXTENSION_ID" \
+            | jq -e '.uploadState == "SUCCESS"' >/dev/null
+          cws -X POST -H "Content-Length: 0" \
+            "https://www.googleapis.com/chromewebstore/v1.1/items/$CWS_EXTENSION_ID/publish" \
+            | jq -e '.status == ["OK"]' >/dev/null

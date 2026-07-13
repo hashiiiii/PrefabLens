@@ -55,7 +55,7 @@ live at https://github.com/hashiiiii/PrefabLens
 
 - Category: Developer Tools
 - Language: English
-- Screenshots: `screenshot-1-overview.png` (semantic view with the global
-  toggle and file tree), `screenshot-2-scene-prefab.png` (scene and prefab
+- Screenshots: `screenshot-1-site-hero.png` (landing hero with the raw vs
+  semantic comparison), `screenshot-2-robot-variant.png` (scene and prefab
   diffs with property changes and script-name resolution)
 - Small promo tile: `promo-tile-small.png` (source: `promo-tile-small.svg`)

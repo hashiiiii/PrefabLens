@@ -68,7 +68,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Render test
-        run: packaging/render_test.sh
+        run: cli/pkg/render_test.sh
 
   site:
     runs-on: ubuntu-latest

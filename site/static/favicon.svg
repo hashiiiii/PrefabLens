@@ -1,4 +1,4 @@
-<!-- "diff cube" mark, same geometry as extension/icons/icon.svg.
+<!-- "diff cube" mark, same geometry as extension/images/icon.svg.
      Faces flip to white on dark browser themes via prefers-color-scheme. -->
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
   <style>

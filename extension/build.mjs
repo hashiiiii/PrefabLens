@@ -44,5 +44,5 @@ writeFileSync("dist/manifest.json", JSON.stringify(manifest, null, 2));
 
 cpSync("src/options/options.html", "dist/options.html");
 cpSync("../zig-out/bin/prefablens.wasm", "dist/prefablens.wasm");
-mkdirSync("dist/icons", { recursive: true });
-for (const size of [16, 32, 48, 128]) cpSync(`icons/icon${size}.png`, `dist/icons/icon${size}.png`);
+mkdirSync("dist/images", { recursive: true });
+for (const size of [16, 32, 48, 128]) cpSync(`images/icon${size}.png`, `dist/images/icon${size}.png`);

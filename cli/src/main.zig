@@ -852,7 +852,14 @@ pub fn run(io: std.Io, arena: std.mem.Allocator, args: []const []const u8, stdou
     }
 
     // --project doubles as the guid-resolution base and the git repo dir.
-    const repo_dir = opt.project_root orelse ".";
+    // Without it, git mode anchors at the repository root: git reports changed
+    // paths relative to that root, so reading them against a subdirectory cwd
+    // would silently misreport every file as deleted. Failure falls back to
+    // "." so the not-a-repository error surfaces through git itself below.
+    const repo_dir = opt.project_root orelse switch (opt.target) {
+        .git => input.repoRoot(io, arena, ".", input.default_git_timeout) catch ".",
+        .files => ".",
+    };
     var resolver_ptr: ?*core.json.Resolver = null;
     var idx: core.json.Resolver = undefined;
     if (opt.project_root) |proj| {

@@ -6,7 +6,7 @@
   "packageManager": "pnpm@11.10.0",
   "scripts": {
     "build": "node build.mjs",
-    "viewer": "node build.mjs --viewer",
+    "demo": "node build.mjs --demo",
     "typecheck": "tsc --noEmit",
     "lint": "biome ci .",
     "fmt": "biome check --write .",

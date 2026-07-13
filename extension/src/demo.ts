@@ -1,14 +1,21 @@
-// Live demo for extension.html: the mock PR page runs the extension's real
-// renderer, toggle, and WASM diff engine via the viewer artifact (viewer.js,
-// global PrefabLensViewer — built by `pnpm run viewer` in extension/), wired
-// the same way as the extension's content script minus the GitHub API and
-// auth layers. Diff inputs are fixture files served next to the page;
-// build.mjs marks each Unity file header with data-before/data-after URLs
-// (empty on the added/removed side, matching the CLI's empty-side semantics).
-const { applyResolved, createDiffer, createToggle, createViewState, injectPageStyles, render, renderError, renderLoading } =
-  PrefabLensViewer;
+// Live demo for the site's extension.html: the mock PR page runs the
+// extension's real renderer, toggle, and WASM diff engine, wired the same way
+// as the content script minus the GitHub API and auth layers (never import
+// anything that pulls github/client.ts — its module init needs the build-time
+// __API_BASE__ define, absent from the demo build). Living in the extension
+// toolchain keeps the demo type-checked against the modules it uses;
+// `node build.mjs --demo` bundles it as dist/demo.js for site/build.mjs.
+// Diff inputs are fixture files served next to the page; site/build.mjs marks
+// each Unity file header with data-before/data-after URLs (empty on the
+// added/removed side, matching the CLI's empty-side semantics).
+import { createToggle, injectPageStyles, type View } from "./content/toggle";
+import { createViewState } from "./content/viewstate";
+import { applyResolved } from "./github/resolved";
+import { render, renderError, renderLoading } from "./renderer/render";
+import type { DiffV2 } from "./types";
+import { createDiffer, type Differ } from "./wasm/differ";
 
-async function fetchBytes(url) {
+async function fetchBytes(url: string | undefined): Promise<Uint8Array<ArrayBuffer>> {
   if (!url) return new Uint8Array();
   const res = await fetch(url);
   if (!res.ok) throw new Error(`${url}: HTTP ${res.status}`);
@@ -19,9 +26,14 @@ async function fetchBytes(url) {
  *  applyResolved attaches paths from the index, and the mergeSources loop
  *  fetches the source prefab of added/removed instances by resolved path and
  *  re-diffs with assets — here from fixture URLs instead of the GitHub API. */
-async function diffResolved(differ, index, before, after) {
+async function diffResolved(
+  differ: Differ,
+  index: Map<string, string>,
+  before: Uint8Array,
+  after: Uint8Array,
+): Promise<DiffV2> {
   let diff = applyResolved(differ.diff(before, after), index);
-  const assets = new Map();
+  const assets = new Map<string, Uint8Array>();
   for (let round = 0; round < 3; round++) {
     const needed = (diff.neededSources ?? []).filter((s) => !assets.has(s.guid));
     if (!needed.length) break;
@@ -41,43 +53,50 @@ async function diffResolved(differ, index, before, after) {
   return diff;
 }
 
-function attachFile(header, differ, index, initial) {
-  const content = header.parentElement.querySelector(".js-file-content");
-  let host;
+function attachFile(
+  header: HTMLElement,
+  differ: Differ,
+  index: Map<string, string>,
+  initial: View,
+): (view: View) => void {
+  // Non-null: site/build.mjs always nests the header in a .file with a .js-file-content sibling.
+  const content = header.parentElement!.querySelector<HTMLElement>(".js-file-content")!;
+  let host: HTMLDivElement | undefined;
+  let root: ShadowRoot | undefined;
   let rendered = false;
 
-  const show = (view) => {
+  const show = (view: View): void => {
     if (view === "raw") {
       content.style.display = "";
       if (host) host.style.display = "none";
       return;
     }
     content.style.display = "none";
-    if (!host) {
+    if (!host || !root) {
       host = document.createElement("div");
       host.setAttribute("data-prefablens-view", "");
       // Same Primer class as .js-file-content: the collapse chevron toggles
       // Details--on on .file, and the host must opt into that CSS itself.
       host.classList.add("Details-content--hidden");
-      host.attachShadow({ mode: "open" });
+      root = host.attachShadow({ mode: "open" });
       content.after(host);
     }
     host.style.display = "";
     if (rendered) return; // fixtures are static: render each file once
     rendered = true;
-    const root = host.shadowRoot;
-    renderLoading(root);
+    const target = root;
+    renderLoading(target);
     Promise.all([fetchBytes(header.dataset.before), fetchBytes(header.dataset.after)])
       .then(([before, after]) => diffResolved(differ, index, before, after))
-      .then((diff) => render(root, diff))
-      .catch((err) => renderError(root, String(err)));
+      .then((diff) => render(target, diff))
+      .catch((err) => renderError(target, String(err)));
   };
 
   show(initial);
   return show;
 }
 
-async function main() {
+async function main(): Promise<void> {
   injectPageStyles();
 
   // The collapse chevrons work on every file, Unity or not (GitHub behavior).
@@ -88,23 +107,23 @@ async function main() {
     });
   }
 
-  const headers = [...document.querySelectorAll(".file-header[data-before]")];
+  const headers = [...document.querySelectorAll<HTMLElement>(".file-header[data-before]")];
   if (!headers.length) return;
 
   const differ = await createDiffer(await fetchBytes("prefablens.wasm"));
   // guid → asset path, generated by build.mjs from the fixture .meta files —
   // the demo's stand-in for the extension's GitHub-backed repo index.
-  const index = new Map(Object.entries(await (await fetch("fixtures/guids.json")).json()));
+  const index = new Map<string, string>(Object.entries(await (await fetch("fixtures/guids.json")).json()));
   // Semantic by default, like the extension once the user has picked it; the
   // demo has no chrome.storage, so persistence is a no-op.
   const state = createViewState("semantic", () => {});
-  const appliers = [];
+  const appliers: Array<(view: View) => void> = [];
   state.onDefaultChange((view) => {
     for (const apply of appliers) apply(view);
   });
 
   // Global bar above the first Unity file, same anchor rule as the content script.
-  const firstFile = headers[0].closest(".file");
+  const firstFile = headers[0].closest(".file")!;
   const bar = document.createElement("div");
   bar.setAttribute("data-prefablens-global", "");
   const label = document.createElement("span");
@@ -116,7 +135,7 @@ async function main() {
   state.onDefaultChange((view) => globalToggle.set(view));
 
   for (const header of headers) {
-    const path = header.dataset.path;
+    const path = header.dataset.path ?? "";
     const show = attachFile(header, differ, index, state.effective(path));
     const toggle = createToggle((view) => {
       state.setOverride(path, view); // a click overrides just this file
@@ -130,4 +149,4 @@ async function main() {
   }
 }
 
-main();
+void main();

@@ -1,8 +1,8 @@
 // Demo-site build. Everything visitors see is produced by the real product
 // code, and the site consumes only built artifacts: the CLI binary renders the
-// report and terminal tree, the extension's viewer artifact powers the mock PR
+// report and terminal tree, the extension's demo bundle powers the mock PR
 // page, and git provides the raw diffs. Run `zig build && zig build wasm` and
-// `pnpm run viewer` (in extension/) first. The site itself needs no toolchain.
+// `pnpm run demo` (in extension/) first. The site itself needs no toolchain.
 import { execFileSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -14,7 +14,7 @@ const SITE = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(SITE, "..");
 const BIN = join(ROOT, "zig-out", "bin", process.platform === "win32" ? "prefablens.exe" : "prefablens");
 const WASM = join(ROOT, "zig-out", "bin", "prefablens.wasm");
-const VIEWER = join(ROOT, "extension", "dist", "viewer.js");
+const DEMO = join(ROOT, "extension", "dist", "demo.js");
 const FIXTURES = join(SITE, "fixtures");
 const DIST = join(SITE, "dist");
 
@@ -181,7 +181,7 @@ function guidIndex(side) {
 
 assertBuilt(BIN, "zig build");
 assertBuilt(WASM, "zig build wasm");
-assertBuilt(VIEWER, "pnpm run viewer (in extension/)");
+assertBuilt(DEMO, "pnpm run demo (in extension/)");
 rmSync(DIST, { recursive: true, force: true });
 mkdirSync(DIST, { recursive: true });
 
@@ -242,7 +242,7 @@ cpSync(join(FIXTURES, "after"), join(DIST, "fixtures", "after"), { recursive: tr
 // through this index, standing in for the extension's GitHub-backed one.
 writeFileSync(join(DIST, "fixtures", "guids.json"), JSON.stringify(guidIndex("after"), null, 2));
 cpSync(WASM, join(DIST, "prefablens.wasm"));
-cpSync(VIEWER, join(DIST, "viewer.js"));
-for (const file of ["site.css", "favicon.svg", "demo.js"]) cpSync(join(SITE, "static", file), join(DIST, file));
+cpSync(DEMO, join(DIST, "demo.js"));
+for (const file of ["site.css", "favicon.svg"]) cpSync(join(SITE, "static", file), join(DIST, file));
 
 console.log(`site built at ${DIST}`);

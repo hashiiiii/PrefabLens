@@ -17,6 +17,8 @@ const DIFF: DiffV2 = { schema: "prefablens.diff.v2", unresolvedGuids: ["g1"], ro
 function makeDeps(overrides?: {
   files?: PrFile[];
   contents?: Record<string, string>; // `${path}@${ref}` → text
+  blobs?: Record<string, string>; // blob sha → text (getBlobRaw; absent sha = 404 → null)
+  baseShas?: Record<string, string>; // path → blob sha at the merge base (listBlobShas)
   diff?: Differ["diff"];
   diffWithAssets?: Differ["diffWithAssets"];
   pat?: string | undefined;
@@ -33,6 +35,14 @@ function makeDeps(overrides?: {
     getPrRefs: vi.fn(async () => ({ baseSha: "base-sha", headSha: "head-sha" })),
     listPrFiles: vi.fn(async () => files),
     getFileAtRef,
+    getBlobRaw: vi.fn(async (_o: string, _r: string, sha: string) => {
+      const text = overrides?.blobs?.[sha];
+      return text === undefined ? null : new TextEncoder().encode(text);
+    }),
+    listBlobShas: vi.fn(async () => ({
+      truncated: false,
+      byPath: new Map(Object.entries(overrides?.baseShas ?? {})),
+    })),
     searchMetaByGuid: vi.fn(async (_o: string, _r: string, guid: string) => overrides?.search?.[guid] ?? null),
     listMetaTree: vi.fn(
       async (): Promise<{ truncated: boolean; metas: Array<{ path: string; sha: string }> }> => ({
@@ -390,6 +400,114 @@ describe("createHandler", () => {
     const limited = makeDeps();
     limited.client.getPrRefs.mockRejectedValue(new RateLimitError("x"));
     expect(await resolveFully(createHandler(limited.deps), REQ)).toEqual({ ok: false, error: "rate-limited" });
+  });
+
+  describe("blob-sha fetching", () => {
+    // contents-by-path has erratic multi-second TTFB (#110): whenever the blob sha is known
+    // (files API for head, merge-base tree for base), fetch by sha and leave path+ref as the fallback.
+    it("fetches base and head by blob sha without touching the contents api", async () => {
+      const { deps, client } = makeDeps({
+        files: [
+          { path: "Assets/Foo.prefab", status: "modified", sha: "foo-head" },
+          { path: "Assets/S.cs.meta", status: "modified", sha: "meta-head" },
+        ],
+        blobs: { "foo-head": "a", "foo-base": "b", "meta-head": "guid: g1\n" },
+        baseShas: { "Assets/Foo.prefab": "foo-base" },
+        contents: {},
+      });
+      const res = await resolveFully(createHandler(deps), REQ);
+      // the guid index also reads the changed .meta by its files-api sha
+      expect(res).toEqual({ ok: true, json: { ...DIFF, resolved: { g1: "Assets/S.cs" } } });
+      expect(client.getBlobRaw).toHaveBeenCalledWith("o", "r", "foo-base");
+      expect(client.getBlobRaw).toHaveBeenCalledWith("o", "r", "foo-head");
+      expect(client.getFileAtRef).not.toHaveBeenCalled();
+    });
+
+    it("uses the files-api sha for the base side of removed files", async () => {
+      const diff = vi.fn<Differ["diff"]>(() => DIFF);
+      const { deps, client } = makeDeps({
+        files: [{ path: "Assets/Foo.prefab", status: "removed", sha: "foo-base" }],
+        blobs: { "foo-base": "b" },
+        contents: {},
+        diff,
+      });
+      const res = await resolveFully(createHandler(deps), REQ);
+      expect(res.ok).toBe(true);
+      expect(client.getBlobRaw).toHaveBeenCalledWith("o", "r", "foo-base");
+      expect(client.getFileAtRef).not.toHaveBeenCalled();
+      expect(diff.mock.calls[0]?.[1]).toHaveLength(0); // after stays empty
+    });
+
+    it("looks up renamed base blobs under previousPath in the base tree", async () => {
+      const { deps, client } = makeDeps({
+        files: [{ path: "Assets/Foo.prefab", status: "renamed", previousPath: "Assets/Old.prefab", sha: "foo-head" }],
+        blobs: { "foo-head": "a", "old-base": "b" },
+        baseShas: { "Assets/Old.prefab": "old-base" },
+        contents: {},
+      });
+      const res = await resolveFully(createHandler(deps), REQ);
+      expect(res.ok).toBe(true);
+      expect(client.getBlobRaw).toHaveBeenCalledWith("o", "r", "old-base");
+      expect(client.getFileAtRef).not.toHaveBeenCalled();
+    });
+
+    it("falls back to the contents api for the base side when the tree is truncated", async () => {
+      const { deps, client } = makeDeps({
+        files: [{ path: "Assets/Foo.prefab", status: "modified", sha: "foo-head" }],
+        blobs: { "foo-head": "a" },
+        contents: { "Assets/Foo.prefab@base-sha": "b" },
+      });
+      client.listBlobShas.mockResolvedValue({ truncated: true, byPath: new Map() });
+      const res = await resolveFully(createHandler(deps), REQ);
+      expect(res.ok).toBe(true);
+      expect(client.getBlobRaw).toHaveBeenCalledWith("o", "r", "foo-head");
+      expect(client.getFileAtRef).toHaveBeenCalledWith("o", "r", "Assets/Foo.prefab", "base-sha");
+    });
+
+    it("falls back to the contents api when the blob fetch 404s", async () => {
+      // a force push between the files listing and the blob fetch can strand the sha
+      const { deps, client } = makeDeps({
+        files: [{ path: "Assets/Foo.prefab", status: "modified", sha: "foo-head" }],
+        blobs: {}, // getBlobRaw misses → null
+        contents: { "Assets/Foo.prefab@base-sha": "b", "Assets/Foo.prefab@head-sha": "a" },
+      });
+      const res = await resolveFully(createHandler(deps), REQ);
+      expect(res.ok).toBe(true);
+      expect(client.getFileAtRef).toHaveBeenCalledWith("o", "r", "Assets/Foo.prefab", "head-sha");
+    });
+
+    it("degrades to the contents api when the base tree fetch fails", async () => {
+      const { deps, client } = makeDeps({
+        files: [{ path: "Assets/Foo.prefab", status: "modified", sha: "foo-head" }],
+        blobs: { "foo-head": "a" },
+        contents: { "Assets/Foo.prefab@base-sha": "b" },
+      });
+      client.listBlobShas.mockRejectedValue(new Error("socket"));
+      const res = await resolveFully(createHandler(deps), REQ);
+      expect(res.ok).toBe(true);
+      expect(client.getFileAtRef).toHaveBeenCalledWith("o", "r", "Assets/Foo.prefab", "base-sha");
+    });
+
+    it("propagates a rate-limited base tree fetch like the guid index does", async () => {
+      const { deps, client } = makeDeps();
+      client.listBlobShas.mockRejectedValue(new RateLimitError("x"));
+      expect(await resolveFully(createHandler(deps), REQ)).toEqual({ ok: false, error: "rate-limited" });
+    });
+
+    it("reads removed .meta files via their files-api sha (base-side blob)", async () => {
+      const { deps, client } = makeDeps({
+        files: [
+          { path: "Assets/Foo.prefab", status: "modified", sha: "foo-head" },
+          { path: "Assets/S.cs.meta", status: "removed", sha: "meta-base" },
+        ],
+        blobs: { "foo-head": "a", "foo-base": "b", "meta-base": "guid: g1\n" },
+        baseShas: { "Assets/Foo.prefab": "foo-base" },
+        contents: {},
+      });
+      const res = await resolveFully(createHandler(deps), REQ);
+      expect(res).toEqual({ ok: true, json: { ...DIFF, resolved: { g1: "Assets/S.cs" } } });
+      expect(client.getFileAtRef).not.toHaveBeenCalled();
+    });
   });
 
   describe("source prefab merging", () => {

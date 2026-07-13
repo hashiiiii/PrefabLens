@@ -46,6 +46,14 @@ mise use -g github:hashiiiii/PrefabLens
 
 Download the zip for your platform from [GitHub Releases](https://github.com/hashiiiii/PrefabLens/releases).
 
+### Unity Editor package (OpenUPM)
+
+```bash
+openupm add com.hashiiiii.prefablens
+```
+
+Without the [openupm-cli](https://github.com/openupm/openupm-cli), add the scoped registry as described on the [package page](https://openupm.com/packages/com.hashiiiii.prefablens/), or install via the Package Manager git URL: `https://github.com/hashiiiii/PrefabLens.git?path=editor`.
+
 ## Usage
 
 ### CLI

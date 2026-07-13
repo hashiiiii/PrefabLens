@@ -87,6 +87,54 @@ test "render: resolved ref values read as asset paths, like the extension" {
     try testing.expect(std.mem.indexOf(u8, text, "guid:abc123") == null);
 }
 
+test "render: unity built-in refs show object names" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const before =
+        \\--- !u!33 &5
+        \\MeshFilter:
+        \\  m_Mesh: {fileID: 0}
+    ;
+    const after =
+        \\--- !u!33 &5
+        \\MeshFilter:
+        \\  m_Mesh: {fileID: 10202, guid: 0000000000000000e000000000000000, type: 0}
+    ;
+    const res = try core.diffBytes(arena, before, after);
+    var out: std.ArrayList(u8) = .empty;
+    var aw = std.Io.Writer.Allocating.fromArrayList(arena, &out);
+    // No resolver: built-in names come from the checked-in table, not .meta files.
+    try render(arena, &aw.writer, res, null, false);
+    const text = aw.toArrayList().items;
+    try testing.expect(std.mem.indexOf(u8, text, "Cube (built-in)") != null);
+    try testing.expect(std.mem.indexOf(u8, text, "guid:0000000000000000e000000000000000") == null);
+}
+
+test "render: built-in guid with unknown fileID keeps the raw guid tuple" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const before =
+        \\--- !u!33 &5
+        \\MeshFilter:
+        \\  m_Mesh: {fileID: 0}
+    ;
+    // fileID 424242 is not in the table (e.g. an object added by a future Unity).
+    const after =
+        \\--- !u!33 &5
+        \\MeshFilter:
+        \\  m_Mesh: {fileID: 424242, guid: 0000000000000000e000000000000000, type: 0}
+    ;
+    const res = try core.diffBytes(arena, before, after);
+    var out: std.ArrayList(u8) = .empty;
+    var aw = std.Io.Writer.Allocating.fromArrayList(arena, &out);
+    try render(arena, &aw.writer, res, null, false);
+    const text = aw.toArrayList().items;
+    try testing.expect(std.mem.indexOf(u8, text, "{guid:0000000000000000e000000000000000, fileID:424242}") != null);
+    try testing.expect(std.mem.indexOf(u8, text, "built-in") == null);
+}
+
 test "render: prefab instance shows cube glyph, meta marker and overrides" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
@@ -317,6 +365,7 @@ test "render: structural summary row shows label only, no dangling value" {
 
 const model = core.model;
 const display = @import("display.zig");
+const builtin_refs = @import("builtin_refs.zig");
 
 pub const Color = struct {
     pub const reset = "\x1b[0m";
@@ -566,12 +615,17 @@ fn writeValueText(w: *std.Io.Writer, node: ?*const model.Node, resolved: ?*const
         .ref => |r| {
             if (r.guid) |g| {
                 // Same rule as render_html's writeValue (and the extension's
-                // formatValue): a resolved external ref reads as its asset path.
+                // formatValue): a resolved external ref reads as its asset path,
+                // a Unity built-in ref as its object name.
                 if (resolved) |rr| {
                     if (rr.get(g)) |p| {
                         try w.writeAll(p);
                         return;
                     }
+                }
+                if (builtin_refs.name(g, r.file_id)) |builtin| {
+                    try w.print("{s} (built-in)", .{builtin});
+                    return;
                 }
                 try w.print("{{guid:{s}, fileID:{d}}}", .{ g, r.file_id });
             } else {

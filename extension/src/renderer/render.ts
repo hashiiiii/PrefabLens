@@ -1,4 +1,5 @@
 import type { ComponentDiff, DiffV2, FieldValue, NodeDiff, OverrideDiff, Status } from "../types";
+import { builtinName } from "./builtin_refs";
 import { ALERT, CHECK, CHEVRON, CUBE, GEAR } from "./icons";
 import { STYLES } from "./styles";
 
@@ -314,5 +315,9 @@ function formatValue(value: FieldValue, diff: DiffV2): string {
   if (typeof value === "string") return value;
   const { fileId, guid } = value.ref;
   if (guid === null) return `#${fileId}`; // local reference
-  return diff.resolved?.[guid] ?? `guid:${guid}`; // external reference (unresolved stays a raw guid)
+  const path = diff.resolved?.[guid];
+  if (path !== undefined) return path;
+  const builtin = builtinName(guid, fileId);
+  if (builtin !== null) return `${builtin} (built-in)`;
+  return `guid:${guid}`; // unresolved external reference stays a raw guid
 }

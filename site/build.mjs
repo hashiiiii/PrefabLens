@@ -214,6 +214,10 @@ try {
   if (!heroReport.includes("Rigidbody")) throw new Error("hero report is missing the Robot diff");
   if (!heroReport.includes("Assets/Scripts/FixtureBehaviour.cs")) throw new Error("hero report lost guid resolution");
   if (tree.includes("unresolved")) throw new Error("tree output has unresolved guid references");
+  // Playground.unity references built-in meshes and Default-Material: those
+  // must render as "<name> (built-in)", never as a raw 32-hex engine guid.
+  if (!report.includes("(built-in)")) throw new Error("report lost built-in ref names");
+  if (report.includes("guid:0000000000000000")) throw new Error("report shows raw built-in guids");
   if (!ansiToHtml(tree).includes("<span")) throw new Error("tree output lost its ANSI colors");
   const paths = files.map((f) => f.after ?? f.before);
   if (paths.join("\n") !== DEMO_FILES.join("\n")) {

@@ -62,6 +62,9 @@ jobs:
         run: |
           dotnet tool restore
           dotnet csharpier check . --no-msbuild-check
+      - name: Test
+        working-directory: editor
+        run: dotnet test DotNetTests~/Tests
 
   packaging:
     runs-on: ubuntu-latest

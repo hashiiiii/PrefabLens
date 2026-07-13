@@ -824,17 +824,6 @@ fn diffOne(
     return res;
 }
 
-fn writeJsonString(w: *std.Io.Writer, s: []const u8) !void {
-    try w.writeByte('"');
-    for (s) |c| switch (c) {
-        '"' => try w.writeAll("\\\""),
-        '\\' => try w.writeAll("\\\\"),
-        0x00...0x1f => try w.print("\\u{x:0>4}", .{c}),
-        else => try w.writeByte(c),
-    };
-    try w.writeByte('"');
-}
-
 /// Looks up an environment variable, treating a set-but-empty value the same as unset.
 /// Some shells/CI configs export TMPDIR="" rather than leaving it undefined, and an empty
 /// directory string would otherwise win the `orelse` fallback chain below with a bogus path.
@@ -993,7 +982,7 @@ pub fn run(io: std.Io, arena: std.mem.Allocator, args: []const []const u8, stdou
                 for (diffs.items, 0..) |d, i| {
                     if (i != 0) try stdout.writeByte(',');
                     try stdout.writeAll("{\"path\":");
-                    try writeJsonString(stdout, d.path.?);
+                    try core.json.writeJsonString(stdout, d.path.?);
                     try stdout.writeAll(",\"diff\":");
                     try stdout.writeAll(try core.json.serialize(arena, d.res, resolver_ptr));
                     try stdout.writeByte('}');

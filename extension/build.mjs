@@ -5,9 +5,8 @@ mkdirSync("dist", { recursive: true });
 
 const e2e = process.argv.includes("--e2e");
 
-// --demo: build only the site demo bundle (src/demo.ts, viewer surface
-// inlined). Kept out of the default build so the extension's shipped dist
-// stays lean.
+// --demo: build only the site demo bundle (see src/demo.ts). Kept out of the
+// default build so the extension's shipped dist stays lean.
 if (process.argv.includes("--demo")) {
   await build({
     entryPoints: { demo: "src/demo.ts" },

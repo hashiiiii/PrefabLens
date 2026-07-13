@@ -98,7 +98,7 @@ jobs:
         run: |
           set -euo pipefail
           gh release download "v$VERSION" --dir dist
-          packaging/render.sh "$VERSION" dist out
+          cli/pkg/render.sh "$VERSION" dist out
       - name: Push manifests
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}

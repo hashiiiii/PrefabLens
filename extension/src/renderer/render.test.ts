@@ -127,6 +127,40 @@ describe("render", () => {
     expect(text).toContain("ghi"); // unresolved guid stays visible
   });
 
+  it("shows unity built-in refs by object name", () => {
+    const builtin: DiffV2 = {
+      schema: "prefablens.diff.v2",
+      unresolvedGuids: [],
+      roots: [],
+      loose: [
+        {
+          kind: "component",
+          fileId: "5",
+          classId: 33,
+          typeName: "MeshFilter",
+          scriptGuid: null,
+          className: null,
+          status: "modified",
+          fields: [
+            {
+              path: "m_Mesh",
+              status: "modified",
+              // Both refs point into "unity default resources": 10202 is the
+              // built-in Cube; 424242 is unknown (e.g. a future Unity object).
+              before: { ref: { fileId: "10202", guid: "0000000000000000e000000000000000", type: 0 } },
+              after: { ref: { fileId: "424242", guid: "0000000000000000e000000000000000", type: 0 } },
+            },
+          ],
+        },
+      ],
+    };
+    const root = freshRoot();
+    render(root, builtin);
+    const text = root.querySelector(".pl-root")!.textContent!;
+    expect(text).toContain("Cube (built-in)"); // known fileID → table name
+    expect(text).toContain("guid:0000000000000000e000000000000000"); // unknown fileID keeps the raw guid
+  });
+
   it("renders repo-controlled strings as text, never as markup", () => {
     const hostile: DiffV2 = {
       ...DIFF,

@@ -132,6 +132,27 @@ test "html: resolved script guid renders stem as name and full path as meta" {
     try testing.expect(std.mem.indexOf(u8, html, "MonoBehaviour") == null);
 }
 
+test "html: unity built-in ref values render object names" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const before =
+        \\--- !u!33 &5
+        \\MeshFilter:
+        \\  m_Mesh: {fileID: 0}
+    ;
+    const after =
+        \\--- !u!33 &5
+        \\MeshFilter:
+        \\  m_Mesh: {fileID: 10202, guid: 0000000000000000e000000000000000, type: 0}
+    ;
+    const res = try core.diffBytes(arena, before, after);
+    // No resolver: built-in names come from the checked-in table, not .meta files.
+    const html = try renderToString(arena, &.{.{ .path = null, .res = res }}, null);
+    try testing.expect(std.mem.indexOf(u8, html, "Cube (built-in)") != null);
+    try testing.expect(std.mem.indexOf(u8, html, "guid:0000000000000000e000000000000000") == null);
+}
+
 test "html: nested child GameObject nests inside the parent's pl-kids" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
@@ -252,6 +273,7 @@ test "html: unresolved guids surface the --project hint as a note" {
 
 const model = core.model;
 const display = @import("display.zig");
+const builtin_refs = @import("builtin_refs.zig");
 
 pub const FileDiff = struct {
     /// null for a single unnamed report (plain two-file mode / single git target).
@@ -528,6 +550,11 @@ fn writeValue(w: *std.Io.Writer, node: ?*const model.Node, resolved: ?*const cor
                         try writeEscaped(w, p);
                         return;
                     }
+                }
+                if (builtin_refs.name(g, r.file_id)) |builtin| {
+                    try writeEscaped(w, builtin);
+                    try w.writeAll(" (built-in)");
+                    return;
                 }
                 try w.writeAll("guid:");
                 try writeEscaped(w, g);

@@ -86,6 +86,7 @@ export const STYLES = `
   .pl-path { color: var(--pl-muted); }
   .pl-before { color: var(--pl-removed); }
   .pl-after { color: var(--pl-added); }
+  .pl-path, .pl-before, .pl-after { min-width: 0; overflow-wrap: anywhere; }
   .pl-arrow { color: var(--pl-muted); }
   .pl-note { display: flex; align-items: center; gap: 6px; min-height: 24px; color: var(--pl-muted); }
   .pl-note-icon { display: inline-flex; align-items: center; }

@@ -133,7 +133,7 @@ main { max-width: 1024px; margin: 0 auto; padding: 24px 32px 96px; }
  * semantic view, side by side. */
 .compare {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(380px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(380px, 100%), 1fr));
   gap: 24px;
   margin: 56px 0 0;
 }

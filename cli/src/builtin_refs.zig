@@ -12,6 +12,19 @@ pub const builtin_extra_guid = "0000000000000000f000000000000000";
 
 const Entry = struct { file_id: i64, name: []const u8 };
 
+/// True for references into Unity's two built-in resource files. These guids
+/// never correspond to a .meta on disk, so resolution scans must neither
+/// trigger on them nor wait for them.
+pub fn isBuiltinGuid(guid: []const u8) bool {
+    return std.mem.eql(u8, guid, default_resources_guid) or std.mem.eql(u8, guid, builtin_extra_guid);
+}
+
+test "isBuiltinGuid matches exactly the two built-in resource files" {
+    try std.testing.expect(isBuiltinGuid(default_resources_guid));
+    try std.testing.expect(isBuiltinGuid(builtin_extra_guid));
+    try std.testing.expect(!isBuiltinGuid("d10cc984e47164feb9cb74c75c0f3cf6"));
+}
+
 /// Object name for a reference into Unity's built-in resource files, or null
 /// when the guid is not one of the two built-in files or the fileID is unknown.
 pub fn name(guid: []const u8, file_id: i64) ?[]const u8 {

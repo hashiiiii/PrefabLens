@@ -11,6 +11,46 @@ pub const max_input_bytes: usize = 64 * 1024 * 1024; // 64 MiB guard
 /// dragged down by a hung git.
 pub const default_git_timeout: std.Io.Timeout = .{ .duration = .{ .clock = .awake, .raw = .fromSeconds(60) } };
 
+/// Absolute path of the work-tree root of the repository containing `dir`.
+/// git reports changed paths relative to this root, so anchoring reads here
+/// keeps subdirectory invocations correct.
+pub fn repoRoot(io: std.Io, arena: std.mem.Allocator, dir: []const u8, timeout: std.Io.Timeout) ![]const u8 {
+    const res = std.process.run(arena, io, .{
+        .argv = &.{ "git", "rev-parse", "--show-toplevel" },
+        .cwd = .{ .path = dir },
+        .stdout_limit = .limited(64 * 1024),
+        .timeout = timeout,
+    }) catch |err| switch (err) {
+        error.Timeout => return error.GitTimeout,
+        else => return err,
+    };
+    if (res.term != .exited or res.term.exited != 0) return error.GitRootFailed;
+    const root = std.mem.trimEnd(u8, res.stdout, "\r\n");
+    if (root.len == 0) return error.GitRootFailed;
+    return root;
+}
+
+test "repoRoot resolves the work-tree root from a subdirectory" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "Foo.prefab", .data = "x" });
+    try tmp.dir.createDirPath(testing.io, "Assets/Sub");
+    const dir = try tmp.dir.realPathFileAlloc(testing.io, ".", arena);
+    try git(testing.io, arena, dir, &.{ "init", "-q" });
+
+    const sub = try tmp.dir.realPathFileAlloc(testing.io, "Assets/Sub", arena);
+    const root = try repoRoot(testing.io, arena, sub, .none);
+    // macOS tmp dirs come back through /private symlinks: compare realpaths.
+    const canonical = try std.Io.Dir.cwd().realPathFileAlloc(testing.io, root, arena);
+    try testing.expectEqualStrings(dir, canonical);
+
+    // Outside any repository the failure is explicit, not a silent ".".
+    try testing.expectError(error.GitRootFailed, repoRoot(testing.io, arena, "/", .none));
+}
+
 pub fn showAtRef(io: std.Io, arena: std.mem.Allocator, repo_dir: []const u8, ref: []const u8, path: []const u8, timeout: std.Io.Timeout) ![]u8 {
     const spec = try std.fmt.allocPrint(arena, "{s}:{s}", .{ ref, path });
     // Force the C locale so the stderr substrings matched below are always

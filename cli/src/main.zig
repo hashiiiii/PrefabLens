@@ -9,6 +9,7 @@ pub const display = @import("display.zig");
 pub const render_tree = @import("render_tree.zig");
 pub const render_html = @import("render_html.zig");
 const unity_path = @import("unity_path.zig");
+const builtin_refs = @import("builtin_refs.zig");
 
 test {
     std.testing.refAllDecls(@This());
@@ -79,6 +80,13 @@ test "parseArgs: --help short-circuits" {
     try testing.expect(opt.help);
     const short = try parseArgs(&.{"-h"});
     try testing.expect(short.help);
+}
+
+test "parseArgs: --no-project parses and conflicts with --project" {
+    const opt = try parseArgs(&.{ "--no-project", "main" });
+    try testing.expect(opt.no_project);
+    try testing.expectError(ArgError.ConflictingFlags, parseArgs(&.{ "--no-project", "--project", ".", "main" }));
+    try testing.expectError(ArgError.ConflictingFlags, parseArgs(&.{ "--project", ".", "--no-project", "main" }));
 }
 
 test "parseArgs: --open implies html and rejects --json" {
@@ -639,6 +647,7 @@ pub const Options = struct {
     target: Target,
     format: Format = .tree,
     project_root: ?[]const u8 = null, // guid-resolution base and the git repo dir
+    no_project: bool = false, // skip the default guid-resolution scan
     no_color: bool = false,
     force_color: bool = false,
     help: bool = false,
@@ -647,7 +656,7 @@ pub const Options = struct {
 
 pub const ArgError = error{ MissingOperands, UnknownFlag, TooManyArguments, ConflictingFlags };
 
-const usage_line = "usage: prefablens [--json|--html] [--open] [--project DIR] [--color|--no-color] [<ref>] [<ref>] [<path>] | <before> <after>\n";
+const usage_line = "usage: prefablens [--json|--html] [--open] [--project DIR|--no-project] [--color|--no-color] [<ref>] [<ref>] [<path>] | <before> <after>\n";
 
 const help_text = usage_line ++
     \\
@@ -664,7 +673,9 @@ const help_text = usage_line ++
     \\  --json         prefablens.diff.v2 JSON ({path, diff} array in bulk mode)
     \\  --html         self-contained HTML report on stdout
     \\  --open         write the HTML report to a temp file and open it in a browser
-    \\  --project DIR  Unity project root for guid resolution (and git repo dir)
+    \\  --project DIR  Unity project root for guid resolution (and git repo dir);
+    \\                 git mode resolves against the repository root by default
+    \\  --no-project   skip the default guid-resolution scan
     \\  --color        force ANSI colors on in tree output (useful when piping)
     \\  --no-color     disable ANSI colors in tree output
     \\  -h, --help     show this help
@@ -674,6 +685,7 @@ const help_text = usage_line ++
 pub fn parseArgs(args: []const []const u8) ArgError!Options {
     var format: Format = .tree;
     var project_root: ?[]const u8 = null;
+    var no_project = false;
     var no_color = false;
     var force_color = false;
     var open = false;
@@ -701,6 +713,8 @@ pub fn parseArgs(args: []const []const u8) ArgError!Options {
             i += 1;
             if (i >= args.len) return ArgError.MissingOperands;
             project_root = args[i];
+        } else if (std.mem.eql(u8, a, "--no-project")) {
+            no_project = true;
         } else if (std.mem.startsWith(u8, a, "--")) {
             return ArgError.UnknownFlag;
         } else if (unity_path.isUnityPath(a)) {
@@ -717,6 +731,8 @@ pub fn parseArgs(args: []const []const u8) ArgError!Options {
         if (format == .json) return ArgError.ConflictingFlags;
         format = .html;
     }
+    // Naming a project root while asking to skip resolution is contradictory.
+    if (no_project and project_root != null) return ArgError.ConflictingFlags;
     if (n_paths == 2) {
         // Plain two-file compare; mixing it with refs has no meaning.
         if (n_refs != 0) return ArgError.TooManyArguments;
@@ -724,6 +740,7 @@ pub fn parseArgs(args: []const []const u8) ArgError!Options {
             .target = .{ .files = .{ .before = paths[0], .after = paths[1] } },
             .format = format,
             .project_root = project_root,
+            .no_project = no_project,
             .no_color = no_color,
             .force_color = force_color,
             .open = open,
@@ -737,6 +754,7 @@ pub fn parseArgs(args: []const []const u8) ArgError!Options {
         } },
         .format = format,
         .project_root = project_root,
+        .no_project = no_project,
         .no_color = no_color,
         .force_color = force_color,
         .open = open,
@@ -769,11 +787,14 @@ fn openInBrowser(io: std.Io, arena: std.mem.Allocator, path: []const u8) !void {
 
 const model = core.model;
 
-const NamedDiff = struct { path: ?[]const u8, res: model.DiffResult };
+/// Bytes ride along so the lazy default resolution can re-diff files whose
+/// source prefabs only become loadable once the index exists.
+const NamedDiff = struct { path: ?[]const u8, before: []const u8, after: []const u8, res: model.DiffResult };
 
 /// Diff one before/after pair, satisfying needed_sources from the project
 /// index when available (nested sources raise new requests, so up to 3
-/// rounds; stop if there's no progress).
+/// rounds; stop if there's no progress). Index paths are project-relative,
+/// so source reads join them with `project_root`.
 fn diffOne(
     io: std.Io,
     arena: std.mem.Allocator,
@@ -781,6 +802,7 @@ fn diffOne(
     after: []const u8,
     idx: ?*core.json.Resolver,
     assets: *core.Assets,
+    project_root: []const u8,
 ) !model.DiffResult {
     var res = try core.diffBytesWithAssets(arena, before, after, assets);
     if (idx) |index| {
@@ -790,7 +812,8 @@ fn diffOne(
             for (res.needed_sources) |ns| {
                 if (assets.contains(ns.guid)) continue;
                 const path = index.get(ns.guid) orelse continue;
-                const bytes = readFile(io, arena, path) catch continue;
+                const full = try std.fs.path.join(arena, &.{ project_root, path });
+                const bytes = readFile(io, arena, full) catch continue;
                 try assets.put(arena, ns.guid, bytes);
                 progressed = true;
             }
@@ -842,7 +865,7 @@ pub fn run(io: std.Io, arena: std.mem.Allocator, args: []const []const u8, stdou
             ArgError.MissingOperands => try stderr.writeAll(usage_line),
             ArgError.UnknownFlag => try stderr.writeAll("error: unknown flag (see --help)\n"),
             ArgError.TooManyArguments => try stderr.writeAll("error: too many arguments (see --help)\n"),
-            ArgError.ConflictingFlags => try stderr.writeAll("error: --open conflicts with --json\n"),
+            ArgError.ConflictingFlags => try stderr.writeAll("error: conflicting flags (see --help)\n"),
         }
         return 2;
     };
@@ -852,7 +875,14 @@ pub fn run(io: std.Io, arena: std.mem.Allocator, args: []const []const u8, stdou
     }
 
     // --project doubles as the guid-resolution base and the git repo dir.
-    const repo_dir = opt.project_root orelse ".";
+    // Without it, git mode anchors at the repository root: git reports changed
+    // paths relative to that root, so reading them against a subdirectory cwd
+    // would silently misreport every file as deleted. Failure falls back to
+    // "." so the not-a-repository error surfaces through git itself below.
+    const repo_dir = opt.project_root orelse switch (opt.target) {
+        .git => input.repoRoot(io, arena, ".", input.default_git_timeout) catch ".",
+        .files => ".",
+    };
     var resolver_ptr: ?*core.json.Resolver = null;
     var idx: core.json.Resolver = undefined;
     if (opt.project_root) |proj| {
@@ -876,8 +906,8 @@ pub fn run(io: std.Io, arena: std.mem.Allocator, args: []const []const u8, stdou
                 try stderr.print("error: cannot read file '{s}'\n", .{f.after});
                 return 1;
             };
-            const res = diffOne(io, arena, before, after, resolver_ptr, &assets) catch |err| return diffError(stderr, err);
-            try diffs.append(arena, .{ .path = null, .res = res });
+            const res = diffOne(io, arena, before, after, resolver_ptr, &assets, repo_dir) catch |err| return diffError(stderr, err);
+            try diffs.append(arena, .{ .path = null, .before = before, .after = after, .res = res });
         },
         .git => |g| {
             // Built as a list (not `&.{p}`) so the single-path case doesn't
@@ -923,11 +953,33 @@ pub fn run(io: std.Io, arena: std.mem.Allocator, args: []const []const u8, stdou
                             try stderr.print("error: git show failed for '{s}:{s}'\n", .{ g.after_ref, p });
                         return 1;
                     };
-                const res = diffOne(io, arena, before, after, resolver_ptr, &assets) catch |err| return diffError(stderr, err);
+                const res = diffOne(io, arena, before, after, resolver_ptr, &assets, repo_dir) catch |err| return diffError(stderr, err);
                 // Single explicit path keeps the headerless single-file output.
-                try diffs.append(arena, .{ .path = if (g.path != null) null else p, .res = res });
+                try diffs.append(arena, .{ .path = if (g.path != null) null else p, .before = before, .after = after, .res = res });
             }
         },
+    }
+
+    // Default guid resolution: with no --project and no --no-project, git mode
+    // resolves against the repository root — but only after the diffs prove
+    // there is something to resolve, so ref-free changes cost nothing. Built-in
+    // refs display by name without any .meta, so they neither trigger a scan
+    // nor keep its early exit waiting. A failed or empty scan degrades to the
+    // unresolved output, "--project" hint included.
+    if (resolver_ptr == null and !opt.no_project and opt.target == .git) {
+        const wanted = try wantedGuids(arena, diffs.items);
+        if (wanted.len != 0) scan: {
+            const built = resolve.buildIndexFor(io, arena, repo_dir, wanted) catch break :scan;
+            if (built.count() == 0) break :scan;
+            idx = built;
+            resolver_ptr = &idx;
+            // Source prefabs only became loadable with the index in hand:
+            // re-diff just the files still asking for them.
+            for (diffs.items) |*d| {
+                if (d.res.needed_sources.len == 0) continue;
+                d.res = diffOne(io, arena, d.before, d.after, resolver_ptr, &assets, repo_dir) catch d.res;
+            }
+        }
     }
 
     switch (opt.format) {
@@ -995,6 +1047,57 @@ pub fn run(io: std.Io, arena: std.mem.Allocator, args: []const []const u8, stdou
         },
     }
     return 0;
+}
+
+/// guids the default scan should look for: every unresolved reference and
+/// needed source across `diffs`, deduplicated, minus built-ins (those resolve
+/// by name and never correspond to a .meta, so waiting on them would defeat
+/// the scan's early exit).
+fn wantedGuids(arena: std.mem.Allocator, diffs: []const NamedDiff) ![]const []const u8 {
+    var seen: std.StringHashMapUnmanaged(void) = .empty;
+    var wanted: std.ArrayList([]const u8) = .empty;
+    for (diffs) |d| {
+        for (d.res.unresolved_guids) |g| {
+            if (builtin_refs.isBuiltinGuid(g)) continue;
+            const gop = try seen.getOrPut(arena, g);
+            if (!gop.found_existing) try wanted.append(arena, g);
+        }
+        for (d.res.needed_sources) |ns| {
+            if (builtin_refs.isBuiltinGuid(ns.guid)) continue;
+            const gop = try seen.getOrPut(arena, ns.guid);
+            if (!gop.found_existing) try wanted.append(arena, ns.guid);
+        }
+    }
+    return wanted.items;
+}
+
+test "wantedGuids dedups across files and excludes built-ins" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    // Two files referencing the same script, one also holding a built-in ref:
+    // the scan target must be exactly one guid.
+    const yaml_a =
+        \\--- !u!114 &5
+        \\MonoBehaviour:
+        \\  m_Script: {fileID: 11500000, guid: abc123, type: 3}
+        \\  m_Mesh: {fileID: 10202, guid: 0000000000000000e000000000000000, type: 0}
+        \\  hp: 1
+    ;
+    const yaml_b =
+        \\--- !u!114 &5
+        \\MonoBehaviour:
+        \\  m_Script: {fileID: 11500000, guid: abc123, type: 3}
+        \\  hp: 2
+    ;
+    const res_a = try core.diffBytes(arena, "", yaml_a);
+    const res_b = try core.diffBytes(arena, yaml_b, yaml_a);
+    const wanted = try wantedGuids(arena, &.{
+        .{ .path = "a", .before = "", .after = yaml_a, .res = res_a },
+        .{ .path = "b", .before = yaml_b, .after = yaml_a, .res = res_b },
+    });
+    try testing.expectEqual(@as(usize, 1), wanted.len);
+    try testing.expectEqualStrings("abc123", wanted[0]);
 }
 
 fn diffError(stderr: *std.Io.Writer, err: anyerror) !u8 {

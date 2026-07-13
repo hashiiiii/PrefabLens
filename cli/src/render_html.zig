@@ -355,10 +355,15 @@ fn renderDiff(w: *std.Io.Writer, res: model.DiffResult, resolved: ?*const core.j
     if (res.roots.len == 0 and res.loose.len == 0) {
         try w.writeAll("<div class=\"pl-note pl-empty\"><span class=\"pl-note-icon\">" ++ check_svg ++ "</span><span>No semantic changes</span></div>");
     }
-    if (res.unresolved_guids.len != 0 and resolved == null) {
-        try w.writeAll("<div class=\"pl-note\"><span class=\"pl-note-icon\">" ++ alert_svg ++ "</span><span>");
-        try w.print("{d} unresolved guid reference(s); pass --project DIR to resolve", .{res.unresolved_guids.len});
-        try w.writeAll("</span></div>");
+    if (resolved == null) {
+        // Built-ins display by name (no .meta exists for them), so counting
+        // them here would advertise a --project run that cannot help.
+        const n = display.unresolvedCount(res);
+        if (n != 0) {
+            try w.writeAll("<div class=\"pl-note\"><span class=\"pl-note-icon\">" ++ alert_svg ++ "</span><span>");
+            try w.print("{d} unresolved guid reference(s); pass --project DIR to resolve", .{n});
+            try w.writeAll("</span></div>");
+        }
     }
     try w.writeAll("</div>");
 }

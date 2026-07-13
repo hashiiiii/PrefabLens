@@ -66,6 +66,21 @@ pub fn build(b: *std.Build) void {
     const perf_step = b.step("perf", "Run the performance budget gate (ReleaseFast)");
     perf_step.dependOn(&run_perf.step);
 
+    // The CLI's guid-resolution scan has its own budget: it must stay
+    // concurrent (see cli/src/perf_scan_main.zig).
+    const perf_scan_exe = b.addExecutable(.{
+        .name = "perf-scan",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("cli/src/perf_scan_main.zig"),
+            .target = target,
+            .optimize = .ReleaseFast,
+            .imports = &.{
+                .{ .name = "core", .module = core_mod },
+            },
+        }),
+    });
+    perf_step.dependOn(&b.addRunArtifact(perf_scan_exe).step);
+
     const wasm = b.addExecutable(.{
         .name = "prefablens",
         .root_module = b.createModule(.{

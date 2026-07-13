@@ -411,8 +411,11 @@ pub fn render(
             try renderCard(arena, w, .{ .component = c }, resolved, color, &prefix, i + 1 == res.loose.len);
         }
     }
-    if (res.unresolved_guids.len != 0 and resolved == null) {
-        try w.print("\n({d} unresolved guid reference(s); pass --project DIR to resolve)\n", .{res.unresolved_guids.len});
+    if (resolved == null) {
+        // Built-ins display by name (no .meta exists for them), so counting
+        // them here would advertise a --project run that cannot help.
+        const n = display.unresolvedCount(res);
+        if (n != 0) try w.print("\n({d} unresolved guid reference(s); pass --project DIR to resolve)\n", .{n});
     }
 }
 

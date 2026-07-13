@@ -194,11 +194,11 @@ let index;
 try {
   // CLI outputs: the --open report page, the tree view (--color because stdout
   // is a pipe here; a terminal gets color automatically), and the single-file
-  // hero report the landing page frames next to the raw diff. --project .
-  // resolves guid references against the fixture .meta files.
-  report = execFileSync(BIN, ["--html", "--project", ".", "main"], { cwd: repo, encoding: "utf8" });
-  tree = execFileSync(BIN, ["--color", "--project", ".", "main"], { cwd: repo, encoding: "utf8" });
-  heroReport = execFileSync(BIN, ["--html", "--project", ".", "main", HERO_FILE], { cwd: repo, encoding: "utf8" });
+  // hero report the landing page frames next to the raw diff. Guid references
+  // resolve against the fixture .meta files by default (no --project needed).
+  report = execFileSync(BIN, ["--html", "main"], { cwd: repo, encoding: "utf8" });
+  tree = execFileSync(BIN, ["--color", "main"], { cwd: repo, encoding: "utf8" });
+  heroReport = execFileSync(BIN, ["--html", "main", HERO_FILE], { cwd: repo, encoding: "utf8" });
 
   const files = changedFiles(repo);
   extension = readFileSync(join(SITE, "static", "extension.html"), "utf8");

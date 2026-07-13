@@ -4,10 +4,10 @@
   "version": "0.6.1",
   "description": "Semantic diffs for Unity YAML files in GitHub pull requests",
   "icons": {
-    "16": "icons/icon16.png",
-    "32": "icons/icon32.png",
-    "48": "icons/icon48.png",
-    "128": "icons/icon128.png"
+    "16": "images/icon16.png",
+    "32": "images/icon32.png",
+    "48": "images/icon48.png",
+    "128": "images/icon128.png"
   },
   "permissions": ["storage"],
   "host_permissions": ["https://api.github.com/*", "https://github.com/*"],

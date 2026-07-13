@@ -9,7 +9,7 @@ Semantic diff tools for UnityYAML assets. Instead of raw text diffs, PrefabLens 
 Try the [live demo](https://hashiiiii.github.io/PrefabLens/) — the extension's GitHub view and the CLI's local output, running in your browser.
 
 <p align="center">
-  <img src="docs/top.png" alt="PrefabLens: semantic Unity prefab diffs vs raw git diff" />
+  <img src="docs/images/top.png" alt="PrefabLens: semantic Unity prefab diffs vs raw git diff" />
 </p>
 
 ## Components

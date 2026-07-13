@@ -27,11 +27,11 @@ jobs:
         run: |
           zig build
           zig build wasm
-      - name: Build viewer artifact
+      - name: Build demo bundle
         working-directory: extension
         run: |
           pnpm install --frozen-lockfile
-          pnpm run viewer
+          pnpm run demo
       - name: Build site
         working-directory: site
         run: node build.mjs

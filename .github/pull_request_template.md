@@ -4,7 +4,7 @@
 
 ## Motivation
 
-<!-- Why is this change needed? Link the issue: Closes #NNN -->
+<!-- Why is this change needed? Link the approved issue: Closes #NNN -->
 
 ## Changes
 

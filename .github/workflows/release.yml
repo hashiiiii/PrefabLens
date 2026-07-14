@@ -73,12 +73,17 @@ jobs:
         env:
           # Publish as the App so the release isn't attributed to github-actions[bot].
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
-        run: gh release create "v$VERSION" dist/*.zip --generate-notes
+        run: |
+          set -euo pipefail
+          # SHA256SUMS lets manifest tooling (e.g. scoop autoupdate) verify
+          # assets without downloading them.
+          (cd dist && shasum -a 256 *.zip > SHA256SUMS)
+          gh release create "v$VERSION" dist/* --generate-notes
 
-  # Regenerates the Homebrew formula and Scoop manifest from the published
-  # release and pushes them to the manifest repos. Idempotent: safe to re-run
-  # without re-tagging.
-  publish-manifests:
+  # Regenerates the Homebrew formula from the published release and pushes
+  # it to the tap. Idempotent: safe to re-run without re-tagging. The Scoop
+  # bucket is not pushed from here: it self-updates via checkver/autoupdate.
+  publish-formula:
     needs: release
     runs-on: ubuntu-latest
     env:
@@ -90,24 +95,24 @@ jobs:
           client-id: ${{ secrets.APP_CLIENT_ID }}
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
           owner: hashiiiii
-          repositories: PrefabLens,homebrew-tap,scoop-bucket
+          repositories: PrefabLens,homebrew-tap
       - uses: actions/checkout@v7
-      - name: Render manifests from the published release
+      - name: Render formula from the published release
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           set -euo pipefail
           gh release download "v$VERSION" --dir dist
           cli/pkg/render.sh "$VERSION" dist out
-      - name: Push manifests
+      - name: Push formula
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
         run: |
           set -euo pipefail
           user_id=$(gh api "/users/${APP_SLUG}[bot]" --jq .id)
-          # publish <repo> <src> <dest>: commit the rendered manifest to the
-          # manifest repo, skipping the push when nothing changed (re-runs).
+          # publish <repo> <src> <dest>: commit the rendered formula to the
+          # tap repo, skipping the push when nothing changed (re-runs).
           publish() {
             git clone --depth 1 "https://x-access-token:${GH_TOKEN}@github.com/hashiiiii/$1.git" "repos/$1"
             mkdir -p "repos/$1/$(dirname "$3")"
@@ -121,4 +126,3 @@ jobs:
             }
           }
           publish homebrew-tap out/prefablens.rb Formula/prefablens.rb
-          publish scoop-bucket out/prefablens.json bucket/prefablens.json

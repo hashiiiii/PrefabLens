@@ -23,6 +23,7 @@
   --accent-ext: #a06be6;
   --accent-ext-deep: #7b42bc;
   --accent-cli: #00ca8e;
+  --accent-editor: #14c6cb;
   --font: system-ui, -apple-system, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif;
   --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
 }
@@ -51,6 +52,7 @@ code, pre { font-family: var(--mono); }
 }
 .eyebrow.ext { color: var(--accent-ext); }
 .eyebrow.cli { color: var(--accent-cli); }
+.eyebrow.editor { color: var(--accent-editor); }
 
 /* --- Site chrome ------------------------------------------------------- */
 
@@ -352,15 +354,24 @@ main { max-width: 1024px; margin: 0 auto; padding: 24px 32px 96px; }
 
 /* --- CLI page ----------------------------------------------------------- */
 
-.cli-section { margin: 0 0 64px; }
-.cli-section h2 {
+.page-section { margin: 0 0 64px; }
+.page-section h2 {
   margin: 32px 0 8px;
   font-size: 28px;
   font-weight: 600;
   line-height: 1.21;
   letter-spacing: -0.6px;
 }
-.cli-section .hint { max-width: 720px; }
+.page-section .hint { max-width: 720px; }
+
+.page-title {
+  margin: 0 0 12px;
+  font-size: 36px;
+  font-weight: 600;
+  line-height: 1.17;
+  letter-spacing: -0.8px;
+}
+.window-shot { display: block; width: 100%; }
 
 .terminal pre {
   margin: 0;

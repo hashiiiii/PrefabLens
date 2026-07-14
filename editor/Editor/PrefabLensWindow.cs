@@ -16,6 +16,7 @@ namespace PrefabLens
         VisualElement content;
         BulkModel bulk = new();
         string selectedPath;
+        string lastStdout;
         bool refreshing;
 
         [MenuItem("Window/PrefabLens")]
@@ -94,10 +95,18 @@ namespace PrefabLens
             refreshing = false;
             if (content == null)
                 return; // unreachable given Refresh's own guard; kept as cheap defense
+            // Unchanged output — the common focus-triggered refresh. Leave the whole UI
+            // alone so the user's tree fold state survives; only restore the status line.
+            if (res.ExitCode == 0 && res.Stdout == lastStdout)
+            {
+                status.text = CountText();
+                return;
+            }
             content.Clear();
             if (res.ExitCode != 0)
             {
                 // The CLI's stderr is the primary source (non-git repository, timeout, etc.)
+                lastStdout = null;
                 status.text = "";
                 Note(string.IsNullOrEmpty(res.Stderr) ? $"prefablens exited with {res.ExitCode}" : res.Stderr.Trim());
                 return;
@@ -108,14 +117,16 @@ namespace PrefabLens
             }
             catch (Exception)
             {
+                lastStdout = null;
                 status.text = "";
                 Note("Could not parse CLI output (CLI version mismatch?):");
                 Note(res.Stdout.Length > 200 ? res.Stdout.Substring(0, 200) + "…" : res.Stdout);
                 return;
             }
+            lastStdout = res.Stdout;
             list.itemsSource = bulk.Entries;
             list.RefreshItems();
-            status.text = bulk.Entries.Count == 0 ? "No changes vs HEAD" : $"{bulk.Entries.Count} changed vs HEAD";
+            status.text = CountText();
 
             if (bulk.Entries.Count == 0)
                 return;
@@ -127,6 +138,8 @@ namespace PrefabLens
             // when the index is unchanged (undocumented ListView behavior).
             ShowEntry(bulk.Entries[idx]);
         }
+
+        string CountText() => bulk.Entries.Count == 0 ? "No changes vs HEAD" : $"{bulk.Entries.Count} changed vs HEAD";
 
         int IndexOfPath(string path)
         {

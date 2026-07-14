@@ -35,8 +35,6 @@ namespace PrefabLens
         public static string DownloadUrl(string version, string assetName) =>
             $"https://github.com/hashiiiii/PrefabLens/releases/download/v{version}/{assetName}";
 
-        public static string[] BuildArgs(string assetPath) => new[] { "HEAD", assetPath, "--json" };
-
         /// Bare invocation = bulk mode: HEAD vs working tree, all changed Unity files,
         /// as a [{path, diff}] JSON array.
         public static string[] BuildBulkArgs() => new[] { "--json" };
@@ -143,12 +141,6 @@ namespace PrefabLens
             public string Stdout;
             public string Stderr;
             public bool TimedOut;
-        }
-
-        /// Run the CLI with the project root as cwd (git refs are resolved against the repository in cwd).
-        public static Result Run(string cliPath, string assetPath)
-        {
-            return RunProcess(cliPath, QuoteArgs(BuildArgs(assetPath)), Directory.GetCurrentDirectory(), RunTimeoutMs);
         }
 
         public static Result RunProcess(string file, string arguments, string workDir, int timeoutMs)

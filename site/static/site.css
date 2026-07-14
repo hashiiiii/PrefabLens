@@ -98,6 +98,7 @@ main { max-width: 1024px; margin: 0 auto; padding: 24px 32px 96px; }
 .demo-banner span { color: var(--ink-muted); }
 
 .hint { font-size: 14px; line-height: 1.7; color: var(--ink-muted); }
+main > .hint { max-width: 720px; }
 
 /* --- Landing ----------------------------------------------------------- */
 

@@ -99,8 +99,13 @@ namespace PrefabLens
         void OnBulkDone(Cli.Result res)
         {
             refreshing = false;
+            // Consume the menu's pending selection on every completion path, success or not,
+            // so a failed run cannot leak it into a later unrelated refresh.
+            var wanted = pendingSelectPath ?? selectedPath;
+            var menuInvoked = pendingSelectPath != null;
+            pendingSelectPath = null;
             if (content == null)
-                return; // window was closed while the CLI ran
+                return; // OnFocus can trigger a refresh before CreateGUI; nothing to render into yet
             content.Clear();
             if (res.ExitCode != 0)
             {
@@ -124,10 +129,7 @@ namespace PrefabLens
             list.RefreshItems();
             status.text = bulk.Entries.Count == 0 ? "No changes vs HEAD" : $"{bulk.Entries.Count} changed vs HEAD";
 
-            var wanted = pendingSelectPath ?? selectedPath;
-            var missingWanted = pendingSelectPath != null && IndexOfPath(pendingSelectPath) < 0;
-            pendingSelectPath = null;
-            if (missingWanted)
+            if (menuInvoked && IndexOfPath(wanted) < 0)
             {
                 Note($"No semantic changes for {wanted}");
                 return;
@@ -135,7 +137,12 @@ namespace PrefabLens
             if (bulk.Entries.Count == 0)
                 return;
             var idx = IndexOfPath(wanted);
-            list.SetSelection(idx < 0 ? 0 : idx);
+            if (idx < 0)
+                idx = 0;
+            list.SetSelection(idx);
+            // Render directly instead of relying on SetSelection to re-fire selectionChanged
+            // when the index is unchanged (undocumented ListView behavior).
+            ShowEntry(bulk.Entries[idx]);
         }
 
         int IndexOfPath(string path)
@@ -154,15 +161,20 @@ namespace PrefabLens
             {
                 if (item is not BulkEntry entry)
                     return;
-                selectedPath = entry.Path;
-                content.Clear();
-                entry.Diff.ResolveWith(AssetDatabase.GUIDToAssetPath);
-                if (entry.Diff.IsEmpty)
-                    Note("No semantic changes");
-                else
-                    content.Add(BuildTree(entry.Diff));
+                ShowEntry(entry);
                 return;
             }
+        }
+
+        void ShowEntry(BulkEntry entry)
+        {
+            selectedPath = entry.Path;
+            content.Clear();
+            entry.Diff.ResolveWith(AssetDatabase.GUIDToAssetPath);
+            if (entry.Diff.IsEmpty)
+                Note("No semantic changes");
+            else
+                content.Add(BuildTree(entry.Diff));
         }
 
         void ShowMissingCli()

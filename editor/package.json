@@ -4,5 +4,15 @@
   "displayName": "PrefabLens",
   "description": "Semantic diff viewer for UnityYAML assets in the Editor.",
   "unity": "2022.3",
-  "license": "Apache-2.0"
+  "license": "Apache-2.0",
+  "author": {
+    "name": "hashiiiii",
+    "url": "https://github.com/hashiiiii"
+  },
+  "keywords": [
+    "unity",
+    "prefab",
+    "diff",
+    "yaml"
+  ]
 }

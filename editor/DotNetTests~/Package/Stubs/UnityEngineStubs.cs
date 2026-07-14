@@ -7,6 +7,10 @@ namespace UnityEngine
 {
     public class Object { }
 
+    public class Texture : Object { }
+
+    public class Texture2D : Texture { }
+
     [AttributeUsage(AttributeTargets.Field)]
     public sealed class SerializeField : Attribute { }
 

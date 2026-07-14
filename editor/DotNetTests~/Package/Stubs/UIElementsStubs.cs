@@ -54,6 +54,9 @@ namespace UnityEngine.UIElements
     public interface IStyle
     {
         StyleEnum<FlexDirection> flexDirection { get; set; }
+        StyleLength width { get; set; }
+        StyleLength height { get; set; }
+        StyleFloat flexShrink { get; set; }
         StyleLength marginTop { get; set; }
         StyleLength marginBottom { get; set; }
         StyleLength marginLeft { get; set; }
@@ -71,6 +74,9 @@ namespace UnityEngine.UIElements
     sealed class Style : IStyle
     {
         public StyleEnum<FlexDirection> flexDirection { get; set; }
+        public StyleLength width { get; set; }
+        public StyleLength height { get; set; }
+        public StyleFloat flexShrink { get; set; }
         public StyleLength marginTop { get; set; }
         public StyleLength marginBottom { get; set; }
         public StyleLength marginLeft { get; set; }
@@ -92,6 +98,11 @@ namespace UnityEngine.UIElements
         public void Add(VisualElement child) { }
 
         public void Clear() { }
+    }
+
+    public class Image : VisualElement
+    {
+        public Texture image { get; set; }
     }
 
     public class Label : VisualElement

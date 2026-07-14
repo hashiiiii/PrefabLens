@@ -209,13 +209,17 @@ namespace PrefabLens
             );
         }
 
-        static Row EntryRow(BulkEntry entry) => Badge(BulkModel.AggregateStatus(entry.Diff)).Add(entry.Path);
+        static Row EntryRow(BulkEntry entry) =>
+            Badge(BulkModel.AggregateStatus(entry.Diff))
+                .WithIcon(AssetDatabase.GetCachedIcon(entry.Path))
+                .Add(entry.Path);
 
         static void RenderRow(VisualElement e, Row row)
         {
             e.Clear();
-            foreach (var span in row.Spans)
+            for (var i = 0; i < row.Spans.Count; i++)
             {
+                var span = row.Spans[i];
                 var l = new Label(span.Text)
                 {
                     style =
@@ -229,7 +233,37 @@ namespace PrefabLens
                 if (span.Tint is Color tint)
                     l.style.color = tint;
                 e.Add(l);
+                // The icon sits between the badge (always the first span) and the name.
+                if (i == 0 && row.Icon != null)
+                    e.Add(
+                        new Image
+                        {
+                            image = row.Icon,
+                            style =
+                            {
+                                width = 16,
+                                height = 16,
+                                marginRight = 2,
+                                flexShrink = 0,
+                            },
+                        }
+                    );
             }
+        }
+
+        /// Unity built-in icon lookup. Pro skin ships d_-prefixed variants, so probe those
+        /// first; FindTexture returns null silently for unknown names.
+        static Texture2D FindIcon(string name)
+        {
+            var dark = EditorGUIUtility.isProSkin ? EditorGUIUtility.FindTexture("d_" + name) : null;
+            return dark != null ? dark : EditorGUIUtility.FindTexture(name);
+        }
+
+        static Texture2D ComponentIcon(ComponentDiff c)
+        {
+            // Built-in components have "<TypeName> Icon" textures; script components use the script icon.
+            var builtin = c.ClassName == null && c.ScriptGuid == null ? FindIcon(c.TypeName + " Icon") : null;
+            return builtin != null ? builtin : FindIcon("cs Script Icon");
         }
 
         // ---- Tree rendering (same color tone and notation as the Chrome renderer) ----
@@ -260,12 +294,19 @@ namespace PrefabLens
 
         sealed class Row
         {
+            public Texture Icon;
             public readonly List<Span> Spans = new();
 
             public Row Add(string text, Color? tint = null)
             {
                 if (!string.IsNullOrEmpty(text))
                     Spans.Add(new Span(text, tint));
+                return this;
+            }
+
+            public Row WithIcon(Texture icon)
+            {
+                Icon = icon;
                 return this;
             }
         }
@@ -295,12 +336,20 @@ namespace PrefabLens
             if (pi != null)
                 foreach (var ov in pi.Overrides)
                     children.Add(new TreeViewItemData<Row>(id++, OverrideRow(ov, m)));
-            foreach (var c in n.Components)
-                children.Add(ComponentItem(c, m, ref id));
+            if (n.Components.Count > 0)
+            {
+                // Components fold as their own group one level below the object row (extension parity).
+                var comps = new List<TreeViewItemData<Row>>();
+                foreach (var c in n.Components)
+                    comps.Add(ComponentItem(c, m, ref id));
+                children.Add(
+                    new TreeViewItemData<Row>(id++, Badge(DiffStatus.Unchanged).Add("Components", Palette.Muted), comps)
+                );
+            }
             foreach (var ch in n.Children)
                 children.Add(NodeItem(ch, m, ref id));
 
-            var row = Badge(n.Status).Add(n.Name);
+            var row = Badge(n.Status).WithIcon(FindIcon(pi != null ? "Prefab Icon" : "GameObject Icon")).Add(n.Name);
             if (pi?.SourceGuid != null)
                 row.Add(
                     " ‹Prefab: " + (m.Resolved.TryGetValue(pi.SourceGuid, out var src) ? src : pi.SourceGuid) + "›",
@@ -315,7 +364,7 @@ namespace PrefabLens
             foreach (var f in c.Fields)
                 children.Add(new TreeViewItemData<Row>(id++, FieldRow(f.Path, f.Status, f.Before, f.After, m)));
 
-            var row = Badge(c.Status);
+            var row = Badge(c.Status).WithIcon(ComponentIcon(c));
             if (!string.IsNullOrEmpty(c.ClassName))
                 row.Add(c.ClassName).Add(" ‹Script›", Palette.Muted);
             else if (c.ScriptGuid != null && m.Resolved.TryGetValue(c.ScriptGuid, out var p))

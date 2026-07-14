@@ -36,6 +36,8 @@ namespace UnityEditor
         public static string GetAssetPath(UnityEngine.Object assetObject) => "";
 
         public static string GUIDToAssetPath(string guid) => "";
+
+        public static UnityEngine.Texture GetCachedIcon(string path) => null;
     }
 
     public static class Selection
@@ -46,5 +48,7 @@ namespace UnityEditor
     public static class EditorGUIUtility
     {
         public static bool isProSkin => false;
+
+        public static UnityEngine.Texture2D FindTexture(string name) => null;
     }
 }

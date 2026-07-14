@@ -99,6 +99,7 @@ namespace PrefabLens
         }
 
         /// Fetch from GitHub Releases and extract under Library. Returns the executable path on success, throws on failure.
+        /// Synchronous and free of Unity API calls so it can run on a worker thread (see DownloadAsync).
         public static string Download()
         {
             var asset = ReleaseAssetName(
@@ -110,29 +111,73 @@ namespace PrefabLens
             var dir = Path.GetDirectoryName(DefaultPath);
             Directory.CreateDirectory(dir);
 
-            try
-            {
-                EditorUtility.DisplayProgressBar("PrefabLens", $"Downloading {asset}…", 0.3f);
-                using var http = new HttpClient();
-                var bytes = http.GetByteArrayAsync(url).Result;
-                using var zip = new ZipArchive(new MemoryStream(bytes));
-                foreach (var entry in zip.Entries)
-                {
-                    // ZipFileExtensions (ExtractToFile) isn't referenceable under netstandard, so copy manually
-                    var dest = Path.Combine(dir, entry.Name);
-                    using var src = entry.Open();
-                    using var dst = File.Create(dest);
-                    src.CopyTo(dst);
-                }
-            }
-            finally
-            {
-                EditorUtility.ClearProgressBar();
-            }
+            using var http = new HttpClient();
+            // GetAwaiter().GetResult() unwraps AggregateException so onDone sees the HttpRequestException message.
+            var bytes = http.GetByteArrayAsync(url).GetAwaiter().GetResult();
+            ExtractTo(bytes, dir);
 
             if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
                 RunProcess("chmod", "+x \"" + DefaultPath + "\"", ".", RunTimeoutMs);
+            DeleteStaleVersions(Path.GetDirectoryName(dir), Version);
             return DefaultPath;
+        }
+
+        /// Run Download() off the main thread. The outcome is posted back through the caller's
+        /// SynchronizationContext (Unity's main thread when called from the window).
+        /// Exactly one of (path, error) is non-null.
+        public static void DownloadAsync(Action<string, string> onDone)
+        {
+            var ctx = SynchronizationContext.Current;
+            Task.Run(() =>
+            {
+                string path = null;
+                string error = null;
+                try
+                {
+                    path = Download();
+                }
+                catch (Exception e)
+                {
+                    error = e.Message;
+                }
+                if (ctx != null)
+                    ctx.Post(_ => onDone(path, error), null);
+                else
+                    onDone(path, error);
+            });
+        }
+
+        public static void ExtractTo(byte[] zipBytes, string dir)
+        {
+            using var zip = new ZipArchive(new MemoryStream(zipBytes));
+            foreach (var entry in zip.Entries)
+            {
+                // ZipFileExtensions (ExtractToFile) isn't referenceable under netstandard, so copy manually
+                var dest = Path.Combine(dir, entry.Name);
+                using var src = entry.Open();
+                using var dst = File.Create(dest);
+                src.CopyTo(dst);
+            }
+        }
+
+        /// Drop cached binaries of other versions once the pinned one is in place.
+        /// Best-effort: a locked directory (e.g. an old prefablens.exe still running
+        /// on Windows) must not fail the download that just succeeded.
+        public static void DeleteStaleVersions(string root, string keep)
+        {
+            if (!Directory.Exists(root))
+                return;
+            foreach (var dir in Directory.GetDirectories(root))
+            {
+                if (Path.GetFileName(dir) == keep)
+                    continue;
+                try
+                {
+                    Directory.Delete(dir, recursive: true);
+                }
+                catch (IOException) { }
+                catch (UnauthorizedAccessException) { }
+            }
         }
 
         public struct Result

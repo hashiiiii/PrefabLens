@@ -11,6 +11,12 @@ on:
         description: PR number to check
         required: true
 
+# One run per PR at a time; a newer trigger supersedes an in-flight run
+# so the sticky comment is never double-posted by a race.
+concurrency:
+  group: pr-issue-gate-${{ github.event.pull_request.number || inputs.pr_number }}
+  cancel-in-progress: true
+
 permissions: {}
 
 jobs:

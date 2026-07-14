@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Mirrors how Unity 2022.3 compiles the package: netstandard2.1 API surface + C# 9. -->
+  <PropertyGroup>
+    <TargetFramework>netstandard2.1</TargetFramework>
+    <LangVersion>9.0</LangVersion>
+    <AssemblyName>PrefabLens.Editor</AssemblyName>
+    <RootNamespace>PrefabLens</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../../Editor/*.cs" LinkBase="Editor" />
+  </ItemGroup>
+</Project>

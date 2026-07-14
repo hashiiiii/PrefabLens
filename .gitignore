@@ -9,3 +9,5 @@ extension/node_modules/
 extension/dist/
 extension/test-results/
 site/dist/
+editor/**/bin/
+editor/**/obj/

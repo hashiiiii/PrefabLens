@@ -5,6 +5,8 @@ on:
     types: [opened, reopened, ready_for_review, edited]
   # Manual entry point for E2E tests: OWNER PRs are exempt below, so a
   # scratch PR can only be exercised by dispatching with its number.
+  # Dispatch runs skip the exemptions entirely — never point one at a
+  # Renovate PR (drafting it stalls automerge).
   workflow_dispatch:
     inputs:
       pr_number:
@@ -55,16 +57,23 @@ jobs:
                   isDraft
                   labels(first: 50) { nodes { name } }
                   closingIssuesReferences(first: 20) {
-                    nodes { labels(first: 50) { nodes { name } } }
+                    nodes {
+                      repository { nameWithOwner }
+                      labels(first: 50) { nodes { name } }
+                    }
                   }
                 }
               }
             }')
 
-          approved=$(jq -r '
+          # Cross-repo closing links don't count: a contributor could
+          # self-apply an approved label in a repo they own.
+          approved=$(jq -r --arg repo "$REPO" '
             .data.repository.pullRequest
             | [.labels.nodes[].name]
-              + [.closingIssuesReferences.nodes[].labels.nodes[].name]
+              + [.closingIssuesReferences.nodes[]
+                 | select(.repository.nameWithOwner == $repo)
+                 | .labels.nodes[].name]
             | any(. == "approved")' <<<"$data")
           if [ "$approved" = "true" ]; then
             echo "gate passed: approved issue linked or PR labeled"
@@ -91,10 +100,13 @@ jobs:
           marker=$(head -1 <<<"$body")
 
           # .[] streams across the concatenated arrays --paginate emits,
-          # so this stays correct past 100 comments.
+          # so this stays correct past 100 comments. Only the bot's own
+          # comment counts: a planted marker by someone else must not
+          # be PATCHed (it would 403 and abort before draft conversion).
           existing=$(gh api "repos/$REPO/issues/$PR_NUMBER/comments" --paginate |
             jq -r --arg marker "$marker" \
-              '.[] | select(.body | startswith($marker)) | .id' | head -1)
+              '.[] | select(.user.login == "unidog-bot[bot]")
+                   | select(.body | startswith($marker)) | .id' | head -1)
           if [ -n "$existing" ]; then
             gh api -X PATCH "repos/$REPO/issues/comments/$existing" \
               -f body="$body" --silent

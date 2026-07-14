@@ -186,6 +186,7 @@ namespace PrefabLens
             bulk = new BulkModel();
             list.itemsSource = bulk.Entries;
             list.RefreshItems();
+            lastStdout = null;
             status.text = "";
             content.Clear();
             if (downloadError != null)
@@ -209,6 +210,7 @@ namespace PrefabLens
             bulk = new BulkModel();
             list.itemsSource = bulk.Entries;
             list.RefreshItems();
+            lastStdout = null;
             status.text = $"Downloading prefablens v{Cli.Version}…";
             content.Clear();
             Cli.DownloadAsync(OnDownloadDone);

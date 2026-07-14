@@ -7,6 +7,7 @@
 [![Homebrew](https://img.shields.io/badge/dynamic/regex?url=https%3A%2F%2Fraw.githubusercontent.com%2Fhashiiiii%2Fhomebrew-tap%2Fmain%2FFormula%2Fprefablens.rb&search=version%20%22(%5B%5Cd.%5D%2B)%22&replace=%241&label=homebrew)](https://github.com/hashiiiii/homebrew-tap/blob/main/Formula/prefablens.rb)
 [![Scoop](https://img.shields.io/scoop/v/prefablens?bucket=https%3A%2F%2Fgithub.com%2Fhashiiiii%2Fscoop-bucket&label=scoop)](https://github.com/hashiiiii/scoop-bucket/blob/main/bucket/prefablens.json)
 [![OpenUPM](https://img.shields.io/npm/v/com.hashiiiii.prefablens?registry_uri=https%3A%2F%2Fpackage.openupm.com&label=openupm)](https://openupm.com/packages/com.hashiiiii.prefablens/)
+[![Chrome Web Store](https://img.shields.io/chrome-web-store/v/dlhnalbfkikchkfedfneiimadommcnip?label=chrome%20web%20store)](https://chromewebstore.google.com/detail/dlhnalbfkikchkfedfneiimadommcnip)
 
 Semantic diff tools for UnityYAML assets. Instead of raw text diffs, PrefabLens shows changes at the GameObject, component, and field level.
 

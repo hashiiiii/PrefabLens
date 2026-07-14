@@ -243,6 +243,8 @@ cpSync(join(FIXTURES, "after"), join(DIST, "fixtures", "after"), { recursive: tr
 writeFileSync(join(DIST, "fixtures", "guids.json"), JSON.stringify(guidIndex("after"), null, 2));
 cpSync(WASM, join(DIST, "prefablens.wasm"));
 cpSync(DEMO, join(DIST, "demo.js"));
-for (const file of ["site.css", "favicon.svg"]) cpSync(join(SITE, "static", file), join(DIST, file));
+for (const file of ["site.css", "favicon.svg", "editor.html", "editor-window.png"]) {
+  cpSync(join(SITE, "static", file), join(DIST, file));
+}
 
 console.log(`site built at ${DIST}`);

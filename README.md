@@ -86,6 +86,9 @@ treated as paths; everything else is a git ref.
 
 Shows semantic diffs for UnityYAML files on the GitHub pull request Files changed tab. Sign in with GitHub from the first diff panel (or the extension options page); authorization uses the GitHub device flow, so no token setup is needed.
 
+> [!NOTE]
+> The extension is currently available on github.com only.
+
 ### Unity Editor
 
 Open `Window > PrefabLens`. The window lists every changed UnityYAML asset vs HEAD and shows the selected asset's semantic diff. The CLI binary is downloaded automatically from GitHub Releases.

@@ -13,6 +13,7 @@
       <nav>
         <a href="extension.html">Extension demo</a>
         <a href="cli.html">CLI demo</a>
+        <a href="editor.html">Unity Editor</a>
         <a href="https://github.com/hashiiiii/PrefabLens">GitHub</a>
       </nav>
     </header>
@@ -22,7 +23,8 @@
         <h1>Review prefabs, not YAML noise.</h1>
         <p>
           PrefabLens shows Unity asset changes as a GameObject / component / field tree —
-          on GitHub pull requests and in your terminal. Not just prefabs: it reads every
+          on GitHub pull requests, in your terminal, and inside the Unity Editor. Not just
+          prefabs: it reads every
           UnityYAML asset — scenes (<code>.unity</code>), ScriptableObjects
           (<code>.asset</code>), materials, animators, and more.
         </p>
@@ -77,6 +79,14 @@
             self-contained HTML report that <code>--open</code> pops into your browser.
           </p>
         </a>
+        <a class="demo-card" href="editor.html">
+          <span class="eyebrow editor">Unity Editor</span>
+          <h2>In the Unity Editor</h2>
+          <p>
+            An Editor window that lists changed UnityYAML assets and shows each one as a
+            semantic diff tree. The CLI binary is downloaded automatically on first use.
+          </p>
+        </a>
       </section>
 
       <section class="install">
@@ -95,9 +105,15 @@
 scoop install prefablens</code></pre></dd>
           <dt>CLI — mise</dt>
           <dd><pre><code>mise use -g github:hashiiiii/PrefabLens</code></pre></dd>
+          <dt>Unity Editor — OpenUPM</dt>
+          <dd>
+            <pre><code>openupm add com.hashiiiii.prefablens</code></pre>
+            Without the openupm-cli, install via the Package Manager git URL:
+            <code>https://github.com/hashiiiii/PrefabLens.git?path=editor</code>.
+          </dd>
           <dt>Everything else</dt>
           <dd>
-            Prebuilt binaries and the Unity Editor package are on the
+            Prebuilt binaries are on the
             <a href="https://github.com/hashiiiii/PrefabLens/releases">releases page</a>.
           </dd>
         </dl>

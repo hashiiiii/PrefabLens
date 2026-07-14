@@ -4,6 +4,8 @@ using System.IO;
 using System.IO.Compression;
 using System.Net.Http;
 using System.Runtime.InteropServices;
+using System.Threading;
+using System.Threading.Tasks;
 using UnityEditor;
 
 namespace PrefabLens
@@ -34,6 +36,43 @@ namespace PrefabLens
             $"https://github.com/hashiiiii/PrefabLens/releases/download/v{version}/{assetName}";
 
         public static string[] BuildArgs(string assetPath) => new[] { "HEAD", assetPath, "--json" };
+
+        /// Bare invocation = bulk mode: HEAD vs working tree, all changed Unity files,
+        /// as a [{path, diff}] JSON array.
+        public static string[] BuildBulkArgs() => new[] { "--json" };
+
+        /// Run bulk mode off the main thread. The callback is posted back through the
+        /// caller's SynchronizationContext (Unity's main thread when called from the window).
+        public static void RunBulkAsync(string cliPath, Action<Result> onDone) =>
+            RunAsync(cliPath, QuoteArgs(BuildBulkArgs()), onDone, SynchronizationContext.Current);
+
+        public static void RunAsync(string file, string arguments, Action<Result> onDone, SynchronizationContext ctx)
+        {
+            var workDir = Directory.GetCurrentDirectory();
+            Task.Run(() =>
+            {
+                Result res;
+                try
+                {
+                    res = RunProcess(file, arguments, workDir, RunTimeoutMs);
+                }
+                catch (Exception e)
+                {
+                    // Process.Start failures (missing binary, permissions) become a Result
+                    // so every failure reaches the window through one path.
+                    res = new Result
+                    {
+                        ExitCode = -1,
+                        Stdout = "",
+                        Stderr = e.Message,
+                    };
+                }
+                if (ctx != null)
+                    ctx.Post(_ => onDone(res), null);
+                else
+                    onDone(res);
+            });
+        }
 
         /// Minimal quoting for ProcessStartInfo.Arguments (handles asset paths with spaces).
         public static string QuoteArgs(string[] args)

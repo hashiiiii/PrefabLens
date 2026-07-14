@@ -51,6 +51,10 @@ mise use -g github:hashiiiii/PrefabLens
 
 Download the zip for your platform from [GitHub Releases](https://github.com/hashiiiii/PrefabLens/releases).
 
+### Chrome extension (Chrome Web Store)
+
+Install from the [Chrome Web Store](https://chromewebstore.google.com/detail/dlhnalbfkikchkfedfneiimadommcnip).
+
 ### Unity Editor package (OpenUPM)
 
 ```bash
@@ -80,7 +84,7 @@ treated as paths; everything else is a git ref.
 
 ### Chrome extension
 
-Shows semantic diffs for UnityYAML files on the GitHub pull request Files changed tab. Requires a GitHub Personal Access Token (configure on the extension options page).
+Shows semantic diffs for UnityYAML files on the GitHub pull request Files changed tab. Sign in with GitHub from the first diff panel (or the extension options page); authorization uses the GitHub device flow, so no token setup is needed.
 
 ### Unity Editor
 
@@ -92,7 +96,7 @@ Text-serialized Unity assets such as `.prefab`, `.unity`, `.asset`, `.mat`, `.an
 
 ## Development
 
-Toolchain is managed with [mise](https://mise.jdx.dev/) (Zig 0.16, Node 24, .NET 10).
+Toolchain is managed with [mise](https://mise.jdx.dev/) (Zig 0.16, Node 24, pnpm 11, .NET 10).
 
 ```bash
 mise install
@@ -106,6 +110,9 @@ zig build wasm
 
 # Extension
 cd extension && pnpm install && pnpm run build && pnpm test
+
+# Editor (EditMode tests run on .NET, no Unity required)
+cd editor && dotnet test DotNetTests~/Tests
 ```
 
 ## License

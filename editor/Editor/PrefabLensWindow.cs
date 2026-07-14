@@ -18,6 +18,8 @@ namespace PrefabLens
         string selectedPath;
         string lastStdout;
         bool refreshing;
+        bool downloadAttempted;
+        string downloadError;
 
         [MenuItem("Window/PrefabLens")]
         public static void Open() => GetWindow<PrefabLensWindow>("PrefabLens");
@@ -82,7 +84,13 @@ namespace PrefabLens
             var cli = Cli.Find();
             if (cli == null)
             {
-                ShowMissingCli();
+                // Fetch the pinned binary automatically, once per session; after a
+                // failure, fall back to the manual screen instead of re-downloading
+                // on every focus.
+                if (downloadAttempted)
+                    ShowMissingCli();
+                else
+                    StartDownload();
                 return;
             }
             refreshing = true;
@@ -180,9 +188,11 @@ namespace PrefabLens
             list.RefreshItems();
             status.text = "";
             content.Clear();
+            if (downloadError != null)
+                Note($"Download failed: {downloadError}");
             Note($"prefablens CLI not found (v{Cli.Version}).");
             content.Add(
-                new Button(DownloadThenRefresh)
+                new Button(StartDownload)
                 {
                     text = "Download from GitHub Releases",
                     style = { alignSelf = Align.FlexStart, marginLeft = 6 },
@@ -191,17 +201,25 @@ namespace PrefabLens
             Note($"Or set a manual path via EditorPrefs key '{Cli.CliPathPref}'.");
         }
 
-        void DownloadThenRefresh()
+        /// Shared by the automatic trigger in Refresh and the manual retry button.
+        void StartDownload()
         {
-            try
+            downloadAttempted = true;
+            refreshing = true; // keeps focus-triggered Refresh calls out while the download runs
+            status.text = $"Downloading prefablens v{Cli.Version}…";
+            content.Clear();
+            Cli.DownloadAsync(OnDownloadDone);
+        }
+
+        void OnDownloadDone(string path, string error)
+        {
+            refreshing = false;
+            if (content == null)
+                return;
+            downloadError = error;
+            if (error != null)
             {
-                Cli.Download();
-            }
-            catch (Exception e)
-            {
-                content.Clear();
-                Note($"Download failed: {e.Message}");
-                Note($"You can place the binary manually and set EditorPrefs '{Cli.CliPathPref}'.");
+                ShowMissingCli();
                 return;
             }
             Refresh();

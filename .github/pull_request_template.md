@@ -4,7 +4,9 @@
 
 ## Motivation
 
-<!-- Why is this change needed? Link the approved issue: Closes #NNN -->
+<!-- Why is this change needed? Keep the Closes line below — the issue gate reads it. -->
+
+Closes #NNN
 
 ## Changes
 

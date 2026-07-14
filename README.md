@@ -79,7 +79,7 @@ Shows semantic diffs for UnityYAML files on the GitHub pull request Files change
 
 ### Unity Editor
 
-Open `Window > PrefabLens`, or right-click a supported asset and choose `PrefabLens: Diff vs HEAD`. The CLI binary is downloaded automatically from GitHub Releases.
+Open `Window > PrefabLens`, or right-click a supported asset and choose `PrefabLens: Diff vs HEAD`. The window automatically lists every changed UnityYAML asset vs HEAD and shows the selected asset's semantic diff. The CLI binary is downloaded automatically from GitHub Releases.
 
 ## Supported files
 

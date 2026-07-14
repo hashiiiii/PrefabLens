@@ -7,32 +7,20 @@ using UnityEngine.UIElements;
 
 namespace PrefabLens
 {
-    /// Displays the "HEAD vs working tree" semantic diff of the selected asset (Phase 3 walking skeleton).
+    /// Master-detail view: UnityYAML assets that differ from HEAD on the left,
+    /// the selected asset's semantic diff on the right.
     public sealed class PrefabLensWindow : EditorWindow
     {
-        [SerializeField]
-        string assetPath = "";
-
         Label status;
+        ListView list;
         VisualElement content;
+        BulkModel bulk = new();
+        string selectedPath;
+        string lastStdout;
+        bool refreshing;
 
         [MenuItem("Window/PrefabLens")]
         public static void Open() => GetWindow<PrefabLensWindow>("PrefabLens");
-
-        [MenuItem("Assets/PrefabLens: Diff vs HEAD")]
-        static void DiffSelected()
-        {
-            var w = GetWindow<PrefabLensWindow>("PrefabLens");
-            w.assetPath = AssetDatabase.GetAssetPath(Selection.activeObject);
-            w.Refresh();
-        }
-
-        [MenuItem("Assets/PrefabLens: Diff vs HEAD", true)]
-        static bool ValidateDiffSelected()
-        {
-            var p = Selection.activeObject == null ? "" : AssetDatabase.GetAssetPath(Selection.activeObject);
-            return UnityYamlPaths.IsSupported(p);
-        }
 
         public void CreateGUI()
         {
@@ -58,64 +46,149 @@ namespace PrefabLens
             toolbar.Add(new Button(Refresh) { text = "Refresh" });
             rootVisualElement.Add(toolbar);
 
+            var split = new TwoPaneSplitView(0, 240, TwoPaneSplitViewOrientation.Horizontal);
+            list = new ListView { fixedItemHeight = 20, style = { marginTop = 2 } };
+            list.makeItem = () =>
+                new VisualElement
+                {
+                    style =
+                    {
+                        flexDirection = FlexDirection.Row,
+                        alignItems = Align.Center,
+                        paddingLeft = 6,
+                        paddingRight = 6,
+                    },
+                };
+            list.bindItem = (e, i) => RenderRow(e, EntryRow(bulk.Entries[i]));
+            list.selectionChanged += OnSelectionChanged;
+            split.Add(list);
             content = new VisualElement { style = { flexGrow = 1 } };
-            rootVisualElement.Add(content);
+            split.Add(content);
+            rootVisualElement.Add(split);
             Refresh();
+        }
+
+        /// Unity calls this whenever the window gains focus; before CreateGUI on first open.
+        void OnFocus()
+        {
+            if (content != null)
+                Refresh();
         }
 
         void Refresh()
         {
-            content.Clear();
-            if (string.IsNullOrEmpty(assetPath))
-            {
-                status.text =
-                    "Select a UnityYAML asset (.prefab / .unity / .asset / .mat / .anim / …) and run Assets → PrefabLens: Diff vs HEAD";
+            if (content == null || refreshing)
                 return;
-            }
-            status.text = assetPath;
-
             var cli = Cli.Find();
             if (cli == null)
             {
-                Note($"prefablens CLI not found (v{Cli.Version}).");
-                content.Add(
-                    new Button(DownloadThenRefresh)
-                    {
-                        text = "Download from GitHub Releases",
-                        style = { alignSelf = Align.FlexStart, marginLeft = 6 },
-                    }
-                );
-                Note($"Or set a manual path via EditorPrefs key '{Cli.CliPathPref}'.");
+                ShowMissingCli();
                 return;
             }
+            refreshing = true;
+            status.text = "Refreshing…";
+            Cli.RunBulkAsync(cli, OnBulkDone);
+        }
 
-            var res = Cli.Run(cli, assetPath);
+        void OnBulkDone(Cli.Result res)
+        {
+            refreshing = false;
+            if (content == null)
+                return; // unreachable given Refresh's own guard; kept as cheap defense
+            // Unchanged output — the common focus-triggered refresh. Leave the whole UI
+            // alone so the user's tree fold state survives; only restore the status line.
+            if (res.ExitCode == 0 && res.Stdout == lastStdout)
+            {
+                status.text = CountText();
+                return;
+            }
+            content.Clear();
             if (res.ExitCode != 0)
             {
-                // The CLI's stderr is the primary source (non-git repository, invalid ref, etc.)
+                // The CLI's stderr is the primary source (non-git repository, timeout, etc.)
+                lastStdout = null;
+                status.text = "";
                 Note(string.IsNullOrEmpty(res.Stderr) ? $"prefablens exited with {res.ExitCode}" : res.Stderr.Trim());
                 return;
             }
-
-            DiffModel model;
             try
             {
-                model = DiffModel.Parse(res.Stdout);
+                bulk = BulkModel.Parse(res.Stdout);
             }
             catch (Exception)
             {
+                lastStdout = null;
+                status.text = "";
                 Note("Could not parse CLI output (CLI version mismatch?):");
                 Note(res.Stdout.Length > 200 ? res.Stdout.Substring(0, 200) + "…" : res.Stdout);
                 return;
             }
+            lastStdout = res.Stdout;
+            list.itemsSource = bulk.Entries;
+            list.RefreshItems();
+            status.text = CountText();
 
-            model.ResolveWith(AssetDatabase.GUIDToAssetPath);
-            if (model.IsEmpty)
+            if (bulk.Entries.Count == 0)
+                return;
+            var idx = IndexOfPath(selectedPath);
+            if (idx < 0)
+                idx = 0;
+            list.SetSelection(idx);
+            // Render directly instead of relying on SetSelection to re-fire selectionChanged
+            // when the index is unchanged (undocumented ListView behavior).
+            ShowEntry(bulk.Entries[idx]);
+        }
+
+        string CountText() => bulk.Entries.Count == 0 ? "No changes vs HEAD" : $"{bulk.Entries.Count} changed vs HEAD";
+
+        int IndexOfPath(string path)
+        {
+            if (path == null)
+                return -1;
+            for (var i = 0; i < bulk.Entries.Count; i++)
+                if (bulk.Entries[i].Path == path)
+                    return i;
+            return -1;
+        }
+
+        void OnSelectionChanged(IEnumerable<object> items)
+        {
+            foreach (var item in items)
             {
-                Note("No semantic changes");
+                if (item is not BulkEntry entry)
+                    return;
+                ShowEntry(entry);
                 return;
             }
-            content.Add(BuildTree(model));
+        }
+
+        void ShowEntry(BulkEntry entry)
+        {
+            selectedPath = entry.Path;
+            content.Clear();
+            entry.Diff.ResolveWith(AssetDatabase.GUIDToAssetPath);
+            if (entry.Diff.IsEmpty)
+                Note("No semantic changes");
+            else
+                content.Add(BuildTree(entry.Diff));
+        }
+
+        void ShowMissingCli()
+        {
+            bulk = new BulkModel();
+            list.itemsSource = bulk.Entries;
+            list.RefreshItems();
+            status.text = "";
+            content.Clear();
+            Note($"prefablens CLI not found (v{Cli.Version}).");
+            content.Add(
+                new Button(DownloadThenRefresh)
+                {
+                    text = "Download from GitHub Releases",
+                    style = { alignSelf = Align.FlexStart, marginLeft = 6 },
+                }
+            );
+            Note($"Or set a manual path via EditorPrefs key '{Cli.CliPathPref}'.");
         }
 
         void DownloadThenRefresh()
@@ -149,6 +222,63 @@ namespace PrefabLens
             );
         }
 
+        static Row EntryRow(BulkEntry entry) =>
+            Badge(BulkModel.AggregateStatus(entry.Diff))
+                .WithIcon(AssetDatabase.GetCachedIcon(entry.Path))
+                .Add(entry.Path);
+
+        static void RenderRow(VisualElement e, Row row)
+        {
+            e.Clear();
+            for (var i = 0; i < row.Spans.Count; i++)
+            {
+                var span = row.Spans[i];
+                var l = new Label(span.Text)
+                {
+                    style =
+                    {
+                        marginLeft = 0,
+                        marginRight = 0,
+                        paddingLeft = 0,
+                        paddingRight = 0,
+                    },
+                };
+                if (span.Tint is Color tint)
+                    l.style.color = tint;
+                e.Add(l);
+                // The icon sits between the badge (always the first span) and the name.
+                if (i == 0 && row.Icon != null)
+                    e.Add(
+                        new Image
+                        {
+                            image = row.Icon,
+                            style =
+                            {
+                                width = 16,
+                                height = 16,
+                                marginRight = 2,
+                                flexShrink = 0,
+                            },
+                        }
+                    );
+            }
+        }
+
+        /// Unity built-in icon lookup. Pro skin ships d_-prefixed variants, so probe those
+        /// first; FindTexture returns null silently for unknown names.
+        static Texture2D FindIcon(string name)
+        {
+            var dark = EditorGUIUtility.isProSkin ? EditorGUIUtility.FindTexture("d_" + name) : null;
+            return dark != null ? dark : EditorGUIUtility.FindTexture(name);
+        }
+
+        static Texture2D ComponentIcon(ComponentDiff c)
+        {
+            // Built-in components have "<TypeName> Icon" textures; script components use the script icon.
+            var builtin = c.ClassName == null && c.ScriptGuid == null ? FindIcon(c.TypeName + " Icon") : null;
+            return builtin != null ? builtin : FindIcon("cs Script Icon");
+        }
+
         // ---- Tree rendering (same color tone and notation as the Chrome renderer) ----
         // No rich text: don't let repository-derived strings be interpreted as markup (same rationale as the Chrome build's XSS test).
 
@@ -177,12 +307,19 @@ namespace PrefabLens
 
         sealed class Row
         {
+            public Texture Icon;
             public readonly List<Span> Spans = new();
 
             public Row Add(string text, Color? tint = null)
             {
                 if (!string.IsNullOrEmpty(text))
                     Spans.Add(new Span(text, tint));
+                return this;
+            }
+
+            public Row WithIcon(Texture icon)
+            {
+                Icon = icon;
                 return this;
             }
         }
@@ -200,26 +337,7 @@ namespace PrefabLens
             tree.SetRootItems(items);
             tree.makeItem = () =>
                 new VisualElement { style = { flexDirection = FlexDirection.Row, alignItems = Align.Center } };
-            tree.bindItem = (e, i) =>
-            {
-                e.Clear();
-                foreach (var span in tree.GetItemDataForIndex<Row>(i).Spans)
-                {
-                    var l = new Label(span.Text)
-                    {
-                        style =
-                        {
-                            marginLeft = 0,
-                            marginRight = 0,
-                            paddingLeft = 0,
-                            paddingRight = 0,
-                        },
-                    };
-                    if (span.Tint is Color tint)
-                        l.style.color = tint;
-                    e.Add(l);
-                }
-            };
+            tree.bindItem = (e, i) => RenderRow(e, tree.GetItemDataForIndex<Row>(i));
             tree.ExpandAll();
             return tree;
         }
@@ -231,12 +349,20 @@ namespace PrefabLens
             if (pi != null)
                 foreach (var ov in pi.Overrides)
                     children.Add(new TreeViewItemData<Row>(id++, OverrideRow(ov, m)));
-            foreach (var c in n.Components)
-                children.Add(ComponentItem(c, m, ref id));
+            if (n.Components.Count > 0)
+            {
+                // Components fold as their own group one level below the object row (extension parity).
+                var comps = new List<TreeViewItemData<Row>>();
+                foreach (var c in n.Components)
+                    comps.Add(ComponentItem(c, m, ref id));
+                children.Add(
+                    new TreeViewItemData<Row>(id++, Badge(DiffStatus.Unchanged).Add("Components", Palette.Muted), comps)
+                );
+            }
             foreach (var ch in n.Children)
                 children.Add(NodeItem(ch, m, ref id));
 
-            var row = Badge(n.Status).Add(n.Name);
+            var row = Badge(n.Status).WithIcon(FindIcon(pi != null ? "Prefab Icon" : "GameObject Icon")).Add(n.Name);
             if (pi?.SourceGuid != null)
                 row.Add(
                     " ‹Prefab: " + (m.Resolved.TryGetValue(pi.SourceGuid, out var src) ? src : pi.SourceGuid) + "›",
@@ -251,7 +377,7 @@ namespace PrefabLens
             foreach (var f in c.Fields)
                 children.Add(new TreeViewItemData<Row>(id++, FieldRow(f.Path, f.Status, f.Before, f.After, m)));
 
-            var row = Badge(c.Status);
+            var row = Badge(c.Status).WithIcon(ComponentIcon(c));
             if (!string.IsNullOrEmpty(c.ClassName))
                 row.Add(c.ClassName).Add(" ‹Script›", Palette.Muted);
             else if (c.ScriptGuid != null && m.Resolved.TryGetValue(c.ScriptGuid, out var p))

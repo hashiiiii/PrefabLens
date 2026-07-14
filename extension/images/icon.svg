@@ -1,0 +1,9 @@
+<!-- Source of the committed PNGs. Regenerate with:
+     for s in 16 32 48 128; do rsvg-convert -w $s -h $s icon.svg -o icon$s.png; done -->
+<!-- "diff cube": isometric cube split into 3 faces, one face accented (= the changed face).
+     Dark faces so the single toolbar PNG survives both light and dark Chrome themes. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <polygon points="50,9.08 82.77,28 50,46.92 17.23,28" fill="#15181e"/>
+  <polygon points="14.57,32.62 47.33,51.54 47.33,89.38 14.57,70.46" fill="#15181e"/>
+  <polygon points="52.67,51.54 85.43,32.62 85.43,70.46 52.67,89.38" fill="#14c6cb"/>
+</svg>

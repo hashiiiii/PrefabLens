@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>PrefabLens — semantic diffs for Unity YAML</title>
+    <link rel="icon" href="favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="site.css" />
+  </head>
+  <body>
+    <header class="site-header">
+      <span class="wordmark">PrefabLens</span>
+      <nav>
+        <a href="extension.html">Extension demo</a>
+        <a href="cli.html">CLI demo</a>
+        <a href="https://github.com/hashiiiii/PrefabLens">GitHub</a>
+      </nav>
+    </header>
+    <main>
+      <section class="hero">
+        <span class="eyebrow">Semantic diffs for UnityYAML</span>
+        <h1>Review prefabs, not YAML noise.</h1>
+        <p>
+          PrefabLens shows Unity asset changes as a GameObject / component / field tree —
+          on GitHub pull requests and in your terminal. Not just prefabs: it reads every
+          UnityYAML asset — scenes (<code>.unity</code>), ScriptableObjects
+          (<code>.asset</code>), materials, animators, and more.
+        </p>
+        <div class="hero-actions">
+          <a class="button ext" href="extension.html">Try the extension demo</a>
+          <a class="button cli" href="cli.html">Try the CLI demo</a>
+        </div>
+      </section>
+
+      <!-- Same Robot.prefab change, both views produced by the real tooling at
+           build time: git for the raw diff, the prefablens binary for the
+           semantic report. -->
+      <section class="compare">
+        <div class="compare-pane">
+          <p class="pane-label">What GitHub shows you</p>
+          <div class="window">
+            <div class="window-bar">
+              <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+              <span class="address">git diff — Robot.prefab</span>
+            </div>
+            <div class="gh-page raw-pane">
+<!--{{HERODIFF}}-->
+            </div>
+          </div>
+        </div>
+        <div class="compare-pane">
+          <p class="pane-label">What PrefabLens shows you</p>
+          <div class="window">
+            <div class="window-bar">
+              <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+              <span class="address">prefablens — Robot.prefab</span>
+            </div>
+            <iframe class="hero-frame" src="hero-report.html" title="PrefabLens semantic diff"></iframe>
+          </div>
+        </div>
+      </section>
+
+      <section class="demo-cards">
+        <a class="demo-card" href="extension.html">
+          <span class="eyebrow ext">Chrome extension</span>
+          <h2>On GitHub pull requests</h2>
+          <p>
+            A simulated Files changed page running the real renderer and WASM diff engine.
+            Toggle each Unity file between the raw diff and the semantic view.
+          </p>
+        </a>
+        <a class="demo-card" href="cli.html">
+          <span class="eyebrow cli">CLI</span>
+          <h2>In your terminal</h2>
+          <p>
+            The colored tree the <code>prefablens</code> command prints locally, and the
+            self-contained HTML report that <code>--open</code> pops into your browser.
+          </p>
+        </a>
+      </section>
+
+      <section class="install">
+        <span class="eyebrow">Install</span>
+        <h2>Get PrefabLens</h2>
+        <dl>
+          <dt>Chrome extension</dt>
+          <dd>
+            <a href="https://chromewebstore.google.com/search/PrefabLens">Chrome Web Store</a> —
+            adds the Raw / Semantic toggle to Unity files on GitHub pull requests.
+          </dd>
+          <dt>CLI — Homebrew</dt>
+          <dd><pre><code>brew install hashiiiii/tap/prefablens</code></pre></dd>
+          <dt>CLI — Scoop</dt>
+          <dd><pre><code>scoop bucket add hashiiiii https://github.com/hashiiiii/scoop-bucket
+scoop install prefablens</code></pre></dd>
+          <dt>CLI — mise</dt>
+          <dd><pre><code>mise use -g github:hashiiiii/PrefabLens</code></pre></dd>
+          <dt>Everything else</dt>
+          <dd>
+            Prebuilt binaries and the Unity Editor package are on the
+            <a href="https://github.com/hashiiiii/PrefabLens/releases">releases page</a>.
+          </dd>
+        </dl>
+      </section>
+    </main>
+    <footer class="site-footer">
+      Apache 2.0 licensed. Source and issues on
+      <a href="https://github.com/hashiiiii/PrefabLens">github.com/hashiiiii/PrefabLens</a>.
+    </footer>
+  </body>
+</html>

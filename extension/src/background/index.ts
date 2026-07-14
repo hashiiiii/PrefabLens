@@ -7,7 +7,7 @@ import { createQueue } from "./queue";
 
 let differ: Promise<Differ> | undefined;
 
-// Six concurrent across all REST/GraphQL (spec B2). GraphQL also goes through fetchFn, so it shares the same budget.
+// Six concurrent across all REST/GraphQL. GraphQL also goes through fetchFn, so it shares the same budget.
 // User-action-originated requests jump the queue via front
 const queue = createQueue(6);
 const queuedFetch =
@@ -17,8 +17,8 @@ const queuedFetch =
 
 const handler = createHandler({
   async getSettings() {
-    const stored = await chrome.storage.local.get(["pat", "baseUrl"]);
-    return { pat: stored.pat as string | undefined, baseUrl: stored.baseUrl as string | undefined };
+    const stored = await chrome.storage.local.get(["pat"]);
+    return { pat: stored.pat as string | undefined };
   },
   makeClient: (base, token, lane) => new GithubClient(base, token, queuedFetch(lane === "user")),
   getDiffer() {
@@ -68,8 +68,10 @@ const handler = createHandler({
 chrome.runtime.onMessage.addListener((msg: BackgroundRequest, sender, sendResponse) => {
   if (msg?.type === "semanticDiff") {
     const tabId = sender.tab?.id;
-    const push =
-      tabId === undefined ? undefined : (m: GuidResolvedPush) => void chrome.tabs.sendMessage(tabId, m).catch(() => {});
+    // semanticDiff requests always originate in a tab content script; guard defensively so a non-tab sender no-ops.
+    const push = (m: GuidResolvedPush) => {
+      if (tabId !== undefined) void chrome.tabs.sendMessage(tabId, m).catch(() => {});
+    };
     void handler.semanticDiff(msg, push).then(sendResponse);
     return true; // async response
   }

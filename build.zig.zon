@@ -1,6 +1,6 @@
 .{
     .name = .prefablens,
-    .version = "0.3.0",
+    .version = "0.6.1",
     .fingerprint = 0x963f0eb06ee0745d,
     .minimum_zig_version = "0.16.0",
     .dependencies = .{},

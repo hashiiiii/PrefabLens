@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { ApiError, AuthError, apiBase, GithubClient, graphqlUrl, RateLimitError } from "./client";
+import { ApiError, AuthError, GithubClient, graphqlUrl, RateLimitError } from "./client";
 
 // fetch fake that returns a fixed path→response table. It also records calls.
 // Matching is url.includes(key), so keys must be unique substrings
@@ -19,23 +19,6 @@ function fakeFetch(routes: Record<string, () => Response>) {
 
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
-
-describe("apiBase", () => {
-  it("defaults to api.github.com", () => {
-    expect(apiBase(undefined)).toBe("https://api.github.com");
-    expect(apiBase("https://github.com")).toBe("https://api.github.com");
-  });
-  it("maps GHES origins to <origin>/api/v3", () => {
-    expect(apiBase("https://ghe.example.com")).toBe("https://ghe.example.com/api/v3");
-  });
-  it("tolerates scheme-less and trailing-slash input from the options form", () => {
-    // Regression test for a real bug where entering "github.com" made new URL throw and turned into fetch-failed
-    expect(apiBase("github.com")).toBe("https://api.github.com");
-    expect(apiBase("github.com/")).toBe("https://api.github.com");
-    expect(apiBase("https://github.com/")).toBe("https://api.github.com");
-    expect(apiBase("ghe.example.com")).toBe("https://ghe.example.com/api/v3");
-  });
-});
 
 describe("GithubClient", () => {
   it("default fetchFn survives strict-this runtimes (Chrome Illegal invocation)", async () => {
@@ -70,7 +53,9 @@ describe("GithubClient", () => {
 
   it("listPrFiles paginates past 100 entries", async () => {
     const page1 = Array.from({ length: 100 }, (_, i) => ({ filename: `f${i}.cs`, status: "modified" }));
-    const page2 = [{ filename: "Assets/Foo.prefab", status: "renamed", previous_filename: "Assets/Old.prefab" }];
+    const page2 = [
+      { filename: "Assets/Foo.prefab", status: "renamed", previous_filename: "Assets/Old.prefab", sha: "blob-head" },
+    ];
     const { fn } = fakeFetch({
       "&page=1": () => json(page1),
       "&page=2": () => json(page2),
@@ -78,7 +63,28 @@ describe("GithubClient", () => {
     const client = new GithubClient("https://api.github.com", "tok", fn);
     const files = await client.listPrFiles("o", "r", 1);
     expect(files).toHaveLength(101);
-    expect(files[100]).toEqual({ path: "Assets/Foo.prefab", status: "renamed", previousPath: "Assets/Old.prefab" });
+    // sha is the head-side blob (base-side for removed files) — fetchPair fetches by it instead of path+ref
+    expect(files[100]).toEqual({
+      path: "Assets/Foo.prefab",
+      status: "renamed",
+      previousPath: "Assets/Old.prefab",
+      sha: "blob-head",
+    });
+  });
+
+  it("getBlobRaw requests raw bytes by blob sha", async () => {
+    const { fn, calls } = fakeFetch({ "/git/blobs/": () => new Response(new Uint8Array([1, 2, 3])) });
+    const client = new GithubClient("https://api.github.com", "tok", fn);
+    const bytes = await client.getBlobRaw("o", "r", "blob1");
+    expect([...bytes!]).toEqual([1, 2, 3]);
+    expect(calls[0]?.url).toBe("https://api.github.com/repos/o/r/git/blobs/blob1");
+    expect(calls[0]?.headers.accept).toBe("application/vnd.github.raw+json");
+  });
+
+  it("getBlobRaw returns null on 404 (sha gone after a force push)", async () => {
+    const { fn } = fakeFetch({});
+    const client = new GithubClient("https://api.github.com", "tok", fn);
+    expect(await client.getBlobRaw("o", "r", "gone")).toBeNull();
   });
 
   it("getFileAtRef requests raw content with URL-encoded path segments", async () => {
@@ -179,9 +185,8 @@ describe("GithubClient", () => {
 });
 
 describe("graphqlUrl", () => {
-  it("maps github.com and GHES api bases to their graphql endpoints", () => {
+  it("appends /graphql to the REST base", () => {
     expect(graphqlUrl("https://api.github.com")).toBe("https://api.github.com/graphql");
-    expect(graphqlUrl("https://ghes.example.com/api/v3")).toBe("https://ghes.example.com/api/graphql");
   });
 });
 
@@ -215,6 +220,32 @@ describe("listMetaTree", () => {
   });
 });
 
+describe("listBlobShas", () => {
+  it("maps every blob path to its sha with the truncated flag", async () => {
+    const fetchFn = vi.fn(
+      async (..._args: Parameters<typeof fetch>) =>
+        new Response(
+          JSON.stringify({
+            truncated: false,
+            tree: [
+              { path: "Assets/Foo.prefab", type: "blob", sha: "sha1" },
+              { path: "Assets/S.cs.meta", type: "blob", sha: "sha2" },
+              { path: "Assets", type: "tree", sha: "sha3" }, // tree nodes are excluded
+            ],
+          }),
+          { status: 200 },
+        ),
+    );
+    const client = new GithubClient("https://api.github.com", "tok", fetchFn);
+    const res = await client.listBlobShas("o", "r", "merge-base");
+    expect(fetchFn.mock.calls[0]?.[0]).toBe("https://api.github.com/repos/o/r/git/trees/merge-base?recursive=1");
+    expect(res.truncated).toBe(false);
+    expect(res.byPath.get("Assets/Foo.prefab")).toBe("sha1");
+    expect(res.byPath.get("Assets/S.cs.meta")).toBe("sha2");
+    expect(res.byPath.has("Assets")).toBe(false);
+  });
+});
+
 describe("batchBlobTexts", () => {
   it("posts an aliased graphql query and maps oids to texts", async () => {
     const fetchFn = vi.fn(
@@ -223,9 +254,9 @@ describe("batchBlobTexts", () => {
           status: 200,
         }),
     );
-    const client = new GithubClient("https://ghes.example.com/api/v3", "tok", fetchFn);
+    const client = new GithubClient("https://api.github.com", "tok", fetchFn);
     const res = await client.batchBlobTexts("o", "r", ["sha1", "sha2"]);
-    expect(fetchFn.mock.calls[0]?.[0]).toBe("https://ghes.example.com/api/graphql"); // GHES uses /api/graphql
+    expect(fetchFn.mock.calls[0]?.[0]).toBe("https://api.github.com/graphql");
     const init = fetchFn.mock.calls[0]?.[1] as RequestInit;
     expect(init.method).toBe("POST");
     const body = JSON.parse(init.body as string) as { query: string };

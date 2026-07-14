@@ -1,7 +1,15 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { DiffV2 } from "../types";
-import { detectTheme, render, renderError, renderTooLarge } from "./render";
+import {
+  detectTheme,
+  render,
+  renderError,
+  renderLoading,
+  renderSignIn,
+  renderSignInPending,
+  renderTooLarge,
+} from "./render";
 
 const DIFF: DiffV2 = {
   schema: "prefablens.diff.v2",
@@ -98,8 +106,9 @@ describe("render", () => {
     expect(text).toContain("volume");
     expect(text).toContain("0.5");
     expect(text).toContain("0.8");
-    expect(text).toContain("Sound"); // resolved guid → file stem, not the full path
-    expect(text).toContain("‹Script›");
+    expect(text).toContain("Sound"); // resolved guid → file stem as the display name
+    // The meta carries the full source path (mirrors the ‹Prefab: …› form on instances).
+    expect(text).toContain("‹Script: Assets/Scripts/Sound.cs›");
   });
 
   it("shows only the current value for added fields, without a before placeholder", () => {
@@ -116,6 +125,40 @@ describe("render", () => {
     const text = root.querySelector(".pl-root")!.textContent!;
     expect(text).toContain("#100"); // local ref
     expect(text).toContain("ghi"); // unresolved guid stays visible
+  });
+
+  it("shows unity built-in refs by object name", () => {
+    const builtin: DiffV2 = {
+      schema: "prefablens.diff.v2",
+      unresolvedGuids: [],
+      roots: [],
+      loose: [
+        {
+          kind: "component",
+          fileId: "5",
+          classId: 33,
+          typeName: "MeshFilter",
+          scriptGuid: null,
+          className: null,
+          status: "modified",
+          fields: [
+            {
+              path: "m_Mesh",
+              status: "modified",
+              // Both refs point into "unity default resources": 10202 is the
+              // built-in Cube; 424242 is unknown (e.g. a future Unity object).
+              before: { ref: { fileId: "10202", guid: "0000000000000000e000000000000000", type: 0 } },
+              after: { ref: { fileId: "424242", guid: "0000000000000000e000000000000000", type: 0 } },
+            },
+          ],
+        },
+      ],
+    };
+    const root = freshRoot();
+    render(root, builtin);
+    const text = root.querySelector(".pl-root")!.textContent!;
+    expect(text).toContain("Cube (built-in)"); // known fileID → table name
+    expect(text).toContain("guid:0000000000000000e000000000000000"); // unknown fileID keeps the raw guid
   });
 
   it("renders repo-controlled strings as text, never as markup", () => {
@@ -273,7 +316,7 @@ describe("render", () => {
       loose: [],
     };
     render(root, diff);
-    const cards = [...root.querySelectorAll(".pl-components > details")] as HTMLDetailsElement[];
+    const cards = [...root.querySelectorAll(".pl-components .pl-kids > details")] as HTMLDetailsElement[];
     expect(cards).toHaveLength(2);
     // Closing added would look asymmetric ("only Cylinder1 collapsed"), so always open regardless of status
     expect(cards[0]?.open).toBe(true); // added Cylinder1 is open too
@@ -368,9 +411,116 @@ describe("render", () => {
       ],
     };
     render(root, diff);
-    const summary = root.querySelector("details > summary");
+    const summary = root.querySelector("details.pl-comp > summary");
     expect(summary?.textContent).toContain("Cylinder1");
     expect(summary?.textContent).not.toContain("MonoBehaviour");
+    // No resolved path yet → the meta stays the bare ‹Script› tag.
+    expect(summary?.textContent).toContain("‹Script›");
+  });
+
+  it("renders the components group as an open collapsible with chevron and count", () => {
+    const root = freshRoot();
+    render(root, DIFF);
+    // The group folds independently of the GameObject row, so the hierarchy can be
+    // scanned with all component noise collapsed.
+    const group = root.querySelector<HTMLDetailsElement>("details.pl-components");
+    expect(group).not.toBeNull();
+    expect(group?.open).toBe(true); // open by default: a diff view must show its changes
+    const head = group?.querySelector("summary.pl-components-label");
+    expect(head).not.toBeNull();
+    expect(head?.querySelector(".pl-chevron svg")).not.toBeNull();
+    // The count keeps the collapsed state informative ("1 changed component hidden").
+    expect(head?.textContent).toContain("components (1)");
+  });
+
+  it("indents component cards one level deeper than child GameObjects", () => {
+    const root = freshRoot();
+    render(root, DIFF);
+    const kids = root.querySelector("details.pl-go > .pl-kids")!;
+    // Gear cards live inside the group's own kids box (extra indent + guide line)...
+    expect(kids.querySelector("details.pl-components > .pl-kids > details.pl-comp")).not.toBeNull();
+    // ...while the child GameObject stays directly on the hierarchy spine.
+    const childGo = kids.querySelector("details.pl-go");
+    expect(childGo?.parentElement).toBe(kids);
+    expect(kids.querySelector("details.pl-components details.pl-go")).toBeNull();
+  });
+
+  it("wraps root-level loose components in a components group", () => {
+    const root = freshRoot();
+    const diff: DiffV2 = {
+      schema: "prefablens.diff.v2",
+      unresolvedGuids: [],
+      roots: [],
+      loose: [
+        {
+          kind: "component",
+          fileId: "5",
+          classId: 114,
+          typeName: "MonoBehaviour",
+          scriptGuid: null,
+          className: "Cylinder1",
+          status: "modified",
+          fields: [{ path: "Hp", status: "modified", before: "1", after: "2" }],
+        },
+      ],
+    };
+    render(root, diff);
+    // Consistent visual language: gear rows always appear inside a components group.
+    expect(root.querySelector(".pl-root > details.pl-components details.pl-comp")).not.toBeNull();
+  });
+
+  it("renders unity-style rows: chevron, icon and status badge", () => {
+    const root = freshRoot();
+    render(root, DIFF);
+    const summary = root.querySelector("details.pl-go > summary")!;
+    expect(summary.classList.contains("pl-row")).toBe(true);
+    expect(summary.querySelector(".pl-chevron svg")).not.toBeNull();
+    expect(summary.querySelector(".pl-icon svg")).not.toBeNull();
+    expect(summary.querySelector(".pl-badge")?.textContent).toBe("~");
+  });
+
+  it("skips the status badge on unchanged rows and tints the prefab icon", () => {
+    const root = freshRoot();
+    render(root, INSTANCE);
+    // Plane is unchanged: no badge chip at all, not a blank one
+    const plane = root.querySelector("details.pl-go > summary")!;
+    expect(plane.querySelector(".pl-badge")).toBeNull();
+    const icon = root.querySelector("details.pl-pi > summary .pl-icon")!;
+    expect(icon.classList.contains("pl-icon-prefab")).toBe(true);
+  });
+
+  it("marks rows without children as leaves (chevron slot hidden via CSS)", () => {
+    const root = freshRoot();
+    render(root, DIFF);
+    const summaries = [...root.querySelectorAll("details.pl-go > summary")];
+    const weapon = summaries.find((s) => s.textContent?.includes("Weapon"))!;
+    expect(weapon.classList.contains("pl-leaf")).toBe(true);
+    const player = summaries.find((s) => s.textContent?.includes("Player"))!;
+    expect(player.classList.contains("pl-leaf")).toBe(false);
+  });
+
+  it("renderLoading shows an accessible skeleton tree instead of text", () => {
+    const root = freshRoot();
+    renderLoading(root);
+    const box = root.querySelector(".pl-skeleton")!;
+    expect(box.getAttribute("role")).toBe("status");
+    expect(box.getAttribute("aria-busy")).toBe("true");
+    expect(box.getAttribute("aria-label")).toContain("Computing semantic diff");
+    expect(box.querySelectorAll(".pl-skel-row")).toHaveLength(5);
+    // The label lives in aria, not in visible text
+    expect(box.textContent).toBe("");
+  });
+
+  it("shows a spinner with the resolving indicator", () => {
+    const root = freshRoot();
+    render(root, { schema: "prefablens.diff.v2", unresolvedGuids: ["g1"], roots: [], loose: [] }, { resolving: 1 });
+    expect(root.querySelector(".pl-resolving .pl-spinner")).not.toBeNull();
+  });
+
+  it("shows an alert icon on errors", () => {
+    const root = freshRoot();
+    renderError(root, "Could not fetch file contents from GitHub.");
+    expect(root.querySelector(".pl-error .pl-note-icon svg")).not.toBeNull();
   });
 });
 
@@ -395,5 +545,37 @@ describe("detectTheme", () => {
     } finally {
       delete (win as { matchMedia?: unknown }).matchMedia;
     }
+  });
+});
+
+describe("renderSignIn", () => {
+  it("renders the message and a sign-in button that invokes the callback", () => {
+    const root = freshRoot();
+    let clicks = 0;
+    renderSignIn(root, "Sign in with GitHub to view semantic diffs.", () => clicks++);
+    expect(root.querySelector(".pl-error")?.textContent).toContain("Sign in with GitHub to view semantic diffs.");
+    const button = root.querySelector<HTMLButtonElement>("button.pl-render");
+    expect(button?.textContent).toBe("Sign in with GitHub");
+    button?.click();
+    expect(clicks).toBe(1);
+  });
+});
+
+describe("renderSignInPending", () => {
+  it("shows the user code, a copy button, and a link to the verification page", () => {
+    const root = freshRoot();
+    let copies = 0;
+    renderSignInPending(root, "ABCD-1234", "https://github.com/login/device", () => copies++);
+    expect(root.querySelector(".pl-user-code")?.textContent).toBe("ABCD-1234");
+    const copy = root.querySelector<HTMLButtonElement>("button.pl-render");
+    expect(copy?.textContent).toBe("Copy code");
+    copy?.click();
+    expect(copies).toBe(1);
+    const link = root.querySelector<HTMLAnchorElement>("a.pl-render");
+    expect(link?.href).toBe("https://github.com/login/device");
+    // New tab without opener: the PR tab must keep polling while the user authorizes.
+    expect(link?.target).toBe("_blank");
+    expect(link?.rel).toBe("noopener noreferrer");
+    expect(root.querySelector(".pl-signin-wait .pl-spinner")).not.toBeNull();
   });
 });

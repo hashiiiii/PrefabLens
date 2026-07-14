@@ -1,4 +1,4 @@
-import { AuthError, apiBase, type GithubClient, type PrFile, type PrRefs, RateLimitError } from "../github/client";
+import { API_BASE, AuthError, type GithubClient, type PrFile, type PrRefs, RateLimitError } from "../github/client";
 import { applyResolved, buildGuidIndex, type GuidCache } from "../github/guids";
 import { type RepoIndexStore, syncRepoIndex } from "../github/repoIndex";
 import type { DiffV2, GuidResolvedPush, PrefetchRequest, SemanticDiffRequest, SemanticDiffResponse } from "../types";
@@ -7,11 +7,18 @@ import { DiffError, type Differ } from "../wasm/differ";
 
 type ClientLike = Pick<
   GithubClient,
-  "getPrRefs" | "listPrFiles" | "getFileAtRef" | "searchMetaByGuid" | "listMetaTree" | "batchBlobTexts"
+  | "getPrRefs"
+  | "listPrFiles"
+  | "getFileAtRef"
+  | "getBlobRaw"
+  | "listBlobShas"
+  | "searchMetaByGuid"
+  | "listMetaTree"
+  | "batchBlobTexts"
 >;
 
 export type Deps = {
-  getSettings(): Promise<{ pat?: string; baseUrl?: string }>;
+  getSettings(): Promise<{ pat?: string }>;
   makeClient(base: string, token: string, lane: "user" | "prefetch"): ClientLike;
   getDiffer(): Promise<Differ>;
   guidCache: GuidCache;
@@ -20,19 +27,25 @@ export type Deps = {
 };
 
 export type Handler = {
-  semanticDiff(req: SemanticDiffRequest, push?: (msg: GuidResolvedPush) => void): Promise<SemanticDiffResponse>;
+  semanticDiff(req: SemanticDiffRequest, push: (msg: GuidResolvedPush) => void): Promise<SemanticDiffResponse>;
   prefetch(req: PrefetchRequest): Promise<void>;
 };
 
-type PrContext = { refs: PrRefs; files: PrFile[]; guidIndex: Map<string, string> };
+// baseShas: path → blob sha at the merge base. null = tree unavailable (truncated/failed) → contents-api fallback
+type PrContext = {
+  refs: PrRefs;
+  files: PrFile[];
+  guidIndex: Map<string, string>;
+  baseShas: Map<string, string> | null;
+};
 
 const EMPTY = new Uint8Array(0);
 const MAX_SEARCHES = 10; // Code Search is authenticated 10 req/min — don't burn it all in one response
 const MAX_SOURCE_ROUNDS = 3; // re-diff cap for nested sources (independent of core's depth cap of 8)
 const CONTEXT_TTL_MS = 60_000; // PR context is short-lived because a push changes headSha
 const BLOB_CACHE_MAX = 32;
-const TOO_LARGE_BYTES = 25 * 1024 * 1024; // parent spec §5.7: over 25MB renders on click
-const PREFETCH_MAX = 100; // spec B2: prefetch cap per PR
+const TOO_LARGE_BYTES = 25 * 1024 * 1024; // over 25MB renders on click
+const PREFETCH_MAX = 100; // prefetch cap per PR (bounds API usage)
 const PREFETCH_CONCURRENCY = 4;
 
 type DiffOutcome = { ok: true; json: DiffV2 } | { ok: false; error: "too-large"; bytes: number };
@@ -48,7 +61,7 @@ export function createHandler(deps: Deps): Handler {
   const searches = new Map<string, Promise<string | null>>();
   // baseSha:headSha:path → raw diff computation Promise. Keeps only successes (too-large/failure allow recomputation)
   const diffs = new Map<string, Promise<DiffOutcome>>();
-  // repoKey@ref → whole-repo index Promise (Task 11). null means not indexable (truncated/over the cap/failure)
+  // repoKey@ref → whole-repo index Promise. null means not indexable (truncated/over the cap/failure)
   const indexes = new Map<string, Promise<Record<string, string> | null>>();
   // A repo that hit a rate limit falls back for the SW lifetime (gives up on the index and defers to Code Search only)
   const indexFallback = new Set<string>();
@@ -132,17 +145,22 @@ export function createHandler(deps: Deps): Handler {
     return p;
   }
 
+  /** blobSha rides along when known (files API / merge-base tree): blob-by-sha latency is flat where
+   *  contents-by-path stalls for seconds (#110). A 404 on the sha (force push) falls back to path+ref. */
   async function fetchBlob(
     client: ClientLike,
     owner: string,
     repo: string,
     path: string,
     sha: string,
+    blobSha?: string,
   ): Promise<Uint8Array | null> {
-    const key = `${sha}:${path}`;
+    const key = blobSha ?? `${sha}:${path}`; // a blob sha never collides with the `${sha}:${path}` form
     const hit = blobs.get(key); // the stored value is Promise<Uint8Array | null>, so undefined = not cached
     if (hit !== undefined) return hit;
-    const p = client.getFileAtRef(owner, repo, path, sha);
+    const p = blobSha
+      ? client.getBlobRaw(owner, repo, blobSha).then((bytes) => bytes ?? client.getFileAtRef(owner, repo, path, sha))
+      : client.getFileAtRef(owner, repo, path, sha);
     p.catch(() => blobs.delete(key)); // don't keep failures: the next call can re-fetch
     blobs.set(key, p);
     if (blobs.size > BLOB_CACHE_MAX) blobs.delete(blobs.keys().next().value!);
@@ -160,11 +178,14 @@ export function createHandler(deps: Deps): Handler {
     const file = ctx.files.find((f) => f.path === path);
     const status = file?.status ?? "modified";
     const beforePath = file?.previousPath ?? path;
-    const fetchSide = (p: string, sha: string): Promise<Uint8Array> =>
-      fetchBlob(client, owner, repo, p, sha).then((bytes) => bytes ?? EMPTY);
+    // files API sha is the head blob, except for removed files where it is the base blob
+    const beforeBlob = status === "removed" ? file?.sha : ctx.baseShas?.get(beforePath);
+    const afterBlob = status === "removed" ? undefined : file?.sha;
+    const fetchSide = (p: string, sha: string, blobSha?: string): Promise<Uint8Array> =>
+      fetchBlob(client, owner, repo, p, sha, blobSha).then((bytes) => bytes ?? EMPTY);
     return Promise.all([
-      status === "added" ? Promise.resolve(EMPTY) : fetchSide(beforePath, ctx.refs.baseSha),
-      status === "removed" ? Promise.resolve(EMPTY) : fetchSide(path, ctx.refs.headSha),
+      status === "added" ? Promise.resolve(EMPTY) : fetchSide(beforePath, ctx.refs.baseSha, beforeBlob),
+      status === "removed" ? Promise.resolve(EMPTY) : fetchSide(path, ctx.refs.headSha, afterBlob),
     ]);
   }
 
@@ -193,11 +214,13 @@ export function createHandler(deps: Deps): Handler {
         const path = current.resolved?.[s.guid];
         if (path === undefined) continue;
         const sha = s.side === "before" ? ctx.refs.baseSha : ctx.refs.headSha;
+        // sources aren't PR files, so only the base tree can supply a sha; the head side keeps the path fallback
+        const blobSha = s.side === "before" ? ctx.baseShas?.get(path) : undefined;
         let bytes: Uint8Array | null = null;
         try {
-          bytes = await fetchBlob(client, owner, repo, path, sha);
+          bytes = await fetchBlob(client, owner, repo, path, sha, blobSha);
         } catch {
-          return current; // rate limit etc.: degrade to the phase 1 result
+          return current; // rate limit etc.: degrade to the first-pass diff
         }
         if (!bytes) continue;
         assets.set(s.guid, bytes);
@@ -225,11 +248,30 @@ export function createHandler(deps: Deps): Handler {
         client.getPrRefs(owner, repo, prNumber),
         client.listPrFiles(owner, repo, prNumber),
       ]);
-      const guidIndex = await buildGuidIndex(files, async (path, side) => {
-        const bytes = await fetchBlob(client, owner, repo, path, side === "base" ? refs.baseSha : refs.headSha);
-        return bytes ? new TextDecoder().decode(bytes) : null;
-      });
-      return { refs, files, guidIndex };
+      const bySha = new Map(files.map((f) => [f.path, f.sha]));
+      const [guidIndex, baseShas] = await Promise.all([
+        buildGuidIndex(files, async (path, side) => {
+          // the files API sha matches the side buildGuidIndex reads: head, or base exactly for removed metas
+          const bytes = await fetchBlob(
+            client,
+            owner,
+            repo,
+            path,
+            side === "base" ? refs.baseSha : refs.headSha,
+            bySha.get(path),
+          );
+          return bytes ? new TextDecoder().decode(bytes) : null;
+        }),
+        // like buildGuidIndex, only rate limits propagate; anything else degrades to the contents-api fallback
+        client.listBlobShas(owner, repo, refs.baseSha).then(
+          (tree) => (tree.truncated ? null : tree.byPath),
+          (err: unknown) => {
+            if (err instanceof RateLimitError) throw err;
+            return null;
+          },
+        ),
+      ]);
+      return { refs, files, guidIndex, baseShas };
     })();
     contexts.set(key, { at: Date.now(), ctx });
     ctx.catch(() => contexts.delete(key)); // don't cache failures
@@ -285,7 +327,7 @@ export function createHandler(deps: Deps): Handler {
   }
 
   /** Runs the rest of the 3-stage resolution (index → Code Search) and source re-merge in the background, delivering results via push.
-   *  Unlike the push-less compatibility path, on failure it emits a done push in catch to release waiters. */
+   *  On failure it still emits a done push in catch to release waiters. */
   async function resolveRemaining(
     first: DiffV2,
     remaining: string[],
@@ -316,7 +358,7 @@ export function createHandler(deps: Deps): Handler {
           push({ type: "guidResolved", ...at, resolved: fromIndex, done: false });
         }
       }
-      // Only guids that aren't indexable or aren't in the index go to Code Search (stage 3 of spec B3)
+      // Only guids that aren't indexable or aren't in the index go to Code Search
       const fromSearch = leftover.length ? await searchGuids(leftover, client, req.owner, req.repo, repoKey) : {};
       let json: DiffV2 = { ...first, resolved: { ...first.resolved, ...fromIndex, ...fromSearch } };
       if (json.neededSources?.length) {
@@ -334,32 +376,19 @@ export function createHandler(deps: Deps): Handler {
 
   async function semanticDiff(
     req: SemanticDiffRequest,
-    push?: (msg: GuidResolvedPush) => void,
+    push: (msg: GuidResolvedPush) => void,
   ): Promise<SemanticDiffResponse> {
     try {
       const settings = await deps.getSettings();
       if (!settings.pat) return { ok: false, error: "pat-missing" };
-      const base = apiBase(settings.baseUrl);
+      const base = API_BASE;
       const client = deps.makeClient(base, settings.pat, "user");
       const ctx = await loadContext(client, req.owner, req.repo, req.prNumber);
       const outcome = await getDiff(client, ctx, req.owner, req.repo, req.path, req.force === true);
       if (!outcome.ok) return outcome;
-      const repoKey = `${base}/${req.owner}/${req.repo}`;
       const withPr = applyResolved(outcome.json, ctx.guidIndex);
 
-      if (!push) {
-        // Compatibility path: the traditional synchronous full pipeline (doesn't change the behavior of existing tests/callers)
-        const first = await searchUnresolved(withPr, client, req.owner, req.repo, repoKey);
-        if (!first.neededSources?.length) return { ok: true, json: first };
-        const differ = await deps.getDiffer();
-        const [before, after] = await fetchPair(client, ctx, req.owner, req.repo, req.path);
-        return {
-          ok: true,
-          json: await mergeSources(first, differ, before, after, ctx, client, req.owner, req.repo, repoKey),
-        };
-      }
-
-      // Two-stage path: return the diff immediately, continue resolution and source merging in the background, deliver via push (B4)
+      // Two-stage path: return the diff immediately, continue resolution and source merging in the background, deliver via push
       const remaining = withPr.unresolvedGuids.filter((g) => !Object.hasOwn(withPr.resolved ?? {}, g));
       if (!remaining.length && !withPr.neededSources?.length) return { ok: true, json: withPr };
       void resolveRemaining(withPr, remaining, client, req, base, ctx, push);
@@ -378,7 +407,7 @@ export function createHandler(deps: Deps): Handler {
     try {
       const settings = await deps.getSettings();
       if (!settings.pat) return;
-      const base = apiBase(settings.baseUrl);
+      const base = API_BASE;
       const client = deps.makeClient(base, settings.pat, "prefetch");
       const ctx = await loadContext(client, req.owner, req.repo, req.prNumber);
       // Run independently of raw-diff prefetch (index sync speeds up the 3-stage resolution at serve time)

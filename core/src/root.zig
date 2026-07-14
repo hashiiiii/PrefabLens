@@ -1,13 +1,14 @@
 const std = @import("std");
 pub const model = @import("model.zig");
-pub const classid = @import("classid.zig");
-pub const parser = @import("parser.zig");
-pub const diff = @import("diff.zig");
-pub const tree = @import("tree.zig");
 pub const json = @import("json.zig");
-pub const inspector = @import("inspector.zig");
-pub const perf = @import("perf.zig");
-pub const instantiate = @import("instantiate.zig");
+
+const classid = @import("classid.zig");
+const parser = @import("parser.zig");
+const diff = @import("diff.zig");
+const tree = @import("tree.zig");
+const inspector = @import("inspector.zig");
+const perf = @import("perf.zig");
+const instantiate = @import("instantiate.zig");
 
 pub const Assets = instantiate.Assets;
 const no_assets: Assets = .empty;
@@ -36,5 +37,14 @@ pub fn diffToJsonWithAssets(arena: std.mem.Allocator, before_src: []const u8, af
 
 test {
     std.testing.refAllDecls(@This());
+    // refAllDecls only references pub decls; reference the internal modules
+    // explicitly so their tests are still discovered.
+    _ = classid;
+    _ = parser;
+    _ = diff;
+    _ = tree;
+    _ = inspector;
+    _ = perf;
+    _ = instantiate;
     _ = @import("fixture_test.zig");
 }

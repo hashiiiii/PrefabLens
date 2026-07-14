@@ -1,5 +1,5 @@
 // Integration tests against real data from the verification PR (hashiiiii/unity-yaml-playground#1).
-// Expected values are the spec's approved mocks (docs/superpowers/specs/2026-07-03-semantic-diff-inspector-model-design.md).
+// Expected values are the approved reference mocks for the inspector diff model.
 const std = @import("std");
 const root = @import("root.zig");
 const model = @import("model.zig");

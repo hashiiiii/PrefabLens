@@ -2,7 +2,7 @@ const std = @import("std");
 const perf = @import("perf.zig");
 
 // The budget is loosened above the nominal value to allow for CI-runner noise. Nominal
-// values are from spec §5.7 (typically < 5ms, ~10MB scene < 150ms). Generate a scene of
+// values are the performance targets (typically < 5ms, ~10MB scene < 150ms). Generate a scene of
 // ~10MB and verify it diffs within the CI ceiling.
 const big_objects = 50_000; // at ~200 bytes per object, ~10 MB of YAML
 const ci_ceiling_ms = 600; // 4x the nominal 150ms. Fails only on a true regression

@@ -1,4 +1,4 @@
-// WASM C ABI wrapper (parent spec §5.6). One diff = one arena, no global mutable state.
+// WASM C ABI wrapper. One diff = one arena, no global mutable state.
 // Returns a JSON byte string prefixed with a u32 (LE) length. The caller frees it with free(ptr, 4 + len).
 const std = @import("std");
 const core = @import("root.zig");

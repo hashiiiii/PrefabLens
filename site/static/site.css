@@ -1,0 +1,391 @@
+/* Demo-site stylesheet.
+ *
+ * Site chrome follows a HashiCorp-style system: near-black canvas, charcoal
+ * surfaces, 1px translucent hairlines, tight 600/700 display type over relaxed
+ * body type, and one identity accent per demo (extension purple, CLI green).
+ *
+ * The simulated GitHub page lives inside a .gh-frame browser window; the
+ * .gh-page scope defines the Primer variables the PrefabLens renderer and
+ * toggle read on github.com (exact fallback palette from
+ * extension/src/renderer/styles.ts), switched by prefers-color-scheme. */
+
+:root {
+  color-scheme: dark;
+  --canvas: #000000;
+  --surface-1: #15181e;
+  --surface-2: #1f232b;
+  --ink: #ffffff;
+  --ink-muted: #b2b6bd;
+  --ink-subtle: #656a76;
+  --hairline: rgba(178, 182, 189, 0.18);
+  --hairline-soft: rgba(178, 182, 189, 0.1);
+  --link: #2b89ff;
+  --accent-ext: #a06be6;
+  --accent-ext-deep: #7b42bc;
+  --accent-cli: #00ca8e;
+  --font: system-ui, -apple-system, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font: 500 16px/1.5 var(--font);
+  color: var(--ink);
+  background: var(--canvas);
+}
+
+a { color: var(--link); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+code, pre { font-family: var(--mono); }
+
+.eyebrow {
+  display: block;
+  margin: 0 0 12px;
+  font: 600 12px/1.23 var(--font);
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+}
+.eyebrow.ext { color: var(--accent-ext); }
+.eyebrow.cli { color: var(--accent-cli); }
+
+/* --- Site chrome ------------------------------------------------------- */
+
+.site-header {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  height: 64px;
+  padding: 0 32px;
+  border-bottom: 1px solid var(--hairline-soft);
+}
+.site-header .wordmark { font-weight: 600; color: var(--ink); }
+.site-header nav { display: flex; gap: 24px; margin-left: auto; }
+.site-header nav a { font-size: 14px; color: var(--ink-muted); }
+.site-header nav a:hover { color: var(--ink); text-decoration: none; }
+
+main { max-width: 1024px; margin: 0 auto; padding: 24px 32px 96px; }
+
+.site-footer {
+  max-width: 1024px;
+  margin: 0 auto;
+  padding: 24px 32px 64px;
+  font-size: 13px;
+  color: var(--ink-subtle);
+  border-top: 1px solid var(--hairline-soft);
+}
+.site-footer a { color: var(--ink-muted); }
+
+/* Banner marking the demo pages as simulations, not real GitHub. */
+.demo-banner {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 24px 0;
+  padding: 12px 16px;
+  border: 1px solid var(--hairline);
+  border-radius: 8px;
+  background: var(--surface-1);
+  font-size: 14px;
+  line-height: 1.6;
+}
+.demo-banner strong { white-space: nowrap; color: var(--ink); }
+.demo-banner span { color: var(--ink-muted); }
+
+.hint { font-size: 14px; line-height: 1.7; color: var(--ink-muted); }
+
+/* --- Landing ----------------------------------------------------------- */
+
+.hero { padding: 72px 0 24px; }
+.hero h1 {
+  margin: 0 0 16px;
+  font-size: 56px;
+  font-weight: 700;
+  line-height: 1.18;
+  letter-spacing: -1.6px;
+}
+.hero p {
+  margin: 0;
+  max-width: 640px;
+  font-size: 18px;
+  line-height: 1.69;
+  color: var(--ink-muted);
+}
+
+.hero-actions { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 32px; }
+.button {
+  padding: 10px 20px;
+  border: 1px solid var(--hairline);
+  border-radius: 8px;
+  background: var(--surface-1);
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.button:hover { background: var(--surface-2); text-decoration: none; }
+.button.ext { border-color: var(--accent-ext); }
+.button.cli { border-color: var(--accent-cli); }
+
+/* Landing hero visual: the same prefab change as a raw diff and as the
+ * semantic view, side by side. */
+.compare {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(380px, 100%), 1fr));
+  gap: 24px;
+  margin: 56px 0 0;
+}
+.compare .window { margin: 0; }
+.pane-label {
+  margin: 0 0 10px;
+  font: 600 12px/1.23 var(--font);
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+}
+/* Compound selector: .gh-page (defined later) supplies the Primer palette the
+ * diff table reads, but its 24px padding must lose to this pane's edge-to-edge
+ * layout. */
+.gh-page.raw-pane { height: 440px; overflow: auto; padding: 0; }
+.hero-frame {
+  display: block;
+  width: 100%;
+  height: 440px;
+  border: none;
+  background: #ffffff;
+}
+@media (prefers-color-scheme: dark) {
+  .hero-frame { background: #0d1117; }
+}
+
+.demo-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 16px;
+  margin: 48px 0 0;
+}
+.demo-card {
+  display: block;
+  padding: 24px;
+  border: 1px solid var(--hairline);
+  border-radius: 12px;
+  background: var(--surface-1);
+  color: inherit;
+}
+.demo-card:hover { background: var(--surface-2); text-decoration: none; }
+.demo-card .eyebrow { margin-bottom: 16px; }
+.demo-card h2 {
+  margin: 0 0 8px;
+  font-size: 22px;
+  font-weight: 600;
+  line-height: 1.18;
+  letter-spacing: -0.4px;
+  color: var(--ink);
+}
+.demo-card p { margin: 0; font-size: 14px; line-height: 1.71; color: var(--ink-muted); }
+.demo-card code { color: var(--ink); }
+
+.install { margin-top: 96px; }
+.install h2 {
+  margin: 0 0 24px;
+  font-size: 28px;
+  font-weight: 600;
+  line-height: 1.21;
+  letter-spacing: -0.6px;
+}
+.install dl { margin: 0; }
+.install dt { font-weight: 600; margin-top: 24px; }
+.install dd { margin: 8px 0 0; font-size: 14px; line-height: 1.71; color: var(--ink-muted); }
+.install pre {
+  margin: 8px 0 0;
+  padding: 12px 16px;
+  border: 1px solid var(--hairline-soft);
+  border-radius: 8px;
+  background: var(--surface-1);
+  color: var(--ink);
+  font-size: 13px;
+  line-height: 1.7;
+  overflow-x: auto;
+}
+
+/* --- Framed windows (browser / terminal) -------------------------------- */
+
+.window {
+  margin: 24px 0;
+  border: 1px solid var(--hairline);
+  border-radius: 12px;
+  background: var(--surface-1);
+  overflow: hidden;
+}
+.window-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--hairline-soft);
+}
+.window-bar .dot { width: 12px; height: 12px; border-radius: 50%; background: var(--surface-2); flex: none; }
+.window-bar .address {
+  flex: 1;
+  max-width: 480px;
+  margin-left: 8px;
+  padding: 3px 12px;
+  border-radius: 6px;
+  background: var(--surface-2);
+  font: 500 12px/1.6 var(--mono);
+  color: var(--ink-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* --- Simulated GitHub page (inside a .window) ---------------------------- */
+
+.gh-page {
+  color-scheme: light;
+  --fgColor-default: #1f2328;
+  --fgColor-muted: #59636e;
+  --fgColor-accent: #0969da;
+  --fgColor-success: #1a7f37;
+  --fgColor-danger: #cf222e;
+  --fgColor-attention: #9a6700;
+  --borderColor-default: #d1d9e0;
+  --borderColor-muted: #d8dee4;
+  --bgColor-default: #ffffff;
+  --bgColor-muted: #f6f8fa;
+  --bgColor-neutral-muted: rgba(129, 139, 152, 0.18);
+  --bgColor-success-muted: #dafbe1;
+  --bgColor-danger-muted: #ffebe9;
+  --bgColor-attention-muted: #fff8c5;
+  --bgColor-accent-muted: #ddf4ff;
+  padding: 24px;
+  background: var(--bgColor-default);
+  color: var(--fgColor-default);
+  font-size: 14px;
+}
+
+@media (prefers-color-scheme: dark) {
+  .gh-page {
+    color-scheme: dark;
+    --fgColor-default: #f0f6fc;
+    --fgColor-muted: #9198a1;
+    --fgColor-accent: #4493f8;
+    --fgColor-success: #3fb950;
+    --fgColor-danger: #f85149;
+    --fgColor-attention: #d29922;
+    --borderColor-default: #3d444d;
+    --borderColor-muted: #3d444d;
+    --bgColor-default: #0d1117;
+    --bgColor-muted: #151b23;
+    --bgColor-neutral-muted: rgba(101, 108, 118, 0.25);
+    --bgColor-success-muted: rgba(46, 160, 67, 0.15);
+    --bgColor-danger-muted: rgba(248, 81, 73, 0.15);
+    --bgColor-attention-muted: rgba(187, 128, 9, 0.15);
+    --bgColor-accent-muted: rgba(56, 139, 253, 0.15);
+  }
+}
+
+.pr-header { margin: 0 0 4px; font-size: 22px; font-weight: 400; line-height: 1.3; }
+.pr-header .pr-number { color: var(--fgColor-muted); }
+.pr-meta { margin: 0 0 16px; color: var(--fgColor-muted); }
+.pr-meta .branch {
+  font: 12px/1.8 var(--mono);
+  padding: 1px 6px;
+  border-radius: 6px;
+  color: var(--fgColor-accent);
+  background: var(--bgColor-accent-muted);
+}
+
+.file {
+  margin: 0 0 16px;
+  border: 1px solid var(--borderColor-default);
+  border-radius: 6px;
+  background: var(--bgColor-default);
+}
+.file-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--borderColor-default);
+  border-radius: 6px 6px 0 0;
+  background: var(--bgColor-muted);
+}
+.file:not(.Details--on) .file-header { border-bottom: none; border-radius: 6px; }
+.file-collapse {
+  display: inline-flex;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--fgColor-muted);
+  cursor: pointer;
+}
+.file-collapse svg { transition: transform 120ms ease; }
+.file.Details--on .file-collapse svg { transform: rotate(90deg); }
+.file-info { font: 600 12px/1.8 var(--mono); overflow-wrap: anywhere; }
+.file-stat { font: 12px/1.8 var(--mono); white-space: nowrap; }
+.file-stat .added { color: var(--fgColor-success); }
+.file-stat .removed { color: var(--fgColor-danger); }
+.file-empty { padding: 8px 10px; margin: 0; color: var(--fgColor-muted); }
+
+/* Primer's collapse rule from github.com: the chevron toggles Details--on on
+ * .file, and this hides anything carrying the class (including the shadow host
+ * the demo script inserts, exactly like the extension on github.com). */
+.Details:not(.Details--on) .Details-content--hidden { display: none !important; }
+
+.diff-table { width: 100%; border-collapse: collapse; font: 12px/1.7 var(--mono); }
+.diff-table td { padding: 0; }
+.diff-table td.num {
+  width: 1%;
+  min-width: 44px;
+  padding: 0 10px;
+  text-align: right;
+  color: var(--fgColor-muted);
+  user-select: none;
+}
+.diff-table td.code { white-space: pre-wrap; word-break: break-all; padding-right: 10px; }
+.diff-table tr.add { background: var(--bgColor-success-muted); }
+.diff-table tr.del { background: var(--bgColor-danger-muted); }
+.diff-table tr.hunk td { background: var(--bgColor-accent-muted); color: var(--fgColor-muted); padding: 2px 10px; }
+
+/* --- CLI page ----------------------------------------------------------- */
+
+.cli-section { margin: 0 0 64px; }
+.cli-section h2 {
+  margin: 32px 0 8px;
+  font-size: 28px;
+  font-weight: 600;
+  line-height: 1.21;
+  letter-spacing: -0.6px;
+}
+.cli-section .hint { max-width: 720px; }
+
+.terminal pre {
+  margin: 0;
+  padding: 16px;
+  overflow: auto;
+  max-height: 560px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--ink);
+  background: var(--canvas);
+}
+.terminal .prompt { color: var(--ink-subtle); }
+.terminal .b { font-weight: 600; }
+.terminal .dim { color: var(--ink-subtle); }
+.terminal .red { color: #f85149; }
+.terminal .green { color: var(--accent-cli); }
+.terminal .yellow { color: #ffcf25; }
+
+.report-frame {
+  display: block;
+  width: 100%;
+  height: 720px;
+  border: none;
+  background: #ffffff;
+}
+@media (prefers-color-scheme: dark) {
+  .report-frame { background: #0d1117; }
+}

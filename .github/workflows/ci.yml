@@ -39,17 +39,17 @@ jobs:
       - name: Extension checks
         working-directory: extension
         run: |
-          npm ci
-          npm run size
-          npm run lint
-          npm run typecheck
-          npm test
-          npm run build
+          pnpm install --frozen-lockfile
+          pnpm run size
+          pnpm run lint
+          pnpm run typecheck
+          pnpm test
+          pnpm run build
       - name: Extension E2E
         working-directory: extension
         run: |
-          npx playwright install --with-deps chromium
-          npm run e2e
+          pnpm exec playwright install --with-deps chromium
+          pnpm run e2e
 
   editor:
     runs-on: ubuntu-latest
@@ -62,3 +62,34 @@ jobs:
         run: |
           dotnet tool restore
           dotnet csharpier check . --no-msbuild-check
+      - name: Test
+        working-directory: editor
+        run: dotnet test DotNetTests~/Tests
+
+  packaging:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Render test
+        run: cli/pkg/render_test.sh
+
+  site:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install tools
+        uses: jdx/mise-action@v4
+      - name: Build CLI and WASM
+        run: |
+          zig build
+          zig build wasm
+      - name: Build demo bundle
+        working-directory: extension
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm run demo
+      - name: Site checks
+        working-directory: site
+        run: |
+          node --test src/*.test.mjs
+          node build.mjs

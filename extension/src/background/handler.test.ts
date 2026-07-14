@@ -17,6 +17,8 @@ const DIFF: DiffV2 = { schema: "prefablens.diff.v2", unresolvedGuids: ["g1"], ro
 function makeDeps(overrides?: {
   files?: PrFile[];
   contents?: Record<string, string>; // `${path}@${ref}` → text
+  blobs?: Record<string, string>; // blob sha → text (getBlobRaw; absent sha = 404 → null)
+  baseShas?: Record<string, string>; // path → blob sha at the merge base (listBlobShas)
   diff?: Differ["diff"];
   diffWithAssets?: Differ["diffWithAssets"];
   pat?: string | undefined;
@@ -33,6 +35,14 @@ function makeDeps(overrides?: {
     getPrRefs: vi.fn(async () => ({ baseSha: "base-sha", headSha: "head-sha" })),
     listPrFiles: vi.fn(async () => files),
     getFileAtRef,
+    getBlobRaw: vi.fn(async (_o: string, _r: string, sha: string) => {
+      const text = overrides?.blobs?.[sha];
+      return text === undefined ? null : new TextEncoder().encode(text);
+    }),
+    listBlobShas: vi.fn(async () => ({
+      truncated: false,
+      byPath: new Map(Object.entries(overrides?.baseShas ?? {})),
+    })),
     searchMetaByGuid: vi.fn(async (_o: string, _r: string, guid: string) => overrides?.search?.[guid] ?? null),
     listMetaTree: vi.fn(
       async (): Promise<{ truncated: boolean; metas: Array<{ path: string; sha: string }> }> => ({
@@ -63,7 +73,7 @@ function makeDeps(overrides?: {
       diffStoreData[key] = json;
     }),
   };
-  // Same shape as Task 11's makeFakes (loadGuids/saveGuids/loadIndex/saveIndex). Starts empty per test.
+  // Mirrors the RepoIndexStore interface (loadGuids/saveGuids/loadIndex/saveIndex). Starts empty per test.
   const guidsData: Record<string, Record<string, string>> = {};
   const indexData: Record<string, { treeSha: string; guids: Record<string, string> }> = {};
   const repoIndexStore = {
@@ -79,7 +89,6 @@ function makeDeps(overrides?: {
   const deps: Deps = {
     getSettings: async () => ({
       pat: Object.hasOwn(overrides ?? {}, "pat") ? overrides?.pat : "tok",
-      baseUrl: undefined,
     }),
     makeClient: (_base: string, _token: string, _lane: "user" | "prefetch") => client,
     getDiffer: async () => differ,
@@ -101,10 +110,25 @@ async function serveAndResolve(
   return { res, pushes };
 }
 
+/** Drives semanticDiff to completion — the immediate response plus every push — and returns the
+ *  fully-resolved response. Errors and fully-in-PR-resolved diffs pass through unchanged; a pending
+ *  diff resolves to the final push's json, i.e. what the pipeline ultimately produces. */
+async function resolveFully(
+  handler: Handler,
+  req: SemanticDiffRequest,
+): Promise<Awaited<ReturnType<Handler["semanticDiff"]>>> {
+  const pushes: GuidResolvedPush[] = [];
+  const res = await handler.semanticDiff(req, (m) => pushes.push(m));
+  if (!res.ok || !res.pending) return res;
+  await vi.waitFor(() => expect(pushes.at(-1)?.done).toBe(true));
+  const final = pushes.at(-1);
+  return final?.json ? { ok: true, json: final.json } : res;
+}
+
 describe("createHandler", () => {
   it("returns pat-missing without touching the network", async () => {
     const { deps, client } = makeDeps({ pat: undefined });
-    const res = await createHandler(deps).semanticDiff(REQ);
+    const res = await resolveFully(createHandler(deps), REQ);
     expect(res).toEqual({ ok: false, error: "pat-missing" });
     expect(client.getPrRefs).not.toHaveBeenCalled();
   });
@@ -121,14 +145,14 @@ describe("createHandler", () => {
         "Assets/S.cs.meta@head-sha": "guid: g1\n",
       },
     });
-    const res = await createHandler(deps).semanticDiff(REQ);
+    const res = await resolveFully(createHandler(deps), REQ);
     expect(res).toEqual({ ok: true, json: { ...DIFF, resolved: { g1: "Assets/S.cs" } } });
   });
 
   it("uses an empty before for added files without fetching the base side", async () => {
     const diff = vi.fn<Differ["diff"]>(() => DIFF);
     const { deps, client } = makeDeps({ files: [{ path: "Assets/Foo.prefab", status: "added" }], diff });
-    await createHandler(deps).semanticDiff(REQ);
+    await resolveFully(createHandler(deps), REQ);
     const baseFetches = client.getFileAtRef.mock.calls.filter(
       (c) => c[2] === "Assets/Foo.prefab" && c[3] === "base-sha",
     );
@@ -139,7 +163,7 @@ describe("createHandler", () => {
   it("uses an empty after for removed files without fetching the head side", async () => {
     const diff = vi.fn<Differ["diff"]>(() => DIFF);
     const { deps, client } = makeDeps({ files: [{ path: "Assets/Foo.prefab", status: "removed" }], diff });
-    await createHandler(deps).semanticDiff(REQ);
+    await resolveFully(createHandler(deps), REQ);
     const headFetches = client.getFileAtRef.mock.calls.filter(
       (c) => c[2] === "Assets/Foo.prefab" && c[3] === "head-sha",
     );
@@ -150,7 +174,7 @@ describe("createHandler", () => {
   it("diffs a file missing from the PR list as modified (files API caps at 3000)", async () => {
     // In a PR with over 3000 files, the listing API is truncated, so a file present in the UI may be absent from the listing
     const { deps, client } = makeDeps({ files: [{ path: "Assets/Other.prefab", status: "modified" }] });
-    const res = await createHandler(deps).semanticDiff(REQ);
+    const res = await resolveFully(createHandler(deps), REQ);
     expect(res.ok).toBe(true);
     expect(client.getFileAtRef).toHaveBeenCalledWith("o", "r", "Assets/Foo.prefab", "base-sha");
     expect(client.getFileAtRef).toHaveBeenCalledWith("o", "r", "Assets/Foo.prefab", "head-sha");
@@ -168,7 +192,7 @@ describe("createHandler", () => {
       inFlight--;
       return new TextEncoder().encode("x");
     });
-    await createHandler(deps).semanticDiff(REQ);
+    await resolveFully(createHandler(deps), REQ);
     expect(maxInFlight).toBe(2);
   });
 
@@ -177,7 +201,7 @@ describe("createHandler", () => {
       files: [{ path: "Assets/Foo.prefab", status: "renamed", previousPath: "Assets/Old.prefab" }],
       contents: { "Assets/Old.prefab@base-sha": "b", "Assets/Foo.prefab@head-sha": "a" },
     });
-    const res = await createHandler(deps).semanticDiff(REQ);
+    const res = await resolveFully(createHandler(deps), REQ);
     expect(res.ok).toBe(true);
     expect(client.getFileAtRef).toHaveBeenCalledWith("o", "r", "Assets/Old.prefab", "base-sha");
   });
@@ -185,8 +209,8 @@ describe("createHandler", () => {
   it("caches PR context across calls (refs/files/guid index fetched once)", async () => {
     const { deps, client } = makeDeps();
     const handle = createHandler(deps);
-    await handle.semanticDiff(REQ);
-    await handle.semanticDiff({ ...REQ, path: "Assets/Foo.prefab" });
+    await resolveFully(handle, REQ);
+    await resolveFully(handle, { ...REQ, path: "Assets/Foo.prefab" });
     expect(client.getPrRefs).toHaveBeenCalledTimes(1);
     expect(client.listPrFiles).toHaveBeenCalledTimes(1);
   });
@@ -196,12 +220,13 @@ describe("createHandler", () => {
     try {
       const { deps, client } = makeDeps();
       const handle = createHandler(deps);
-      await handle.semanticDiff(REQ);
+      // Fake timers make resolveFully's vi.waitFor hang; this test only needs the immediate response.
+      await handle.semanticDiff(REQ, () => {});
       vi.setSystemTime(Date.now() + 59_000);
-      await handle.semanticDiff(REQ);
+      await handle.semanticDiff(REQ, () => {});
       expect(client.getPrRefs).toHaveBeenCalledTimes(1);
       vi.setSystemTime(Date.now() + 2_000); // 61 seconds total
-      await handle.semanticDiff(REQ);
+      await handle.semanticDiff(REQ, () => {});
       expect(client.getPrRefs).toHaveBeenCalledTimes(2);
     } finally {
       vi.useRealTimers();
@@ -213,22 +238,22 @@ describe("createHandler", () => {
     const { deps, client } = makeDeps();
     client.listPrFiles.mockRejectedValueOnce(new Error("socket"));
     const handle = createHandler(deps);
-    expect(await handle.semanticDiff(REQ)).toEqual({ ok: false, error: "fetch-failed" });
-    expect((await handle.semanticDiff(REQ)).ok).toBe(true);
+    expect(await resolveFully(handle, REQ)).toEqual({ ok: false, error: "fetch-failed" });
+    expect((await resolveFully(handle, REQ)).ok).toBe(true);
   });
 
   it("fetches each sha+path blob only once (immutable content)", async () => {
     const { deps, client } = makeDeps();
     const handle = createHandler(deps);
-    await handle.semanticDiff(REQ);
-    await handle.semanticDiff(REQ);
+    await resolveFully(handle, REQ);
+    await resolveFully(handle, REQ);
     const fooFetches = client.getFileAtRef.mock.calls.filter((c) => c[2] === "Assets/Foo.prefab");
     expect(fooFetches).toHaveLength(2); // only twice, base + head (the second handle doesn't re-fetch)
   });
 
   it("resolves remaining guids via code search and persists them", async () => {
     const { deps, guidCache } = makeDeps({ search: { g1: "Assets/Scripts/S.cs" } });
-    const res = await createHandler(deps).semanticDiff(REQ);
+    const res = await resolveFully(createHandler(deps), REQ);
     expect(res).toEqual({ ok: true, json: { ...DIFF, resolved: { g1: "Assets/Scripts/S.cs" } } });
     expect(guidCache.save).toHaveBeenCalledWith("https://api.github.com/o/r", { g1: "Assets/Scripts/S.cs" });
   });
@@ -246,14 +271,14 @@ describe("createHandler", () => {
       },
       search: { g1: "Assets/Elsewhere.cs" },
     });
-    const res = await createHandler(deps).semanticDiff(REQ);
+    const res = await resolveFully(createHandler(deps), REQ);
     expect(res).toEqual({ ok: true, json: { ...DIFF, resolved: { g1: "Assets/S.cs" } } });
     expect(client.searchMetaByGuid).not.toHaveBeenCalled();
   });
 
   it("serves cached guids without searching", async () => {
     const { deps, client } = makeDeps({ cached: { g1: "Assets/Cached.cs" } });
-    const res = await createHandler(deps).semanticDiff(REQ);
+    const res = await resolveFully(createHandler(deps), REQ);
     expect(res).toEqual({ ok: true, json: { ...DIFF, resolved: { g1: "Assets/Cached.cs" } } });
     expect(client.searchMetaByGuid).not.toHaveBeenCalled();
   });
@@ -261,8 +286,8 @@ describe("createHandler", () => {
   it("does not re-search a missed guid within the worker lifetime", async () => {
     const { deps, client } = makeDeps(); // search misses
     const handle = createHandler(deps);
-    await handle.semanticDiff(REQ);
-    await handle.semanticDiff(REQ);
+    await resolveFully(handle, REQ);
+    await resolveFully(handle, REQ);
     expect(client.searchMetaByGuid).toHaveBeenCalledTimes(1);
   });
 
@@ -271,10 +296,10 @@ describe("createHandler", () => {
     // misses is the gatekeeper for "don't re-search", not for "don't emit the name"
     const { deps, client, guidCache } = makeDeps(); // search misses → g1 goes into misses
     const handler = createHandler(deps);
-    await handler.semanticDiff(REQ);
+    await resolveFully(handler, REQ);
     expect(client.searchMetaByGuid).toHaveBeenCalledTimes(1);
     guidCache.data["https://api.github.com/o/r"] = { g1: "Assets/Later.cs" }; // as if an index resolution wrote it later
-    const res = await handler.semanticDiff(REQ);
+    const res = await resolveFully(handler, REQ);
     expect(res).toEqual({ ok: true, json: { ...DIFF, resolved: { g1: "Assets/Later.cs" } } });
     expect(client.searchMetaByGuid).toHaveBeenCalledTimes(1); // no re-search
   });
@@ -290,7 +315,7 @@ describe("createHandler", () => {
         }),
     );
     const handler = createHandler(deps);
-    const [a, b] = [handler.semanticDiff(REQ), handler.semanticDiff(REQ)];
+    const [a, b] = [resolveFully(handler, REQ), resolveFully(handler, REQ)];
     await vi.waitFor(() => expect(client.searchMetaByGuid).toHaveBeenCalled());
     release("Assets/S.cs");
     const [ra, rb] = await Promise.all([a, b]);
@@ -303,14 +328,14 @@ describe("createHandler", () => {
     const twoGuids: DiffV2 = { ...DIFF, unresolvedGuids: ["g1", "g2"] };
     const { deps, client } = makeDeps({ diff: () => twoGuids });
     client.searchMetaByGuid.mockResolvedValueOnce("Assets/First.cs").mockRejectedValueOnce(new RateLimitError("x"));
-    const res = await createHandler(deps).semanticDiff(REQ);
+    const res = await resolveFully(createHandler(deps), REQ);
     expect(res).toEqual({ ok: true, json: { ...twoGuids, resolved: { g1: "Assets/First.cs" } } });
   });
 
   it("does not treat Object.prototype members as cache hits (hostile guid)", async () => {
     const proto: DiffV2 = { ...DIFF, unresolvedGuids: ["constructor"] };
     const { deps, client } = makeDeps({ diff: () => proto, cached: { g9: "Assets/X.cs" } });
-    const res = await createHandler(deps).semanticDiff(REQ);
+    const res = await resolveFully(createHandler(deps), REQ);
     // 'constructor' goes to search rather than a cache hit, and stays unresolved after missing
     expect(client.searchMetaByGuid).toHaveBeenCalledWith("o", "r", "constructor");
     expect(res).toEqual({ ok: true, json: { ...proto, resolved: {} } });
@@ -319,7 +344,7 @@ describe("createHandler", () => {
   it("caps code searches at 10 per request", async () => {
     const many: DiffV2 = { ...DIFF, unresolvedGuids: Array.from({ length: 12 }, (_, i) => `g${i}`) };
     const { deps, client } = makeDeps({ diff: () => many });
-    await createHandler(deps).semanticDiff(REQ);
+    await resolveFully(createHandler(deps), REQ);
     expect(client.searchMetaByGuid).toHaveBeenCalledTimes(10);
   });
 
@@ -327,7 +352,7 @@ describe("createHandler", () => {
     // If 2 of 12 guids are cached, the search budget of 10 can be spent entirely on the 10 unknown guids
     const many: DiffV2 = { ...DIFF, unresolvedGuids: Array.from({ length: 12 }, (_, i) => `g${i}`) };
     const { deps, client } = makeDeps({ diff: () => many, cached: { g0: "Assets/A.cs", g1: "Assets/B.cs" } });
-    const res = await createHandler(deps).semanticDiff(REQ);
+    const res = await resolveFully(createHandler(deps), REQ);
     expect(client.searchMetaByGuid).toHaveBeenCalledTimes(10);
     expect(res).toEqual({ ok: true, json: { ...many, resolved: { g0: "Assets/A.cs", g1: "Assets/B.cs" } } });
   });
@@ -335,18 +360,18 @@ describe("createHandler", () => {
   it("maps AuthError / DiffError / other failures to stable error codes", async () => {
     const auth = makeDeps();
     auth.client.getPrRefs.mockRejectedValue(new AuthError("x"));
-    expect(await createHandler(auth.deps).semanticDiff(REQ)).toEqual({ ok: false, error: "auth-failed" });
+    expect(await resolveFully(createHandler(auth.deps), REQ)).toEqual({ ok: false, error: "auth-failed" });
 
     const bad = makeDeps({
       diff: () => {
         throw new DiffError("NestingTooDeep");
       },
     });
-    expect(await createHandler(bad.deps).semanticDiff(REQ)).toEqual({ ok: false, error: "diff-failed" });
+    expect(await resolveFully(createHandler(bad.deps), REQ)).toEqual({ ok: false, error: "diff-failed" });
 
     const net = makeDeps();
     net.client.listPrFiles.mockRejectedValue(new Error("socket"));
-    expect(await createHandler(net.deps).semanticDiff(REQ)).toEqual({ ok: false, error: "fetch-failed" });
+    expect(await resolveFully(createHandler(net.deps), REQ)).toEqual({ ok: false, error: "fetch-failed" });
   });
 
   it("returns too-large above 25MB unless forced", async () => {
@@ -355,11 +380,11 @@ describe("createHandler", () => {
     const { deps, client } = makeDeps({ diff });
     client.getFileAtRef.mockResolvedValue(big);
     const handle = createHandler(deps);
-    expect(await handle.semanticDiff(REQ)).toEqual({ ok: false, error: "too-large", bytes: big.length * 2 });
+    expect(await resolveFully(handle, REQ)).toEqual({ ok: false, error: "too-large", bytes: big.length * 2 });
     expect(diff).not.toHaveBeenCalled();
     // force proceeds to render. The blob is in the sha cache, so no re-fetch either
     const fetches = client.getFileAtRef.mock.calls.length;
-    expect((await handle.semanticDiff({ ...REQ, force: true })).ok).toBe(true);
+    expect((await resolveFully(handle, { ...REQ, force: true })).ok).toBe(true);
     expect(diff).toHaveBeenCalledTimes(1);
     expect(client.getFileAtRef.mock.calls.length).toBe(fetches);
   });
@@ -368,17 +393,125 @@ describe("createHandler", () => {
     const half = new Uint8Array((25 * 1024 * 1024) / 2);
     const { deps, client } = makeDeps();
     client.getFileAtRef.mockResolvedValue(half);
-    expect((await createHandler(deps).semanticDiff(REQ)).ok).toBe(true);
+    expect((await resolveFully(createHandler(deps), REQ)).ok).toBe(true);
   });
 
   it("maps RateLimitError to rate-limited", async () => {
     const limited = makeDeps();
     limited.client.getPrRefs.mockRejectedValue(new RateLimitError("x"));
-    expect(await createHandler(limited.deps).semanticDiff(REQ)).toEqual({ ok: false, error: "rate-limited" });
+    expect(await resolveFully(createHandler(limited.deps), REQ)).toEqual({ ok: false, error: "rate-limited" });
+  });
+
+  describe("blob-sha fetching", () => {
+    // contents-by-path has erratic multi-second TTFB (#110): whenever the blob sha is known
+    // (files API for head, merge-base tree for base), fetch by sha and leave path+ref as the fallback.
+    it("fetches base and head by blob sha without touching the contents api", async () => {
+      const { deps, client } = makeDeps({
+        files: [
+          { path: "Assets/Foo.prefab", status: "modified", sha: "foo-head" },
+          { path: "Assets/S.cs.meta", status: "modified", sha: "meta-head" },
+        ],
+        blobs: { "foo-head": "a", "foo-base": "b", "meta-head": "guid: g1\n" },
+        baseShas: { "Assets/Foo.prefab": "foo-base" },
+        contents: {},
+      });
+      const res = await resolveFully(createHandler(deps), REQ);
+      // the guid index also reads the changed .meta by its files-api sha
+      expect(res).toEqual({ ok: true, json: { ...DIFF, resolved: { g1: "Assets/S.cs" } } });
+      expect(client.getBlobRaw).toHaveBeenCalledWith("o", "r", "foo-base");
+      expect(client.getBlobRaw).toHaveBeenCalledWith("o", "r", "foo-head");
+      expect(client.getFileAtRef).not.toHaveBeenCalled();
+    });
+
+    it("uses the files-api sha for the base side of removed files", async () => {
+      const diff = vi.fn<Differ["diff"]>(() => DIFF);
+      const { deps, client } = makeDeps({
+        files: [{ path: "Assets/Foo.prefab", status: "removed", sha: "foo-base" }],
+        blobs: { "foo-base": "b" },
+        contents: {},
+        diff,
+      });
+      const res = await resolveFully(createHandler(deps), REQ);
+      expect(res.ok).toBe(true);
+      expect(client.getBlobRaw).toHaveBeenCalledWith("o", "r", "foo-base");
+      expect(client.getFileAtRef).not.toHaveBeenCalled();
+      expect(diff.mock.calls[0]?.[1]).toHaveLength(0); // after stays empty
+    });
+
+    it("looks up renamed base blobs under previousPath in the base tree", async () => {
+      const { deps, client } = makeDeps({
+        files: [{ path: "Assets/Foo.prefab", status: "renamed", previousPath: "Assets/Old.prefab", sha: "foo-head" }],
+        blobs: { "foo-head": "a", "old-base": "b" },
+        baseShas: { "Assets/Old.prefab": "old-base" },
+        contents: {},
+      });
+      const res = await resolveFully(createHandler(deps), REQ);
+      expect(res.ok).toBe(true);
+      expect(client.getBlobRaw).toHaveBeenCalledWith("o", "r", "old-base");
+      expect(client.getFileAtRef).not.toHaveBeenCalled();
+    });
+
+    it("falls back to the contents api for the base side when the tree is truncated", async () => {
+      const { deps, client } = makeDeps({
+        files: [{ path: "Assets/Foo.prefab", status: "modified", sha: "foo-head" }],
+        blobs: { "foo-head": "a" },
+        contents: { "Assets/Foo.prefab@base-sha": "b" },
+      });
+      client.listBlobShas.mockResolvedValue({ truncated: true, byPath: new Map() });
+      const res = await resolveFully(createHandler(deps), REQ);
+      expect(res.ok).toBe(true);
+      expect(client.getBlobRaw).toHaveBeenCalledWith("o", "r", "foo-head");
+      expect(client.getFileAtRef).toHaveBeenCalledWith("o", "r", "Assets/Foo.prefab", "base-sha");
+    });
+
+    it("falls back to the contents api when the blob fetch 404s", async () => {
+      // a force push between the files listing and the blob fetch can strand the sha
+      const { deps, client } = makeDeps({
+        files: [{ path: "Assets/Foo.prefab", status: "modified", sha: "foo-head" }],
+        blobs: {}, // getBlobRaw misses → null
+        contents: { "Assets/Foo.prefab@base-sha": "b", "Assets/Foo.prefab@head-sha": "a" },
+      });
+      const res = await resolveFully(createHandler(deps), REQ);
+      expect(res.ok).toBe(true);
+      expect(client.getFileAtRef).toHaveBeenCalledWith("o", "r", "Assets/Foo.prefab", "head-sha");
+    });
+
+    it("degrades to the contents api when the base tree fetch fails", async () => {
+      const { deps, client } = makeDeps({
+        files: [{ path: "Assets/Foo.prefab", status: "modified", sha: "foo-head" }],
+        blobs: { "foo-head": "a" },
+        contents: { "Assets/Foo.prefab@base-sha": "b" },
+      });
+      client.listBlobShas.mockRejectedValue(new Error("socket"));
+      const res = await resolveFully(createHandler(deps), REQ);
+      expect(res.ok).toBe(true);
+      expect(client.getFileAtRef).toHaveBeenCalledWith("o", "r", "Assets/Foo.prefab", "base-sha");
+    });
+
+    it("propagates a rate-limited base tree fetch like the guid index does", async () => {
+      const { deps, client } = makeDeps();
+      client.listBlobShas.mockRejectedValue(new RateLimitError("x"));
+      expect(await resolveFully(createHandler(deps), REQ)).toEqual({ ok: false, error: "rate-limited" });
+    });
+
+    it("reads removed .meta files via their files-api sha (base-side blob)", async () => {
+      const { deps, client } = makeDeps({
+        files: [
+          { path: "Assets/Foo.prefab", status: "modified", sha: "foo-head" },
+          { path: "Assets/S.cs.meta", status: "removed", sha: "meta-base" },
+        ],
+        blobs: { "foo-head": "a", "foo-base": "b", "meta-base": "guid: g1\n" },
+        baseShas: { "Assets/Foo.prefab": "foo-base" },
+        contents: {},
+      });
+      const res = await resolveFully(createHandler(deps), REQ);
+      expect(res).toEqual({ ok: true, json: { ...DIFF, resolved: { g1: "Assets/S.cs" } } });
+      expect(client.getFileAtRef).not.toHaveBeenCalled();
+    });
   });
 
   describe("source prefab merging", () => {
-    // A diff where phase 1 requests source supply. src1's path is resolved via Code Search.
+    // A diff where the first pass requests source supply. src1's path is resolved via Code Search.
     const NEEDS: DiffV2 = {
       ...DIFF,
       unresolvedGuids: ["src1"],
@@ -398,7 +531,7 @@ describe("createHandler", () => {
           "Assets/Cyl.prefab@head-sha": "SRC",
         },
       });
-      const res = await createHandler(deps).semanticDiff(REQ);
+      const res = await resolveFully(createHandler(deps), REQ);
       // side=after, so the source is fetched from head and its bytes land in assets.
       expect(client.getFileAtRef).toHaveBeenCalledWith("o", "r", "Assets/Cyl.prefab", "head-sha");
       const assets = diffWithAssets.mock.calls[0]?.[2];
@@ -419,15 +552,15 @@ describe("createHandler", () => {
           "Assets/Cyl.prefab@base-sha": "OLD",
         },
       });
-      await createHandler(deps).semanticDiff(REQ);
+      await resolveFully(createHandler(deps), REQ);
       expect(client.getFileAtRef).toHaveBeenCalledWith("o", "r", "Assets/Cyl.prefab", "base-sha");
     });
 
-    it("keeps the phase-1 diff when the source path cannot be resolved", async () => {
+    it("keeps the first-pass diff when the source path cannot be resolved", async () => {
       const diffWithAssets = vi.fn<Differ["diffWithAssets"]>(() => MERGED);
       const { deps } = makeDeps({ diff: () => NEEDS, diffWithAssets }); // search misses
-      const res = await createHandler(deps).semanticDiff(REQ);
-      // An unknown-path source is given up on, returning the degraded view (phase 1's json) as-is.
+      const res = await resolveFully(createHandler(deps), REQ);
+      // An unknown-path source is given up on, returning the degraded view (the first-pass json) as-is.
       expect(diffWithAssets).not.toHaveBeenCalled();
       expect(res).toEqual({ ok: true, json: { ...NEEDS, resolved: {} } });
     });
@@ -445,7 +578,7 @@ describe("createHandler", () => {
           "Assets/Cyl.prefab@head-sha": "SRC",
         },
       });
-      const res = await createHandler(deps).semanticDiff(REQ);
+      const res = await resolveFully(createHandler(deps), REQ);
       expect(diffWithAssets).toHaveBeenCalledTimes(1);
       expect(res.ok).toBe(true);
     });
@@ -476,7 +609,7 @@ describe("createHandler", () => {
       const handler = createHandler(deps);
       await handler.prefetch({ type: "prefetch", owner: "o", repo: "r", prNumber: 1 });
       expect(diffWithAssets).not.toHaveBeenCalled(); // prefetch stops at raw
-      const res = await handler.semanticDiff(REQ);
+      const res = await resolveFully(handler, REQ);
       expect(res.ok).toBe(true);
       expect(diffWithAssets).toHaveBeenCalledTimes(1); // merging runs at serve time
     });
@@ -490,7 +623,7 @@ describe("prefetch", () => {
     await handler.prefetch({ type: "prefetch", owner: "o", repo: "r", prNumber: 1 });
     expect(client.searchMetaByGuid).not.toHaveBeenCalled(); // prefetch doesn't touch the 10 req/min Code Search
     const fetchesAfterPrefetch = client.getFileAtRef.mock.calls.length;
-    const res = await handler.semanticDiff(REQ);
+    const res = await resolveFully(handler, REQ);
     expect(res.ok).toBe(true);
     expect(client.getFileAtRef.mock.calls.length).toBe(fetchesAfterPrefetch); // no blob re-fetch
   });
@@ -505,7 +638,7 @@ describe("prefetch", () => {
     // The SW dies after 30 seconds: a result prefetched in a prior life must be recoverable via storage.session
     const { deps, client, diffStore } = makeDeps();
     diffStore.data["base-sha:head-sha:Assets/Foo.prefab"] = DIFF; // seeded as if saved by a prior SW life
-    const res = await createHandler(deps).semanticDiff(REQ);
+    const res = await resolveFully(createHandler(deps), REQ);
     expect(res.ok).toBe(true);
     expect(client.getFileAtRef).not.toHaveBeenCalledWith("o", "r", "Assets/Foo.prefab", "base-sha");
   });
@@ -531,7 +664,7 @@ describe("prefetch", () => {
     await handler.prefetch({ type: "prefetch", owner: "o", repo: "r", prNumber: 1 });
     expect(deps.diffStore.save).not.toHaveBeenCalled();
     // A later manual toggle still shows the too-large gate as before
-    expect(await handler.semanticDiff(REQ)).toEqual({ ok: false, error: "too-large", bytes: big.length * 2 });
+    expect(await resolveFully(handler, REQ)).toEqual({ ok: false, error: "too-large", bytes: big.length * 2 });
   });
 
   it("aborts silently on rate limit instead of surfacing an error", async () => {
@@ -555,7 +688,7 @@ it("dedupes a concurrent user toggle against an in-flight prefetch compute", asy
   const handler = createHandler(deps);
   const [, res] = await Promise.all([
     handler.prefetch({ type: "prefetch", owner: "o", repo: "r", prNumber: 1 }),
-    handler.semanticDiff(REQ),
+    resolveFully(handler, REQ),
   ]);
   expect(res.ok).toBe(true);
   const fooFetches = client.getFileAtRef.mock.calls.filter((c) => c[2] === "Assets/Foo.prefab");
@@ -623,7 +756,7 @@ describe("semanticDiff with push (two-stage)", () => {
   });
 
   it("re-merges sources in the async stage once the source guid resolves", async () => {
-    // The crux of mergeSources consistency: stage 1 responds immediately without merging,
+    // The crux of mergeSources consistency: the immediate response comes back without merging,
     // and once the repo index resolves the source guid, the re-merged json arrives in the final push
     const withSource: DiffV2 = { ...DIFF, unresolvedGuids: ["src1"], neededSources: [{ guid: "src1", side: "after" }] };
     const merged: DiffV2 = { ...DIFF, unresolvedGuids: ["src1"], resolved: { src1: "Assets/Src.prefab" } };
@@ -648,7 +781,7 @@ describe("semanticDiff with push (two-stage)", () => {
     const pushes: GuidResolvedPush[] = [];
     const res = await createHandler(deps).semanticDiff(REQ, (m) => pushes.push(m));
     expect(res.ok && res.pending).toBe(true);
-    expect(diffWithAssets).not.toHaveBeenCalled(); // stage 1 doesn't merge (immediate response takes priority)
+    expect(diffWithAssets).not.toHaveBeenCalled(); // the immediate response doesn't merge (it takes priority)
     await vi.waitFor(() => expect(diffWithAssets).toHaveBeenCalledTimes(1));
     await vi.waitFor(() => expect(pushes.at(-1)?.done).toBe(true));
     expect(pushes.at(-1)?.json).toMatchObject({ resolved: { src1: "Assets/Src.prefab" } });

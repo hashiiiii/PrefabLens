@@ -1,11 +1,16 @@
 {
   "manifest_version": 3,
   "name": "PrefabLens",
-  "version": "0.3.0",
+  "version": "0.6.1",
   "description": "Semantic diffs for Unity YAML files in GitHub pull requests",
-  "permissions": ["storage", "scripting"],
-  "host_permissions": ["https://api.github.com/*"],
-  "optional_host_permissions": ["https://*/*", "http://127.0.0.1/*"],
+  "icons": {
+    "16": "images/icon16.png",
+    "32": "images/icon32.png",
+    "48": "images/icon48.png",
+    "128": "images/icon128.png"
+  },
+  "permissions": ["storage"],
+  "host_permissions": ["https://api.github.com/*", "https://github.com/*"],
   "background": { "service_worker": "background.js" },
   "content_scripts": [
     {

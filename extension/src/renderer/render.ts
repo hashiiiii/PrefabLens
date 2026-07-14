@@ -1,38 +1,10 @@
 import type { ComponentDiff, DiffV2, FieldValue, NodeDiff, OverrideDiff, Status } from "../types";
+import { builtinName } from "./builtin_refs";
+import { ALERT, CHECK, CHEVRON, CUBE, GEAR } from "./icons";
+import { STYLES } from "./styles";
 
-const STYLES = `
-  :host { all: initial; }
-  .pl-root {
-    --pl-fg: #1f2328; --pl-muted: #59636e; --pl-border: #d1d9e0;
-    --pl-added: #1a7f37; --pl-removed: #cf222e; --pl-modified: #9a6700;
-    font: 12px/1.5 ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
-    color: var(--pl-fg); padding: 8px 12px; display: block;
-  }
-  .pl-root.pl-dark {
-    --pl-fg: #f0f6fc; --pl-muted: #9198a1; --pl-border: #3d444d;
-    --pl-added: #3fb950; --pl-removed: #f85149; --pl-modified: #d29922;
-  }
-  details { margin: 2px 0; border-left: 1px solid var(--pl-border); padding-left: 10px; }
-  summary { cursor: pointer; user-select: none; }
-  .pl-badge { font-weight: 600; margin-right: 6px; }
-  .pl-added > summary .pl-badge { color: var(--pl-added); }
-  .pl-removed > summary .pl-badge { color: var(--pl-removed); }
-  .pl-modified > summary .pl-badge { color: var(--pl-modified); }
-  .pl-script { color: var(--pl-muted); margin-left: 6px; }
-  .pl-field { padding-left: 14px; }
-  .pl-field .pl-path { color: var(--pl-muted); margin-right: 6px; }
-  .pl-before { color: var(--pl-removed); }
-  .pl-after { color: var(--pl-added); }
-  .pl-arrow { color: var(--pl-muted); margin: 0 4px; }
-  .pl-empty, .pl-error, .pl-loading { color: var(--pl-muted); margin: 0; }
-  .pl-resolving { color: var(--pl-muted); margin: 0 0 4px; }
-  .pl-error { color: var(--pl-removed); }
-  .pl-render { font: inherit; margin-top: 4px; padding: 1px 8px; border: 1px solid var(--pl-border); background: transparent; color: inherit; cursor: pointer; }
-  .pl-components { border-left: 1px solid var(--pl-border); margin: 2px 0 2px 4px; padding-left: 8px; }
-  .pl-components-label { color: var(--pl-muted); font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; user-select: none; }
-`;
-
-const BADGE: Record<Status, string> = { added: "+", removed: "−", modified: "~", unchanged: " " };
+// Unchanged rows carry no chip: the absence of a badge is the "unchanged" signal.
+const BADGE: Record<Exclude<Status, "unchanged">, string> = { added: "+", removed: "−", modified: "~" };
 
 export function detectTheme(doc: Document): "light" | "dark" {
   const mode = doc.documentElement.getAttribute("data-color-mode");
@@ -43,24 +15,57 @@ export function detectTheme(doc: Document): "light" | "dark" {
 
 export function render(root: ShadowRoot, diff: DiffV2, opts?: { resolving?: number }): void {
   const container = mount(root);
-  // Resolving indicator (spec B4): the diff body is correct from the start, only reference names fill in later
-  if (opts?.resolving) container.append(note("pl-resolving", `Resolving ${opts.resolving} reference(s)…`));
+  // Resolving indicator: the diff body is correct from the start, only reference names fill in later
+  if (opts?.resolving) {
+    const busy = note("pl-resolving", `Resolving ${opts.resolving} reference(s)…`);
+    const spin = document.createElement("span");
+    spin.className = "pl-spinner";
+    busy.prepend(spin);
+    container.append(busy);
+  }
   for (const node of diff.roots) container.append(renderNode(node, diff));
-  for (const c of diff.loose) container.append(renderComponent(c, diff));
+  const loose = diff.loose.map((c) => renderComponent(c, diff));
+  if (loose.length) container.append(componentsSection(loose));
   if (!diff.roots.length && !diff.loose.length) {
-    container.append(note("pl-empty", "No semantic changes"));
+    container.append(note("pl-empty", "No semantic changes", CHECK));
   }
 }
 
 export function renderError(root: ShadowRoot, message: string): void {
-  mount(root).append(note("pl-error", message));
+  mount(root).append(note("pl-error", message, ALERT));
 }
+
+// Deterministic tree-shaped placeholder: [indent level, name-bar width %]
+const SKELETON_ROWS: Array<[number, number]> = [
+  [0, 40],
+  [1, 55],
+  [2, 35],
+  [1, 60],
+  [0, 30],
+];
 
 export function renderLoading(root: ShadowRoot): void {
-  mount(root).append(note("pl-loading", "Computing semantic diff…"));
+  const box = document.createElement("div");
+  box.className = "pl-skeleton";
+  box.setAttribute("role", "status");
+  box.setAttribute("aria-label", "Computing semantic diff…");
+  box.setAttribute("aria-busy", "true");
+  for (const [indent, width] of SKELETON_ROWS) {
+    const row = document.createElement("div");
+    row.className = "pl-skel-row";
+    row.style.setProperty("--pl-indent", String(indent));
+    const icon = document.createElement("span");
+    icon.className = "pl-skel-icon";
+    const bar = document.createElement("span");
+    bar.className = "pl-skel-bar";
+    bar.style.setProperty("--pl-w", `${width}%`);
+    row.append(icon, bar);
+    box.append(row);
+  }
+  mount(root).append(box);
 }
 
-/** Over-25MB guard (parent spec §5.7): doesn't auto-render, waits for an explicit click. */
+/** Over-25MB guard: doesn't auto-render, waits for an explicit click. */
 export function renderTooLarge(root: ShadowRoot, bytes: number, onRender: () => void): void {
   const container = mount(root);
   const button = document.createElement("button");
@@ -68,7 +73,49 @@ export function renderTooLarge(root: ShadowRoot, bytes: number, onRender: () => 
   button.className = "pl-render";
   button.textContent = "Render anyway";
   button.addEventListener("click", onRender);
-  container.append(note("pl-empty", `Large file (${Math.round(bytes / (1024 * 1024))} MB).`), button);
+  container.append(note("pl-empty", `Large file (${Math.round(bytes / (1024 * 1024))} MB).`, ALERT), button);
+}
+
+/** Auth-error panel: the message plus a button that starts the GitHub device flow in place. */
+export function renderSignIn(root: ShadowRoot, message: string, onSignIn: () => void): void {
+  const container = mount(root);
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "pl-render";
+  button.textContent = "Sign in with GitHub";
+  button.addEventListener("click", onSignIn);
+  container.append(note("pl-error", message, ALERT), button);
+}
+
+/** Device-flow pending state: keeps the user code visible while the user authorizes on GitHub. */
+export function renderSignInPending(
+  root: ShadowRoot,
+  userCode: string,
+  verificationUri: string,
+  onCopy: () => void,
+): void {
+  const container = mount(root);
+  const row = note("pl-signin", "Enter this code on GitHub:");
+  const code = document.createElement("code");
+  code.className = "pl-user-code";
+  code.textContent = userCode;
+  const copy = document.createElement("button");
+  copy.type = "button";
+  copy.className = "pl-render";
+  copy.textContent = "Copy code";
+  copy.addEventListener("click", onCopy);
+  const link = document.createElement("a");
+  link.className = "pl-render";
+  link.href = verificationUri;
+  link.target = "_blank";
+  link.rel = "noopener noreferrer";
+  link.textContent = "Open GitHub";
+  row.append(code, copy, link);
+  const busy = note("pl-signin-wait", "Waiting for GitHub authorization…");
+  const spin = document.createElement("span");
+  spin.className = "pl-spinner";
+  busy.prepend(spin);
+  container.append(row, busy);
 }
 
 function mount(root: ShadowRoot): HTMLElement {
@@ -81,11 +128,58 @@ function mount(root: ShadowRoot): HTMLElement {
   return container;
 }
 
-function note(className: string, text: string): HTMLElement {
-  const p = document.createElement("p");
-  p.className = className;
-  p.textContent = text;
-  return p;
+function note(className: string, text: string, icon?: string): HTMLElement {
+  const div = document.createElement("div");
+  div.className = `pl-note ${className}`;
+  if (icon) div.append(glyph(icon, "pl-note-icon"));
+  const span = document.createElement("span");
+  span.textContent = text;
+  div.append(span);
+  return div;
+}
+
+function glyph(markup: string, className: string): HTMLElement {
+  const span = document.createElement("span");
+  span.className = className;
+  span.innerHTML = markup; // static constants from icons.ts only
+  return span;
+}
+
+function summaryRow(status: Status, icon: string, iconClass: string, name: string, meta?: string): HTMLElement {
+  const summary = document.createElement("summary");
+  summary.className = "pl-row";
+  summary.append(glyph(CHEVRON, "pl-chevron"), glyph(icon, iconClass));
+  const label = document.createElement("span");
+  label.className = "pl-name";
+  label.textContent = name;
+  if (meta) {
+    const m = document.createElement("span");
+    m.className = "pl-script";
+    m.textContent = meta;
+    label.append(m);
+  }
+  summary.append(label);
+  if (status !== "unchanged") {
+    const badge = document.createElement("span");
+    badge.className = "pl-badge";
+    badge.textContent = BADGE[status];
+    summary.append(badge);
+  }
+  return summary;
+}
+
+/** Appends kids into the details, or marks the summary as a leaf when there are none. */
+function finish(details: HTMLDetailsElement, summary: HTMLElement, kids: HTMLElement): HTMLDetailsElement {
+  details.append(summary);
+  if (kids.childElementCount) details.append(kids);
+  else summary.classList.add("pl-leaf");
+  return details;
+}
+
+function kidsBox(): HTMLElement {
+  const div = document.createElement("div");
+  div.className = "pl-kids";
+  return div;
 }
 
 function stem(path: string): string {
@@ -104,31 +198,46 @@ function nodeName(node: NodeDiff, diff: DiffV2): string {
 }
 
 function renderNode(node: NodeDiff, diff: DiffV2): HTMLElement {
-  const details = openDetails(node.kind === "prefabInstance" ? "pl-pi" : "pl-go", node.status);
-  const summary = summaryLine(node.status, nodeName(node, diff));
+  const isPrefab = node.kind === "prefabInstance";
+  const details = openDetails(isPrefab ? "pl-pi" : "pl-go", node.status);
+  let meta: string | undefined;
   if (node.kind === "prefabInstance") {
-    const badge = document.createElement("span");
-    badge.className = "pl-script";
     const p = node.sourceGuid ? diff.resolved?.[node.sourceGuid] : undefined;
-    badge.textContent = p ? `‹Prefab: ${p}›` : "‹Prefab›";
-    summary.append(badge);
+    meta = p ? `‹Prefab: ${p}›` : "‹Prefab›";
   }
-  details.append(summary);
+  const summary = summaryRow(
+    node.status,
+    CUBE,
+    isPrefab ? "pl-icon pl-icon-prefab" : "pl-icon",
+    nodeName(node, diff),
+    meta,
+  );
 
+  const kids = kidsBox();
   // Display-hierarchy rule: component/override cards live only under the components section.
   const cards: HTMLElement[] = [];
   if (node.kind === "prefabInstance") cards.push(...renderOverrideGroups(node.overrides, diff));
   cards.push(...node.components.map((c) => renderComponent(c, diff)));
-  if (cards.length) {
-    const section = document.createElement("div");
-    section.className = "pl-components";
-    const label = document.createElement("div");
-    label.className = "pl-components-label";
-    label.textContent = "components";
-    section.append(label, ...cards);
-    details.append(section);
-  }
-  for (const child of node.children) details.append(renderNode(child, diff));
+  if (cards.length) kids.append(componentsSection(cards));
+  for (const child of node.children) kids.append(renderNode(child, diff));
+  return finish(details, summary, kids);
+}
+
+/** Components fold as their own group one level below the object row, so cube rows
+ *  alone form the hierarchy spine (Unity puts components in the Inspector, not the tree). */
+function componentsSection(cards: HTMLElement[]): HTMLElement {
+  const details = document.createElement("details");
+  details.open = true;
+  details.className = "pl-components";
+  const summary = document.createElement("summary");
+  summary.className = "pl-components-label";
+  summary.append(glyph(CHEVRON, "pl-chevron"));
+  const label = document.createElement("span");
+  label.textContent = `components (${cards.length})`;
+  summary.append(label);
+  const kids = kidsBox();
+  kids.append(...cards);
+  details.append(summary, kids);
   return details;
 }
 
@@ -145,9 +254,9 @@ function renderOverrideGroups(overrides: OverrideDiff[], diff: DiffV2): HTMLElem
     const status = first && rows.every((r) => r.status === first.status) ? first.status : "modified";
     const el = openDetails("pl-comp", status);
     el.open = true; // override cards are always open (spec: light, just a collapsed summary)
-    el.append(summaryLine(status, name));
-    for (const r of rows) el.append(fieldRow(r.label, r.status, r.before, r.after, diff));
-    return el;
+    const kids = kidsBox();
+    for (const r of rows) kids.append(fieldRow(r.label, r.status, r.before, r.after, diff));
+    return finish(el, summaryRow(status, GEAR, "pl-icon", name), kids);
   });
 }
 
@@ -155,16 +264,12 @@ function renderComponent(c: ComponentDiff, diff: DiffV2): HTMLElement {
   const details = openDetails("pl-comp", c.status);
   const resolved = c.scriptGuid ? diff.resolved?.[c.scriptGuid] : undefined;
   const display = resolved ? stem(resolved) : (c.className ?? c.typeName);
-  const summary = summaryLine(c.status, display);
-  if (c.scriptGuid) {
-    const script = document.createElement("span");
-    script.className = "pl-script";
-    script.textContent = "‹Script›";
-    summary.append(script);
-  }
-  details.append(summary);
-  for (const f of c.fields) details.append(fieldRow(f.path, f.status, f.before, f.after, diff));
-  return details;
+  // Mirror the ‹Prefab: …› meta on instances: full source path once the guid resolves.
+  const meta = c.scriptGuid ? (resolved ? `‹Script: ${resolved}›` : "‹Script›") : undefined;
+  const summary = summaryRow(c.status, GEAR, "pl-icon", display, meta);
+  const kids = kidsBox();
+  for (const f of c.fields) kids.append(fieldRow(f.path, f.status, f.before, f.after, diff));
+  return finish(details, summary, kids);
 }
 
 function fieldRow(label: string, status: Status, before: FieldValue, after: FieldValue, diff: DiffV2): HTMLElement {
@@ -198,17 +303,6 @@ function openDetails(kind: string, status: Status): HTMLDetailsElement {
   return details;
 }
 
-function summaryLine(status: Status, text: string): HTMLElement {
-  const summary = document.createElement("summary");
-  const badge = document.createElement("span");
-  badge.className = "pl-badge";
-  badge.textContent = BADGE[status];
-  const label = document.createElement("span");
-  label.textContent = text;
-  summary.append(badge, label);
-  return summary;
-}
-
 function valueSpan(className: string, value: FieldValue, diff: DiffV2): HTMLElement {
   const span = document.createElement("span");
   span.className = className;
@@ -221,5 +315,9 @@ function formatValue(value: FieldValue, diff: DiffV2): string {
   if (typeof value === "string") return value;
   const { fileId, guid } = value.ref;
   if (guid === null) return `#${fileId}`; // local reference
-  return diff.resolved?.[guid] ?? `guid:${guid}`; // external reference (unresolved stays a raw guid)
+  const path = diff.resolved?.[guid];
+  if (path !== undefined) return path;
+  const builtin = builtinName(guid, fileId);
+  if (builtin !== null) return `${builtin} (built-in)`;
+  return `guid:${guid}`; // unresolved external reference stays a raw guid
 }

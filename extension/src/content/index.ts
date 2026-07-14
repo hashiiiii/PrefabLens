@@ -1,4 +1,12 @@
-import { render, renderError, renderLoading, renderTooLarge } from "../renderer/render";
+import { pollForToken, requestDeviceCode } from "../github/deviceFlow";
+import {
+  render,
+  renderError,
+  renderLoading,
+  renderSignIn,
+  renderSignInPending,
+  renderTooLarge,
+} from "../renderer/render";
 import type {
   BackgroundError,
   DiffV2,
@@ -8,12 +16,14 @@ import type {
   SemanticDiffResponse,
 } from "../types";
 import { type FileEntry, parsePrPage, parsePrUrl, scanUnityFiles } from "./detect";
+import { fillDeviceCode } from "./devicePage";
+import { createSignIn, type PendingSignIn } from "./signin";
 import { createToggle, type Toggle, type View } from "./toggle";
 import { createViewState, type ViewState } from "./viewstate";
 
 const ERROR_TEXT: Record<BackgroundError, string> = {
-  "pat-missing": "Set a GitHub token in the PrefabLens options page.",
-  "auth-failed": "GitHub authentication failed. Check your token in the PrefabLens options page.",
+  "pat-missing": "Sign in with GitHub to view semantic diffs.",
+  "auth-failed": "GitHub authentication failed. Sign in again.",
   "rate-limited": "GitHub rate limit exceeded. Wait a while and toggle again.",
   "fetch-failed": "Could not fetch file contents from GitHub.",
   "diff-failed": "Could not compute a semantic diff for this file.",
@@ -32,6 +42,32 @@ const appliers = new Set<Applier>();
 let globalToggle: Toggle | undefined;
 let currentPr = ""; // overrides are valid only while on the PR: discard when the PR changes
 let prefetchedPr = ""; // send prefetch just once across all PR tabs, including the conversation tab
+
+// Files whose panels are stuck on an auth error: all retried once a token lands in storage.
+const authRetries = new Set<() => void>();
+
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+const signIn = createSignIn({
+  // Same-origin on github.com: the device flow needs no background relay and no extra permissions.
+  requestDeviceCode: () => requestDeviceCode(fetch),
+  pollForToken: (code) => pollForToken(fetch, sleep, code),
+  savePending: (pending) => chrome.storage.local.set({ signin: pending }),
+  clearPending: () => chrome.storage.local.remove("signin"),
+  saveToken: (token) => chrome.storage.local.set({ pat: token }),
+  openTab: (url) => void window.open(url, "_blank", "noopener"),
+  now: () => Date.now(),
+});
+
+/** Auth-error panel driving the device flow; failures land back here so the user can retry. */
+function signInPanel(root: ShadowRoot, message: string): void {
+  renderSignIn(root, message, () => {
+    void signIn({
+      showPending: (userCode, verificationUri) =>
+        renderSignInPending(root, userCode, verificationUri, () => void navigator.clipboard.writeText(userCode)),
+      showFailure: (text) => signInPanel(root, text),
+    });
+  });
+}
 
 function attach(state: ViewState): void {
   const page = parsePrPage(location.pathname);
@@ -67,8 +103,8 @@ function ensureGlobalToggle(state: ViewState, first: FileEntry): void {
   if (!container?.parentElement) return;
   const bar = document.createElement("div");
   bar.setAttribute("data-prefablens-global", "");
-  bar.style.cssText = "display:flex;align-items:center;gap:8px;margin:0 0 8px;font:12px system-ui;";
   const label = document.createElement("span");
+  label.className = "prefablens-eyebrow";
   label.textContent = "PrefabLens";
   const toggle = createToggle((view) => state.setDefault(view), state.defaultView());
   bar.append(label, toggle.element);
@@ -94,6 +130,9 @@ function attachToggle(state: ViewState, pr: { owner: string; repo: string; prNum
     if (!host) {
       host = document.createElement("div");
       host.setAttribute("data-prefablens-view", "");
+      // Same Primer class github puts on .js-file-content: the chevron / Viewed collapse
+      // only toggles Details--on on .file, so the host must opt into that CSS itself
+      host.classList.add("Details-content--hidden");
       host.attachShadow({ mode: "open" });
       entry.content.after(host);
     }
@@ -111,7 +150,13 @@ function attachToggle(state: ViewState, pr: { owner: string; repo: string; prNum
         }
         requested = false; // don't cache errors: let the next toggle re-fetch
         if (res.error === "too-large") renderTooLarge(root, res.bytes, () => request(true));
-        else renderError(root, ERROR_TEXT[res.error]);
+        else if (res.error === "pat-missing" || res.error === "auth-failed") {
+          authRetries.add(() => {
+            // requested flips true on the first retry, so duplicate registrations no-op.
+            if (!requested && state.effective(entry.path) === "semantic") request();
+          });
+          signInPanel(root, ERROR_TEXT[res.error]);
+        } else renderError(root, ERROR_TEXT[res.error]);
       });
     };
     request();
@@ -143,6 +188,14 @@ function requestDiff(req: SemanticDiffRequest): Promise<SemanticDiffResponse> {
 }
 
 async function init(): Promise<void> {
+  // On the device-verification page the only job is pre-filling the code the PR page issued.
+  if (location.pathname === "/login/device") {
+    const stored = await chrome.storage.local.get(["signin"]).catch(() => ({}) as Record<string, unknown>);
+    const pending = stored.signin as PendingSignIn | undefined;
+    if (pending) fillDeviceCode(document, pending, Date.now());
+    return;
+  }
+
   const stored = await chrome.storage.local.get(["viewMode"]).catch(() => ({}) as Record<string, unknown>);
   const initial: View = stored.viewMode === "semantic" ? "semantic" : "raw";
   const state = createViewState(initial, (view) => void chrome.storage.local.set({ viewMode: view }).catch(() => {}));
@@ -161,6 +214,12 @@ async function init(): Promise<void> {
     if (area !== "local") return;
     const next = changes.viewMode?.newValue;
     if (next === "raw" || next === "semantic") state.applyExternal(next);
+    if (typeof changes.pat?.newValue === "string" && changes.pat.newValue) {
+      // A token just landed (this tab's own flow or another surface): retry every auth-blocked panel.
+      const retries = [...authRetries];
+      authRetries.clear();
+      for (const retry of retries) retry();
+    }
   });
 
   // guid resolution push from background (the second stage of the two-stage response): re-render if the matching view exists

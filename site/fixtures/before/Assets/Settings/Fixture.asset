@@ -1,0 +1,29 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: f7942e5a835264f3582eaf184cdf5a5c, type: 3}
+  m_Name: Fixture
+  m_EditorClassIdentifier: Assembly-CSharp::FixtureData
+  hitPoints: 100
+  title: fixture
+  weights:
+  - 0.1
+  - 0.2
+  - 0.7
+  items:
+  - itemName: sword
+    cost: 50
+    consumable: 0
+  - itemName: potion
+    cost: 10
+    consumable: 1
+  materialRef: {fileID: 2100000, guid: d10cc984e47164feb9cb74c75c0f3cf6, type: 2}
+  tint: {r: 1, g: 1, b: 1, a: 1}

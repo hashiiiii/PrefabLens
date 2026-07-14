@@ -1,6 +1,6 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
-using System.Text;
+using System.Threading;
 using NUnit.Framework;
 
 namespace PrefabLens.Tests
@@ -38,54 +38,13 @@ namespace PrefabLens.Tests
         }
 
         [Test]
-        public void BuildArgsDiffsHeadAgainstTheWorktreeAsJson()
-        {
-            Assert.AreEqual(
-                new[] { "--git", "HEAD", "Assets/Foo.prefab", "--json" },
-                Cli.BuildArgs("Assets/Foo.prefab")
-            );
-        }
-
-        [Test]
         public void QuoteArgsSurvivesSpacesAndQuotes()
         {
             Assert.AreEqual(
-                "\"--git\" \"HEAD\" \"Assets/My Prefab.prefab\" \"--json\"",
-                Cli.QuoteArgs(Cli.BuildArgs("Assets/My Prefab.prefab"))
+                "\"HEAD\" \"Assets/My Prefab.prefab\" \"--json\"",
+                Cli.QuoteArgs(new[] { "HEAD", "Assets/My Prefab.prefab", "--json" })
             );
             Assert.AreEqual("\"a\\\"b\"", Cli.QuoteArgs(new[] { "a\"b" }));
-        }
-
-        [Test]
-        public void ParseSha256SumsFindsTheAssetLine()
-        {
-            // Exactly the form release.yml's `sha256sum *.zip` produces.
-            var sums =
-                "1111111111111111111111111111111111111111111111111111111111111111  prefablens-linux-x64.zip\n"
-                + "2222222222222222222222222222222222222222222222222222222222222222  prefablens-macos-arm64.zip\n";
-            Assert.AreEqual(
-                "2222222222222222222222222222222222222222222222222222222222222222",
-                Cli.ParseSha256Sums(sums, "prefablens-macos-arm64.zip")
-            );
-            Assert.IsNull(Cli.ParseSha256Sums(sums, "prefablens-windows-x64.zip"));
-        }
-
-        [Test]
-        public void ParseSha256SumsHandlesCrlfAndBinaryMarker()
-        {
-            // Also accepts CRLF line endings and sha256sum binary mode's leading "*".
-            var sums = "cafe01 *prefablens-windows-x64.zip\r\n";
-            Assert.AreEqual("cafe01", Cli.ParseSha256Sums(sums, "prefablens-windows-x64.zip"));
-        }
-
-        [Test]
-        public void Sha256HexMatchesTheStandardTestVector()
-        {
-            // Known vector from FIPS 180-2: sha256("abc")
-            Assert.AreEqual(
-                "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
-                Cli.Sha256Hex(Encoding.ASCII.GetBytes("abc"))
-            );
         }
 
         [Test]
@@ -147,6 +106,60 @@ namespace PrefabLens.Tests
             // 4000 lines × 41 bytes ≈ 160KB. Reliably exceeds the buffer while also detecting dropped output.
             Assert.Greater(res.Stdout.Length, 100_000);
             Assert.Greater(res.Stderr.Length, 100_000);
+        }
+
+        [Test]
+        public void BuildBulkArgsRequestsAllChangedFilesAsJson()
+        {
+            // Bare `prefablens --json` is bulk mode: HEAD vs working tree, all changed Unity files.
+            Assert.AreEqual(new[] { "--json" }, Cli.BuildBulkArgs());
+        }
+
+        [Test]
+        public void RunAsyncInvokesTheCallbackOffTheBlockedCaller()
+        {
+            // ctx: null exercises the no-SynchronizationContext fallback; a posted callback
+            // could not run while this test blocks the caller, failing the wait below.
+            var isWindows = RuntimeInformation.IsOSPlatform(OSPlatform.Windows);
+            var file = isWindows ? "cmd.exe" : "/bin/sh";
+            var args = isWindows ? "/c echo hello" : "-c \"echo hello\"";
+            Cli.Result? got = null;
+            using var done = new ManualResetEventSlim();
+            Cli.RunAsync(
+                file,
+                args,
+                r =>
+                {
+                    got = r;
+                    done.Set();
+                },
+                ctx: null
+            );
+            Assert.IsTrue(done.Wait(30_000), "callback never fired");
+            Assert.AreEqual(0, got.Value.ExitCode);
+            StringAssert.Contains("hello", got.Value.Stdout);
+        }
+
+        [Test]
+        public void RunAsyncReportsAStartupFailureInsteadOfThrowing()
+        {
+            // Process.Start throws when the binary is missing; the async path must fold
+            // that into a Result so the window's error display keeps working.
+            Cli.Result? got = null;
+            using var done = new ManualResetEventSlim();
+            Cli.RunAsync(
+                "/nonexistent/prefablens-binary",
+                "\"--json\"",
+                r =>
+                {
+                    got = r;
+                    done.Set();
+                },
+                ctx: null
+            );
+            Assert.IsTrue(done.Wait(30_000), "callback never fired");
+            Assert.AreNotEqual(0, got.Value.ExitCode);
+            Assert.IsNotEmpty(got.Value.Stderr);
         }
     }
 }

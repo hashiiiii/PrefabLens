@@ -16,7 +16,7 @@
   "osvVulnerabilityAlerts": true,
   "packageRules": [
     {
-      "description": "Group extension npm devDependencies minor/patch updates into a single PR",
+      "description": "Group extension devDependencies minor/patch updates into a single PR",
       "matchManagers": [
         "npm"
       ],
@@ -42,10 +42,7 @@
         "github-actions"
       ],
       "groupName": "github-actions",
-      "pinDigests": false,
-      "addLabels": [
-        "github-actions"
-      ]
+      "pinDigests": false
     },
     {
       "description": "The mise toolchain (zig/zls/node/dotnet/bump-my-version) affects the whole build, so require CI review instead of automerge",
@@ -53,18 +50,33 @@
         "mise"
       ],
       "groupName": "toolchain (mise)",
-      "automerge": false,
-      "addLabels": [
-        "toolchain"
-      ]
+      "automerge": false
     },
     {
-      "description": "Split major updates out of groups into individual PRs and flag them with the major label",
+      "description": "Flag major dependency updates",
       "matchUpdateTypes": [
         "major"
       ],
       "addLabels": [
         "major"
+      ]
+    },
+    {
+      "description": "Flag minor dependency updates",
+      "matchUpdateTypes": [
+        "minor"
+      ],
+      "addLabels": [
+        "minor"
+      ]
+    },
+    {
+      "description": "Flag patch dependency updates",
+      "matchUpdateTypes": [
+        "patch"
+      ],
+      "addLabels": [
+        "patch"
       ]
     }
   ],

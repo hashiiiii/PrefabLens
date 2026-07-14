@@ -2,20 +2,19 @@ using System;
 using System.Diagnostics;
 using System.IO;
 using System.IO.Compression;
-using System.Net;
 using System.Net.Http;
 using System.Runtime.InteropServices;
-using System.Security.Cryptography;
-using System.Text;
+using System.Threading;
+using System.Threading.Tasks;
 using UnityEditor;
 
 namespace PrefabLens
 {
-    /// Locate, download, and run the prefablens CLI. All git logic lives in the CLI (parent spec §6.3).
+    /// Locate, download, and run the prefablens CLI. All git logic lives in the CLI.
     public static class Cli
     {
         /// Version of the CLI to download (kept in sync with the GitHub Releases tag v{Version}).
-        public const string Version = "0.3.0";
+        public const string Version = "0.6.1";
         public const string CliPathPref = "PrefabLens.CliPath";
 
         /// Upper bound on CLI execution. Set longer than the CLI's internal git timeout (60s) so that on a git hang
@@ -36,7 +35,42 @@ namespace PrefabLens
         public static string DownloadUrl(string version, string assetName) =>
             $"https://github.com/hashiiiii/PrefabLens/releases/download/v{version}/{assetName}";
 
-        public static string[] BuildArgs(string assetPath) => new[] { "--git", "HEAD", assetPath, "--json" };
+        /// Bare invocation = bulk mode: HEAD vs working tree, all changed Unity files,
+        /// as a [{path, diff}] JSON array.
+        public static string[] BuildBulkArgs() => new[] { "--json" };
+
+        /// Run bulk mode off the main thread. The callback is posted back through the
+        /// caller's SynchronizationContext (Unity's main thread when called from the window).
+        public static void RunBulkAsync(string cliPath, Action<Result> onDone) =>
+            RunAsync(cliPath, QuoteArgs(BuildBulkArgs()), onDone, SynchronizationContext.Current);
+
+        public static void RunAsync(string file, string arguments, Action<Result> onDone, SynchronizationContext ctx)
+        {
+            var workDir = Directory.GetCurrentDirectory();
+            Task.Run(() =>
+            {
+                Result res;
+                try
+                {
+                    res = RunProcess(file, arguments, workDir, RunTimeoutMs);
+                }
+                catch (Exception e)
+                {
+                    // Process.Start failures (missing binary, permissions) become a Result
+                    // so every failure reaches the window through one path.
+                    res = new Result
+                    {
+                        ExitCode = -1,
+                        Stdout = "",
+                        Stderr = e.Message,
+                    };
+                }
+                if (ctx != null)
+                    ctx.Post(_ => onDone(res), null);
+                else
+                    onDone(res);
+            });
+        }
 
         /// Minimal quoting for ProcessStartInfo.Arguments (handles asset paths with spaces).
         public static string QuoteArgs(string[] args)
@@ -45,32 +79,6 @@ namespace PrefabLens
             for (var i = 0; i < args.Length; i++)
                 quoted[i] = "\"" + args[i].Replace("\"", "\\\"") + "\"";
             return string.Join(" ", quoted);
-        }
-
-        /// Extract the hash of assetName's line from `sha256sum` format ("<hex>  <name>", binary mode "<hex> *<name>").
-        /// Returns null if not found.
-        public static string ParseSha256Sums(string sums, string assetName)
-        {
-            foreach (var raw in sums.Split('\n'))
-            {
-                var line = raw.Trim();
-                var sep = line.IndexOf(' ');
-                if (sep <= 0)
-                    continue;
-                var name = line.Substring(sep).Trim().TrimStart('*');
-                if (name == assetName)
-                    return line.Substring(0, sep);
-            }
-            return null;
-        }
-
-        public static string Sha256Hex(byte[] bytes)
-        {
-            using var sha = SHA256.Create();
-            var sb = new StringBuilder();
-            foreach (var b in sha.ComputeHash(bytes))
-                sb.Append(b.ToString("x2"));
-            return sb.ToString();
         }
 
         // ---- Editor integration ----
@@ -107,7 +115,6 @@ namespace PrefabLens
                 EditorUtility.DisplayProgressBar("PrefabLens", $"Downloading {asset}…", 0.3f);
                 using var http = new HttpClient();
                 var bytes = http.GetByteArrayAsync(url).Result;
-                VerifyChecksum(http, asset, bytes);
                 using var zip = new ZipArchive(new MemoryStream(bytes));
                 foreach (var entry in zip.Entries)
                 {
@@ -128,34 +135,12 @@ namespace PrefabLens
             return DefaultPath;
         }
 
-        /// Verify the zip against the release's SHA256SUMS. Skip only when SHA256SUMS is absent (404 = a release
-        /// before v0.2.0); any other fetch failure or mismatch throws.
-        static void VerifyChecksum(HttpClient http, string assetName, byte[] zipBytes)
-        {
-            var res = http.GetAsync(DownloadUrl(Version, "SHA256SUMS")).Result;
-            if (res.StatusCode == HttpStatusCode.NotFound)
-                return;
-            res.EnsureSuccessStatusCode();
-            var want = ParseSha256Sums(res.Content.ReadAsStringAsync().Result, assetName);
-            if (want == null)
-                throw new InvalidOperationException($"SHA256SUMS has no entry for {assetName}");
-            var got = Sha256Hex(zipBytes);
-            if (!string.Equals(want, got, StringComparison.OrdinalIgnoreCase))
-                throw new InvalidOperationException($"SHA256 mismatch for {assetName}: expected {want}, got {got}");
-        }
-
         public struct Result
         {
             public int ExitCode;
             public string Stdout;
             public string Stderr;
             public bool TimedOut;
-        }
-
-        /// Run the CLI with the project root as cwd (--git looks at the repository in cwd).
-        public static Result Run(string cliPath, string assetPath)
-        {
-            return RunProcess(cliPath, QuoteArgs(BuildArgs(assetPath)), Directory.GetCurrentDirectory(), RunTimeoutMs);
         }
 
         public static Result RunProcess(string file, string arguments, string workDir, int timeoutMs)

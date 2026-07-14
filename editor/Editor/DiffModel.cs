@@ -87,6 +87,11 @@ namespace PrefabLens
             // so the Window's "Could not parse CLI output" branch (which catches the Exception) works.
             if (Json.Deserialize(json) is not Dictionary<string, object> o)
                 throw new FormatException("diff json root is not an object");
+            return FromDict(o);
+        }
+
+        internal static DiffModel FromDict(Dictionary<string, object> o)
+        {
             var m = new DiffModel();
             foreach (var g in Items(o, "unresolvedGuids"))
                 if (g is string s)

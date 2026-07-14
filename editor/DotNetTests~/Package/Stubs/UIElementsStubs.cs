@@ -1,6 +1,8 @@
 // Minimal Unity API stand-ins so editor/Editor compiles on the plain dotnet SDK.
 // Signatures mirror Unity 2022.3; bodies are inert.
+#pragma warning disable 67 // stub events are never raised
 using System;
+using System.Collections;
 using System.Collections.Generic;
 
 namespace UnityEngine.UIElements
@@ -127,5 +129,34 @@ namespace UnityEngine.UIElements
         public T GetItemDataForIndex<T>(int index) => default;
 
         public void ExpandAll() { }
+    }
+
+    public enum TwoPaneSplitViewOrientation
+    {
+        Horizontal,
+        Vertical,
+    }
+
+    public class TwoPaneSplitView : VisualElement
+    {
+        public TwoPaneSplitView(
+            int fixedPaneIndex,
+            float fixedPaneStartDimension,
+            TwoPaneSplitViewOrientation orientation
+        ) { }
+    }
+
+    public class ListView : VisualElement
+    {
+        public float fixedItemHeight { get; set; }
+        public Func<VisualElement> makeItem { get; set; }
+        public Action<VisualElement, int> bindItem { get; set; }
+        public IList itemsSource { get; set; }
+
+        public event Action<IEnumerable<object>> selectionChanged;
+
+        public void SetSelection(int index) { }
+
+        public void RefreshItems() { }
     }
 }

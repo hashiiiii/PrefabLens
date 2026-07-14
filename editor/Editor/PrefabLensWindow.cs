@@ -7,14 +7,17 @@ using UnityEngine.UIElements;
 
 namespace PrefabLens
 {
-    /// Displays the "HEAD vs working tree" semantic diff of the selected asset.
+    /// Master-detail view: UnityYAML assets that differ from HEAD on the left,
+    /// the selected asset's semantic diff on the right.
     public sealed class PrefabLensWindow : EditorWindow
     {
-        [SerializeField]
-        string assetPath = "";
-
         Label status;
+        ListView list;
         VisualElement content;
+        BulkModel bulk = new();
+        string selectedPath;
+        string pendingSelectPath;
+        bool refreshing;
 
         [MenuItem("Window/PrefabLens")]
         public static void Open() => GetWindow<PrefabLensWindow>("PrefabLens");
@@ -23,7 +26,7 @@ namespace PrefabLens
         static void DiffSelected()
         {
             var w = GetWindow<PrefabLensWindow>("PrefabLens");
-            w.assetPath = AssetDatabase.GetAssetPath(Selection.activeObject);
+            w.pendingSelectPath = AssetDatabase.GetAssetPath(Selection.activeObject);
             w.Refresh();
         }
 
@@ -58,64 +61,139 @@ namespace PrefabLens
             toolbar.Add(new Button(Refresh) { text = "Refresh" });
             rootVisualElement.Add(toolbar);
 
+            var split = new TwoPaneSplitView(0, 240, TwoPaneSplitViewOrientation.Horizontal);
+            list = new ListView { fixedItemHeight = 20 };
+            list.makeItem = () =>
+                new VisualElement { style = { flexDirection = FlexDirection.Row, alignItems = Align.Center } };
+            list.bindItem = (e, i) => RenderRow(e, EntryRow(bulk.Entries[i]));
+            list.selectionChanged += OnSelectionChanged;
+            split.Add(list);
             content = new VisualElement { style = { flexGrow = 1 } };
-            rootVisualElement.Add(content);
+            split.Add(content);
+            rootVisualElement.Add(split);
             Refresh();
+        }
+
+        /// Unity calls this whenever the window gains focus; before CreateGUI on first open.
+        void OnFocus()
+        {
+            if (content != null)
+                Refresh();
         }
 
         void Refresh()
         {
-            content.Clear();
-            if (string.IsNullOrEmpty(assetPath))
-            {
-                status.text =
-                    "Select a UnityYAML asset (.prefab / .unity / .asset / .mat / .anim / …) and run Assets → PrefabLens: Diff vs HEAD";
+            if (content == null || refreshing)
                 return;
-            }
-            status.text = assetPath;
-
             var cli = Cli.Find();
             if (cli == null)
             {
-                Note($"prefablens CLI not found (v{Cli.Version}).");
-                content.Add(
-                    new Button(DownloadThenRefresh)
-                    {
-                        text = "Download from GitHub Releases",
-                        style = { alignSelf = Align.FlexStart, marginLeft = 6 },
-                    }
-                );
-                Note($"Or set a manual path via EditorPrefs key '{Cli.CliPathPref}'.");
+                ShowMissingCli();
                 return;
             }
+            refreshing = true;
+            status.text = "Refreshing…";
+            Cli.RunBulkAsync(cli, OnBulkDone);
+        }
 
-            var res = Cli.Run(cli, assetPath);
+        void OnBulkDone(Cli.Result res)
+        {
+            refreshing = false;
+            // Consume the menu's pending selection on every completion path, success or not,
+            // so a failed run cannot leak it into a later unrelated refresh.
+            var wanted = pendingSelectPath ?? selectedPath;
+            var menuInvoked = pendingSelectPath != null;
+            pendingSelectPath = null;
+            if (content == null)
+                return; // unreachable given Refresh's own guard; kept as cheap defense
+            content.Clear();
             if (res.ExitCode != 0)
             {
-                // The CLI's stderr is the primary source (non-git repository, invalid ref, etc.)
+                // The CLI's stderr is the primary source (non-git repository, timeout, etc.)
+                status.text = "";
                 Note(string.IsNullOrEmpty(res.Stderr) ? $"prefablens exited with {res.ExitCode}" : res.Stderr.Trim());
                 return;
             }
-
-            DiffModel model;
             try
             {
-                model = DiffModel.Parse(res.Stdout);
+                bulk = BulkModel.Parse(res.Stdout);
             }
             catch (Exception)
             {
+                status.text = "";
                 Note("Could not parse CLI output (CLI version mismatch?):");
                 Note(res.Stdout.Length > 200 ? res.Stdout.Substring(0, 200) + "…" : res.Stdout);
                 return;
             }
+            list.itemsSource = bulk.Entries;
+            list.RefreshItems();
+            status.text = bulk.Entries.Count == 0 ? "No changes vs HEAD" : $"{bulk.Entries.Count} changed vs HEAD";
 
-            model.ResolveWith(AssetDatabase.GUIDToAssetPath);
-            if (model.IsEmpty)
+            if (menuInvoked && IndexOfPath(wanted) < 0)
             {
-                Note("No semantic changes");
+                Note($"No semantic changes for {wanted}");
                 return;
             }
-            content.Add(BuildTree(model));
+            if (bulk.Entries.Count == 0)
+                return;
+            var idx = IndexOfPath(wanted);
+            if (idx < 0)
+                idx = 0;
+            list.SetSelection(idx);
+            // Render directly instead of relying on SetSelection to re-fire selectionChanged
+            // when the index is unchanged (undocumented ListView behavior).
+            ShowEntry(bulk.Entries[idx]);
+        }
+
+        int IndexOfPath(string path)
+        {
+            if (path == null)
+                return -1;
+            for (var i = 0; i < bulk.Entries.Count; i++)
+                if (bulk.Entries[i].Path == path)
+                    return i;
+            return -1;
+        }
+
+        void OnSelectionChanged(IEnumerable<object> items)
+        {
+            foreach (var item in items)
+            {
+                if (item is not BulkEntry entry)
+                    return;
+                ShowEntry(entry);
+                return;
+            }
+        }
+
+        void ShowEntry(BulkEntry entry)
+        {
+            selectedPath = entry.Path;
+            content.Clear();
+            entry.Diff.ResolveWith(AssetDatabase.GUIDToAssetPath);
+            if (entry.Diff.IsEmpty)
+                Note("No semantic changes");
+            else
+                content.Add(BuildTree(entry.Diff));
+        }
+
+        void ShowMissingCli()
+        {
+            bulk = new BulkModel();
+            list.itemsSource = bulk.Entries;
+            list.RefreshItems();
+            status.text = "";
+            // pendingSelectPath intentionally survives this path so DownloadThenRefresh carries the menu intent through.
+            content.Clear();
+            Note($"prefablens CLI not found (v{Cli.Version}).");
+            content.Add(
+                new Button(DownloadThenRefresh)
+                {
+                    text = "Download from GitHub Releases",
+                    style = { alignSelf = Align.FlexStart, marginLeft = 6 },
+                }
+            );
+            Note($"Or set a manual path via EditorPrefs key '{Cli.CliPathPref}'.");
         }
 
         void DownloadThenRefresh()
@@ -147,6 +225,29 @@ namespace PrefabLens
                     },
                 }
             );
+        }
+
+        static Row EntryRow(BulkEntry entry) => Badge(BulkModel.AggregateStatus(entry.Diff)).Add(entry.Path);
+
+        static void RenderRow(VisualElement e, Row row)
+        {
+            e.Clear();
+            foreach (var span in row.Spans)
+            {
+                var l = new Label(span.Text)
+                {
+                    style =
+                    {
+                        marginLeft = 0,
+                        marginRight = 0,
+                        paddingLeft = 0,
+                        paddingRight = 0,
+                    },
+                };
+                if (span.Tint is Color tint)
+                    l.style.color = tint;
+                e.Add(l);
+            }
         }
 
         // ---- Tree rendering (same color tone and notation as the Chrome renderer) ----
@@ -200,26 +301,7 @@ namespace PrefabLens
             tree.SetRootItems(items);
             tree.makeItem = () =>
                 new VisualElement { style = { flexDirection = FlexDirection.Row, alignItems = Align.Center } };
-            tree.bindItem = (e, i) =>
-            {
-                e.Clear();
-                foreach (var span in tree.GetItemDataForIndex<Row>(i).Spans)
-                {
-                    var l = new Label(span.Text)
-                    {
-                        style =
-                        {
-                            marginLeft = 0,
-                            marginRight = 0,
-                            paddingLeft = 0,
-                            paddingRight = 0,
-                        },
-                    };
-                    if (span.Tint is Color tint)
-                        l.style.color = tint;
-                    e.Add(l);
-                }
-            };
+            tree.bindItem = (e, i) => RenderRow(e, tree.GetItemDataForIndex<Row>(i));
             tree.ExpandAll();
             return tree;
         }

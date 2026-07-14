@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
+using System.Threading;
 using NUnit.Framework;
 
 namespace PrefabLens.Tests
@@ -37,17 +38,11 @@ namespace PrefabLens.Tests
         }
 
         [Test]
-        public void BuildArgsDiffsHeadAgainstTheWorktreeAsJson()
-        {
-            Assert.AreEqual(new[] { "HEAD", "Assets/Foo.prefab", "--json" }, Cli.BuildArgs("Assets/Foo.prefab"));
-        }
-
-        [Test]
         public void QuoteArgsSurvivesSpacesAndQuotes()
         {
             Assert.AreEqual(
                 "\"HEAD\" \"Assets/My Prefab.prefab\" \"--json\"",
-                Cli.QuoteArgs(Cli.BuildArgs("Assets/My Prefab.prefab"))
+                Cli.QuoteArgs(new[] { "HEAD", "Assets/My Prefab.prefab", "--json" })
             );
             Assert.AreEqual("\"a\\\"b\"", Cli.QuoteArgs(new[] { "a\"b" }));
         }
@@ -111,6 +106,60 @@ namespace PrefabLens.Tests
             // 4000 lines × 41 bytes ≈ 160KB. Reliably exceeds the buffer while also detecting dropped output.
             Assert.Greater(res.Stdout.Length, 100_000);
             Assert.Greater(res.Stderr.Length, 100_000);
+        }
+
+        [Test]
+        public void BuildBulkArgsRequestsAllChangedFilesAsJson()
+        {
+            // Bare `prefablens --json` is bulk mode: HEAD vs working tree, all changed Unity files.
+            Assert.AreEqual(new[] { "--json" }, Cli.BuildBulkArgs());
+        }
+
+        [Test]
+        public void RunAsyncInvokesTheCallbackOffTheBlockedCaller()
+        {
+            // ctx: null exercises the no-SynchronizationContext fallback; a posted callback
+            // could not run while this test blocks the caller, failing the wait below.
+            var isWindows = RuntimeInformation.IsOSPlatform(OSPlatform.Windows);
+            var file = isWindows ? "cmd.exe" : "/bin/sh";
+            var args = isWindows ? "/c echo hello" : "-c \"echo hello\"";
+            Cli.Result? got = null;
+            using var done = new ManualResetEventSlim();
+            Cli.RunAsync(
+                file,
+                args,
+                r =>
+                {
+                    got = r;
+                    done.Set();
+                },
+                ctx: null
+            );
+            Assert.IsTrue(done.Wait(30_000), "callback never fired");
+            Assert.AreEqual(0, got.Value.ExitCode);
+            StringAssert.Contains("hello", got.Value.Stdout);
+        }
+
+        [Test]
+        public void RunAsyncReportsAStartupFailureInsteadOfThrowing()
+        {
+            // Process.Start throws when the binary is missing; the async path must fold
+            // that into a Result so the window's error display keeps working.
+            Cli.Result? got = null;
+            using var done = new ManualResetEventSlim();
+            Cli.RunAsync(
+                "/nonexistent/prefablens-binary",
+                "\"--json\"",
+                r =>
+                {
+                    got = r;
+                    done.Set();
+                },
+                ctx: null
+            );
+            Assert.IsTrue(done.Wait(30_000), "callback never fired");
+            Assert.AreNotEqual(0, got.Value.ExitCode);
+            Assert.IsNotEmpty(got.Value.Stderr);
         }
     }
 }

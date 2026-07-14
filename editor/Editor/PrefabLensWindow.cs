@@ -16,26 +16,10 @@ namespace PrefabLens
         VisualElement content;
         BulkModel bulk = new();
         string selectedPath;
-        string pendingSelectPath;
         bool refreshing;
 
         [MenuItem("Window/PrefabLens")]
         public static void Open() => GetWindow<PrefabLensWindow>("PrefabLens");
-
-        [MenuItem("Assets/PrefabLens: Diff vs HEAD")]
-        static void DiffSelected()
-        {
-            var w = GetWindow<PrefabLensWindow>("PrefabLens");
-            w.pendingSelectPath = AssetDatabase.GetAssetPath(Selection.activeObject);
-            w.Refresh();
-        }
-
-        [MenuItem("Assets/PrefabLens: Diff vs HEAD", true)]
-        static bool ValidateDiffSelected()
-        {
-            var p = Selection.activeObject == null ? "" : AssetDatabase.GetAssetPath(Selection.activeObject);
-            return UnityYamlPaths.IsSupported(p);
-        }
 
         public void CreateGUI()
         {
@@ -62,9 +46,18 @@ namespace PrefabLens
             rootVisualElement.Add(toolbar);
 
             var split = new TwoPaneSplitView(0, 240, TwoPaneSplitViewOrientation.Horizontal);
-            list = new ListView { fixedItemHeight = 20 };
+            list = new ListView { fixedItemHeight = 20, style = { marginTop = 2 } };
             list.makeItem = () =>
-                new VisualElement { style = { flexDirection = FlexDirection.Row, alignItems = Align.Center } };
+                new VisualElement
+                {
+                    style =
+                    {
+                        flexDirection = FlexDirection.Row,
+                        alignItems = Align.Center,
+                        paddingLeft = 6,
+                        paddingRight = 6,
+                    },
+                };
             list.bindItem = (e, i) => RenderRow(e, EntryRow(bulk.Entries[i]));
             list.selectionChanged += OnSelectionChanged;
             split.Add(list);
@@ -99,11 +92,6 @@ namespace PrefabLens
         void OnBulkDone(Cli.Result res)
         {
             refreshing = false;
-            // Consume the menu's pending selection on every completion path, success or not,
-            // so a failed run cannot leak it into a later unrelated refresh.
-            var wanted = pendingSelectPath ?? selectedPath;
-            var menuInvoked = pendingSelectPath != null;
-            pendingSelectPath = null;
             if (content == null)
                 return; // unreachable given Refresh's own guard; kept as cheap defense
             content.Clear();
@@ -129,14 +117,9 @@ namespace PrefabLens
             list.RefreshItems();
             status.text = bulk.Entries.Count == 0 ? "No changes vs HEAD" : $"{bulk.Entries.Count} changed vs HEAD";
 
-            if (menuInvoked && IndexOfPath(wanted) < 0)
-            {
-                Note($"No semantic changes for {wanted}");
-                return;
-            }
             if (bulk.Entries.Count == 0)
                 return;
-            var idx = IndexOfPath(wanted);
+            var idx = IndexOfPath(selectedPath);
             if (idx < 0)
                 idx = 0;
             list.SetSelection(idx);
@@ -183,7 +166,6 @@ namespace PrefabLens
             list.itemsSource = bulk.Entries;
             list.RefreshItems();
             status.text = "";
-            // pendingSelectPath intentionally survives this path so DownloadThenRefresh carries the menu intent through.
             content.Clear();
             Note($"prefablens CLI not found (v{Cli.Version}).");
             content.Add(

@@ -206,11 +206,16 @@ namespace PrefabLens
         {
             downloadAttempted = true;
             refreshing = true; // keeps focus-triggered Refresh calls out while the download runs
+            bulk = new BulkModel();
+            list.itemsSource = bulk.Entries;
+            list.RefreshItems();
             status.text = $"Downloading prefablens v{Cli.Version}…";
             content.Clear();
             Cli.DownloadAsync(OnDownloadDone);
         }
 
+        /// The success path re-resolves through Cli.Find instead of using the returned
+        /// path, so the manual EditorPrefs override keeps precedence.
         void OnDownloadDone(string path, string error)
         {
             refreshing = false;

@@ -17,8 +17,8 @@ const queuedFetch =
 
 const handler = createHandler({
   async getSettings() {
-    const stored = await chrome.storage.local.get(["pat", "baseUrl"]);
-    return { pat: stored.pat as string | undefined, baseUrl: stored.baseUrl as string | undefined };
+    const stored = await chrome.storage.local.get(["pat"]);
+    return { pat: stored.pat as string | undefined };
   },
   makeClient: (base, token, lane) => new GithubClient(base, token, queuedFetch(lane === "user")),
   getDiffer() {

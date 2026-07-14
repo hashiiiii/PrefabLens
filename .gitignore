@@ -1,9 +1,13 @@
 .DS_Store
 *.swp
-.superpowers
+.superpowers/
+.playwright-mcp/
 .zig-cache/
 zig-out/
 docs/superpowers/
 extension/node_modules/
 extension/dist/
 extension/test-results/
+site/dist/
+editor/**/bin/
+editor/**/obj/

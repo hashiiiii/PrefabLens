@@ -24,45 +24,31 @@ jobs:
         with:
           client-id: ${{ secrets.APP_CLIENT_ID }}
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
-      - name: Set the release committer to the app identity
-        env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
-          APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
-        run: |
-          set -euo pipefail
-          # GitHub links a commit to the App only when the committer email is
-          # <app-user-id>+<slug>[bot]@users.noreply.github.com; resolve the id from the slug.
-          user_id=$(gh api "/users/${APP_SLUG}[bot]" --jq .id)
-          {
-            echo "GIT_AUTHOR_NAME=${APP_SLUG}[bot]"
-            echo "GIT_AUTHOR_EMAIL=${user_id}+${APP_SLUG}[bot]@users.noreply.github.com"
-            echo "GIT_COMMITTER_NAME=${APP_SLUG}[bot]"
-            echo "GIT_COMMITTER_EMAIL=${user_id}+${APP_SLUG}[bot]@users.noreply.github.com"
-          } >> "$GITHUB_ENV"
       - uses: actions/checkout@v7
         with:
           token: ${{ steps.app-token.outputs.token }}
       - name: Install tools
         uses: jdx/mise-action@v4
       - name: Validate input
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           [ "$GITHUB_REF_NAME" = "main" ] || { echo "::error::run this workflow from main (got $GITHUB_REF_NAME)"; exit 1; }
-          if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/v$VERSION" >/dev/null 2>&1; then
-            echo "::error::tag v$VERSION already exists; delete it first to re-release: git push origin :refs/tags/v$VERSION"
-            exit 1
-          fi
       - name: Bump, commit, and tag
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
         run: |
           set -euo pipefail
+          # Author the commit as the app; the +<id> email links it to the bot account.
+          user_id=$(gh api "/users/${APP_SLUG}[bot]" --jq .id)
+          git config user.name "${APP_SLUG}[bot]"
+          git config user.email "${user_id}+${APP_SLUG}[bot]@users.noreply.github.com"
           bump-my-version bump --new-version "$VERSION"
           pnpm -C extension version "$VERSION" --no-git-tag-version --allow-same-version --no-git-checks
           git add -u
           git diff --cached --quiet || git commit -m "chore: release v$VERSION"
           git tag "v$VERSION"
-          git push origin main "v$VERSION"
+          git push --atomic origin main "v$VERSION"
       - name: Build CLI for all targets
         run: |
           set -euo pipefail
@@ -75,8 +61,102 @@ jobs:
           build x86_64-macos     macos-x64    prefablens
           build x86_64-linux-gnu linux-x64    prefablens
           build x86_64-windows   windows-x64  prefablens.exe
+      - name: Build and package extension
+        run: |
+          set -euo pipefail
+          zig build wasm
+          pnpm -C extension install --frozen-lockfile
+          pnpm -C extension build
+          # Zip the dist contents (not the directory) so manifest.json sits at the zip root
+          (cd extension/dist && zip -r "../../dist/prefablens-extension-$VERSION.zip" .)
       - name: Create release
         env:
           # Publish as the App so the release isn't attributed to github-actions[bot].
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
-        run: gh release create "v$VERSION" dist/*.zip --generate-notes
+        run: |
+          set -euo pipefail
+          # SHA256SUMS lets manifest tooling (e.g. scoop autoupdate) verify
+          # assets without downloading them.
+          (cd dist && shasum -a 256 *.zip > SHA256SUMS)
+          gh release create "v$VERSION" dist/* --generate-notes
+
+  # Regenerates the Homebrew formula from the published release and pushes
+  # it to the tap. Idempotent: safe to re-run without re-tagging. The Scoop
+  # bucket is not pushed from here: it self-updates via checkver/autoupdate.
+  publish-formula:
+    needs: release
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ inputs.version }}
+    steps:
+      - uses: actions/create-github-app-token@v3
+        id: app-token
+        with:
+          client-id: ${{ secrets.APP_CLIENT_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          owner: hashiiiii
+          repositories: PrefabLens,homebrew-tap
+      - uses: actions/checkout@v7
+      - name: Render formula from the published release
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          gh release download "v$VERSION" --dir dist
+          cli/pkg/render.sh "$VERSION" dist out
+      - name: Push formula
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
+        run: |
+          set -euo pipefail
+          user_id=$(gh api "/users/${APP_SLUG}[bot]" --jq .id)
+          # publish <repo> <src> <dest>: commit the rendered formula to the
+          # tap repo, skipping the push when nothing changed (re-runs).
+          publish() {
+            git clone --depth 1 "https://x-access-token:${GH_TOKEN}@github.com/hashiiiii/$1.git" "repos/$1"
+            mkdir -p "repos/$1/$(dirname "$3")"
+            cp "$2" "repos/$1/$3"
+            git -C "repos/$1" config user.name "${APP_SLUG}[bot]"
+            git -C "repos/$1" config user.email "${user_id}+${APP_SLUG}[bot]@users.noreply.github.com"
+            git -C "repos/$1" add "$3"
+            git -C "repos/$1" diff --cached --quiet || {
+              git -C "repos/$1" commit -m "chore: prefablens v$VERSION"
+              git -C "repos/$1" push
+            }
+          }
+          publish homebrew-tap out/prefablens.rb Formula/prefablens.rb
+
+  # Uploads the extension zip from the published release to the Chrome Web
+  # Store and submits it for review; the store publishes it automatically on
+  # approval. Independent from the release: safe to re-run in isolation, but
+  # fails while a previous submission is still pending review.
+  publish-extension:
+    needs: release
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ inputs.version }}
+    steps:
+      - name: Download extension zip from the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release download "v$VERSION" --repo "$GITHUB_REPOSITORY" --pattern "prefablens-extension-*.zip" --dir dist
+      - name: Upload and submit for review
+        env:
+          CWS_EXTENSION_ID: ${{ secrets.CWS_EXTENSION_ID }}
+          CWS_CLIENT_ID: ${{ secrets.CWS_CLIENT_ID }}
+          CWS_CLIENT_SECRET: ${{ secrets.CWS_CLIENT_SECRET }}
+          CWS_REFRESH_TOKEN: ${{ secrets.CWS_REFRESH_TOKEN }}
+        run: |
+          set -euo pipefail
+          token=$(curl -fsS https://oauth2.googleapis.com/token \
+            -d client_id="$CWS_CLIENT_ID" -d client_secret="$CWS_CLIENT_SECRET" \
+            -d refresh_token="$CWS_REFRESH_TOKEN" -d grant_type=refresh_token | jq -er .access_token)
+          # cws <curl args...>: call the API, log the response, and pass it to the jq assertion
+          cws() { curl -fsS -H "Authorization: Bearer $token" -H "x-goog-api-version: 2" "$@" | tee /dev/stderr; }
+          cws -X PUT -T "dist/prefablens-extension-$VERSION.zip" \
+            "https://www.googleapis.com/upload/chromewebstore/v1.1/items/$CWS_EXTENSION_ID" \
+            | jq -e '.uploadState == "SUCCESS"' >/dev/null
+          cws -X POST -H "Content-Length: 0" \
+            "https://www.googleapis.com/chromewebstore/v1.1/items/$CWS_EXTENSION_ID/publish" \
+            | jq -e '.status == ["OK"]' >/dev/null

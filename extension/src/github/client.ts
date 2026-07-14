@@ -6,26 +6,16 @@ export class ApiError extends Error {
   }
 }
 
-export type PrFile = { path: string; status: string; previousPath?: string };
+// sha is the blob at head (at base for removed files) — the files API provides it for every status.
+export type PrFile = { path: string; status: string; previousPath?: string; sha?: string };
 export type PrRefs = { baseSha: string; headSha: string };
 
-// Input from the Options form may be scheme-less ("github.com").
-// A bare new URL throws and gets swallowed into fetch-failed, so we fill in the scheme.
-export function originOf(baseUrl: string): string {
-  const withScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(baseUrl) ? baseUrl : `https://${baseUrl}`;
-  return new URL(withScheme).origin;
-}
+// The REST base is fixed at build time (see build.mjs's esbuild define).
+export const API_BASE = __API_BASE__;
 
-export function apiBase(baseUrl: string | undefined): string {
-  if (!baseUrl) return "https://api.github.com";
-  const origin = originOf(baseUrl);
-  return origin === "https://github.com" ? "https://api.github.com" : `${origin}/api/v3`;
-}
-
-/** Derives the GraphQL endpoint from the REST base. GHES: /api/v3 → /api/graphql.
- *  The argument is named restBase to avoid confusion with the apiBase function. */
+/** Derives the GraphQL endpoint from the REST base. */
 export function graphqlUrl(restBase: string): string {
-  return restBase.endsWith("/api/v3") ? `${restBase.slice(0, -"/api/v3".length)}/api/graphql` : `${restBase}/graphql`;
+  return `${restBase}/graphql`;
 }
 
 export class GithubClient {
@@ -85,16 +75,17 @@ export class GithubClient {
   async listPrFiles(owner: string, repo: string, prNumber: number): Promise<PrFile[]> {
     const out: PrFile[] = [];
     for (let page = 1; ; page++) {
-      const batch = await this.json<Array<{ filename: string; status: string; previous_filename?: string }>>(
-        `/repos/${owner}/${repo}/pulls/${prNumber}/files?per_page=100&page=${page}`,
-      );
-      for (const f of batch) out.push({ path: f.filename, status: f.status, previousPath: f.previous_filename });
+      const batch = await this.json<
+        Array<{ filename: string; status: string; previous_filename?: string; sha?: string }>
+      >(`/repos/${owner}/${repo}/pulls/${prNumber}/files?per_page=100&page=${page}`);
+      for (const f of batch)
+        out.push({ path: f.filename, status: f.status, previousPath: f.previous_filename, sha: f.sha });
       if (batch.length < 100) return out;
     }
   }
 
   /** Looks up guid → asset path (with .meta stripped) via Code Search. No hit / not indexed (422) → null.
-   *  legacy syntax (extension:meta) = GHES-compatible. The index covers only the default branch, authenticated 10 req/min. */
+   *  The index covers only the default branch, authenticated 10 req/min. */
   async searchMetaByGuid(owner: string, repo: string, guid: string): Promise<string | null> {
     const q = encodeURIComponent(`"${guid}" repo:${owner}/${repo} extension:meta`);
     const res = await this.request(`/search/code?q=${q}&per_page=1`, "application/vnd.github+json");
@@ -104,7 +95,9 @@ export class GithubClient {
     return path?.endsWith(".meta") ? path.slice(0, -".meta".length) : null;
   }
 
-  /** Raw bytes at ref. null if the file is absent on that side. */
+  /** Raw bytes at ref. null if the file is absent on that side.
+   *  Path resolution at an arbitrary ref has erratic multi-second TTFB on GitHub's side (#110):
+   *  prefer getBlobRaw whenever the blob SHA is known. */
   async getFileAtRef(owner: string, repo: string, path: string, ref: string): Promise<Uint8Array | null> {
     const encoded = path.split("/").map(encodeURIComponent).join("/");
     const res = await this.request(
@@ -116,19 +109,46 @@ export class GithubClient {
     return new Uint8Array(await res.arrayBuffer());
   }
 
+  /** Raw blob bytes by SHA — content-addressed, so latency stays flat where contents-by-path stalls.
+   *  null on 404 (the SHA can vanish after a force push + gc). */
+  async getBlobRaw(owner: string, repo: string, sha: string): Promise<Uint8Array | null> {
+    const res = await this.request(`/repos/${owner}/${repo}/git/blobs/${sha}`, "application/vnd.github.raw+json");
+    if (res.status === 404) return null;
+    if (!res.ok) throw new ApiError(res.status);
+    return new Uint8Array(await res.arrayBuffer());
+  }
+
+  private async tree(
+    owner: string,
+    repo: string,
+    ref: string,
+  ): Promise<{ truncated: boolean; tree: Array<{ path: string; type: string; sha: string }> }> {
+    return this.json(`/repos/${owner}/${repo}/git/trees/${ref}?recursive=1`);
+  }
+
   /** path + blob SHA of every .meta at ref (a commit SHA is allowed). truncated means the listing was cut off past 100k entries. */
   async listMetaTree(
     owner: string,
     repo: string,
     ref: string,
   ): Promise<{ truncated: boolean; metas: Array<{ path: string; sha: string }> }> {
-    const body = await this.json<{ truncated: boolean; tree: Array<{ path: string; type: string; sha: string }> }>(
-      `/repos/${owner}/${repo}/git/trees/${ref}?recursive=1`,
-    );
+    const body = await this.tree(owner, repo, ref);
     const metas = body.tree
       .filter((e) => e.type === "blob" && e.path.endsWith(".meta"))
       .map((e) => ({ path: e.path, sha: e.sha }));
     return { truncated: body.truncated, metas };
+  }
+
+  /** path → blob SHA of every blob at ref. Feeds base-side getBlobRaw lookups; same truncation rule as listMetaTree. */
+  async listBlobShas(
+    owner: string,
+    repo: string,
+    ref: string,
+  ): Promise<{ truncated: boolean; byPath: Map<string, string> }> {
+    const body = await this.tree(owner, repo, ref);
+    const byPath = new Map<string, string>();
+    for (const e of body.tree) if (e.type === "blob") byPath.set(e.path, e.sha);
+    return { truncated: body.truncated, byPath };
   }
 
   /** Batch-fetches blob text via GraphQL (chunking is the caller's job). GraphQL has an independent 5,000 pt/h budget. */

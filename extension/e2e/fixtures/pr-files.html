@@ -1,24 +1,31 @@
 <!doctype html>
 <html data-color-mode="light">
-  <head><meta charset="utf-8" /><title>PR fixture</title></head>
+  <head>
+    <meta charset="utf-8" /><title>PR fixture</title>
+    <style>
+      /* Primer's collapse rule from github.com: the chevron / Viewed checkbox toggles
+         Details--on (and open) on .file, and this hides anything carrying the class. */
+      .Details:not(.Details--on) .Details-content--hidden { display: none !important; }
+    </style>
+  </head>
   <body>
-    <div class="file">
+    <div class="file js-details-container Details Details--on open">
       <div class="file-header" data-path="Assets/Foo.prefab">
         <span class="file-info">Assets/Foo.prefab</span>
       </div>
-      <div class="js-file-content">raw github diff table</div>
+      <div class="js-file-content Details-content--hidden">raw github diff table</div>
     </div>
-    <div class="file">
+    <div class="file js-details-container Details Details--on open">
       <div class="file-header" data-path="Assets/Big.unity">
         <span class="file-info">Assets/Big.unity</span>
       </div>
-      <div class="js-file-content">raw github diff table</div>
+      <div class="js-file-content Details-content--hidden">raw github diff table</div>
     </div>
-    <div class="file">
+    <div class="file js-details-container Details Details--on open">
       <div class="file-header" data-path="README.md">
         <span class="file-info">README.md</span>
       </div>
-      <div class="js-file-content">raw github diff table</div>
+      <div class="js-file-content Details-content--hidden">raw github diff table</div>
     </div>
   </body>
 </html>

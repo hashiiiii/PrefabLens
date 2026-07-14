@@ -3,6 +3,22 @@ import { build } from "esbuild";
 
 mkdirSync("dist", { recursive: true });
 
+const e2e = process.argv.includes("--e2e");
+
+// --demo: build only the site demo bundle (see src/demo.ts). Kept out of the
+// default build so the extension's shipped dist stays lean.
+if (process.argv.includes("--demo")) {
+  await build({
+    entryPoints: { demo: "src/demo.ts" },
+    bundle: true,
+    format: "iife",
+    target: "chrome120",
+    minify: true,
+    outdir: "dist",
+  });
+  process.exit(0);
+}
+
 await build({
   entryPoints: {
     content: "src/content/index.ts",
@@ -14,13 +30,18 @@ await build({
   target: "chrome120",
   minify: true,
   outdir: "dist",
+  define: { __API_BASE__: JSON.stringify(e2e ? "http://127.0.0.1:8471" : "https://api.github.com") },
 });
 
-// --e2e: pre-grant 127.0.0.1 so full-stack E2E can use a local HTTP server as "GHES"
-// (permissions.request returns true without a prompt for an already-granted origin)
 const manifest = JSON.parse(readFileSync("manifest.json", "utf8"));
-if (process.argv.includes("--e2e")) manifest.host_permissions.push("http://127.0.0.1/*");
+if (e2e) {
+  // --e2e: grant and target the fixed port the fake-GitHub server in full.spec.ts listens on
+  manifest.host_permissions.push("http://127.0.0.1/*");
+  manifest.content_scripts.push({ matches: ["http://127.0.0.1/*"], js: ["content.js"], run_at: "document_idle" });
+}
 writeFileSync("dist/manifest.json", JSON.stringify(manifest, null, 2));
 
 cpSync("src/options/options.html", "dist/options.html");
 cpSync("../zig-out/bin/prefablens.wasm", "dist/prefablens.wasm");
+mkdirSync("dist/images", { recursive: true });
+for (const size of [16, 32, 48, 128]) cpSync(`images/icon${size}.png`, `dist/images/icon${size}.png`);

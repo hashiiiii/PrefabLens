@@ -1,4 +1,4 @@
-import { AuthError, apiBase, type GithubClient, type PrFile, type PrRefs, RateLimitError } from "../github/client";
+import { API_BASE, AuthError, type GithubClient, type PrFile, type PrRefs, RateLimitError } from "../github/client";
 import { applyResolved, buildGuidIndex, type GuidCache } from "../github/guids";
 import { type RepoIndexStore, syncRepoIndex } from "../github/repoIndex";
 import type { DiffV2, GuidResolvedPush, PrefetchRequest, SemanticDiffRequest, SemanticDiffResponse } from "../types";
@@ -7,11 +7,18 @@ import { DiffError, type Differ } from "../wasm/differ";
 
 type ClientLike = Pick<
   GithubClient,
-  "getPrRefs" | "listPrFiles" | "getFileAtRef" | "searchMetaByGuid" | "listMetaTree" | "batchBlobTexts"
+  | "getPrRefs"
+  | "listPrFiles"
+  | "getFileAtRef"
+  | "getBlobRaw"
+  | "listBlobShas"
+  | "searchMetaByGuid"
+  | "listMetaTree"
+  | "batchBlobTexts"
 >;
 
 export type Deps = {
-  getSettings(): Promise<{ pat?: string; baseUrl?: string }>;
+  getSettings(): Promise<{ pat?: string }>;
   makeClient(base: string, token: string, lane: "user" | "prefetch"): ClientLike;
   getDiffer(): Promise<Differ>;
   guidCache: GuidCache;
@@ -24,7 +31,13 @@ export type Handler = {
   prefetch(req: PrefetchRequest): Promise<void>;
 };
 
-type PrContext = { refs: PrRefs; files: PrFile[]; guidIndex: Map<string, string> };
+// baseShas: path → blob sha at the merge base. null = tree unavailable (truncated/failed) → contents-api fallback
+type PrContext = {
+  refs: PrRefs;
+  files: PrFile[];
+  guidIndex: Map<string, string>;
+  baseShas: Map<string, string> | null;
+};
 
 const EMPTY = new Uint8Array(0);
 const MAX_SEARCHES = 10; // Code Search is authenticated 10 req/min — don't burn it all in one response
@@ -132,17 +145,22 @@ export function createHandler(deps: Deps): Handler {
     return p;
   }
 
+  /** blobSha rides along when known (files API / merge-base tree): blob-by-sha latency is flat where
+   *  contents-by-path stalls for seconds (#110). A 404 on the sha (force push) falls back to path+ref. */
   async function fetchBlob(
     client: ClientLike,
     owner: string,
     repo: string,
     path: string,
     sha: string,
+    blobSha?: string,
   ): Promise<Uint8Array | null> {
-    const key = `${sha}:${path}`;
+    const key = blobSha ?? `${sha}:${path}`; // a blob sha never collides with the `${sha}:${path}` form
     const hit = blobs.get(key); // the stored value is Promise<Uint8Array | null>, so undefined = not cached
     if (hit !== undefined) return hit;
-    const p = client.getFileAtRef(owner, repo, path, sha);
+    const p = blobSha
+      ? client.getBlobRaw(owner, repo, blobSha).then((bytes) => bytes ?? client.getFileAtRef(owner, repo, path, sha))
+      : client.getFileAtRef(owner, repo, path, sha);
     p.catch(() => blobs.delete(key)); // don't keep failures: the next call can re-fetch
     blobs.set(key, p);
     if (blobs.size > BLOB_CACHE_MAX) blobs.delete(blobs.keys().next().value!);
@@ -160,11 +178,14 @@ export function createHandler(deps: Deps): Handler {
     const file = ctx.files.find((f) => f.path === path);
     const status = file?.status ?? "modified";
     const beforePath = file?.previousPath ?? path;
-    const fetchSide = (p: string, sha: string): Promise<Uint8Array> =>
-      fetchBlob(client, owner, repo, p, sha).then((bytes) => bytes ?? EMPTY);
+    // files API sha is the head blob, except for removed files where it is the base blob
+    const beforeBlob = status === "removed" ? file?.sha : ctx.baseShas?.get(beforePath);
+    const afterBlob = status === "removed" ? undefined : file?.sha;
+    const fetchSide = (p: string, sha: string, blobSha?: string): Promise<Uint8Array> =>
+      fetchBlob(client, owner, repo, p, sha, blobSha).then((bytes) => bytes ?? EMPTY);
     return Promise.all([
-      status === "added" ? Promise.resolve(EMPTY) : fetchSide(beforePath, ctx.refs.baseSha),
-      status === "removed" ? Promise.resolve(EMPTY) : fetchSide(path, ctx.refs.headSha),
+      status === "added" ? Promise.resolve(EMPTY) : fetchSide(beforePath, ctx.refs.baseSha, beforeBlob),
+      status === "removed" ? Promise.resolve(EMPTY) : fetchSide(path, ctx.refs.headSha, afterBlob),
     ]);
   }
 
@@ -193,9 +214,11 @@ export function createHandler(deps: Deps): Handler {
         const path = current.resolved?.[s.guid];
         if (path === undefined) continue;
         const sha = s.side === "before" ? ctx.refs.baseSha : ctx.refs.headSha;
+        // sources aren't PR files, so only the base tree can supply a sha; the head side keeps the path fallback
+        const blobSha = s.side === "before" ? ctx.baseShas?.get(path) : undefined;
         let bytes: Uint8Array | null = null;
         try {
-          bytes = await fetchBlob(client, owner, repo, path, sha);
+          bytes = await fetchBlob(client, owner, repo, path, sha, blobSha);
         } catch {
           return current; // rate limit etc.: degrade to the first-pass diff
         }
@@ -225,11 +248,30 @@ export function createHandler(deps: Deps): Handler {
         client.getPrRefs(owner, repo, prNumber),
         client.listPrFiles(owner, repo, prNumber),
       ]);
-      const guidIndex = await buildGuidIndex(files, async (path, side) => {
-        const bytes = await fetchBlob(client, owner, repo, path, side === "base" ? refs.baseSha : refs.headSha);
-        return bytes ? new TextDecoder().decode(bytes) : null;
-      });
-      return { refs, files, guidIndex };
+      const bySha = new Map(files.map((f) => [f.path, f.sha]));
+      const [guidIndex, baseShas] = await Promise.all([
+        buildGuidIndex(files, async (path, side) => {
+          // the files API sha matches the side buildGuidIndex reads: head, or base exactly for removed metas
+          const bytes = await fetchBlob(
+            client,
+            owner,
+            repo,
+            path,
+            side === "base" ? refs.baseSha : refs.headSha,
+            bySha.get(path),
+          );
+          return bytes ? new TextDecoder().decode(bytes) : null;
+        }),
+        // like buildGuidIndex, only rate limits propagate; anything else degrades to the contents-api fallback
+        client.listBlobShas(owner, repo, refs.baseSha).then(
+          (tree) => (tree.truncated ? null : tree.byPath),
+          (err: unknown) => {
+            if (err instanceof RateLimitError) throw err;
+            return null;
+          },
+        ),
+      ]);
+      return { refs, files, guidIndex, baseShas };
     })();
     contexts.set(key, { at: Date.now(), ctx });
     ctx.catch(() => contexts.delete(key)); // don't cache failures
@@ -339,7 +381,7 @@ export function createHandler(deps: Deps): Handler {
     try {
       const settings = await deps.getSettings();
       if (!settings.pat) return { ok: false, error: "pat-missing" };
-      const base = apiBase(settings.baseUrl);
+      const base = API_BASE;
       const client = deps.makeClient(base, settings.pat, "user");
       const ctx = await loadContext(client, req.owner, req.repo, req.prNumber);
       const outcome = await getDiff(client, ctx, req.owner, req.repo, req.path, req.force === true);
@@ -365,7 +407,7 @@ export function createHandler(deps: Deps): Handler {
     try {
       const settings = await deps.getSettings();
       if (!settings.pat) return;
-      const base = apiBase(settings.baseUrl);
+      const base = API_BASE;
       const client = deps.makeClient(base, settings.pat, "prefetch");
       const ctx = await loadContext(client, req.owner, req.repo, req.prNumber);
       // Run independently of raw-diff prefetch (index sync speeds up the 3-stage resolution at serve time)

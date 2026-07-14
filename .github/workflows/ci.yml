@@ -62,3 +62,34 @@ jobs:
         run: |
           dotnet tool restore
           dotnet csharpier check . --no-msbuild-check
+      - name: Test
+        working-directory: editor
+        run: dotnet test DotNetTests~/Tests
+
+  packaging:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Render test
+        run: cli/pkg/render_test.sh
+
+  site:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install tools
+        uses: jdx/mise-action@v4
+      - name: Build CLI and WASM
+        run: |
+          zig build
+          zig build wasm
+      - name: Build demo bundle
+        working-directory: extension
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm run demo
+      - name: Site checks
+        working-directory: site
+        run: |
+          node --test src/*.test.mjs
+          node build.mjs

@@ -36,4 +36,18 @@ describe("createToggle", () => {
     expect(semantic?.getAttribute("aria-pressed")).toBe("true");
     expect(onSelect).not.toHaveBeenCalled();
   });
+
+  it("injects the page stylesheet exactly once", () => {
+    createToggle(vi.fn());
+    createToggle(vi.fn());
+    expect(document.head.querySelectorAll("style[data-prefablens-style]")).toHaveLength(1);
+  });
+
+  it("renders as a segmented control styled via aria-pressed", () => {
+    const toggle = createToggle(vi.fn());
+    expect(toggle.element.classList.contains("prefablens-seg")).toBe(true);
+    // No inline style juggling: the selected look is keyed off aria-pressed in CSS
+    const [raw] = [...toggle.element.querySelectorAll("button")];
+    expect(raw?.getAttribute("style")).toBeNull();
+  });
 });

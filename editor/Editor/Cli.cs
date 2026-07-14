@@ -161,13 +161,23 @@ namespace PrefabLens
         }
 
         /// Drop cached binaries of other versions once the pinned one is in place.
+        /// Best-effort: a locked directory (e.g. an old prefablens.exe still running
+        /// on Windows) must not fail the download that just succeeded.
         public static void DeleteStaleVersions(string root, string keep)
         {
             if (!Directory.Exists(root))
                 return;
             foreach (var dir in Directory.GetDirectories(root))
-                if (Path.GetFileName(dir) != keep)
+            {
+                if (Path.GetFileName(dir) == keep)
+                    continue;
+                try
+                {
                     Directory.Delete(dir, recursive: true);
+                }
+                catch (IOException) { }
+                catch (UnauthorizedAccessException) { }
+            }
         }
 
         public struct Result

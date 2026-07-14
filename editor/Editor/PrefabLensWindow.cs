@@ -105,7 +105,7 @@ namespace PrefabLens
             var menuInvoked = pendingSelectPath != null;
             pendingSelectPath = null;
             if (content == null)
-                return; // OnFocus can trigger a refresh before CreateGUI; nothing to render into yet
+                return; // unreachable given Refresh's own guard; kept as cheap defense
             content.Clear();
             if (res.ExitCode != 0)
             {
@@ -183,6 +183,7 @@ namespace PrefabLens
             list.itemsSource = bulk.Entries;
             list.RefreshItems();
             status.text = "";
+            // pendingSelectPath intentionally survives this path so DownloadThenRefresh carries the menu intent through.
             content.Clear();
             Note($"prefablens CLI not found (v{Cli.Version}).");
             content.Add(

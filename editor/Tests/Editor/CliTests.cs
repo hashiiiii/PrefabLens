@@ -118,8 +118,8 @@ namespace PrefabLens.Tests
         [Test]
         public void RunAsyncInvokesTheCallbackOffTheBlockedCaller()
         {
-            // ctx: null exercises the no-SynchronizationContext fallback; with a captured
-            // context the callback would deadlock here because this test blocks the caller.
+            // ctx: null exercises the no-SynchronizationContext fallback; a posted callback
+            // could not run while this test blocks the caller, failing the wait below.
             var isWindows = RuntimeInformation.IsOSPlatform(OSPlatform.Windows);
             var file = isWindows ? "cmd.exe" : "/bin/sh";
             var args = isWindows ? "/c echo hello" : "-c \"echo hello\"";

@@ -80,7 +80,7 @@ treated as paths; everything else is a git ref.
 
 ### Chrome extension
 
-Shows semantic diffs for UnityYAML files on the GitHub pull request Files changed tab. Requires a GitHub Personal Access Token (configure on the extension options page).
+Shows semantic diffs for UnityYAML files on the GitHub pull request Files changed tab. Sign in with GitHub via the OAuth device flow — directly from the PR page prompt or the extension options page. No Personal Access Token is required.
 
 ### Unity Editor
 

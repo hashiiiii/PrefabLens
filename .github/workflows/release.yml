@@ -126,3 +126,37 @@ jobs:
             }
           }
           publish homebrew-tap out/prefablens.rb Formula/prefablens.rb
+
+  # Uploads the extension zip from the published release to the Chrome Web
+  # Store and submits it for review; the store publishes it automatically on
+  # approval. Independent from the release: safe to re-run in isolation, but
+  # fails while a previous submission is still pending review.
+  publish-extension:
+    needs: release
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ inputs.version }}
+    steps:
+      - name: Download extension zip from the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release download "v$VERSION" --repo "$GITHUB_REPOSITORY" --pattern "prefablens-extension-*.zip" --dir dist
+      - name: Upload and submit for review
+        env:
+          CWS_EXTENSION_ID: ${{ secrets.CWS_EXTENSION_ID }}
+          CWS_CLIENT_ID: ${{ secrets.CWS_CLIENT_ID }}
+          CWS_CLIENT_SECRET: ${{ secrets.CWS_CLIENT_SECRET }}
+          CWS_REFRESH_TOKEN: ${{ secrets.CWS_REFRESH_TOKEN }}
+        run: |
+          set -euo pipefail
+          token=$(curl -fsS https://oauth2.googleapis.com/token \
+            -d client_id="$CWS_CLIENT_ID" -d client_secret="$CWS_CLIENT_SECRET" \
+            -d refresh_token="$CWS_REFRESH_TOKEN" -d grant_type=refresh_token | jq -er .access_token)
+          # cws <curl args...>: call the API, log the response, and pass it to the jq assertion
+          cws() { curl -fsS -H "Authorization: Bearer $token" -H "x-goog-api-version: 2" "$@" | tee /dev/stderr; }
+          cws -X PUT -T "dist/prefablens-extension-$VERSION.zip" \
+            "https://www.googleapis.com/upload/chromewebstore/v1.1/items/$CWS_EXTENSION_ID" \
+            | jq -e '.uploadState == "SUCCESS"' >/dev/null
+          cws -X POST -H "Content-Length: 0" \
+            "https://www.googleapis.com/chromewebstore/v1.1/items/$CWS_EXTENSION_ID/publish" \
+            | jq -e '.status == ["OK"]' >/dev/null

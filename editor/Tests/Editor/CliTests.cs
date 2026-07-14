@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using System.IO;
+using System.IO.Compression;
 using System.Runtime.InteropServices;
 using System.Threading;
 using NUnit.Framework;
@@ -160,6 +162,62 @@ namespace PrefabLens.Tests
             Assert.IsTrue(done.Wait(30_000), "callback never fired");
             Assert.AreNotEqual(0, got.Value.ExitCode);
             Assert.IsNotEmpty(got.Value.Stderr);
+        }
+
+        [Test]
+        public void ExtractToWritesEveryZipEntry()
+        {
+            // Build a real zip in memory (no fixture files) and extract it into a temp dir.
+            var buffer = new MemoryStream();
+            using (var zip = new ZipArchive(buffer, ZipArchiveMode.Create, leaveOpen: true))
+            {
+                using (var w = new StreamWriter(zip.CreateEntry("prefablens").Open()))
+                    w.Write("binary");
+                using (var w = new StreamWriter(zip.CreateEntry("LICENSE").Open()))
+                    w.Write("apache");
+            }
+            var dir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+            Directory.CreateDirectory(dir);
+            try
+            {
+                Cli.ExtractTo(buffer.ToArray(), dir);
+                Assert.AreEqual("binary", File.ReadAllText(Path.Combine(dir, "prefablens")));
+                Assert.AreEqual("apache", File.ReadAllText(Path.Combine(dir, "LICENSE")));
+            }
+            finally
+            {
+                Directory.Delete(dir, recursive: true);
+            }
+        }
+
+        [Test]
+        public void DeleteStaleVersionsKeepsOnlyThePinnedVersion()
+        {
+            // Simulates Library/PrefabLens after a package upgrade: the old cache dir
+            // must be removed, the freshly downloaded pinned version must survive.
+            var root = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+            Directory.CreateDirectory(Path.Combine(root, "0.5.0"));
+            File.WriteAllText(Path.Combine(root, "0.5.0", "prefablens"), "old");
+            Directory.CreateDirectory(Path.Combine(root, "0.6.1"));
+            try
+            {
+                Cli.DeleteStaleVersions(root, keep: "0.6.1");
+                Assert.IsFalse(Directory.Exists(Path.Combine(root, "0.5.0")));
+                Assert.IsTrue(Directory.Exists(Path.Combine(root, "0.6.1")));
+            }
+            finally
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+
+        [Test]
+        public void DeleteStaleVersionsToleratesAMissingRoot()
+        {
+            // First-ever download: Library/PrefabLens does not exist yet.
+            // Cleanup must be a silent no-op, not a DirectoryNotFoundException.
+            var root = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+            Assert.DoesNotThrow(() => Cli.DeleteStaleVersions(root, keep: "0.6.1"));
         }
     }
 }

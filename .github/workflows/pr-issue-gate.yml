@@ -1,0 +1,110 @@
+name: PR issue gate
+
+on:
+  pull_request_target:
+    types: [opened, reopened, ready_for_review, edited]
+  # Manual entry point for E2E tests: OWNER PRs are exempt below, so a
+  # scratch PR can only be exercised by dispatching with its number.
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: PR number to check
+        required: true
+
+permissions: {}
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    # The owner, Renovate, and the bot itself are exempt from the gate.
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.pull_request.author_association != 'OWNER' &&
+       github.event.pull_request.user.login != 'renovate[bot]' &&
+       github.event.pull_request.user.login != 'unidog-bot[bot]')
+    steps:
+      - uses: actions/create-github-app-token@v3
+        id: app-token
+        with:
+          client-id: ${{ secrets.APP_CLIENT_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+      - name: Enforce issue-first flow
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number }}
+        run: |
+          set -euo pipefail
+          owner=${REPO%/*} name=${REPO#*/}
+
+          # One query answers everything: the PR's own labels (maintainer
+          # escape hatch for trivial fixes), the labels of every issue the
+          # body closes, and the draft state the enforcement step needs.
+          data=$(gh api graphql -F owner="$owner" -F name="$name" \
+            -F number="$PR_NUMBER" -f query='
+            query($owner: String!, $name: String!, $number: Int!) {
+              repository(owner: $owner, name: $name) {
+                pullRequest(number: $number) {
+                  id
+                  isDraft
+                  labels(first: 50) { nodes { name } }
+                  closingIssuesReferences(first: 20) {
+                    nodes { labels(first: 50) { nodes { name } } }
+                  }
+                }
+              }
+            }')
+
+          approved=$(jq -r '
+            .data.repository.pullRequest
+            | [.labels.nodes[].name]
+              + [.closingIssuesReferences.nodes[].labels.nodes[].name]
+            | any(. == "approved")' <<<"$data")
+          if [ "$approved" = "true" ]; then
+            echo "gate passed: approved issue linked or PR labeled"
+            exit 0
+          fi
+
+          body=$(cat <<'EOF'
+          <!-- pr-issue-gate -->
+          Thanks for the pull request!
+
+          PrefabLens is pre-1.0 and follows an **issue-first** flow (see [CONTRIBUTING.md](https://github.com/hashiiiii/PrefabLens/blob/main/CONTRIBUTING.md)): breaking changes and large refactors are in flight, and a PR without prior discussion is likely to conflict with them or wait unreviewed.
+
+          To get this PR reviewed:
+
+          1. Open an issue describing the change (or pick an existing one) and discuss the approach.
+          2. Wait for a maintainer to add the `approved` label to that issue.
+          3. Link the issue from this PR's body with `Closes #NNN`, then mark the PR **Ready for review**.
+
+          Until then this PR stays in draft.
+          EOF
+          )
+          # The marker is the comment's first line; reusing it avoids a
+          # second copy that could drift.
+          marker=$(head -1 <<<"$body")
+
+          # .[] streams across the concatenated arrays --paginate emits,
+          # so this stays correct past 100 comments.
+          existing=$(gh api "repos/$REPO/issues/$PR_NUMBER/comments" --paginate |
+            jq -r --arg marker "$marker" \
+              '.[] | select(.body | startswith($marker)) | .id' | head -1)
+          if [ -n "$existing" ]; then
+            gh api -X PATCH "repos/$REPO/issues/comments/$existing" \
+              -f body="$body" --silent
+          else
+            gh api -X POST "repos/$REPO/issues/$PR_NUMBER/comments" \
+              -f body="$body" --silent
+          fi
+
+          if [ "$(jq -r '.data.repository.pullRequest.isDraft' <<<"$data")" = "false" ]; then
+            gh api graphql \
+              -F id="$(jq -r '.data.repository.pullRequest.id' <<<"$data")" \
+              -f query='
+              mutation($id: ID!) {
+                convertPullRequestToDraft(input: { pullRequestId: $id }) {
+                  pullRequest { isDraft }
+                }
+              }'
+          fi
+          echo "gate failed: commented and ensured draft state"

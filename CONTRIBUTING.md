@@ -24,11 +24,12 @@ you start — it saves rework on both sides.
 | `cli/` | `prefablens` command-line tool |
 | `extension/` | Chrome extension for semantic diffs on GitHub pull requests |
 | `editor/` | Unity Editor package for semantic UnityYAML diffs |
+| `site/` | GitHub Pages demo of the diff viewer |
 
 ## Development setup
 
 The toolchain is managed with [mise](https://mise.jdx.dev/) — Zig 0.16, Node 24,
-and .NET 10.
+pnpm 11, and .NET 10.
 
 ```bash
 mise install
@@ -59,13 +60,14 @@ zig build wasm
 node --test core/tests/*.test.mjs
 
 cd extension
-npm ci
-npm run size
-npm run lint
-npm run typecheck
-npm test
-npm run build
-npm run e2e        # Playwright; installs Chromium on first run
+pnpm install --frozen-lockfile
+pnpm run size
+pnpm run lint
+pnpm run typecheck
+pnpm test
+pnpm run build
+pnpm exec playwright install chromium   # first run only
+pnpm run e2e
 ```
 
 ### Unity Editor package (C#)
@@ -74,6 +76,30 @@ npm run e2e        # Playwright; installs Chromium on first run
 cd editor
 dotnet tool restore
 dotnet csharpier check . --no-msbuild-check
+dotnet test DotNetTests~/Tests
+```
+
+### Packaging templates (shell)
+
+If you touch the Homebrew formula template under `cli/pkg/`:
+
+```bash
+cli/pkg/render_test.sh
+```
+
+### Demo site
+
+The site embeds the extension's demo bundle, so build the CLI, the WASM
+library, and the bundle first:
+
+```bash
+zig build
+zig build wasm
+cd extension && pnpm install --frozen-lockfile && pnpm run demo
+
+cd ../site
+node --test src/*.test.mjs
+node build.mjs
 ```
 
 ## Coding conventions

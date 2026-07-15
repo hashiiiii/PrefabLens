@@ -6,11 +6,13 @@
 
 Semantic diff tools for UnityYAML assets. Instead of raw text diffs, PrefabLens shows changes at the GameObject, component, and field level.
 
-Try the [live demo](https://hashiiiii.github.io/PrefabLens/) — the extension's GitHub view and the CLI's local output, running in your browser.
+<img width="1271" height="734" alt="Kapture 2026-07-15 at 15 27 10" src="https://github.com/user-attachments/assets/e19dec9e-9bbd-4a8a-b5d0-90e9f3e284b7" />
 
 <p align="center">
   <img src="docs/images/top.png" alt="PrefabLens: semantic Unity prefab diffs vs raw git diff" />
 </p>
+
+Try the [live demo](https://hashiiiii.github.io/PrefabLens/) — the extension's GitHub view and the CLI's local output, running in your browser.
 
 ## Components
 
@@ -53,7 +55,7 @@ Install from the [Chrome Web Store](https://chromewebstore.google.com/detail/dlh
 
 ### Unity Editor package (OpenUPM)
 
-Requires Unity 2022.3 or newer.
+Requires Unity `2022.3+`.
 
 ```bash
 openupm add com.hashiiiii.prefablens

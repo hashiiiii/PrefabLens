@@ -564,8 +564,8 @@ fn renderField(
     try w.writeAll("</div>");
 }
 
-// Extension formatValue parity: — for null, #fileID for local refs, resolved
-// path (or raw guid:) for external refs.
+// Extension formatValue parity: — for null, None for {fileID: 0}, #fileID for
+// other local refs, resolved path / built-in name / raw guid: for external refs.
 fn writeValue(w: *std.Io.Writer, node: ?*const model.Node, resolved: ?*const core.json.Resolver) !void {
     const n = node orelse {
         try w.writeAll("—");

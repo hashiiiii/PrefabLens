@@ -48,5 +48,9 @@ namespace PrefabLens.Tests
         [Test]
         public void LocalRefReadsAsHashFileId() =>
             Assert.AreEqual("#42", ValueFormat.Format(Ref("42", null), Model()));
+
+        [Test]
+        public void BrokenRefWithGuidAndFileIdZeroUsesGuidRules() =>
+            Assert.AreEqual("guid:def", ValueFormat.Format(Ref("0", "def"), Model()));
     }
 }

@@ -20,6 +20,7 @@ Try the [live demo](https://hashiiiii.github.io/PrefabLens/) — the extension's
 | `cli/` | `prefablens` command-line tool |
 | `extension/` | Chrome extension for semantic diffs on GitHub pull requests |
 | `editor/` | Unity Editor package for semantic UnityYAML diffs |
+| `site/` | Live demo site published to GitHub Pages, built from the CLI and extension artifacts |
 
 ## Installation
 
@@ -51,6 +52,8 @@ Download the zip for your platform from [GitHub Releases](https://github.com/has
 Install from the [Chrome Web Store](https://chromewebstore.google.com/detail/dlhnalbfkikchkfedfneiimadommcnip).
 
 ### Unity Editor package (OpenUPM)
+
+Requires Unity 2022.3 or newer.
 
 ```bash
 openupm add com.hashiiiii.prefablens
@@ -111,7 +114,14 @@ cd extension && pnpm install && pnpm run build && pnpm test
 
 # Editor (EditMode tests run on .NET, no Unity required)
 cd editor && dotnet test DotNetTests~/Tests
+
+# Site (build the CLI, WASM, and extension demo bundle first: `pnpm run demo`)
+cd site && node --test src/*.test.mjs && node build.mjs
 ```
+
+## Contributing
+
+Contributions follow an issue-first flow: open an issue and wait for the `approved` label before sending a pull request. See [CONTRIBUTING.md](CONTRIBUTING.md) for details.
 
 ## License
 

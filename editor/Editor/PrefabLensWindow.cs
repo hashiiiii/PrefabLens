@@ -421,8 +421,8 @@ namespace PrefabLens
         static Row FieldRow(string label, DiffStatus status, Value before, Value after, DiffModel m)
         {
             var row = Badge(status).Add(label + " ", Palette.Muted);
-            var b = Format(before, m);
-            var a = Format(after, m);
+            var b = ValueFormat.Format(before, m);
+            var a = ValueFormat.Format(after, m);
             if (status == DiffStatus.Modified)
                 row.Add(b, Palette.Removed).Add(" → ", Palette.Muted).Add(a, Palette.Added);
             else if (status == DiffStatus.Removed)
@@ -430,17 +430,6 @@ namespace PrefabLens
             else
                 row.Add(a, status == DiffStatus.Added ? Palette.Added : (Color?)null);
             return row;
-        }
-
-        static string Format(Value v, DiffModel m)
-        {
-            if (v == null || v.IsNull)
-                return "";
-            if (!v.IsRef)
-                return v.Scalar ?? "";
-            if (v.RefGuid != null)
-                return m.Resolved.TryGetValue(v.RefGuid, out var p) ? Stem(p) : v.RefGuid;
-            return v.RefFileId == "0" ? "None" : "#" + v.RefFileId;
         }
 
         static Row Badge(DiffStatus s) =>

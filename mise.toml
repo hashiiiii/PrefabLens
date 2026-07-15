@@ -5,6 +5,6 @@ node = '24'
 # pnpm ships its own bundled Node.js to run pnpm itself; that runtime is never
 # exposed as `node`, so its version need not match the one above. Project code
 # (node build.mjs, node --test) always runs on the Node.js pinned above.
-pnpm = '11.10.0'
+pnpm = '11.13.0'
 dotnet = '10'
 'pipx:bump-my-version' = '1.4.1'

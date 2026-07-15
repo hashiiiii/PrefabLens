@@ -14,7 +14,8 @@ namespace PrefabLens
         /// <summary>Object name for a reference into Unity's built-in resource files, or null when unknown.</summary>
         public static string Name(string guid, string fileId)
         {
-            var table = guid == DefaultResourcesGuid ? DefaultResources
+            var table =
+                guid == DefaultResourcesGuid ? DefaultResources
                 : guid == BuiltinExtraGuid ? BuiltinExtra
                 : null;
             return table != null && table.TryGetValue(fileId, out var n) ? n : null;

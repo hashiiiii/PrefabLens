@@ -4,7 +4,7 @@
 [![Release](https://img.shields.io/github/v/release/hashiiiii/PrefabLens)](https://github.com/hashiiiii/PrefabLens/releases)
 [![CI](https://img.shields.io/github/actions/workflow/status/hashiiiii/PrefabLens/ci.yml?branch=main&label=CI)](https://github.com/hashiiiii/PrefabLens/actions/workflows/ci.yml)
 
-Semantic diff tools for UnityYAML assets. Instead of raw text diffs, PrefabLens shows changes at the GameObject, component, and field level.
+**Human-readable diffs for UnityYAML assets.** Instead of raw text diffs, PrefabLens shows changes at the GameObject, component, and field level.
 
 Try the [live demo](https://hashiiiii.github.io/PrefabLens/).
 

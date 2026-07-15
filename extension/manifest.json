@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "PrefabLens",
   "version": "0.6.1",
-  "description": "Semantic diffs for Unity YAML files in GitHub pull requests",
+  "description": "Human-readable diffs for UnityYAML assets in GitHub pull requests",
   "icons": {
     "16": "images/icon16.png",
     "32": "images/icon32.png",

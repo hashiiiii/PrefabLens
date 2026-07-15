@@ -314,7 +314,7 @@ function formatValue(value: FieldValue, diff: DiffV2): string {
   if (value === null) return "—";
   if (typeof value === "string") return value;
   const { fileId, guid } = value.ref;
-  if (guid === null) return `#${fileId}`; // local reference
+  if (guid === null) return fileId === "0" ? "None" : `#${fileId}`; // {fileID: 0} is Unity's null reference
   const path = diff.resolved?.[guid];
   if (path !== undefined) return path;
   const builtin = builtinName(guid, fileId);

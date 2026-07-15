@@ -153,6 +153,31 @@ test "html: unity built-in ref values render object names" {
     try testing.expect(std.mem.indexOf(u8, html, "guid:0000000000000000e000000000000000") == null);
 }
 
+test "html: null reference reads as None, local refs as #fileID" {
+    // Same decision-table cases as render_tree.zig ("null reference reads as
+    // None") and the extension's render.test.ts.
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const before =
+        \\--- !u!65 &5
+        \\CapsuleCollider:
+        \\  m_Material: {fileID: 0}
+    ;
+    const after =
+        \\--- !u!65 &5
+        \\CapsuleCollider:
+        \\  m_Material: {fileID: 42}
+    ;
+    const res = try core.diffBytes(arena, before, after);
+    const html = try renderToString(arena, &.{.{ .path = null, .res = res }}, null);
+    try testing.expect(std.mem.indexOf(u8, html, ">None<") != null);
+    try testing.expect(std.mem.indexOf(u8, html, ">#42<") != null);
+    // ">#0<" (not bare "#0"): the embedded semantic_view.css contains color
+    // codes like #0969da, so only the value-span form proves absence.
+    try testing.expect(std.mem.indexOf(u8, html, ">#0<") == null);
+}
+
 test "html: nested child GameObject nests inside the parent's pl-kids" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
@@ -563,6 +588,9 @@ fn writeValue(w: *std.Io.Writer, node: ?*const model.Node, resolved: ?*const cor
                 }
                 try w.writeAll("guid:");
                 try writeEscaped(w, g);
+            } else if (r.file_id == 0) {
+                // Unity's null reference; the Inspector shows it as None.
+                try w.writeAll("None");
             } else {
                 try w.print("#{d}", .{r.file_id});
             }

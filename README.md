@@ -6,13 +6,27 @@
 
 Semantic diff tools for UnityYAML assets. Instead of raw text diffs, PrefabLens shows changes at the GameObject, component, and field level.
 
-<img width="1271" height="734" alt="Kapture 2026-07-15 at 15 27 10" src="https://github.com/user-attachments/assets/e19dec9e-9bbd-4a8a-b5d0-90e9f3e284b7" />
+Try the [live demo](https://hashiiiii.github.io/PrefabLens/).
+
+## Chrome extension (Chrome Web Store)
 
 <p align="center">
-  <img src="docs/images/top.png" alt="PrefabLens: semantic Unity prefab diffs vs raw git diff" />
+  <img width="1271" height="734" alt="extension-01" src="docs/images/extension-01.gif" />
+
+  <img src="docs/images/extension-02.png" alt="extension-02" />
 </p>
 
-Try the [live demo](https://hashiiiii.github.io/PrefabLens/) — the extension's GitHub view and the CLI's local output, running in your browser.
+## Unity Editor
+
+<p align="center">
+  <img width="1087" height="750" src="docs/images/editor-01.gif" alt="editor-01" />
+</p>
+
+## CLI
+
+<p align="center">
+  <img width="840" height="720" src="docs/images/cli-01.png" alt="cli-01" />
+</p>
 
 ## Components
 
@@ -26,32 +40,34 @@ Try the [live demo](https://hashiiiii.github.io/PrefabLens/) — the extension's
 
 ## Installation
 
-### Homebrew (macOS / Linux)
+### Chrome extension (Chrome Web Store)
+
+Install from the [Chrome Web Store](https://chromewebstore.google.com/detail/dlhnalbfkikchkfedfneiimadommcnip).
+
+### CLI
+
+#### Homebrew (macOS / Linux)
 
 ```bash
 brew install hashiiiii/tap/prefablens
 ```
 
-### Scoop (Windows)
+#### Scoop (Windows)
 
 ```bash
 scoop bucket add hashiiiii https://github.com/hashiiiii/scoop-bucket
 scoop install prefablens
 ```
 
-### mise
+#### mise
 
 ```bash
 mise use -g github:hashiiiii/PrefabLens
 ```
 
-### Manual
+#### Manual
 
 Download the zip for your platform from [GitHub Releases](https://github.com/hashiiiii/PrefabLens/releases).
-
-### Chrome extension (Chrome Web Store)
-
-Install from the [Chrome Web Store](https://chromewebstore.google.com/detail/dlhnalbfkikchkfedfneiimadommcnip).
 
 ### Unity Editor package (OpenUPM)
 
@@ -64,6 +80,13 @@ openupm add com.hashiiiii.prefablens
 Without the [openupm-cli](https://github.com/openupm/openupm-cli), add the scoped registry as described on the [package page](https://openupm.com/packages/com.hashiiiii.prefablens/), or install via the Package Manager git URL: `https://github.com/hashiiiii/PrefabLens.git?path=editor`.
 
 ## Usage
+
+### Chrome extension
+
+Shows semantic diffs for UnityYAML files on the GitHub pull request Files changed tab. Sign in with GitHub from the first diff panel (or the extension options page); authorization uses the GitHub device flow, so no token setup is needed.
+
+> [!NOTE]
+> The extension is currently available on github.com only.
 
 ### CLI
 
@@ -81,13 +104,6 @@ prefablens --open main                  # write the report to a temp file and op
 
 Operands ending in a Unity YAML extension (`.prefab`, `.unity`, `.asset`, ...) are
 treated as paths; everything else is a git ref.
-
-### Chrome extension
-
-Shows semantic diffs for UnityYAML files on the GitHub pull request Files changed tab. Sign in with GitHub from the first diff panel (or the extension options page); authorization uses the GitHub device flow, so no token setup is needed.
-
-> [!NOTE]
-> The extension is currently available on github.com only.
 
 ### Unity Editor
 

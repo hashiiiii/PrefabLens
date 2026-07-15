@@ -161,6 +161,43 @@ describe("render", () => {
     expect(text).toContain("guid:0000000000000000e000000000000000"); // unknown fileID keeps the raw guid
   });
 
+  it("shows the null reference ({fileID: 0}) as None, like the Unity Inspector", () => {
+    // Same decision-table cases as cli/src/render_tree.zig and
+    // cli/src/render_html.zig ("null reference reads as None") and the
+    // editor's ValueFormatTests.cs.
+    const nullRef: DiffV2 = {
+      schema: "prefablens.diff.v2",
+      unresolvedGuids: [],
+      roots: [],
+      loose: [
+        {
+          kind: "component",
+          fileId: "5",
+          classId: 65,
+          typeName: "CapsuleCollider",
+          scriptGuid: null,
+          className: null,
+          status: "modified",
+          fields: [
+            {
+              path: "Material",
+              status: "modified",
+              // {fileID: 0} is Unity's null reference; 42 is a plain local ref.
+              before: { ref: { fileId: "0", guid: null, type: null } },
+              after: { ref: { fileId: "42", guid: null, type: null } },
+            },
+          ],
+        },
+      ],
+    };
+    const root = freshRoot();
+    render(root, nullRef);
+    const text = root.querySelector(".pl-root")!.textContent!;
+    expect(text).toContain("None"); // {fileID: 0} reads as the Inspector's None
+    expect(text).toContain("#42"); // non-zero local refs keep #fileId
+    expect(text).not.toContain("#0");
+  });
+
   it("renders repo-controlled strings as text, never as markup", () => {
     const hostile: DiffV2 = {
       ...DIFF,

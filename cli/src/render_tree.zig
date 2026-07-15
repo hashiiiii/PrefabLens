@@ -83,8 +83,32 @@ test "render: resolved ref values read as asset paths, like the extension" {
     try render(arena, &aw.writer, res, &resolver, false);
     const text = aw.toArrayList().items;
     // The external ref shows its resolved path instead of the raw guid tuple.
-    try testing.expect(std.mem.indexOf(u8, text, "Material: Assets/Materials/Fixture.mat → {fileID:0}") != null);
+    try testing.expect(std.mem.indexOf(u8, text, "Material: Assets/Materials/Fixture.mat → None") != null);
     try testing.expect(std.mem.indexOf(u8, text, "guid:abc123") == null);
+}
+
+test "render: null reference reads as None, local refs as #fileID" {
+    // Same decision-table cases as the extension's render.test.ts ("shows the
+    // null reference ({fileID: 0}) as None") and the editor's ValueFormatTests.cs.
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const before =
+        \\--- !u!65 &5
+        \\CapsuleCollider:
+        \\  m_Material: {fileID: 0}
+    ;
+    const after =
+        \\--- !u!65 &5
+        \\CapsuleCollider:
+        \\  m_Material: {fileID: 42}
+    ;
+    const res = try core.diffBytes(arena, before, after);
+    var out: std.ArrayList(u8) = .empty;
+    var aw = std.Io.Writer.Allocating.fromArrayList(arena, &out);
+    try render(arena, &aw.writer, res, null, false);
+    const text = aw.toArrayList().items;
+    try testing.expect(std.mem.indexOf(u8, text, "Material: None → #42") != null);
 }
 
 test "render: unity built-in refs show object names" {
@@ -111,7 +135,7 @@ test "render: unity built-in refs show object names" {
     try testing.expect(std.mem.indexOf(u8, text, "guid:0000000000000000e000000000000000") == null);
 }
 
-test "render: built-in guid with unknown fileID keeps the raw guid tuple" {
+test "render: built-in guid with unknown fileID keeps the raw guid" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
@@ -131,7 +155,7 @@ test "render: built-in guid with unknown fileID keeps the raw guid tuple" {
     var aw = std.Io.Writer.Allocating.fromArrayList(arena, &out);
     try render(arena, &aw.writer, res, null, false);
     const text = aw.toArrayList().items;
-    try testing.expect(std.mem.indexOf(u8, text, "{guid:0000000000000000e000000000000000, fileID:424242}") != null);
+    try testing.expect(std.mem.indexOf(u8, text, "guid:0000000000000000e000000000000000") != null);
     try testing.expect(std.mem.indexOf(u8, text, "built-in") == null);
 }
 
@@ -630,9 +654,12 @@ fn writeValueText(w: *std.Io.Writer, node: ?*const model.Node, resolved: ?*const
                     try w.print("{s} (built-in)", .{builtin});
                     return;
                 }
-                try w.print("{{guid:{s}, fileID:{d}}}", .{ g, r.file_id });
+                try w.print("guid:{s}", .{g});
+            } else if (r.file_id == 0) {
+                // Unity's null reference; the Inspector shows it as None.
+                try w.writeAll("None");
             } else {
-                try w.print("{{fileID:{d}}}", .{r.file_id});
+                try w.print("#{d}", .{r.file_id});
             }
         },
         .map => try w.writeAll("{...}"),

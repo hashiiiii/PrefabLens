@@ -1,0 +1,15 @@
+<!-- Source of social-preview.png (GitHub social preview, 1280x640).
+     Upload manually: repo Settings > General > Social preview.
+     Regenerate with: rsvg-convert -w 1280 -h 640 social-preview.svg -o social-preview.png -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 640">
+  <rect width="1280" height="640" fill="#000"/>
+  <!-- Mark: diff cube, same geometry as extension/images/icon.svg (white faces on dark) -->
+  <g transform="translate(170,180) scale(2.8)">
+    <polygon points="50,9.08 82.77,28 50,46.92 17.23,28" fill="#fff"/>
+    <polygon points="14.57,32.62 47.33,51.54 47.33,89.38 14.57,70.46" fill="#fff"/>
+    <polygon points="52.67,51.54 85.43,32.62 85.43,70.46 52.67,89.38" fill="#14c6cb"/>
+  </g>
+  <text x="560" y="308" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="96" font-weight="700" fill="#ffffff">PrefabLens</text>
+  <text x="562" y="376" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="38" fill="#b2b6bd">Human-readable diffs</text>
+  <text x="562" y="428" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="38" fill="#b2b6bd">for UnityYAML assets</text>
+</svg>

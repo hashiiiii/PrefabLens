@@ -31,6 +31,19 @@ describe("parsePrUrl", () => {
     expect(parsePrUrl("/owner/repo/pull/42")).toBeNull();
     expect(parsePrUrl("/owner/repo/blob/main/a.prefab")).toBeNull();
   });
+  it("matches the react ui changes tab (rolled out since december 2025)", () => {
+    expect(parsePrUrl("/owner/repo/pull/42/changes")).toEqual({ owner: "owner", repo: "repo", prNumber: 42 });
+    // "Between commit A and B" range view, same shape github-url-detection accepts
+    expect(parsePrUrl("/owner/repo/pull/42/changes/1e27d799..e1aba6f")).toEqual({
+      owner: "owner",
+      repo: "repo",
+      prNumber: 42,
+    });
+  });
+  it("rejects the single-commit changes view (commit pages are a separate issue)", () => {
+    expect(parsePrUrl("/owner/repo/pull/42/changes/1e27d7998afdd3608d9fc3bf95ccf27fa5010641")).toBeNull();
+    expect(parsePrUrl("/owner/repo/pull/42/changes/1e27d79")).toBeNull();
+  });
 });
 
 describe("parsePrPage", () => {
@@ -57,7 +70,21 @@ describe("scanUnityFiles", () => {
       "Assets/Scenes/Main.unity",
       "Assets/Data/Config.asset",
     ]);
-    expect(entries[0]?.content.classList.contains("js-file-content")).toBe(true);
+    // Behavior replaces the old `content` field: hiding acts on the .js-file-content element
+    const content = document.querySelector<HTMLElement>(".file .js-file-content")!;
+    entries[0]!.setRawHidden(true);
+    expect(content.style.display).toBe("none");
+    entries[0]!.setRawHidden(false);
+    expect(content.style.display).toBe("");
+    // Classic collapse is handled by Primer's Details CSS, not by us
+    expect(entries[0]!.collapsed()).toBe(false);
+    // The global bar anchors on the .file container
+    expect(entries[0]!.globalAnchor()).toBe(document.querySelector(".file"));
+    // The host lands right after the content and opts into the Details collapse CSS
+    const host = document.createElement("div");
+    entries[0]!.attachHost(host);
+    expect(content.nextElementSibling).toBe(host);
+    expect(host.classList.contains("Details-content--hidden")).toBe(true);
   });
 
   it("finds every UnityYAML asset extension beyond the original trio", () => {
@@ -115,6 +142,117 @@ describe("scanUnityFiles", () => {
 
   it("is harmless when the expected structure is missing (defensive selectors)", () => {
     document.body.innerHTML = "<div>totally different markup</div>";
+    expect(scanUnityFiles(document)).toEqual([]);
+  });
+});
+
+// Captured shape of GitHub's react diff UI (login-gated rollout): hashed CSS-module classes,
+// path only as LRM-wrapped header text, no data-path attribute anywhere.
+const REACT_FIXTURE = `
+  <div data-testid="diff-content">
+    <div data-testid="progressive-diffs-list">
+      <div class="PullRequestDiffsList-module__diffEntry__djnVa">
+        <div role="region" id="diff-aaa111" class="Diff-module__diffTargetable Diff-module__diff">
+          <div class="Diff-module__diffHeaderWrapper">
+            <div class="DiffFileHeader-module__diff-file-header">
+              <h3 class="DiffFileHeader-module__file-name"><a href="#diff-aaa111"><code>‎Assets/Foo.prefab‎</code></a></h3>
+              <button type="button" aria-expanded="true"><svg class="octicon octicon-chevron-down"></svg></button>
+            </div>
+          </div>
+          <div class="Diff-module__diffContent">raw diff</div>
+        </div>
+      </div>
+      <div class="PullRequestDiffsList-module__diffEntry__djnVa">
+        <div role="region" id="diff-bbb222" class="Diff-module__diffTargetable Diff-module__diff">
+          <div class="Diff-module__diffHeaderWrapper">
+            <div class="DiffFileHeader-module__diff-file-header">
+              <h3 class="DiffFileHeader-module__file-name"><a href="#diff-bbb222"><code>‎README.md‎</code></a></h3>
+              <button type="button" aria-expanded="true"><svg class="octicon octicon-chevron-down"></svg></button>
+            </div>
+          </div>
+          <div class="Diff-module__diffContent">raw diff</div>
+        </div>
+      </div>
+    </div>
+  </div>
+`;
+
+describe("scanUnityFiles (react ui)", () => {
+  it("finds unity files by header text and strips bidi marks", () => {
+    document.body.innerHTML = REACT_FIXTURE;
+    const entries = scanUnityFiles(document);
+    expect(entries.map((e) => e.path)).toEqual(["Assets/Foo.prefab"]);
+  });
+
+  it("reads the renamed-to path from the visually hidden span", () => {
+    // Renames concatenate visible text and sr-only "OLD renamed to NEW" in textContent,
+    // so the sr-only form must win when present.
+    document.body.innerHTML = REACT_FIXTURE.replace(
+      "<code>‎Assets/Foo.prefab‎</code>",
+      '<code>‎Assets/{Old.prefab → New.prefab}‎<span class="sr-only">Assets/Old.prefab renamed to Assets/New.prefab</span></code>',
+    );
+    expect(scanUnityFiles(document).map((e) => e.path)).toEqual(["Assets/New.prefab"]);
+  });
+
+  it("hides every region child except the header block and our host", () => {
+    document.body.innerHTML = REACT_FIXTURE;
+    const entry = scanUnityFiles(document)[0]!;
+    const host = document.createElement("div");
+    host.setAttribute("data-prefablens-view", "");
+    entry.attachHost(host);
+    // Host goes right after the header wrapper, inside the region
+    const region = document.querySelector("#diff-aaa111")!;
+    expect(region.children[1]).toBe(host);
+    entry.setRawHidden(true);
+    const body = region.querySelector<HTMLElement>(".Diff-module__diffContent")!;
+    expect(body.style.display).toBe("none");
+    expect(host.style.display).not.toBe("none");
+    expect(region.querySelector<HTMLElement>(".Diff-module__diffHeaderWrapper")!.style.display).not.toBe("none");
+    entry.setRawHidden(false);
+    expect(body.style.display).toBe("");
+  });
+
+  it("re-resolves body nodes on every call because react recreates them", () => {
+    document.body.innerHTML = REACT_FIXTURE;
+    const entry = scanUnityFiles(document)[0]!;
+    entry.setRawHidden(true);
+    // Simulate a react remount: fresh body node without our inline style
+    const region = document.querySelector("#diff-aaa111")!;
+    region.querySelector(".Diff-module__diffContent")!.remove();
+    const fresh = document.createElement("div");
+    fresh.className = "Diff-module__diffContent";
+    region.append(fresh);
+    entry.setRawHidden(true);
+    expect(fresh.style.display).toBe("none");
+  });
+
+  it("reports the chevron collapse state", () => {
+    document.body.innerHTML = REACT_FIXTURE;
+    const entry = scanUnityFiles(document)[0]!;
+    expect(entry.collapsed()).toBe(false);
+    // React swaps the chevron icon when the file is collapsed
+    const icon = document.querySelector("#diff-aaa111 .octicon-chevron-down")!;
+    icon.setAttribute("class", "octicon octicon-chevron-right");
+    expect(entry.collapsed()).toBe(true);
+  });
+
+  it("also reads collapse from the header's collapsed module class", () => {
+    // Second signal, independent of the icon: github stamps this class on the header row
+    document.body.innerHTML = REACT_FIXTURE;
+    const entry = scanUnityFiles(document)[0]!;
+    const header = document.querySelector("#diff-aaa111 .DiffFileHeader-module__diff-file-header")!;
+    header.classList.add("DiffFileHeader-module__collapsed__aB3cD");
+    expect(entry.collapsed()).toBe(true);
+  });
+
+  it("anchors the global bar on the virtualized list root", () => {
+    document.body.innerHTML = REACT_FIXTURE;
+    const entry = scanUnityFiles(document)[0]!;
+    expect(entry.globalAnchor()).toBe(document.querySelector('[data-testid="progressive-diffs-list"]'));
+  });
+
+  it("is harmless when the react structure is missing pieces", () => {
+    document.body.innerHTML = '<div role="region" id="diff-x"><div>no header</div></div>';
     expect(scanUnityFiles(document)).toEqual([]);
   });
 });

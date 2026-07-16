@@ -37,7 +37,7 @@ function countUnresolved(json: DiffV2): number {
 }
 
 // Targets of the global switch: drives the toggle + display of already-attached files from outside
-type Applier = { header: HTMLElement; apply(view: View): void };
+type Applier = { header: HTMLElement; apply(view: View): void; sync(): void };
 const appliers = new Set<Applier>();
 let globalToggle: Toggle | undefined;
 let currentPr = ""; // overrides are valid only while on the PR: discard when the PR changes
@@ -86,21 +86,26 @@ function attach(state: ViewState): void {
   if (key !== currentPr) {
     currentPr = key;
     state.clearOverrides();
-    // Crossing PRs also drops references to dead DOM (prevents a soft leak)
-    for (const a of [...appliers]) if (!a.header.isConnected) appliers.delete(a);
     for (const [k, v] of views) if (!v.root.host.isConnected) views.delete(k); // not only ignore late pushes to views killed by navigation, but also cut the reference
   }
+  // The react ui virtualizes the list and discards off-screen DOM continuously, so prune
+  // dead appliers every scan, not just on PR change (also plugs the classic soft leak).
+  for (const a of [...appliers]) if (!a.header.isConnected) appliers.delete(a);
   const entries = scanUnityFiles(document);
   if (entries.length) ensureGlobalToggle(state, entries[0]!);
   for (const entry of entries) attachToggle(state, pr, entry);
+  // Re-assert view state: react remounts diff bodies under still-marked headers, which
+  // silently undoes the inline hide. All sync operations are idempotent and fetch-free.
+  for (const a of appliers) a.sync();
 }
 
-/** Injects exactly one global toggle right before the first Unity file's .file container.
- *  The toolbar DOM changes heavily on GitHub's side, so anchor on the reliably-present .file. */
+/** Injects exactly one global toggle right before the first Unity file's layout anchor:
+ *  the .file container on classic, the virtualized list root on the react ui (a bar inside
+ *  a recycled list item would be discarded on scroll). */
 function ensureGlobalToggle(state: ViewState, first: FileEntry): void {
   if (globalToggle?.element.closest("[data-prefablens-global]")?.isConnected) return;
-  const container = first.header.closest(".file");
-  if (!container?.parentElement) return;
+  const anchor = first.globalAnchor();
+  if (!anchor?.parentElement) return;
   const bar = document.createElement("div");
   bar.setAttribute("data-prefablens-global", "");
   const label = document.createElement("span");
@@ -108,7 +113,7 @@ function ensureGlobalToggle(state: ViewState, first: FileEntry): void {
   label.textContent = "PrefabLens";
   const toggle = createToggle((view) => state.setDefault(view), state.defaultView());
   bar.append(label, toggle.element);
-  container.before(bar);
+  anchor.before(bar);
   globalToggle = toggle;
 }
 
@@ -120,23 +125,34 @@ function attachToggle(state: ViewState, pr: { owner: string; repo: string; prNum
   let host: HTMLElement | undefined;
   let requested = false;
 
-  const show = (view: View): void => {
+  // Display-only re-assert, never fetches: safe to run on every scan even while a panel
+  // sits on an error (a fetching sync would silently hammer retries on rate limits).
+  const sync = (view: View): void => {
     if (view === "raw") {
-      entry.content.style.display = "";
+      entry.setRawHidden(false);
       if (host) host.style.display = "none";
       return;
     }
-    entry.content.style.display = "none";
+    if (!host) return; // semantic never rendered here: leave the raw diff alone
+    entry.setRawHidden(true);
+    if (!host.isConnected) entry.attachHost(host); // a react remount can drop the host together with the old body
+    // Follow github's own collapse (react ui): the classic layout handles this via the
+    // Details CSS class added in attachHost instead, where collapsed() is always false.
+    host.style.display = entry.collapsed() ? "none" : "";
+  };
+
+  const show = (view: View): void => {
+    if (view === "raw") {
+      sync(view);
+      return;
+    }
     if (!host) {
       host = document.createElement("div");
       host.setAttribute("data-prefablens-view", "");
-      // Same Primer class github puts on .js-file-content: the chevron / Viewed collapse
-      // only toggles Details--on on .file, so the host must opt into that CSS itself
-      host.classList.add("Details-content--hidden");
       host.attachShadow({ mode: "open" });
-      entry.content.after(host);
+      entry.attachHost(host);
     }
-    host.style.display = "";
+    sync(view);
     if (requested) return; // cache only successful results per file (re-toggle doesn't re-fetch)
     const root = host.shadowRoot!;
     const request = (force?: boolean): void => {
@@ -173,6 +189,7 @@ function attachToggle(state: ViewState, pr: { owner: string; repo: string; prNum
       toggle.set(view);
       show(view);
     },
+    sync: () => sync(state.effective(entry.path)),
   });
 
   // If the default is semantic, start rendering at attach time: lazy-loaded files also pass through here, so

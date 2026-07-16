@@ -7,11 +7,12 @@ using UnityEngine.UIElements;
 
 namespace PrefabLens
 {
-    /// Master-detail view: UnityYAML assets that differ from HEAD on the left,
-    /// the selected asset's semantic diff on the right.
+    /// Master-detail view: UnityYAML assets that differ from the chosen base ref
+    /// (HEAD by default) on the left, the selected asset's semantic diff on the right.
     public sealed class PrefabLensWindow : EditorWindow
     {
         Label status;
+        TextField baseRef;
         ListView list;
         VisualElement content;
         BulkModel bulk = new();
@@ -46,6 +47,16 @@ namespace PrefabLens
                 },
             };
             toolbar.Add(status);
+            baseRef = new TextField("Base")
+            {
+                // Commit on Enter or focus loss instead of every keystroke, so each
+                // edit triggers exactly one CLI run.
+                isDelayed = true,
+                tooltip = "Git ref to compare against: branch, tag, or commit. Empty = HEAD.",
+                style = { width = 220 },
+            };
+            baseRef.RegisterValueChangedCallback(_ => Refresh());
+            toolbar.Add(baseRef);
             toolbar.Add(new Button(Refresh) { text = "Refresh" });
             rootVisualElement.Add(toolbar);
 
@@ -96,7 +107,7 @@ namespace PrefabLens
             }
             refreshing = true;
             status.text = "Refreshing…";
-            Cli.RunBulkAsync(cli, OnBulkDone);
+            Cli.RunBulkAsync(cli, baseRef.value, OnBulkDone);
         }
 
         void OnBulkDone(Cli.Result res)
@@ -148,7 +159,14 @@ namespace PrefabLens
             ShowEntry(bulk.Entries[idx]);
         }
 
-        string CountText() => bulk.Entries.Count == 0 ? "No changes vs HEAD" : $"{bulk.Entries.Count} changed vs HEAD";
+        string CountText() =>
+            bulk.Entries.Count == 0 ? $"No changes vs {BaseLabel()}" : $"{bulk.Entries.Count} changed vs {BaseLabel()}";
+
+        string BaseLabel()
+        {
+            var r = baseRef.value?.Trim();
+            return string.IsNullOrEmpty(r) ? "HEAD" : r;
+        }
 
         int IndexOfPath(string path)
         {

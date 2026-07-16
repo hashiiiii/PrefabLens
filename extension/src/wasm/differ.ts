@@ -71,7 +71,7 @@ export async function createDiffer(wasmBytes: BufferSource): Promise<Differ> {
     } finally {
       if (before.length) exp.free(bp, before.length);
       if (after.length) exp.free(ap, after.length);
-      if (assets !== undefined && assets.length) exp.free(tp, assets.length);
+      if (assets?.length) exp.free(tp, assets.length);
     }
   }
 

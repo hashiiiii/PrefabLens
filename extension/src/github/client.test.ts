@@ -239,6 +239,58 @@ describe("GithubClient", () => {
     await expect(client.resolveRefSha("o", "r", "main")).resolves.toBe("full-head-sha");
     expect(calls[0]?.headers.accept).toBe("application/vnd.github.sha");
   });
+
+  it("carries retry-after advice on a secondary rate limit", async () => {
+    const { fn } = fakeFetch({
+      "/pulls/7": () => new Response("slow down", { status: 403, headers: { "retry-after": "12" } }),
+    });
+    const client = new GithubClient("https://api.github.com", "tok", fn);
+    const err = await client.getPrRefs("o", "r", 7).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(RateLimitError);
+    // retry-after is seconds; the queue consumes milliseconds
+    expect((err as RateLimitError).retryAfterMs).toBe(12_000);
+  });
+
+  it("derives advice from x-ratelimit-reset when retry-after is absent", async () => {
+    const reset = Math.floor(Date.now() / 1000) + 30;
+    const { fn } = fakeFetch({
+      "/pulls/7": () =>
+        new Response("", {
+          status: 403,
+          headers: { "x-ratelimit-remaining": "0", "x-ratelimit-reset": String(reset) },
+        }),
+    });
+    const client = new GithubClient("https://api.github.com", "tok", fn);
+    const err = (await client.getPrRefs("o", "r", 7).catch((e: unknown) => e)) as RateLimitError;
+    // reset is an absolute epoch: allow scheduling slack around the 30s target
+    expect(err.retryAfterMs).toBeGreaterThan(25_000);
+    expect(err.retryAfterMs).toBeLessThanOrEqual(30_000);
+  });
+
+  it("leaves retryAfterMs undefined when no header advises a wait", async () => {
+    const { fn } = fakeFetch({
+      "/pulls/7": () => new Response('{"message":"You have exceeded a secondary rate limit."}', { status: 403 }),
+    });
+    const client = new GithubClient("https://api.github.com", "tok", fn);
+    const err = (await client.getPrRefs("o", "r", 7).catch((e: unknown) => e)) as RateLimitError;
+    expect(err).toBeInstanceOf(RateLimitError);
+    expect(err.retryAfterMs).toBeUndefined();
+  });
+
+  it("attaches advice to graphql RATE_LIMITED errors", async () => {
+    const reset = Math.floor(Date.now() / 1000) + 30;
+    const { fn } = fakeFetch({
+      "/graphql": () =>
+        new Response(JSON.stringify({ errors: [{ type: "RATE_LIMITED" }] }), {
+          status: 200,
+          headers: { "content-type": "application/json", "x-ratelimit-reset": String(reset) },
+        }),
+    });
+    const client = new GithubClient("https://api.github.com", "tok", fn);
+    const err = (await client.batchBlobTexts("o", "r", ["oid1"]).catch((e: unknown) => e)) as RateLimitError;
+    expect(err).toBeInstanceOf(RateLimitError);
+    expect(err.retryAfterMs).toBeGreaterThan(0);
+  });
 });
 
 describe("graphqlUrl", () => {

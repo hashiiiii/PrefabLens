@@ -1,5 +1,23 @@
 export class AuthError extends Error {}
-export class RateLimitError extends Error {}
+export class RateLimitError extends Error {
+  /** Backoff advice from response headers; undefined when GitHub gave none. */
+  constructor(
+    message: string,
+    readonly retryAfterMs?: number,
+  ) {
+    super(message);
+  }
+}
+
+/** retry-after (seconds) wins; else x-ratelimit-reset (epoch seconds) relative to now.
+ *  Number(null) is 0 and Number("") is NaN, so absent headers fail the > 0 guards. */
+function adviceMs(headers: Headers): number | undefined {
+  const retryAfter = Number(headers.get("retry-after"));
+  if (retryAfter > 0) return retryAfter * 1000;
+  const reset = Number(headers.get("x-ratelimit-reset"));
+  if (reset > 0) return Math.max(0, reset * 1000 - Date.now());
+  return undefined;
+}
 export class ApiError extends Error {
   constructor(readonly status: number) {
     super(`GitHub API error (HTTP ${status})`); // does not carry the raw body (leak prevention)
@@ -47,7 +65,7 @@ export class GithubClient {
         res.headers.has("retry-after") ||
         res.headers.get("x-ratelimit-remaining") === "0" ||
         /rate limit|abuse/i.test(body);
-      if (rateLimited) throw new RateLimitError("GitHub rate limit exceeded");
+      if (rateLimited) throw new RateLimitError("GitHub rate limit exceeded", adviceMs(res.headers));
       throw new AuthError("GitHub authentication failed");
     }
     if (res.status === 401) throw new AuthError("GitHub authentication failed");
@@ -233,7 +251,8 @@ export class GithubClient {
       errors?: Array<{ type?: string }>;
     };
     // GraphQL returns errors while still HTTP 200: RATE_LIMITED is caught here
-    if (body.errors?.some((e) => e.type === "RATE_LIMITED")) throw new RateLimitError("GitHub rate limit exceeded");
+    if (body.errors?.some((e) => e.type === "RATE_LIMITED"))
+      throw new RateLimitError("GitHub rate limit exceeded", adviceMs(res.headers));
     const blobs = body.data?.repository;
     if (!blobs) throw new ApiError(res.status);
     return Object.fromEntries(oids.map((oid, i) => [oid, blobs[`b${i}`]?.text ?? null]));

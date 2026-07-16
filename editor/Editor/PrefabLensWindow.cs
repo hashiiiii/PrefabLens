@@ -217,7 +217,9 @@ namespace PrefabLens
             content.Clear();
             downloadCts = new CancellationTokenSource();
             content.Add(
-                new Button(() => downloadCts.Cancel())
+                // Null-conditional: the button outlives the download (until the next content.Clear),
+                // and OnDownloadDone nulls the field on the same thread as this click handler.
+                new Button(() => downloadCts?.Cancel())
                 {
                     text = "Cancel",
                     style = { alignSelf = Align.FlexStart, marginLeft = 6 },
@@ -254,8 +256,13 @@ namespace PrefabLens
                 ShowMissingCli();
                 return;
             }
+            // Drop the Cancel button now; Refresh only rebuilds content once the bulk run returns.
+            content.Clear();
             Refresh();
         }
+
+        /// Unity calls this when the window closes (and on domain reload): stop an in-flight download.
+        void OnDisable() => downloadCts?.Cancel();
 
         void Note(string text)
         {

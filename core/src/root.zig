@@ -11,6 +11,7 @@ const perf = @import("perf.zig");
 const instantiate = @import("instantiate.zig");
 
 pub const Assets = instantiate.Assets;
+pub const isUnityYaml = parser.isUnityYaml;
 const no_assets: Assets = .empty;
 
 pub fn diffBytes(arena: std.mem.Allocator, before_src: []const u8, after_src: []const u8) !model.DiffResult {

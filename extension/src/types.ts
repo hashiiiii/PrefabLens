@@ -75,7 +75,13 @@ export type SemanticDiffRequest = {
 export type PrefetchRequest = { type: "prefetch"; owner: string; repo: string; prNumber: number };
 export type BackgroundRequest = SemanticDiffRequest | PrefetchRequest;
 
-export type BackgroundError = "pat-missing" | "auth-failed" | "rate-limited" | "fetch-failed" | "diff-failed";
+export type BackgroundError =
+  | "pat-missing"
+  | "auth-failed"
+  | "rate-limited"
+  | "fetch-failed"
+  | "diff-failed"
+  | "not-unity-yaml";
 
 export type SemanticDiffResponse =
   | { ok: true; json: DiffV2; pending?: boolean }

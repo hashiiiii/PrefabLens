@@ -21,6 +21,7 @@ function makeDeps(overrides?: {
   baseShas?: Record<string, string>; // path → blob sha at the merge base (listBlobShas)
   diff?: Differ["diff"];
   diffWithAssets?: Differ["diffWithAssets"];
+  isUnityYaml?: Differ["isUnityYaml"];
   pat?: string | undefined;
   search?: Record<string, string | null>; // guid → asset path (null = no hit)
   cached?: Record<string, string>; // initial contents of guidCache
@@ -55,6 +56,8 @@ function makeDeps(overrides?: {
   const differ: Differ = {
     diff: overrides?.diff ?? vi.fn(() => DIFF),
     diffWithAssets: overrides?.diffWithAssets ?? vi.fn(() => DIFF),
+    // Fixture contents are shorthand strings, not real UnityYAML: accept by default.
+    isUnityYaml: overrides?.isUnityYaml ?? (() => true),
   };
   const cacheData: Record<string, Record<string, string>> = {};
   if (overrides?.cached) cacheData["https://api.github.com/o/r"] = { ...overrides.cached };
@@ -169,6 +172,34 @@ describe("createHandler", () => {
     );
     expect(headFetches).toHaveLength(0);
     expect(diff.mock.calls[0]?.[1]).toHaveLength(0); // after is empty
+  });
+
+  it("rejects a file whose content is not UnityYAML on either side", async () => {
+    // Real sniff behavior lives in differ.test.ts; here the fake reproduces its
+    // contract so the outcome plumbing (computeDiff -> response) is what's tested.
+    const diff = vi.fn<Differ["diff"]>(() => DIFF);
+    const { deps } = makeDeps({
+      contents: { "Assets/Foo.prefab@base-sha": "\x00binary", "Assets/Foo.prefab@head-sha": "\x00binary2" },
+      diff,
+      isUnityYaml: () => false,
+    });
+    const res = await resolveFully(createHandler(deps), REQ);
+    expect(res).toEqual({ ok: false, error: "not-unity-yaml" });
+    // The differ must not even run on rejected content.
+    expect(diff).not.toHaveBeenCalled();
+  });
+
+  it("caches the not-unity-yaml outcome for the sha pair", async () => {
+    // Unlike too-large there is no force escape hatch: the verdict is
+    // deterministic for a given blob pair, so a second toggle must serve the
+    // cached outcome instead of re-fetching and re-sniffing.
+    const isUnityYaml = vi.fn<Differ["isUnityYaml"]>(() => false);
+    const { deps } = makeDeps({ isUnityYaml });
+    const handler = createHandler(deps);
+    expect(await handler.semanticDiff(REQ, () => {})).toEqual({ ok: false, error: "not-unity-yaml" });
+    const sniffs = isUnityYaml.mock.calls.length;
+    expect(await handler.semanticDiff(REQ, () => {})).toEqual({ ok: false, error: "not-unity-yaml" });
+    expect(isUnityYaml.mock.calls.length).toBe(sniffs);
   });
 
   it("diffs a file missing from the PR list as modified (files API caps at 3000)", async () => {

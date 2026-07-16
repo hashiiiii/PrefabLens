@@ -39,6 +39,10 @@ export fn diff_with_assets(
     return run(slice(before_ptr, before_len), slice(after_ptr, after_len), slice(assets_ptr, assets_len));
 }
 
+export fn is_unity_yaml(ptr: ?[*]const u8, len: usize) i32 {
+    return @intFromBool(core.isUnityYaml(slice(ptr, len)));
+}
+
 fn slice(ptr: ?[*]const u8, len: usize) []const u8 {
     return if (ptr) |p| p[0..len] else "";
 }

@@ -48,7 +48,10 @@ const TOO_LARGE_BYTES = 25 * 1024 * 1024; // over 25MB renders on click
 const PREFETCH_MAX = 100; // prefetch cap per PR (bounds API usage)
 const PREFETCH_CONCURRENCY = 4;
 
-type DiffOutcome = { ok: true; json: DiffV2 } | { ok: false; error: "too-large"; bytes: number };
+type DiffOutcome =
+  | { ok: true; json: DiffV2 }
+  | { ok: false; error: "too-large"; bytes: number }
+  | { ok: false; error: "not-unity-yaml" };
 
 export function createHandler(deps: Deps): Handler {
   // Per-PR context cache. The SW may be killed at any time; then we just re-fetch.
@@ -223,6 +226,9 @@ export function createHandler(deps: Deps): Handler {
           return current; // rate limit etc.: degrade to the first-pass diff
         }
         if (!bytes) continue;
+        // Sources resolved by guid can be binary-serialized too: merging
+        // them is a no-op re-diff, so don't count it as progress.
+        if (!differ.isUnityYaml(bytes)) continue;
         assets.set(s.guid, bytes);
         progressed = true;
       }
@@ -294,6 +300,11 @@ export function createHandler(deps: Deps): Handler {
       return { ok: false, error: "too-large", bytes: before.length + after.length };
     }
     const differ = await deps.getDiffer();
+    // Path passed the extension prefilter, but some .asset files are binary
+    // regardless of Force Text: content is the ground truth.
+    if (!differ.isUnityYaml(before) && !differ.isUnityYaml(after)) {
+      return { ok: false, error: "not-unity-yaml" };
+    }
     return { ok: true, json: differ.diff(before, after) };
   }
 
@@ -319,7 +330,9 @@ export function createHandler(deps: Deps): Handler {
     diffs.set(key, p);
     p.then(
       (o) => {
-        if (!o.ok) diffs.delete(key); // too-large allows a force recomputation
+        // too-large allows a force recomputation; not-unity-yaml is
+        // deterministic for the sha pair, so keep it cached in memory
+        if (!o.ok && o.error === "too-large") diffs.delete(key);
       },
       () => diffs.delete(key),
     );

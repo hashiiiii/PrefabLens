@@ -202,8 +202,8 @@ test("applies the persisted semantic default to every unity file and late additi
   await page.goto("https://prefablens.test/owner/repo/pull/1/files");
   await page.addScriptTag({ path: "dist/content.js" });
 
-  // Both Unity files render as semantic without a click
-  await expect(page.locator("[data-prefablens-view]")).toHaveCount(2);
+  // All three Unity files render as semantic without a click
+  await expect(page.locator("[data-prefablens-view]")).toHaveCount(3);
   await expect(page.locator('.file:has(.file-header[data-path="Assets/Foo.prefab"]) .js-file-content')).toBeHidden();
 
   // The global toggle also reflects the default and appears in the Semantic pressed state
@@ -218,7 +218,7 @@ test("applies the persisted semantic default to every unity file and late additi
       '<div class="file-header" data-path="Assets/Late.prefab"></div><div class="js-file-content">raw diff</div>';
     document.body.append(file);
   });
-  await expect(page.locator("[data-prefablens-view]")).toHaveCount(3);
+  await expect(page.locator("[data-prefablens-view]")).toHaveCount(4);
   await expect(page.locator('.file:has(.file-header[data-path="Assets/Late.prefab"]) .js-file-content')).toBeHidden();
 });
 
@@ -240,7 +240,7 @@ test("global toggle switches all files and resets per-file overrides", async ({ 
 
   // Global Semantic → all Unity files switch (README is excluded)
   await global.getByRole("button", { name: "Semantic" }).click();
-  await expect(page.locator("[data-prefablens-view]")).toHaveCount(2);
+  await expect(page.locator("[data-prefablens-view]")).toHaveCount(3);
 
   // Per-file override to Raw → only that file reverts to raw
   const fooHeader = page.locator('.file-header[data-path="Assets/Foo.prefab"]');

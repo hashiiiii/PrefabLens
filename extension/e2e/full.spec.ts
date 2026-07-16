@@ -21,8 +21,9 @@ MonoBehaviour:
   volume: 0.5
 `;
 const AFTER = BEFORE.replace("0.5", "0.8");
-// 26MB with no documents trips the 25MB guard; after force it finishes cheaply with an empty diff
-const BIG = "x".repeat(26 * 1024 * 1024);
+// 26MB with a UnityYAML head but no documents trips the 25MB guard; after
+// force, the content sniff passes and it finishes cheaply with an empty diff
+const BIG = `%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n${"x".repeat(26 * 1024 * 1024)}`;
 
 function startServer(): Promise<Server> {
   const server = createServer((req, res) => {
@@ -39,6 +40,7 @@ function startServer(): Promise<Server> {
         return json([
           { filename: "Assets/Foo.prefab", status: "modified" },
           { filename: "Assets/Big.unity", status: "modified" },
+          { filename: "Assets/Baked.asset", status: "modified" },
         ]);
       case "/repos/o/r/pulls/1":
         return json({ base: { sha: "B" }, head: { sha: "H" } });
@@ -50,6 +52,10 @@ function startServer(): Promise<Server> {
         return send(url.searchParams.get("ref") === "MB" ? BEFORE : AFTER, "application/vnd.github.raw+json");
       case "/repos/o/r/contents/Assets/Big.unity":
         return send(BIG, "application/vnd.github.raw+json");
+      // A binary-serialized .asset (LightingDataAsset etc.): passes the path
+      // prefilter, must be rejected by the real wasm content sniff.
+      case "/repos/o/r/contents/Assets/Baked.asset":
+        return send("\x00\x01PK-binary-payload", "application/vnd.github.raw+json");
       case "/search/code":
         return json({ items: [{ path: "Assets/Scripts/Sound.cs.meta" }] });
       case "/graphql":
@@ -102,6 +108,18 @@ test("renders a real wasm diff with code-search guid resolution", async () => {
   await expect(view).toContainText("Volume");
   await expect(view).toContainText("0.5");
   await expect(view).toContainText("0.8");
+  await page.close();
+});
+
+test("rejects a binary .asset through the real wasm sniff", async () => {
+  const page = await context.newPage();
+  await page.goto(`http://127.0.0.1:${PORT}/o/r/pull/1/files`);
+
+  const header = page.locator('.file-header[data-path="Assets/Baked.asset"]');
+  await header.getByRole("button", { name: "Semantic" }).click();
+
+  const view = page.locator("[data-prefablens-view]");
+  await expect(view).toContainText("not a text-serialized Unity asset", { timeout: 30_000 });
   await page.close();
 });
 

@@ -5,6 +5,7 @@ export class DiffError extends Error {}
 export type Differ = {
   diff(before: Uint8Array, after: Uint8Array): DiffV2;
   diffWithAssets(before: Uint8Array, after: Uint8Array, assets: Map<string, Uint8Array>): DiffV2;
+  isUnityYaml(bytes: Uint8Array): boolean;
 };
 
 type Exports = {
@@ -13,6 +14,7 @@ type Exports = {
   free(ptr: number, len: number): void;
   diff(bp: number, bl: number, ap: number, al: number): number;
   diff_with_assets(bp: number, bl: number, ap: number, al: number, tp: number, tl: number): number;
+  is_unity_yaml(p: number, l: number): number;
 };
 
 /** assets TLV (LE): [u32 count] repeat{ [u32 guid_len][guid][u32 data_len][data] }.
@@ -71,8 +73,22 @@ export async function createDiffer(wasmBytes: BufferSource): Promise<Differ> {
     }
   }
 
+  function isUnityYaml(bytes: Uint8Array): boolean {
+    // The Zig sniff reads at most 512 bytes: never marshal a whole blob
+    // (wasm memory only grows) just to inspect its head.
+    const head = bytes.subarray(0, 512);
+    const ptr = head.length ? exp.alloc(head.length) : 0;
+    new Uint8Array(exp.memory.buffer, ptr, head.length).set(head);
+    try {
+      return exp.is_unity_yaml(ptr, head.length) !== 0;
+    } finally {
+      if (head.length) exp.free(ptr, head.length);
+    }
+  }
+
   return {
     diff: (before, after) => call(before, after),
     diffWithAssets: (before, after, assets) => call(before, after, encodeAssets(assets)),
+    isUnityYaml,
   };
 }

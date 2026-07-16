@@ -3,14 +3,17 @@ import { fileURLToPath } from "node:url";
 import { expect, it } from "vitest";
 import { must } from "../util/must";
 
-// The diff.v2 value display rules are hand-copied in four places: the
+// The diff.v2 value display rules are hand-copied across languages: the
 // extension's formatValue (render.ts), the Unity editor's ValueFormat.cs, and
-// the CLI's writeValueText (render_tree.zig) / writeValue (render_html.zig).
-// Each parser below pulls the output literal of every branch out of one
-// implementation's source; the tests compare those records against the
-// extension's, so changing e.g. "None" in one place fails until all four move
-// together (issue #152). The guid resolution order (resolved path, then
-// built-in name, then raw guid) is checked via source positions.
+// the CLI, where the guid resolution ladder lives once in display.zig's
+// refDisplay (issue #155) while the output literals stay in writeValueText
+// (render_tree.zig) / writeValue (render_html.zig). Each parser below pulls
+// the output literal of every branch out of one implementation's source; the
+// tests compare those records against the extension's, so changing e.g.
+// "None" in one place fails until all four move together (issue #152). The
+// guid resolution order (resolved path, then built-in name, then raw guid) is
+// checked via source positions, and each CLI renderer is pinned to
+// display.refDisplay so the ladder cannot be re-forked.
 
 type Rules = {
   missing: string; // absent side of an added/removed row
@@ -74,10 +77,12 @@ function csRules(): Rules {
 
 function zigTreeRules(): Rules {
   const fn = fnSlice(read("../../../cli/src/render_tree.zig"), "fn writeValueText");
-  expectResolveOrder(fn, "rr.get(g)", "builtin_refs.name(", "guid:");
+  // The renderer must decorate the shared ladder, not re-fork it; the ladder
+  // order itself is checked once against display.zig below.
+  expect(fn, "writeValueText goes through display.refDisplay").toContain("display.refDisplay(");
   return {
     missing: extract(fn, /orelse \{\s*try w\.writeAll\("([^"]*)"\)/, "null branch"),
-    nullRef: extract(fn, /file_id == 0\) \{[\s\S]*?writeAll\("([^"]*)"\)/, "fileID 0 branch"),
+    nullRef: extract(fn, /\.none => try w\.writeAll\("([^"]*)"\)/, "fileID 0 branch"),
     localRefPrefix: extract(fn, /print\("([^"{]*)\{d\}"/, "local ref branch"),
     guidPrefix: extract(fn, /print\("([^"{]*)\{s\}", \.\{g\}\)/, "raw guid branch"),
     builtinSuffix: extract(fn, /print\("\{s\}([^"]*)"/, "built-in branch"),
@@ -86,13 +91,14 @@ function zigTreeRules(): Rules {
 
 function zigHtmlRules(): Rules {
   const fn = fnSlice(read("../../../cli/src/render_html.zig"), "fn writeValue(");
-  expectResolveOrder(fn, "rr.get(g)", "builtin_refs.name(", "guid:");
+  // Same pin as zigTreeRules: escaping and decoration only, no forked ladder.
+  expect(fn, "writeValue goes through display.refDisplay").toContain("display.refDisplay(");
   return {
     missing: extract(fn, /orelse \{\s*try w\.writeAll\("([^"]*)"\)/, "null branch"),
-    nullRef: extract(fn, /file_id == 0\) \{[\s\S]*?writeAll\("([^"]*)"\)/, "fileID 0 branch"),
+    nullRef: extract(fn, /\.none => try w\.writeAll\("([^"]*)"\)/, "fileID 0 branch"),
     localRefPrefix: extract(fn, /print\("([^"{]*)\{d\}"/, "local ref branch"),
     guidPrefix: extract(fn, /writeAll\("([^"]*)"\);\s*try writeEscaped\(w, g\)/, "raw guid branch"),
-    builtinSuffix: extract(fn, /writeEscaped\(w, builtin\);\s*try w\.writeAll\("([^"]*)"\)/, "built-in branch"),
+    builtinSuffix: extract(fn, /writeEscaped\(w, b\);\s*try w\.writeAll\("([^"]*)"\)/, "built-in branch"),
   };
 }
 
@@ -106,6 +112,12 @@ it("CLI render_tree.zig formats values like the extension's formatValue", () => 
 
 it("CLI render_html.zig formats values like the extension's formatValue", () => {
   expect(zigHtmlRules()).toEqual(tsRules());
+});
+
+it("CLI display.zig resolves guid refs in the extension's order", () => {
+  // The single Zig source of truth for the ladder both renderers switch on.
+  const fn = fnSlice(read("../../../cli/src/display.zig"), "pub fn refDisplay");
+  expectResolveOrder(fn, "rr.get(g)", "builtin_refs.name(", ".guid = g");
 });
 
 it("both CLI renderers collapse composite nodes the same way", () => {

@@ -298,7 +298,6 @@ test "html: unresolved guids surface the --project hint as a note" {
 
 const model = core.model;
 const display = @import("display.zig");
-const builtin_refs = @import("builtin_refs.zig");
 
 pub const FileDiff = struct {
     /// null for a single unnamed report (plain two-file mode / single git target).
@@ -573,27 +572,20 @@ fn writeValue(w: *std.Io.Writer, node: ?*const model.Node, resolved: ?*const cor
     };
     switch (n.*) {
         .scalar => |s| try writeEscaped(w, s),
-        .ref => |r| {
-            if (r.guid) |g| {
-                if (resolved) |rr| {
-                    if (rr.get(g)) |p| {
-                        try writeEscaped(w, p);
-                        return;
-                    }
-                }
-                if (builtin_refs.name(g, r.file_id)) |builtin| {
-                    try writeEscaped(w, builtin);
-                    try w.writeAll(" (built-in)");
-                    return;
-                }
+        // The resolution ladder lives in display.refDisplay; this switch adds
+        // only the HTML escaping and decoration.
+        .ref => |r| switch (display.refDisplay(r, resolved)) {
+            .path => |p| try writeEscaped(w, p),
+            .builtin => |b| {
+                try writeEscaped(w, b);
+                try w.writeAll(" (built-in)");
+            },
+            .guid => |g| {
                 try w.writeAll("guid:");
                 try writeEscaped(w, g);
-            } else if (r.file_id == 0) {
-                // Unity's null reference; the Inspector shows it as None.
-                try w.writeAll("None");
-            } else {
-                try w.print("#{d}", .{r.file_id});
-            }
+            },
+            .none => try w.writeAll("None"),
+            .file_id => |id| try w.print("#{d}", .{id}),
         },
         .map => try w.writeAll("{...}"),
         .seq => try w.writeAll("[...]"),

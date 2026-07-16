@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { expect, it } from "vitest";
+import { must } from "../util/must";
 import { BUILTIN_EXTRA_GUID, BUILTIN_REFS, DEFAULT_RESOURCES_GUID } from "./builtin_refs";
 
 // All three tables are generated from the same Unity dump (issue #104). This
@@ -9,7 +10,7 @@ import { BUILTIN_EXTRA_GUID, BUILTIN_REFS, DEFAULT_RESOURCES_GUID } from "./buil
 function zigEntries(section: string): Record<string, string> {
   const out: Record<string, string> = {};
   for (const m of section.matchAll(/\.\{ \.file_id = (\d+), \.name = "([^"]*)" \}/g)) {
-    out[m[1]!] = m[2]!;
+    out[must(m[1])] = must(m[2]);
   }
   return out;
 }
@@ -34,7 +35,7 @@ it("guid constants match between the Zig and TS tables", () => {
 function csEntries(section: string): Record<string, string> {
   const out: Record<string, string> = {};
   for (const m of section.matchAll(/\{ "(\d+)", "([^"]*)" \},/g)) {
-    out[m[1]!] = m[2]!;
+    out[must(m[1])] = must(m[2]);
   }
   return out;
 }

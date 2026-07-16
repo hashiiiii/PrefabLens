@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { DiffV2 } from "../types";
+import { must } from "../util/must";
 import {
   detectTheme,
   render,
@@ -102,7 +103,7 @@ describe("render", () => {
   it("shows field values as before → after and resolves the component to its script stem", () => {
     const root = freshRoot();
     render(root, DIFF);
-    const text = root.querySelector(".pl-root")!.textContent!;
+    const text = must(root.querySelector(".pl-root")?.textContent);
     expect(text).toContain("volume");
     expect(text).toContain("0.5");
     expect(text).toContain("0.8");
@@ -115,14 +116,14 @@ describe("render", () => {
     const root = freshRoot();
     render(root, DIFF);
     const rows = [...root.querySelectorAll(".pl-field")];
-    const added = rows.find((r) => r.textContent?.includes("newField"))!;
+    const added = must(rows.find((r) => r.textContent?.includes("newField")));
     expect(added.textContent).toBe("newField1");
   });
 
   it("falls back to the raw guid when unresolved and to #fileId for local refs", () => {
     const root = freshRoot();
     render(root, DIFF);
-    const text = root.querySelector(".pl-root")!.textContent!;
+    const text = must(root.querySelector(".pl-root")?.textContent);
     expect(text).toContain("#100"); // local ref
     expect(text).toContain("ghi"); // unresolved guid stays visible
   });
@@ -156,7 +157,7 @@ describe("render", () => {
     };
     const root = freshRoot();
     render(root, builtin);
-    const text = root.querySelector(".pl-root")!.textContent!;
+    const text = must(root.querySelector(".pl-root")?.textContent);
     expect(text).toContain("Cube (built-in)"); // known fileID → table name
     expect(text).toContain("guid:0000000000000000e000000000000000"); // unknown fileID keeps the raw guid
   });
@@ -192,7 +193,7 @@ describe("render", () => {
     };
     const root = freshRoot();
     render(root, nullRef);
-    const text = root.querySelector(".pl-root")!.textContent!;
+    const text = must(root.querySelector(".pl-root")?.textContent);
     expect(text).toContain("None"); // {fileID: 0} reads as the Inspector's None
     expect(text).toContain("#42"); // non-zero local refs keep #fileId
     expect(text).not.toContain("#0");
@@ -231,7 +232,7 @@ describe("render", () => {
     const onRender = vi.fn();
     renderTooLarge(root, 26 * 1024 * 1024, onRender);
     expect(root.textContent).toContain("Large file (26 MB)");
-    const button = root.querySelector<HTMLButtonElement>("button.pl-render")!;
+    const button = must(root.querySelector<HTMLButtonElement>("button.pl-render"));
     expect(button.textContent).toBe("Render anyway");
     button.click();
     expect(onRender).toHaveBeenCalledTimes(1);
@@ -473,7 +474,7 @@ describe("render", () => {
   it("indents component cards one level deeper than child GameObjects", () => {
     const root = freshRoot();
     render(root, DIFF);
-    const kids = root.querySelector("details.pl-go > .pl-kids")!;
+    const kids = must(root.querySelector("details.pl-go > .pl-kids"));
     // Gear cards live inside the group's own kids box (extra indent + guide line)...
     expect(kids.querySelector("details.pl-components > .pl-kids > details.pl-comp")).not.toBeNull();
     // ...while the child GameObject stays directly on the hierarchy spine.
@@ -509,7 +510,7 @@ describe("render", () => {
   it("renders unity-style rows: chevron, icon and status badge", () => {
     const root = freshRoot();
     render(root, DIFF);
-    const summary = root.querySelector("details.pl-go > summary")!;
+    const summary = must(root.querySelector("details.pl-go > summary"));
     expect(summary.classList.contains("pl-row")).toBe(true);
     expect(summary.querySelector(".pl-chevron svg")).not.toBeNull();
     expect(summary.querySelector(".pl-icon svg")).not.toBeNull();
@@ -520,9 +521,9 @@ describe("render", () => {
     const root = freshRoot();
     render(root, INSTANCE);
     // Plane is unchanged: no badge chip at all, not a blank one
-    const plane = root.querySelector("details.pl-go > summary")!;
+    const plane = must(root.querySelector("details.pl-go > summary"));
     expect(plane.querySelector(".pl-badge")).toBeNull();
-    const icon = root.querySelector("details.pl-pi > summary .pl-icon")!;
+    const icon = must(root.querySelector("details.pl-pi > summary .pl-icon"));
     expect(icon.classList.contains("pl-icon-prefab")).toBe(true);
   });
 
@@ -530,16 +531,16 @@ describe("render", () => {
     const root = freshRoot();
     render(root, DIFF);
     const summaries = [...root.querySelectorAll("details.pl-go > summary")];
-    const weapon = summaries.find((s) => s.textContent?.includes("Weapon"))!;
+    const weapon = must(summaries.find((s) => s.textContent?.includes("Weapon")));
     expect(weapon.classList.contains("pl-leaf")).toBe(true);
-    const player = summaries.find((s) => s.textContent?.includes("Player"))!;
+    const player = must(summaries.find((s) => s.textContent?.includes("Player")));
     expect(player.classList.contains("pl-leaf")).toBe(false);
   });
 
   it("renderLoading shows an accessible skeleton tree instead of text", () => {
     const root = freshRoot();
     renderLoading(root);
-    const box = root.querySelector(".pl-skeleton")!;
+    const box = must(root.querySelector(".pl-skeleton"));
     expect(box.getAttribute("role")).toBe("status");
     expect(box.getAttribute("aria-busy")).toBe("true");
     expect(box.getAttribute("aria-label")).toContain("Computing semantic diff");
@@ -573,7 +574,7 @@ describe("detectTheme", () => {
     // GitHub's default is auto: a value that is neither dark nor light defers to matchMedia
     document.documentElement.setAttribute("data-color-mode", "auto");
     expect(detectTheme(document)).toBe("light"); // jsdom has no matchMedia → fall back to light
-    const win = document.defaultView!;
+    const win = must(document.defaultView);
     win.matchMedia = ((query: string) => ({
       matches: query === "(prefers-color-scheme: dark)",
     })) as unknown as typeof win.matchMedia;

@@ -1,6 +1,7 @@
 /// <reference types="node" />
 import { readFileSync } from "node:fs";
 import { beforeAll, describe, expect, it } from "vitest";
+import { must } from "../util/must";
 import { createDiffer, DiffError, type Differ } from "./differ";
 
 const enc = new TextEncoder();
@@ -79,7 +80,7 @@ Transform:
     // With assets: merged, so neededSources disappears and it becomes a full enumeration with overrides applied.
     const merged = differ.diffWithAssets(new Uint8Array(0), variant, new Map([["srcguid", source]]));
     expect(merged.neededSources).toBeUndefined();
-    const inst = merged.roots[0]!;
+    const inst = must(merged.roots[0]);
     expect(inst.kind).toBe("prefabInstance");
     if (inst.kind !== "prefabInstance") return;
     expect(inst.overrides).toEqual([]);

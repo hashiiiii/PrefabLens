@@ -5,6 +5,7 @@ pub const json = @import("json.zig");
 const classid = @import("classid.zig");
 const parser = @import("parser.zig");
 const diff = @import("diff.zig");
+const diff_overrides = @import("diff_overrides.zig");
 const tree = @import("tree.zig");
 const inspector = @import("inspector.zig");
 const perf = @import("perf.zig");
@@ -43,6 +44,7 @@ test {
     _ = classid;
     _ = parser;
     _ = diff;
+    _ = diff_overrides;
     _ = tree;
     _ = inspector;
     _ = perf;

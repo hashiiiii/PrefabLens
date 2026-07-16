@@ -226,6 +226,9 @@ export function createHandler(deps: Deps): Handler {
           return current; // rate limit etc.: degrade to the first-pass diff
         }
         if (!bytes) continue;
+        // Sources resolved by guid can be binary-serialized too: merging
+        // them is a no-op re-diff, so don't count it as progress.
+        if (!differ.isUnityYaml(bytes)) continue;
         assets.set(s.guid, bytes);
         progressed = true;
       }
@@ -327,7 +330,9 @@ export function createHandler(deps: Deps): Handler {
     diffs.set(key, p);
     p.then(
       (o) => {
-        if (!o.ok) diffs.delete(key); // too-large allows a force recomputation
+        // too-large allows a force recomputation; not-unity-yaml is
+        // deterministic for the sha pair, so keep it cached in memory
+        if (!o.ok && o.error === "too-large") diffs.delete(key);
       },
       () => diffs.delete(key),
     );

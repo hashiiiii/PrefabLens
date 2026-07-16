@@ -189,6 +189,19 @@ describe("createHandler", () => {
     expect(diff).not.toHaveBeenCalled();
   });
 
+  it("caches the not-unity-yaml outcome for the sha pair", async () => {
+    // Unlike too-large there is no force escape hatch: the verdict is
+    // deterministic for a given blob pair, so a second toggle must serve the
+    // cached outcome instead of re-fetching and re-sniffing.
+    const isUnityYaml = vi.fn<Differ["isUnityYaml"]>(() => false);
+    const { deps } = makeDeps({ isUnityYaml });
+    const handler = createHandler(deps);
+    expect(await handler.semanticDiff(REQ, () => {})).toEqual({ ok: false, error: "not-unity-yaml" });
+    const sniffs = isUnityYaml.mock.calls.length;
+    expect(await handler.semanticDiff(REQ, () => {})).toEqual({ ok: false, error: "not-unity-yaml" });
+    expect(isUnityYaml.mock.calls.length).toBe(sniffs);
+  });
+
   it("diffs a file missing from the PR list as modified (files API caps at 3000)", async () => {
     // In a PR with over 3000 files, the listing API is truncated, so a file present in the UI may be absent from the listing
     const { deps, client } = makeDeps({ files: [{ path: "Assets/Other.prefab", status: "modified" }] });

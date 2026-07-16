@@ -79,7 +79,9 @@ async function loadRefsAndFiles(
   }
   const [cmp, headSha] = await Promise.all([
     client.compareRefs(owner, repo, target.base, target.head),
-    client.resolveRefSha(owner, repo, target.head), // cache keys need an immutable sha, not a branch name
+    // Cache keys need an immutable sha, not a branch name. The compare body can't supply it:
+    // its commits array truncates at 250, so the last entry isn't always the head.
+    client.resolveRefSha(owner, repo, target.head),
   ]);
   return { refs: { baseSha: cmp.mergeBaseSha, headSha }, files: cmp.files };
 }

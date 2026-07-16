@@ -74,7 +74,7 @@ function signInPanel(root: ShadowRoot, message: string): void {
 function attach(state: ViewState): void {
   const prPage = parsePrPage(location.pathname);
   if (prPage) {
-    const prKey = `${prPage.owner}/${prPage.repo}#${prPage.prNumber}`;
+    const prKey = targetKey(prPage.owner, prPage.repo, { kind: "pull", prNumber: prPage.prNumber });
     if (prKey !== prefetchedPr) {
       prefetchedPr = prKey;
       // fire-and-forget: don't wait on the response, ignore failures (the manual-toggle path is separately alive)

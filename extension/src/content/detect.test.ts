@@ -73,6 +73,22 @@ describe("parseDiffUrl", () => {
       base: "v1.0",
       head: "main",
     });
+    // A manually typed trailing slash must not leak into the head ref (git refs can't end with /)
+    expect(parseDiffUrl("/owner/repo/compare/main...topic/")?.target).toEqual({
+      kind: "compare",
+      base: "main",
+      head: "topic",
+    });
+  });
+
+  it("survives malformed percent escapes instead of throwing", () => {
+    // Browsers pass invalid %-sequences through pathname verbatim; decodeURIComponent would
+    // throw URIError and attach() runs this unguarded before the MutationObserver is installed
+    expect(parseDiffUrl("/owner/repo/compare/50%discount...main")?.target).toEqual({
+      kind: "compare",
+      base: "50%discount",
+      head: "main",
+    });
   });
   it("rejects compare pages this extension cannot serve", () => {
     expect(parseDiffUrl("/owner/repo/compare/main...other:branch")).toBeNull(); // cross-fork

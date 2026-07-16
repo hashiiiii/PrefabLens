@@ -75,10 +75,8 @@ export class GithubClient {
     const pr = await this.json<{ base: { sha: string }; head: { sha: string } }>(
       `/repos/${owner}/${repo}/pulls/${prNumber}`,
     );
-    const cmp = await this.json<{ merge_base_commit: { sha: string } }>(
-      `/repos/${owner}/${repo}/compare/${pr.base.sha}...${pr.head.sha}`,
-    );
-    return { baseSha: cmp.merge_base_commit.sha, headSha: pr.head.sha };
+    const cmp = await this.compareRefs(owner, repo, pr.base.sha, pr.head.sha);
+    return { baseSha: cmp.mergeBaseSha, headSha: pr.head.sha };
   }
 
   async listPrFiles(owner: string, repo: string, prNumber: number): Promise<ChangedFile[]> {
@@ -103,7 +101,9 @@ export class GithubClient {
     const files: ChangedFile[] = [];
     let sha = "";
     let parentSha: string | null = null;
-    for (let page = 1; ; page++) {
+    // GitHub documents a 3,000-file cap for this endpoint: 10 pages of 300 bounds the loop
+    // even if the API ever stops honoring the paging params.
+    for (let page = 1; page <= 10; page++) {
       const body = await this.json<{ sha: string; parents: Array<{ sha: string }>; files?: DiffEntry[] }>(
         `/repos/${owner}/${repo}/commits/${encodeURIComponent(ref)}?per_page=300&page=${page}`,
       );
@@ -113,8 +113,9 @@ export class GithubClient {
       }
       const batch = body.files ?? [];
       for (const f of batch) files.push(toChangedFile(f));
-      if (batch.length < 300) return { sha, parentSha, files };
+      if (batch.length < 300) break;
     }
+    return { sha, parentSha, files };
   }
 
   /** Three-dot comparison (what GitHub's compare page shows): merge base + changed files.

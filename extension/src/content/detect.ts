@@ -12,6 +12,17 @@ export type FileEntry = {
 
 export type DiffPage = { owner: string; repo: string; target: DiffTarget };
 
+/** decodeURIComponent that tolerates malformed escapes: a pathname can carry a bare %
+ *  (browsers pass invalid sequences through verbatim), and parseDiffUrl runs unguarded
+ *  in attach() — throwing here would kill the whole page scan. */
+function decodeRef(s: string): string {
+  try {
+    return decodeURIComponent(s);
+  } catch {
+    return s;
+  }
+}
+
 /** Recognizes every diff page the pipeline can serve. Compare is same-repo three-dot only:
  *  fork syntax (owner:branch) would need a second repo's blobs, and GitHub's compare page
  *  itself is three-dot (merge base), which is exactly what the compare API returns. */
@@ -22,15 +33,14 @@ export function parseDiffUrl(pathname: string): DiffPage | null {
       pathname,
     );
   if (pr) return { owner: pr[1]!, repo: pr[2]!, target: { kind: "pull", prNumber: Number(pr[3]!) } };
-  // Single-commit views inside a PR (classic /commits/SHA, react /changes/SHA) share the commit pipeline
-  const prCommit = /^\/([^/]+)\/([^/]+)\/pull\/\d+\/(?:commits|changes)\/([\da-f]{7,40})\/?$/.exec(pathname);
-  if (prCommit) return { owner: prCommit[1]!, repo: prCommit[2]!, target: { kind: "commit", sha: prCommit[3]! } };
-  const commit = /^\/([^/]+)\/([^/]+)\/commit\/([\da-f]{7,40})\/?$/.exec(pathname);
+  // Single-commit views: standalone /commit/SHA, plus the in-PR classic /commits/SHA and
+  // react /changes/SHA — all show one commit against its parent
+  const commit = /^\/([^/]+)\/([^/]+)\/(?:pull\/\d+\/(?:commits|changes)|commit)\/([\da-f]{7,40})\/?$/.exec(pathname);
   if (commit) return { owner: commit[1]!, repo: commit[2]!, target: { kind: "commit", sha: commit[3]! } };
-  const compare = /^\/([^/]+)\/([^/]+)\/compare\/(.+?)\.\.\.(.+)$/.exec(pathname);
+  const compare = /^\/([^/]+)\/([^/]+)\/compare\/(.+?)\.\.\.(.+?)\/?$/.exec(pathname);
   if (compare) {
-    const base = decodeURIComponent(compare[3]!);
-    const head = decodeURIComponent(compare[4]!);
+    const base = decodeRef(compare[3]!);
+    const head = decodeRef(compare[4]!);
     if (base.includes(":") || head.includes(":")) return null;
     return { owner: compare[1]!, repo: compare[2]!, target: { kind: "compare", base, head } };
   }

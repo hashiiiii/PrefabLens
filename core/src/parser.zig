@@ -687,3 +687,37 @@ const TopLevelIter = struct {
 fn splitTopLevel(s: []const u8) TopLevelIter {
     return .{ .s = s };
 }
+
+/// Content sniff for UnityYAML. The extension allowlists in the products are
+/// prefilters only; some .asset files are binary regardless of Force Text
+/// (LightingDataAsset etc.), so the leading bytes are the ground truth.
+/// Directives (%...) may precede the first document; anything else decides.
+pub fn isUnityYaml(src: []const u8) bool {
+    const head = src[0..@min(src.len, 512)];
+    var lines = std.mem.splitScalar(u8, head, '\n');
+    while (lines.next()) |line| {
+        if (std.mem.startsWith(u8, line, "%TAG !u!")) return true;
+        if (std.mem.startsWith(u8, line, "--- !u!")) return true;
+        if (line.len == 0 or line[0] == '%') continue;
+        return false;
+    }
+    return false;
+}
+
+test "isUnityYaml: accepts UnityYAML heads, rejects other content" {
+    // Full Unity-written header: %YAML directive first, %TAG !u! second.
+    try testing.expect(isUnityYaml("%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!1 &1\nGameObject:\n"));
+    // Fixture-style head without directives: the document marker alone decides.
+    try testing.expect(isUnityYaml("--- !u!114 &1\nMonoBehaviour:\n  hp: 1\n"));
+    // CRLF must not defeat the prefix checks.
+    try testing.expect(isUnityYaml("%YAML 1.1\r\n%TAG !u! tag:unity3d.com,2011:\r\n--- !u!1 &1\r\n"));
+
+    // .meta files are YAML but not !u! documents.
+    try testing.expect(!isUnityYaml("fileFormatVersion: 2\nguid: 0123456789abcdef0123456789abcdef\n"));
+    // Plain YAML with a bare document marker is not UnityYAML.
+    try testing.expect(!isUnityYaml("---\nfoo: 1\n"));
+    // Binary content (e.g. a binary-serialized .asset) has no UnityYAML head.
+    try testing.expect(!isUnityYaml("\x00\x01\x02binary"));
+    // Empty input: an absent side is "missing", never "UnityYAML".
+    try testing.expect(!isUnityYaml(""));
+}

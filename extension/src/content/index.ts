@@ -17,10 +17,12 @@ import {
   targetKey,
 } from "../types";
 import { must } from "../util/must";
+import { createAuthRetries } from "./authRetries";
 import { type DiffPage, type FileEntry, parseDiffUrl, parsePrPage, scanUnityFiles } from "./detect";
 import { fillDeviceCode } from "./devicePage";
 import { createSignIn, type PendingSignIn } from "./signin";
 import { createToggle, type Toggle, type View } from "./toggle";
+import { createViewRegistry } from "./views";
 import { createViewState, type ViewState } from "./viewstate";
 
 const ERROR_TEXT: Record<BackgroundError, string> = {
@@ -33,7 +35,7 @@ const ERROR_TEXT: Record<BackgroundError, string> = {
 };
 
 // path → render target. When a push (guidResolved) arrives, merge resolved and re-render
-const views = new Map<string, { root: ShadowRoot; json: DiffV2 }>();
+const views = createViewRegistry();
 
 function countUnresolved(json: DiffV2): number {
   return json.unresolvedGuids.filter((g) => !Object.hasOwn(json.resolved ?? {}, g)).length;
@@ -47,7 +49,7 @@ let currentPage = ""; // overrides are valid only while on the diff page: discar
 let prefetchedPr = ""; // send prefetch just once across all PR tabs, including the conversation tab
 
 // Files whose panels are stuck on an auth error: all retried once a token lands in storage.
-const authRetries = new Set<() => void>();
+const authRetries = createAuthRetries();
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 const signIn = createSignIn({
@@ -90,7 +92,7 @@ function attach(state: ViewState): void {
   if (key !== currentPage) {
     currentPage = key;
     state.clearOverrides();
-    for (const [k, v] of views) if (!v.root.host.isConnected) views.delete(k); // not only ignore late pushes to views killed by navigation, but also cut the reference
+    views.pruneDisconnected(); // not only ignore late pushes to views killed by navigation, but also cut the reference
   }
   // The react ui virtualizes the list and discards off-screen DOM continuously, so prune
   // dead appliers every scan, not just on PR change (also plugs the classic soft leak).
@@ -245,9 +247,7 @@ async function init(): Promise<void> {
     if (next === "raw" || next === "semantic") state.applyExternal(next);
     if (typeof changes.pat?.newValue === "string" && changes.pat.newValue) {
       // A token just landed (this tab's own flow or another surface): retry every auth-blocked panel.
-      const retries = [...authRetries];
-      authRetries.clear();
-      for (const retry of retries) retry();
+      authRetries.flush();
     }
   });
 

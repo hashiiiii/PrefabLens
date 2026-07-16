@@ -920,6 +920,183 @@ test "envDir treats a set-but-empty variable as unset and falls through" {
     try testing.expectEqualStrings("/tmp", envDir(&env, "NOPE") orelse "/tmp");
 }
 
+/// Runs `git show <ref>:<path>`, printing the one-line error and returning
+/// null when it fails (the caller exits 1).
+fn gitShowOrReport(io: std.Io, arena: std.mem.Allocator, repo_dir: []const u8, ref: []const u8, path: []const u8, stderr: *std.Io.Writer) !?[]u8 {
+    return input.showAtRef(io, arena, repo_dir, ref, path, input.default_git_timeout) catch |err| {
+        if (err == error.GitTimeout)
+            try stderr.print("error: git timed out for '{s}:{s}'\n", .{ ref, path })
+        else
+            try stderr.print("error: git show failed for '{s}:{s}'\n", .{ ref, path });
+        return null;
+    };
+}
+
+/// What target collection hands back to run(): the diffs to render, or the
+/// exit code to return right away (the message is already written).
+const Collected = union(enum) { diffs: []NamedDiff, exit: u8 };
+
+/// Collects the single diff for an explicit two-file compare.
+fn collectFileDiffs(
+    io: std.Io,
+    arena: std.mem.Allocator,
+    f: @FieldType(Target, "files"),
+    resolver: ?*core.json.Resolver,
+    assets: *core.Assets,
+    repo_dir: []const u8,
+    stderr: *std.Io.Writer,
+) !Collected {
+    const before = readFile(io, arena, f.before) catch {
+        try stderr.print("error: cannot read file '{s}'\n", .{f.before});
+        return .{ .exit = 1 };
+    };
+    const after = readFile(io, arena, f.after) catch {
+        try stderr.print("error: cannot read file '{s}'\n", .{f.after});
+        return .{ .exit = 1 };
+    };
+    const res = diffOne(io, arena, before, after, resolver, assets, repo_dir) catch |err| return .{ .exit = try diffError(stderr, err) };
+    var diffs: std.ArrayList(NamedDiff) = .empty;
+    try diffs.append(arena, .{ .path = null, .before = before, .after = after, .res = res });
+    return .{ .diffs = diffs.items };
+}
+
+/// Collects one diff per changed path between two git refs (or a ref and the
+/// working tree). Explicit paths yield exactly one; bulk mode sniffs away
+/// binary files and may exit early with no diffs at all.
+fn collectGitDiffs(
+    io: std.Io,
+    arena: std.mem.Allocator,
+    g: @FieldType(Target, "git"),
+    format: Format,
+    resolver: ?*core.json.Resolver,
+    assets: *core.Assets,
+    repo_dir: []const u8,
+    stdout: *std.Io.Writer,
+    stderr: *std.Io.Writer,
+) !Collected {
+    // Built as a list (not `&.{p}`) so the single-path case doesn't
+    // take the address of a temporary array literal.
+    var path_list: std.ArrayList([]const u8) = .empty;
+    if (g.path) |p| {
+        try path_list.append(arena, p);
+    } else {
+        const all = input.changedPaths(io, arena, repo_dir, g.before_ref, g.after_ref, input.default_git_timeout) catch |err| {
+            if (err == error.GitTimeout)
+                try stderr.writeAll("error: git timed out listing changed files\n")
+            else
+                try stderr.print("error: git diff failed for '{s}'\n", .{g.before_ref});
+            return .{ .exit = 1 };
+        };
+        for (all) |p| if (unity_path.isUnityPath(p)) try path_list.append(arena, p);
+    }
+    var diffs: std.ArrayList(NamedDiff) = .empty;
+    for (path_list.items) |p| {
+        const before = try gitShowOrReport(io, arena, repo_dir, g.before_ref, p, stderr) orelse return .{ .exit = 1 };
+        const after = if (g.after_ref.len == 0)
+            // One ref = comparison against the working tree (a
+            // missing file is deletion = empty side).
+            input.readWorktree(io, arena, repo_dir, p) catch {
+                try stderr.print("error: cannot read file '{s}'\n", .{p});
+                return .{ .exit = 1 };
+            }
+        else
+            try gitShowOrReport(io, arena, repo_dir, g.after_ref, p, stderr) orelse return .{ .exit = 1 };
+        // Bulk mode trusts content over extension: some .asset files
+        // are binary regardless of Force Text and would render as an
+        // empty diff. An explicit path operand is never second-guessed.
+        if (g.path == null and !core.isUnityYaml(before) and !core.isUnityYaml(after)) continue;
+        const res = diffOne(io, arena, before, after, resolver, assets, repo_dir) catch |err| return .{ .exit = try diffError(stderr, err) };
+        // Single explicit path keeps the headerless single-file output.
+        try diffs.append(arena, .{ .path = if (g.path != null) null else p, .before = before, .after = after, .res = res });
+    }
+    // No candidates listed, or every one sniffed away (binary .asset):
+    // one exit for both, honoring --json's array contract. Explicit
+    // paths and .files always append, so only bulk mode gets here.
+    if (diffs.items.len == 0) {
+        if (format == .json) try stdout.writeAll("[]\n") else try stdout.writeAll("no Unity YAML changes\n");
+        return .{ .exit = 0 };
+    }
+    return .{ .diffs = diffs.items };
+}
+
+/// Prints diff.v2 JSON: a bare object for the single headerless diff, a
+/// {path, diff} array otherwise.
+fn emitJson(arena: std.mem.Allocator, stdout: *std.Io.Writer, diffs: []const NamedDiff, resolver: ?*core.json.Resolver) !void {
+    if (diffs.len == 1 and diffs[0].path == null) {
+        const out = try core.json.serialize(arena, diffs[0].res, resolver);
+        try stdout.writeAll(out);
+        try stdout.writeByte('\n');
+    } else {
+        try stdout.writeByte('[');
+        for (diffs, 0..) |d, i| {
+            if (i != 0) try stdout.writeByte(',');
+            try stdout.writeAll("{\"path\":");
+            try core.json.writeJsonString(stdout, d.path.?);
+            try stdout.writeAll(",\"diff\":");
+            try stdout.writeAll(try core.json.serialize(arena, d.res, resolver));
+            try stdout.writeByte('}');
+        }
+        try stdout.writeAll("]\n");
+    }
+}
+
+/// Renders every diff as a tree; bulk mode prefixes each with its path
+/// (bold when colored).
+fn emitTree(arena: std.mem.Allocator, stdout: *std.Io.Writer, diffs: []const NamedDiff, resolver: ?*core.json.Resolver, use_color: bool) !void {
+    for (diffs, 0..) |d, i| {
+        if (d.path) |p| {
+            if (i != 0) try stdout.writeByte('\n');
+            if (use_color) try stdout.writeAll(render_tree.Color.bold);
+            try stdout.print("{s}\n", .{p});
+            if (use_color) try stdout.writeAll(render_tree.Color.reset);
+        }
+        try render_tree.render(arena, stdout, d.res, resolver, use_color);
+    }
+}
+
+/// Writes the HTML report to stdout, or with --open to a temp file that is
+/// then launched in a browser. Returns the exit code.
+fn emitHtml(
+    io: std.Io,
+    arena: std.mem.Allocator,
+    opt: Options,
+    diffs: []const NamedDiff,
+    resolver: ?*core.json.Resolver,
+    stdout: *std.Io.Writer,
+    stderr: *std.Io.Writer,
+    environ: ?*const std.process.Environ.Map,
+) !u8 {
+    var files: std.ArrayList(render_html.FileDiff) = .empty;
+    for (diffs) |d| try files.append(arena, .{ .path = d.path, .res = d.res });
+    if (!opt.open) {
+        try render_html.render(stdout, files.items, resolver);
+        return 0;
+    }
+    var buf: std.ArrayList(u8) = .empty;
+    var aw = std.Io.Writer.Allocating.fromArrayList(arena, &buf);
+    try render_html.render(&aw.writer, files.items, resolver);
+    const tmp_dir = if (environ) |env|
+        envDir(env, "TMPDIR") orelse envDir(env, "TEMP") orelse "/tmp"
+    else
+        "/tmp";
+    // Single-file reports carry the file stem; bulk mode is just "report".
+    const stem = switch (opt.target) {
+        .files => |f| std.fs.path.stem(f.after),
+        .git => |g| if (g.path) |p| std.fs.path.stem(p) else "report",
+    };
+    const report = writeReportFile(io, arena, tmp_dir, stem, aw.toArrayList().items) catch {
+        try stderr.print("error: cannot write report to '{s}'\n", .{tmp_dir});
+        return 1;
+    };
+    try stdout.print("{s}\n", .{report});
+    openInBrowser(io, arena, report) catch {
+        // The path is already printed; failing to launch a
+        // browser must not fail the diff.
+        try stderr.print("warning: could not open a browser for '{s}'\n", .{report});
+    };
+    return 0;
+}
+
 pub fn run(io: std.Io, arena: std.mem.Allocator, args: []const []const u8, stdout: *std.Io.Writer, stderr: *std.Io.Writer, color: bool, environ: ?*const std.process.Environ.Map) !u8 {
     const opt = parseArgs(args) catch |err| {
         switch (err) {
@@ -956,77 +1133,14 @@ pub fn run(io: std.Io, arena: std.mem.Allocator, args: []const []const u8, stdou
     var assets: core.Assets = .empty;
 
     // Collect (path, before, after) triples for every diff target.
-    var diffs: std.ArrayList(NamedDiff) = .empty;
-    switch (opt.target) {
-        .files => |f| {
-            const before = readFile(io, arena, f.before) catch {
-                try stderr.print("error: cannot read file '{s}'\n", .{f.before});
-                return 1;
-            };
-            const after = readFile(io, arena, f.after) catch {
-                try stderr.print("error: cannot read file '{s}'\n", .{f.after});
-                return 1;
-            };
-            const res = diffOne(io, arena, before, after, resolver_ptr, &assets, repo_dir) catch |err| return diffError(stderr, err);
-            try diffs.append(arena, .{ .path = null, .before = before, .after = after, .res = res });
-        },
-        .git => |g| {
-            // Built as a list (not `&.{p}`) so the single-path case doesn't
-            // take the address of a temporary array literal.
-            var path_list: std.ArrayList([]const u8) = .empty;
-            if (g.path) |p| {
-                try path_list.append(arena, p);
-            } else {
-                const all = input.changedPaths(io, arena, repo_dir, g.before_ref, g.after_ref, input.default_git_timeout) catch |err| {
-                    if (err == error.GitTimeout)
-                        try stderr.writeAll("error: git timed out listing changed files\n")
-                    else
-                        try stderr.print("error: git diff failed for '{s}'\n", .{g.before_ref});
-                    return 1;
-                };
-                for (all) |p| if (unity_path.isUnityPath(p)) try path_list.append(arena, p);
-            }
-            const paths = path_list.items;
-            for (paths) |p| {
-                const before = input.showAtRef(io, arena, repo_dir, g.before_ref, p, input.default_git_timeout) catch |err| {
-                    if (err == error.GitTimeout)
-                        try stderr.print("error: git timed out for '{s}:{s}'\n", .{ g.before_ref, p })
-                    else
-                        try stderr.print("error: git show failed for '{s}:{s}'\n", .{ g.before_ref, p });
-                    return 1;
-                };
-                const after = if (g.after_ref.len == 0)
-                    // One ref = comparison against the working tree (a
-                    // missing file is deletion = empty side).
-                    input.readWorktree(io, arena, repo_dir, p) catch {
-                        try stderr.print("error: cannot read file '{s}'\n", .{p});
-                        return 1;
-                    }
-                else
-                    input.showAtRef(io, arena, repo_dir, g.after_ref, p, input.default_git_timeout) catch |err| {
-                        if (err == error.GitTimeout)
-                            try stderr.print("error: git timed out for '{s}:{s}'\n", .{ g.after_ref, p })
-                        else
-                            try stderr.print("error: git show failed for '{s}:{s}'\n", .{ g.after_ref, p });
-                        return 1;
-                    };
-                // Bulk mode trusts content over extension: some .asset files
-                // are binary regardless of Force Text and would render as an
-                // empty diff. An explicit path operand is never second-guessed.
-                if (g.path == null and !core.isUnityYaml(before) and !core.isUnityYaml(after)) continue;
-                const res = diffOne(io, arena, before, after, resolver_ptr, &assets, repo_dir) catch |err| return diffError(stderr, err);
-                // Single explicit path keeps the headerless single-file output.
-                try diffs.append(arena, .{ .path = if (g.path != null) null else p, .before = before, .after = after, .res = res });
-            }
-            // No candidates listed, or every one sniffed away (binary .asset):
-            // one exit for both, honoring --json's array contract. Explicit
-            // paths and .files always append, so only bulk mode gets here.
-            if (diffs.items.len == 0) {
-                if (opt.format == .json) try stdout.writeAll("[]\n") else try stdout.writeAll("no Unity YAML changes\n");
-                return 0;
-            }
-        },
-    }
+    const collected = switch (opt.target) {
+        .files => |f| try collectFileDiffs(io, arena, f, resolver_ptr, &assets, repo_dir, stderr),
+        .git => |g| try collectGitDiffs(io, arena, g, opt.format, resolver_ptr, &assets, repo_dir, stdout, stderr),
+    };
+    const diffs = switch (collected) {
+        .diffs => |d| d,
+        .exit => |code| return code,
+    };
 
     // Default guid resolution: with no --project and no --no-project, git mode
     // resolves against the repository root — but only after the diffs prove
@@ -1035,7 +1149,7 @@ pub fn run(io: std.Io, arena: std.mem.Allocator, args: []const []const u8, stdou
     // nor keep its early exit waiting. A failed or empty scan degrades to the
     // unresolved output, "--project" hint included.
     if (resolver_ptr == null and !opt.no_project and opt.target == .git) {
-        const wanted = try wantedGuids(arena, diffs.items);
+        const wanted = try wantedGuids(arena, diffs);
         if (wanted.len != 0) scan: {
             const built = resolve.buildIndexFor(io, arena, repo_dir, wanted) catch break :scan;
             if (built.count() == 0) break :scan;
@@ -1043,7 +1157,7 @@ pub fn run(io: std.Io, arena: std.mem.Allocator, args: []const []const u8, stdou
             resolver_ptr = &idx;
             // Source prefabs only became loadable with the index in hand:
             // re-diff just the files still asking for them.
-            for (diffs.items) |*d| {
+            for (diffs) |*d| {
                 if (d.res.needed_sources.len == 0) continue;
                 d.res = diffOne(io, arena, d.before, d.after, resolver_ptr, &assets, repo_dir) catch d.res;
             }
@@ -1051,68 +1165,11 @@ pub fn run(io: std.Io, arena: std.mem.Allocator, args: []const []const u8, stdou
     }
 
     switch (opt.format) {
-        .json => {
-            if (diffs.items.len == 1 and diffs.items[0].path == null) {
-                const out = try core.json.serialize(arena, diffs.items[0].res, resolver_ptr);
-                try stdout.writeAll(out);
-                try stdout.writeByte('\n');
-            } else {
-                try stdout.writeByte('[');
-                for (diffs.items, 0..) |d, i| {
-                    if (i != 0) try stdout.writeByte(',');
-                    try stdout.writeAll("{\"path\":");
-                    try core.json.writeJsonString(stdout, d.path.?);
-                    try stdout.writeAll(",\"diff\":");
-                    try stdout.writeAll(try core.json.serialize(arena, d.res, resolver_ptr));
-                    try stdout.writeByte('}');
-                }
-                try stdout.writeAll("]\n");
-            }
-        },
+        .json => try emitJson(arena, stdout, diffs, resolver_ptr),
         // Color when stdout is a TTY is decided in main(); --color forces it on
         // for pipes, and --no-color wins over both.
-        .tree => {
-            const use_color = (color or opt.force_color) and !opt.no_color;
-            for (diffs.items, 0..) |d, i| {
-                if (d.path) |p| {
-                    if (i != 0) try stdout.writeByte('\n');
-                    if (use_color) try stdout.writeAll(render_tree.Color.bold);
-                    try stdout.print("{s}\n", .{p});
-                    if (use_color) try stdout.writeAll(render_tree.Color.reset);
-                }
-                try render_tree.render(arena, stdout, d.res, resolver_ptr, use_color);
-            }
-        },
-        .html => {
-            var files: std.ArrayList(render_html.FileDiff) = .empty;
-            for (diffs.items) |d| try files.append(arena, .{ .path = d.path, .res = d.res });
-            if (!opt.open) {
-                try render_html.render(stdout, files.items, resolver_ptr);
-            } else {
-                var buf: std.ArrayList(u8) = .empty;
-                var aw = std.Io.Writer.Allocating.fromArrayList(arena, &buf);
-                try render_html.render(&aw.writer, files.items, resolver_ptr);
-                const tmp_dir = if (environ) |env|
-                    envDir(env, "TMPDIR") orelse envDir(env, "TEMP") orelse "/tmp"
-                else
-                    "/tmp";
-                // Single-file reports carry the file stem; bulk mode is just "report".
-                const stem = switch (opt.target) {
-                    .files => |f| std.fs.path.stem(f.after),
-                    .git => |g| if (g.path) |p| std.fs.path.stem(p) else "report",
-                };
-                const report = writeReportFile(io, arena, tmp_dir, stem, aw.toArrayList().items) catch {
-                    try stderr.print("error: cannot write report to '{s}'\n", .{tmp_dir});
-                    return 1;
-                };
-                try stdout.print("{s}\n", .{report});
-                openInBrowser(io, arena, report) catch {
-                    // The path is already printed; failing to launch a
-                    // browser must not fail the diff.
-                    try stderr.print("warning: could not open a browser for '{s}'\n", .{report});
-                };
-            }
-        },
+        .tree => try emitTree(arena, stdout, diffs, resolver_ptr, (color or opt.force_color) and !opt.no_color),
+        .html => return emitHtml(io, arena, opt, diffs, resolver_ptr, stdout, stderr, environ),
     }
     return 0;
 }
@@ -1168,6 +1225,11 @@ test "wantedGuids dedups across files and excludes built-ins" {
     try testing.expectEqualStrings("abc123", wanted[0]);
 }
 
+/// Maps anticipated diff failures to the one-line stderr contract and exit
+/// code 1. Anything else is a prefablens bug, not a user mistake, so it
+/// deliberately propagates and crashes with an error trace: the trace is the
+/// bug report, and a polite message would only hide it. The `try
+/// stderr.print` paths follow the same rule for write failures.
 fn diffError(stderr: *std.Io.Writer, err: anyerror) !u8 {
     if (err == error.NestingTooDeep) {
         try stderr.writeAll("error: input nested too deeply\n");

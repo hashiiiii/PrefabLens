@@ -1019,6 +1019,84 @@ fn collectGitDiffs(
     return .{ .diffs = diffs.items };
 }
 
+/// Prints diff.v2 JSON: a bare object for the single headerless diff, a
+/// {path, diff} array otherwise.
+fn emitJson(arena: std.mem.Allocator, stdout: *std.Io.Writer, diffs: []const NamedDiff, resolver: ?*core.json.Resolver) !void {
+    if (diffs.len == 1 and diffs[0].path == null) {
+        const out = try core.json.serialize(arena, diffs[0].res, resolver);
+        try stdout.writeAll(out);
+        try stdout.writeByte('\n');
+    } else {
+        try stdout.writeByte('[');
+        for (diffs, 0..) |d, i| {
+            if (i != 0) try stdout.writeByte(',');
+            try stdout.writeAll("{\"path\":");
+            try core.json.writeJsonString(stdout, d.path.?);
+            try stdout.writeAll(",\"diff\":");
+            try stdout.writeAll(try core.json.serialize(arena, d.res, resolver));
+            try stdout.writeByte('}');
+        }
+        try stdout.writeAll("]\n");
+    }
+}
+
+/// Renders every diff as a tree; bulk mode prefixes each with its path
+/// (bold when colored).
+fn emitTree(arena: std.mem.Allocator, stdout: *std.Io.Writer, diffs: []const NamedDiff, resolver: ?*core.json.Resolver, use_color: bool) !void {
+    for (diffs, 0..) |d, i| {
+        if (d.path) |p| {
+            if (i != 0) try stdout.writeByte('\n');
+            if (use_color) try stdout.writeAll(render_tree.Color.bold);
+            try stdout.print("{s}\n", .{p});
+            if (use_color) try stdout.writeAll(render_tree.Color.reset);
+        }
+        try render_tree.render(arena, stdout, d.res, resolver, use_color);
+    }
+}
+
+/// Writes the HTML report to stdout, or with --open to a temp file that is
+/// then launched in a browser. Returns the exit code.
+fn emitHtml(
+    io: std.Io,
+    arena: std.mem.Allocator,
+    opt: Options,
+    diffs: []const NamedDiff,
+    resolver: ?*core.json.Resolver,
+    stdout: *std.Io.Writer,
+    stderr: *std.Io.Writer,
+    environ: ?*const std.process.Environ.Map,
+) !u8 {
+    var files: std.ArrayList(render_html.FileDiff) = .empty;
+    for (diffs) |d| try files.append(arena, .{ .path = d.path, .res = d.res });
+    if (!opt.open) {
+        try render_html.render(stdout, files.items, resolver);
+        return 0;
+    }
+    var buf: std.ArrayList(u8) = .empty;
+    var aw = std.Io.Writer.Allocating.fromArrayList(arena, &buf);
+    try render_html.render(&aw.writer, files.items, resolver);
+    const tmp_dir = if (environ) |env|
+        envDir(env, "TMPDIR") orelse envDir(env, "TEMP") orelse "/tmp"
+    else
+        "/tmp";
+    // Single-file reports carry the file stem; bulk mode is just "report".
+    const stem = switch (opt.target) {
+        .files => |f| std.fs.path.stem(f.after),
+        .git => |g| if (g.path) |p| std.fs.path.stem(p) else "report",
+    };
+    const report = writeReportFile(io, arena, tmp_dir, stem, aw.toArrayList().items) catch {
+        try stderr.print("error: cannot write report to '{s}'\n", .{tmp_dir});
+        return 1;
+    };
+    try stdout.print("{s}\n", .{report});
+    openInBrowser(io, arena, report) catch {
+        // The path is already printed; failing to launch a
+        // browser must not fail the diff.
+        try stderr.print("warning: could not open a browser for '{s}'\n", .{report});
+    };
+    return 0;
+}
+
 pub fn run(io: std.Io, arena: std.mem.Allocator, args: []const []const u8, stdout: *std.Io.Writer, stderr: *std.Io.Writer, color: bool, environ: ?*const std.process.Environ.Map) !u8 {
     const opt = parseArgs(args) catch |err| {
         switch (err) {
@@ -1087,68 +1165,11 @@ pub fn run(io: std.Io, arena: std.mem.Allocator, args: []const []const u8, stdou
     }
 
     switch (opt.format) {
-        .json => {
-            if (diffs.len == 1 and diffs[0].path == null) {
-                const out = try core.json.serialize(arena, diffs[0].res, resolver_ptr);
-                try stdout.writeAll(out);
-                try stdout.writeByte('\n');
-            } else {
-                try stdout.writeByte('[');
-                for (diffs, 0..) |d, i| {
-                    if (i != 0) try stdout.writeByte(',');
-                    try stdout.writeAll("{\"path\":");
-                    try core.json.writeJsonString(stdout, d.path.?);
-                    try stdout.writeAll(",\"diff\":");
-                    try stdout.writeAll(try core.json.serialize(arena, d.res, resolver_ptr));
-                    try stdout.writeByte('}');
-                }
-                try stdout.writeAll("]\n");
-            }
-        },
+        .json => try emitJson(arena, stdout, diffs, resolver_ptr),
         // Color when stdout is a TTY is decided in main(); --color forces it on
         // for pipes, and --no-color wins over both.
-        .tree => {
-            const use_color = (color or opt.force_color) and !opt.no_color;
-            for (diffs, 0..) |d, i| {
-                if (d.path) |p| {
-                    if (i != 0) try stdout.writeByte('\n');
-                    if (use_color) try stdout.writeAll(render_tree.Color.bold);
-                    try stdout.print("{s}\n", .{p});
-                    if (use_color) try stdout.writeAll(render_tree.Color.reset);
-                }
-                try render_tree.render(arena, stdout, d.res, resolver_ptr, use_color);
-            }
-        },
-        .html => {
-            var files: std.ArrayList(render_html.FileDiff) = .empty;
-            for (diffs) |d| try files.append(arena, .{ .path = d.path, .res = d.res });
-            if (!opt.open) {
-                try render_html.render(stdout, files.items, resolver_ptr);
-            } else {
-                var buf: std.ArrayList(u8) = .empty;
-                var aw = std.Io.Writer.Allocating.fromArrayList(arena, &buf);
-                try render_html.render(&aw.writer, files.items, resolver_ptr);
-                const tmp_dir = if (environ) |env|
-                    envDir(env, "TMPDIR") orelse envDir(env, "TEMP") orelse "/tmp"
-                else
-                    "/tmp";
-                // Single-file reports carry the file stem; bulk mode is just "report".
-                const stem = switch (opt.target) {
-                    .files => |f| std.fs.path.stem(f.after),
-                    .git => |g| if (g.path) |p| std.fs.path.stem(p) else "report",
-                };
-                const report = writeReportFile(io, arena, tmp_dir, stem, aw.toArrayList().items) catch {
-                    try stderr.print("error: cannot write report to '{s}'\n", .{tmp_dir});
-                    return 1;
-                };
-                try stdout.print("{s}\n", .{report});
-                openInBrowser(io, arena, report) catch {
-                    // The path is already printed; failing to launch a
-                    // browser must not fail the diff.
-                    try stderr.print("warning: could not open a browser for '{s}'\n", .{report});
-                };
-            }
-        },
+        .tree => try emitTree(arena, stdout, diffs, resolver_ptr, (color or opt.force_color) and !opt.no_color),
+        .html => return emitHtml(io, arena, opt, diffs, resolver_ptr, stdout, stderr, environ),
     }
     return 0;
 }

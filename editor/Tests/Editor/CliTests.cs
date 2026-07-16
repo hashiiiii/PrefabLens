@@ -132,6 +132,28 @@ namespace PrefabLens.Tests
         }
 
         [Test]
+        public void BuildBulkArgsWithABaseRefComparesRefVsWorkingTree()
+        {
+            // CLI grammar (cli/src/main.zig parseArgs): one operand without a Unity YAML
+            // extension is a git ref, so `prefablens <ref> --json` is ref vs working tree,
+            // still bulk mode because no path operand is given.
+            Assert.AreEqual(new[] { "main", "--json" }, Cli.BuildBulkArgs("main"));
+            Assert.AreEqual(new[] { "HEAD~1", "--json" }, Cli.BuildBulkArgs("HEAD~1"));
+        }
+
+        [Test]
+        public void BuildBulkArgsTreatsABlankBaseRefAsTheDefault()
+        {
+            // The window feeds a free-form text field straight in: null, empty, and
+            // whitespace-only must all keep the default invocation byte-for-byte, and
+            // surrounding whitespace must not leak into the git ref.
+            Assert.AreEqual(new[] { "--json" }, Cli.BuildBulkArgs(null));
+            Assert.AreEqual(new[] { "--json" }, Cli.BuildBulkArgs(""));
+            Assert.AreEqual(new[] { "--json" }, Cli.BuildBulkArgs("   "));
+            Assert.AreEqual(new[] { "main", "--json" }, Cli.BuildBulkArgs(" main "));
+        }
+
+        [Test]
         public void RunAsyncInvokesTheCallbackOffTheBlockedCaller()
         {
             // ctx: null exercises the no-SynchronizationContext fallback; a posted callback

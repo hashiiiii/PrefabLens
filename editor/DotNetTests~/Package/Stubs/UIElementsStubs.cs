@@ -94,10 +94,33 @@ namespace UnityEngine.UIElements
     public class VisualElement
     {
         public IStyle style { get; } = new Style();
+        public string tooltip { get; set; }
 
         public void Add(VisualElement child) { }
 
         public void Clear() { }
+    }
+
+    public delegate void EventCallback<in TEventType>(TEventType evt);
+
+    public class ChangeEvent<T>
+    {
+        public T previousValue { get; }
+        public T newValue { get; }
+    }
+
+    public class TextField : VisualElement
+    {
+        public TextField() { }
+
+        public TextField(string label) { }
+
+        public string value { get; set; }
+        public bool isDelayed { get; set; }
+
+        // In Unity this is INotifyValueChangedExtensions.RegisterValueChangedCallback;
+        // an instance method compiles against the identical call syntax.
+        public void RegisterValueChangedCallback(EventCallback<ChangeEvent<string>> callback) { }
     }
 
     public class Image : VisualElement

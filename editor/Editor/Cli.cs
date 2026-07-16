@@ -78,13 +78,18 @@ namespace PrefabLens
         }
 
         /// Bare invocation = bulk mode: HEAD vs working tree, all changed Unity files,
-        /// as a [{path, diff}] JSON array.
-        public static string[] BuildBulkArgs() => new[] { "--json" };
+        /// as a [{path, diff}] JSON array. A non-blank baseRef becomes the single ref
+        /// operand, which the CLI parses as base ref vs working tree (still bulk mode).
+        public static string[] BuildBulkArgs(string baseRef = null)
+        {
+            var r = baseRef?.Trim();
+            return string.IsNullOrEmpty(r) ? new[] { "--json" } : new[] { r, "--json" };
+        }
 
         /// Run bulk mode off the main thread. The callback is posted back through the
         /// caller's SynchronizationContext (Unity's main thread when called from the window).
-        public static void RunBulkAsync(string cliPath, Action<Result> onDone) =>
-            RunAsync(cliPath, QuoteArgs(BuildBulkArgs()), onDone, SynchronizationContext.Current);
+        public static void RunBulkAsync(string cliPath, string baseRef, Action<Result> onDone) =>
+            RunAsync(cliPath, QuoteArgs(BuildBulkArgs(baseRef)), onDone, SynchronizationContext.Current);
 
         public static void RunAsync(string file, string arguments, Action<Result> onDone, SynchronizationContext ctx)
         {

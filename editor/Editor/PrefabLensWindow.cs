@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.IO;
 using System.Threading;
 using UnityEditor;
 using UnityEngine;
@@ -280,7 +279,8 @@ namespace PrefabLens
         }
 
         static Row EntryRow(BulkEntry entry) =>
-            Badge(BulkModel.AggregateStatus(entry.Diff))
+            DiffTree
+                .Badge(BulkModel.AggregateStatus(entry.Diff))
                 .WithIcon(AssetDatabase.GetCachedIcon(entry.Path))
                 .Add(entry.Path);
 
@@ -321,74 +321,14 @@ namespace PrefabLens
             }
         }
 
-        /// Unity built-in icon lookup. Pro skin ships d_-prefixed variants, so probe those
-        /// first; FindTexture returns null silently for unknown names.
-        static Texture2D FindIcon(string name)
-        {
-            var dark = EditorGUIUtility.isProSkin ? EditorGUIUtility.FindTexture("d_" + name) : null;
-            return dark != null ? dark : EditorGUIUtility.FindTexture(name);
-        }
-
-        static Texture2D ComponentIcon(ComponentDiff c)
-        {
-            // Built-in components have "<TypeName> Icon" textures; script components use the script icon.
-            var builtin = c.ClassName == null && c.ScriptGuid == null ? FindIcon(c.TypeName + " Icon") : null;
-            return builtin != null ? builtin : FindIcon("cs Script Icon");
-        }
-
-        // ---- Tree rendering (same color tone and notation as the Chrome renderer) ----
-        // No rich text: don't let repository-derived strings be interpreted as markup (same rationale as the Chrome build's XSS test).
-
-        static class Palette
-        {
-            public static Color Added => Hex(EditorGUIUtility.isProSkin ? 0x3fb950 : 0x1a7f37);
-            public static Color Removed => Hex(EditorGUIUtility.isProSkin ? 0xf85149 : 0xcf222e);
-            public static Color Modified => Hex(EditorGUIUtility.isProSkin ? 0xd29922 : 0x9a6700);
-            public static Color Muted => Hex(EditorGUIUtility.isProSkin ? 0x9198a1 : 0x59636e);
-
-            static Color Hex(int rgb) =>
-                new Color(((rgb >> 16) & 0xff) / 255f, ((rgb >> 8) & 0xff) / 255f, (rgb & 0xff) / 255f);
-        }
-
-        readonly struct Span
-        {
-            public readonly string Text;
-            public readonly Color? Tint;
-
-            public Span(string text, Color? tint = null)
-            {
-                Text = text;
-                Tint = tint;
-            }
-        }
-
-        sealed class Row
-        {
-            public Texture Icon;
-            public readonly List<Span> Spans = new();
-
-            public Row Add(string text, Color? tint = null)
-            {
-                if (!string.IsNullOrEmpty(text))
-                    Spans.Add(new Span(text, tint));
-                return this;
-            }
-
-            public Row WithIcon(Texture icon)
-            {
-                Icon = icon;
-                return this;
-            }
-        }
+        // ---- Tree rendering: DiffTree builds the rows; only the UIElements wiring lives here ----
 
         static TreeView BuildTree(DiffModel model)
         {
             var id = 0;
             var items = new List<TreeViewItemData<Row>>();
-            foreach (var n in model.Roots)
-                items.Add(NodeItem(n, model, ref id));
-            foreach (var c in model.Loose)
-                items.Add(ComponentItem(c, model, ref id));
+            foreach (var item in DiffTree.Build(model))
+                items.Add(ToViewItem(item, ref id));
 
             var tree = new TreeView { fixedItemHeight = 18, style = { flexGrow = 1 } };
             tree.SetRootItems(items);
@@ -399,84 +339,13 @@ namespace PrefabLens
             return tree;
         }
 
-        static TreeViewItemData<Row> NodeItem(NodeDiff n, DiffModel m, ref int id)
-        {
-            var pi = n as PrefabInstanceDiff;
-            var children = new List<TreeViewItemData<Row>>();
-            if (pi != null)
-                foreach (var ov in pi.Overrides)
-                    children.Add(new TreeViewItemData<Row>(id++, OverrideRow(ov, m)));
-            if (n.Components.Count > 0)
-            {
-                // Components fold as their own group one level below the object row (extension parity).
-                var comps = new List<TreeViewItemData<Row>>();
-                foreach (var c in n.Components)
-                    comps.Add(ComponentItem(c, m, ref id));
-                children.Add(
-                    new TreeViewItemData<Row>(id++, Badge(DiffStatus.Unchanged).Add("Components", Palette.Muted), comps)
-                );
-            }
-            foreach (var ch in n.Children)
-                children.Add(NodeItem(ch, m, ref id));
-
-            var row = Badge(n.Status).WithIcon(FindIcon(pi != null ? "Prefab Icon" : "GameObject Icon")).Add(n.Name);
-            if (pi?.SourceGuid != null)
-                row.Add(
-                    " ‹Prefab: " + (m.Resolved.TryGetValue(pi.SourceGuid, out var src) ? src : pi.SourceGuid) + "›",
-                    Palette.Muted
-                );
-            return new TreeViewItemData<Row>(id++, row, children);
-        }
-
-        static TreeViewItemData<Row> ComponentItem(ComponentDiff c, DiffModel m, ref int id)
+        /// Ids only need to be unique within one TreeView; each ShowEntry builds a fresh one.
+        static TreeViewItemData<Row> ToViewItem(DiffTree.Item item, ref int id)
         {
             var children = new List<TreeViewItemData<Row>>();
-            foreach (var f in c.Fields)
-                children.Add(new TreeViewItemData<Row>(id++, FieldRow(f.Path, f.Status, f.Before, f.After, m)));
-
-            var row = Badge(c.Status).WithIcon(ComponentIcon(c));
-            if (!string.IsNullOrEmpty(c.ClassName))
-                row.Add(c.ClassName).Add(" ‹Script›", Palette.Muted);
-            else if (c.ScriptGuid != null && m.Resolved.TryGetValue(c.ScriptGuid, out var p))
-                row.Add(Stem(p)).Add(" ‹Script›", Palette.Muted);
-            else
-                row.Add(c.TypeName);
-            return new TreeViewItemData<Row>(id++, row, children);
-        }
-
-        static Row OverrideRow(OverrideDiff ov, DiffModel m)
-        {
-            var label = ov.Group.Length > 0 && ov.Group != "Overrides" ? ov.Group + " / " + ov.Label : ov.Label;
-            return FieldRow(label, ov.Status, ov.Before, ov.After, m);
-        }
-
-        static Row FieldRow(string label, DiffStatus status, Value before, Value after, DiffModel m)
-        {
-            var row = Badge(status).Add(label + " ", Palette.Muted);
-            var b = ValueFormat.Format(before, m);
-            var a = ValueFormat.Format(after, m);
-            if (status == DiffStatus.Modified)
-                row.Add(b, Palette.Removed).Add(" → ", Palette.Muted).Add(a, Palette.Added);
-            else if (status == DiffStatus.Removed)
-                row.Add(b, Palette.Removed);
-            else
-                row.Add(a, status == DiffStatus.Added ? Palette.Added : (Color?)null);
-            return row;
-        }
-
-        static Row Badge(DiffStatus s) =>
-            s switch
-            {
-                DiffStatus.Added => new Row().Add("+ ", Palette.Added),
-                DiffStatus.Removed => new Row().Add("− ", Palette.Removed),
-                DiffStatus.Modified => new Row().Add("~ ", Palette.Modified),
-                _ => new Row().Add("  "),
-            };
-
-        static string Stem(string path)
-        {
-            var name = Path.GetFileNameWithoutExtension(path);
-            return string.IsNullOrEmpty(name) ? path : name;
+            foreach (var ch in item.Children)
+                children.Add(ToViewItem(ch, ref id));
+            return new TreeViewItemData<Row>(id++, item.Row, children);
         }
     }
 }

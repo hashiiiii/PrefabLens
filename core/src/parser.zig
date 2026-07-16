@@ -693,9 +693,13 @@ fn splitTopLevel(s: []const u8) TopLevelIter {
 /// (LightingDataAsset etc.), so the leading bytes are the ground truth.
 /// Directives (%...) may precede the first document; anything else decides.
 pub fn isUnityYaml(src: []const u8) bool {
-    const head = src[0..@min(src.len, 512)];
+    var head = src[0..@min(src.len, 512)];
+    // Unity writes no BOM, but external tools may prepend one; parse() still
+    // finds the documents, so the sniff must not disagree with it.
+    if (std.mem.startsWith(u8, head, "\xEF\xBB\xBF")) head = head[3..];
     var lines = std.mem.splitScalar(u8, head, '\n');
-    while (lines.next()) |line| {
+    while (lines.next()) |raw| {
+        const line = std.mem.trimEnd(u8, raw, "\r");
         if (std.mem.startsWith(u8, line, "%TAG !u!")) return true;
         if (std.mem.startsWith(u8, line, "--- !u!")) return true;
         if (line.len == 0 or line[0] == '%') continue;
@@ -711,6 +715,11 @@ test "isUnityYaml: accepts UnityYAML heads, rejects other content" {
     try testing.expect(isUnityYaml("--- !u!114 &1\nMonoBehaviour:\n  hp: 1\n"));
     // CRLF must not defeat the prefix checks.
     try testing.expect(isUnityYaml("%YAML 1.1\r\n%TAG !u! tag:unity3d.com,2011:\r\n--- !u!1 &1\r\n"));
+    // A UTF-8 BOM prepended by an external tool must not defeat the sniff:
+    // parse() finds the documents regardless, so the sniff must agree.
+    try testing.expect(isUnityYaml("\xEF\xBB\xBF%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!1 &1\n"));
+    // A blank CRLF line before the first document is as skippable as its LF twin.
+    try testing.expect(isUnityYaml("%YAML 1.1\r\n\r\n--- !u!1 &1\r\n"));
 
     // .meta files are YAML but not !u! documents.
     try testing.expect(!isUnityYaml("fileFormatVersion: 2\nguid: 0123456789abcdef0123456789abcdef\n"));

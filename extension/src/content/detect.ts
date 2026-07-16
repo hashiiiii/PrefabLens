@@ -33,7 +33,7 @@ export function parseDiffUrl(pathname: string): DiffPage | null {
     /^\/([^/]+)\/([^/]+)\/pull\/(\d+)\/(?:files(?:\/|$)|changes(?:\/[\da-f]{7,40}\.\.[\da-f]{7,40})?\/?$)/.exec(
       pathname,
     );
-  if (pr) return { owner: must(pr[1]), repo: must(pr[2]), target: { kind: "pull", prNumber: Number(must(pr[3])) } };
+  if (pr) return { owner: pr[1]!, repo: must(pr[2]), target: { kind: "pull", prNumber: Number(must(pr[3])) } };
   // Single-commit views: standalone /commit/SHA, plus the in-PR classic /commits/SHA and
   // react /changes/SHA — all show one commit against its parent
   const commit = /^\/([^/]+)\/([^/]+)\/(?:pull\/\d+\/(?:commits|changes)|commit)\/([\da-f]{7,40})\/?$/.exec(pathname);

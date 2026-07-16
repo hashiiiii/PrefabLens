@@ -27,3 +27,8 @@ replace = '"version": "{new_version}"'
 filename = "editor/Editor/Cli.cs"
 search = 'public const string Version = "{current_version}"'
 replace = 'public const string Version = "{new_version}"'
+
+[[tool.bumpversion.files]]
+filename = "extension/package.json"
+search = '"version": "{current_version}"'
+replace = '"version": "{new_version}"'

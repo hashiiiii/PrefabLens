@@ -39,6 +39,16 @@ describe("createDiffer", () => {
     expect(() => differ.diff(hostile, hostile)).toThrowError(DiffError);
   });
 
+  it("isUnityYaml sniffs content, not paths", () => {
+    // The BEFORE fixture is a bare "--- !u!" document head.
+    expect(differ.isUnityYaml(BEFORE)).toBe(true);
+    // .meta-style plain YAML and binary bytes are both rejected.
+    expect(differ.isUnityYaml(enc.encode("fileFormatVersion: 2\nguid: abc\n"))).toBe(false);
+    expect(differ.isUnityYaml(new Uint8Array([0, 1, 2, 255]))).toBe(false);
+    // An absent side (added/removed file) is empty bytes: never UnityYAML.
+    expect(differ.isUnityYaml(new Uint8Array(0))).toBe(false);
+  });
+
   it("is re-entrant across many calls", () => {
     for (let i = 0; i < 50; i++) expect(differ.diff(BEFORE, AFTER).schema).toBe("prefablens.diff.v2");
   });

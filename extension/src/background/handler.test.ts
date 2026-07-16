@@ -21,6 +21,7 @@ function makeDeps(overrides?: {
   baseShas?: Record<string, string>; // path → blob sha at the merge base (listBlobShas)
   diff?: Differ["diff"];
   diffWithAssets?: Differ["diffWithAssets"];
+  isUnityYaml?: Differ["isUnityYaml"];
   pat?: string | undefined;
   search?: Record<string, string | null>; // guid → asset path (null = no hit)
   cached?: Record<string, string>; // initial contents of guidCache
@@ -55,6 +56,8 @@ function makeDeps(overrides?: {
   const differ: Differ = {
     diff: overrides?.diff ?? vi.fn(() => DIFF),
     diffWithAssets: overrides?.diffWithAssets ?? vi.fn(() => DIFF),
+    // Fixture contents are shorthand strings, not real UnityYAML: accept by default.
+    isUnityYaml: overrides?.isUnityYaml ?? (() => true),
   };
   const cacheData: Record<string, Record<string, string>> = {};
   if (overrides?.cached) cacheData["https://api.github.com/o/r"] = { ...overrides.cached };

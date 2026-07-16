@@ -5,6 +5,7 @@ export class DiffError extends Error {}
 export type Differ = {
   diff(before: Uint8Array, after: Uint8Array): DiffV2;
   diffWithAssets(before: Uint8Array, after: Uint8Array, assets: Map<string, Uint8Array>): DiffV2;
+  isUnityYaml(bytes: Uint8Array): boolean;
 };
 
 type Exports = {
@@ -13,6 +14,7 @@ type Exports = {
   free(ptr: number, len: number): void;
   diff(bp: number, bl: number, ap: number, al: number): number;
   diff_with_assets(bp: number, bl: number, ap: number, al: number, tp: number, tl: number): number;
+  is_unity_yaml(p: number, l: number): number;
 };
 
 /** assets TLV (LE): [u32 count] repeat{ [u32 guid_len][guid][u32 data_len][data] }.
@@ -71,8 +73,20 @@ export async function createDiffer(wasmBytes: BufferSource): Promise<Differ> {
     }
   }
 
+  function isUnityYaml(bytes: Uint8Array): boolean {
+    if (!bytes.length) return false;
+    const ptr = exp.alloc(bytes.length);
+    new Uint8Array(exp.memory.buffer, ptr, bytes.length).set(bytes);
+    try {
+      return exp.is_unity_yaml(ptr, bytes.length) !== 0;
+    } finally {
+      exp.free(ptr, bytes.length);
+    }
+  }
+
   return {
     diff: (before, after) => call(before, after),
     diffWithAssets: (before, after, assets) => call(before, after, encodeAssets(assets)),
+    isUnityYaml,
   };
 }

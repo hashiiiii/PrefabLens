@@ -920,6 +920,18 @@ test "envDir treats a set-but-empty variable as unset and falls through" {
     try testing.expectEqualStrings("/tmp", envDir(&env, "NOPE") orelse "/tmp");
 }
 
+/// Runs `git show <ref>:<path>`, printing the one-line error and returning
+/// null when it fails (the caller exits 1).
+fn gitShowOrReport(io: std.Io, arena: std.mem.Allocator, repo_dir: []const u8, ref: []const u8, path: []const u8, stderr: *std.Io.Writer) !?[]u8 {
+    return input.showAtRef(io, arena, repo_dir, ref, path, input.default_git_timeout) catch |err| {
+        if (err == error.GitTimeout)
+            try stderr.print("error: git timed out for '{s}:{s}'\n", .{ ref, path })
+        else
+            try stderr.print("error: git show failed for '{s}:{s}'\n", .{ ref, path });
+        return null;
+    };
+}
+
 pub fn run(io: std.Io, arena: std.mem.Allocator, args: []const []const u8, stdout: *std.Io.Writer, stderr: *std.Io.Writer, color: bool, environ: ?*const std.process.Environ.Map) !u8 {
     const opt = parseArgs(args) catch |err| {
         switch (err) {
@@ -988,13 +1000,7 @@ pub fn run(io: std.Io, arena: std.mem.Allocator, args: []const []const u8, stdou
             }
             const paths = path_list.items;
             for (paths) |p| {
-                const before = input.showAtRef(io, arena, repo_dir, g.before_ref, p, input.default_git_timeout) catch |err| {
-                    if (err == error.GitTimeout)
-                        try stderr.print("error: git timed out for '{s}:{s}'\n", .{ g.before_ref, p })
-                    else
-                        try stderr.print("error: git show failed for '{s}:{s}'\n", .{ g.before_ref, p });
-                    return 1;
-                };
+                const before = try gitShowOrReport(io, arena, repo_dir, g.before_ref, p, stderr) orelse return 1;
                 const after = if (g.after_ref.len == 0)
                     // One ref = comparison against the working tree (a
                     // missing file is deletion = empty side).
@@ -1003,13 +1009,7 @@ pub fn run(io: std.Io, arena: std.mem.Allocator, args: []const []const u8, stdou
                         return 1;
                     }
                 else
-                    input.showAtRef(io, arena, repo_dir, g.after_ref, p, input.default_git_timeout) catch |err| {
-                        if (err == error.GitTimeout)
-                            try stderr.print("error: git timed out for '{s}:{s}'\n", .{ g.after_ref, p })
-                        else
-                            try stderr.print("error: git show failed for '{s}:{s}'\n", .{ g.after_ref, p });
-                        return 1;
-                    };
+                    try gitShowOrReport(io, arena, repo_dir, g.after_ref, p, stderr) orelse return 1;
                 // Bulk mode trusts content over extension: some .asset files
                 // are binary regardless of Force Text and would render as an
                 // empty diff. An explicit path operand is never second-guessed.

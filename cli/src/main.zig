@@ -1225,6 +1225,11 @@ test "wantedGuids dedups across files and excludes built-ins" {
     try testing.expectEqualStrings("abc123", wanted[0]);
 }
 
+/// Maps anticipated diff failures to the one-line stderr contract and exit
+/// code 1. Anything else is a prefablens bug, not a user mistake, so it
+/// deliberately propagates and crashes with an error trace: the trace is the
+/// bug report, and a polite message would only hide it. The `try
+/// stderr.print` paths follow the same rule for write failures.
 fn diffError(stderr: *std.Io.Writer, err: anyerror) !u8 {
     if (err == error.NestingTooDeep) {
         try stderr.writeAll("error: input nested too deeply\n");

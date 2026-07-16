@@ -184,6 +184,37 @@ namespace PrefabLens
             });
         }
 
+        /// GET url into memory, reporting (bytesSoFar, contentLengthOrMinusOne) after each chunk.
+        /// Blocking by design: Download() runs on a worker thread (see DownloadAsync).
+        public static byte[] FetchBytes(
+            HttpClient http,
+            string url,
+            Action<long, long> onProgress,
+            CancellationToken ct
+        )
+        {
+            // GetAwaiter().GetResult() unwraps AggregateException so callers see the original message.
+            using var res = http.SendAsync(
+                    new HttpRequestMessage(HttpMethod.Get, url),
+                    HttpCompletionOption.ResponseHeadersRead,
+                    ct
+                )
+                .GetAwaiter()
+                .GetResult();
+            res.EnsureSuccessStatusCode();
+            var total = res.Content.Headers.ContentLength ?? -1;
+            using var src = res.Content.ReadAsStreamAsync().GetAwaiter().GetResult();
+            using var dst = new MemoryStream();
+            var buf = new byte[64 * 1024];
+            int n;
+            while ((n = src.ReadAsync(buf, 0, buf.Length, ct).GetAwaiter().GetResult()) > 0)
+            {
+                dst.Write(buf, 0, n);
+                onProgress?.Invoke(dst.Length, total);
+            }
+            return dst.ToArray();
+        }
+
         public static void ExtractTo(byte[] zipBytes, string dir)
         {
             using var zip = new ZipArchive(new MemoryStream(zipBytes));

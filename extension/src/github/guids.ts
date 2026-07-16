@@ -1,4 +1,4 @@
-import { type PrFile, RateLimitError } from "./client";
+import { type ChangedFile, RateLimitError } from "./client";
 
 /** Same rule as parseGuid in cli/src/resolve.zig: picks up "guid:" at the start of a line (after trim). */
 export function parseGuidFromMeta(meta: string): string | undefined {
@@ -22,11 +22,11 @@ const MAX_CONCURRENT_META_FETCHES = 8;
 
 /** Builds a guid → asset path index only from .meta files changed in the PR. removed ones are read from the base side.
  *  Caps concurrent fetches at 8 (avoids GitHub secondary rate limits on large .meta changes). */
-export async function buildGuidIndex(files: PrFile[], fetchMeta: MetaFetcher): Promise<Map<string, string>> {
+export async function buildGuidIndex(files: ChangedFile[], fetchMeta: MetaFetcher): Promise<Map<string, string>> {
   const index = new Map<string, string>();
   const metas = files.filter((f) => f.path.endsWith(".meta"));
 
-  const indexOne = async (f: PrFile): Promise<void> => {
+  const indexOne = async (f: ChangedFile): Promise<void> => {
     const side = f.status === "removed" ? "base" : "head";
     // Only rate limits propagate: swallowing them would cache a degraded index for the SW's lifetime
     const text = await fetchMeta(f.path, side).catch((err) => {

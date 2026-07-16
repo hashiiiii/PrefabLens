@@ -1,4 +1,11 @@
-import { API_BASE, AuthError, type GithubClient, type PrFile, type PrRefs, RateLimitError } from "../github/client";
+import {
+  API_BASE,
+  AuthError,
+  type ChangedFile,
+  type GithubClient,
+  RateLimitError,
+  type RefPair,
+} from "../github/client";
 import { applyResolved, buildGuidIndex, type GuidCache } from "../github/guids";
 import { type RepoIndexStore, syncRepoIndex } from "../github/repoIndex";
 import {
@@ -44,8 +51,8 @@ export type Handler = {
 
 // baseShas: path → blob sha at the base ref. null = tree unavailable (truncated/failed) → contents-api fallback
 type DiffContext = {
-  refs: PrRefs;
-  files: PrFile[];
+  refs: RefPair;
+  files: ChangedFile[];
   guidIndex: Map<string, string>;
   baseShas: Map<string, string> | null;
 };
@@ -56,7 +63,7 @@ async function loadRefsAndFiles(
   owner: string,
   repo: string,
   target: DiffTarget,
-): Promise<{ refs: PrRefs; files: PrFile[] }> {
+): Promise<{ refs: RefPair; files: ChangedFile[] }> {
   if (target.kind === "pull") {
     const [refs, files] = await Promise.all([
       client.getPrRefs(owner, repo, target.prNumber),

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { AuthError, type PrFile, RateLimitError } from "../github/client";
+import { AuthError, type ChangedFile, RateLimitError } from "../github/client";
 import type { DiffV2, GuidResolvedPush, SemanticDiffRequest } from "../types";
 import { DiffError, type Differ } from "../wasm/differ";
 import { createHandler, type Deps, type Handler } from "./handler";
@@ -15,7 +15,7 @@ const REQ: SemanticDiffRequest = {
 const DIFF: DiffV2 = { schema: "prefablens.diff.v2", unresolvedGuids: ["g1"], roots: [], loose: [] };
 
 function makeDeps(overrides?: {
-  files?: PrFile[];
+  files?: ChangedFile[];
   contents?: Record<string, string>; // `${path}@${ref}` → text
   blobs?: Record<string, string>; // blob sha → text (getBlobRaw; absent sha = 404 → null)
   baseShas?: Record<string, string>; // path → blob sha at the merge base (listBlobShas)
@@ -708,7 +708,7 @@ describe("prefetch", () => {
   });
 
   it("prefetches only unity files and caps at 100", async () => {
-    const files: PrFile[] = Array.from({ length: 120 }, (_, i) => ({
+    const files: ChangedFile[] = Array.from({ length: 120 }, (_, i) => ({
       path: `Assets/F${i}.prefab`,
       status: "modified",
     }));

@@ -7,12 +7,12 @@ export class ApiError extends Error {
 }
 
 // sha is the blob at head (at base for removed files) — the files API provides it for every status.
-export type PrFile = { path: string; status: string; previousPath?: string; sha?: string };
-export type PrRefs = { baseSha: string; headSha: string };
+export type ChangedFile = { path: string; status: string; previousPath?: string; sha?: string };
+export type RefPair = { baseSha: string; headSha: string };
 
 // GitHub's shared "diff entry" schema: PR files, commit files, and compare files all use it.
 type DiffEntry = { filename: string; status: string; previous_filename?: string; sha?: string };
-const toPrFile = (f: DiffEntry): PrFile => ({
+const toChangedFile = (f: DiffEntry): ChangedFile => ({
   path: f.filename,
   status: f.status,
   previousPath: f.previous_filename,
@@ -71,7 +71,7 @@ export class GithubClient {
   }
 
   // The before side is the merge-base: GitHub's PR diff compares against the merge-base, not the base branch tip.
-  async getPrRefs(owner: string, repo: string, prNumber: number): Promise<PrRefs> {
+  async getPrRefs(owner: string, repo: string, prNumber: number): Promise<RefPair> {
     const pr = await this.json<{ base: { sha: string }; head: { sha: string } }>(
       `/repos/${owner}/${repo}/pulls/${prNumber}`,
     );
@@ -81,13 +81,13 @@ export class GithubClient {
     return { baseSha: cmp.merge_base_commit.sha, headSha: pr.head.sha };
   }
 
-  async listPrFiles(owner: string, repo: string, prNumber: number): Promise<PrFile[]> {
-    const out: PrFile[] = [];
+  async listPrFiles(owner: string, repo: string, prNumber: number): Promise<ChangedFile[]> {
+    const out: ChangedFile[] = [];
     for (let page = 1; ; page++) {
       const batch = await this.json<DiffEntry[]>(
         `/repos/${owner}/${repo}/pulls/${prNumber}/files?per_page=100&page=${page}`,
       );
-      for (const f of batch) out.push(toPrFile(f));
+      for (const f of batch) out.push(toChangedFile(f));
       if (batch.length < 100) return out;
     }
   }
@@ -99,8 +99,8 @@ export class GithubClient {
     owner: string,
     repo: string,
     ref: string,
-  ): Promise<{ sha: string; parentSha: string | null; files: PrFile[] }> {
-    const files: PrFile[] = [];
+  ): Promise<{ sha: string; parentSha: string | null; files: ChangedFile[] }> {
+    const files: ChangedFile[] = [];
     let sha = "";
     let parentSha: string | null = null;
     for (let page = 1; ; page++) {
@@ -112,7 +112,7 @@ export class GithubClient {
         parentSha = body.parents[0]?.sha ?? null;
       }
       const batch = body.files ?? [];
-      for (const f of batch) files.push(toPrFile(f));
+      for (const f of batch) files.push(toChangedFile(f));
       if (batch.length < 300) return { sha, parentSha, files };
     }
   }
@@ -126,12 +126,12 @@ export class GithubClient {
     repo: string,
     base: string,
     head: string,
-  ): Promise<{ mergeBaseSha: string; files: PrFile[] }> {
+  ): Promise<{ mergeBaseSha: string; files: ChangedFile[] }> {
     const basehead = `${encodeURIComponent(base)}...${encodeURIComponent(head)}`;
     const body = await this.json<{ merge_base_commit: { sha: string }; files?: DiffEntry[] }>(
       `/repos/${owner}/${repo}/compare/${basehead}`,
     );
-    return { mergeBaseSha: body.merge_base_commit.sha, files: (body.files ?? []).map(toPrFile) };
+    return { mergeBaseSha: body.merge_base_commit.sha, files: (body.files ?? []).map(toChangedFile) };
   }
 
   /** Resolves a ref (branch, tag, abbreviated sha) to the full commit sha via the sha media type. */

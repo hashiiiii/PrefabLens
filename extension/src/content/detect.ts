@@ -95,6 +95,20 @@ function reactPath(header: HTMLElement): string | null {
   return text || null;
 }
 
+/** React remounts diff bodies with no inline styles (collapse/expand, re-renders), and
+ *  the debounced rescan re-hides them only ~200ms later — long enough to flash the raw
+ *  diff. This document-level rule, keyed on the region marker set by setRawHidden, hides
+ *  a fresh body before first paint. It targets the body's own classes rather than
+ *  "everything but the header" so github markup drift degrades back to the debounced
+ *  flash instead of hiding the file header. */
+function ensureHideRule(doc: Document): void {
+  if (doc.head.querySelector("style[data-prefablens-hide-rule]")) return;
+  const style = doc.createElement("style");
+  style.setAttribute("data-prefablens-hide-rule", "");
+  style.textContent = "[data-prefablens-raw-hidden] > .border.rounded-bottom-2 { display: none !important; }";
+  doc.head.append(style);
+}
+
 // GitHub's react diff UI (login-gated rollout). Class names are hashed CSS modules, so
 // anchors are role/id plus class-prefix matches; the body is "any region child that isn't
 // the header block", because its class is unstable and react recreates it constantly.
@@ -114,8 +128,19 @@ function scanReact(root: ParentNode): FileEntry[] {
     out.push({
       path,
       header,
-      attachHost: (host) => headerBlock().after(host),
+      attachHost(host) {
+        // The card frame lives on the diff body in this layout, so hiding the body
+        // strips it: recreate the same chrome on the host (theme-following variables,
+        // fallbacks for pages without Primer)
+        host.style.cssText =
+          "border: 1px solid var(--borderColor-default, #d1d9e0); border-radius: 0 0 6px 6px; background: var(--bgColor-default, #ffffff);";
+        headerBlock().after(host);
+      },
       setRawHidden(hidden) {
+        region.toggleAttribute("data-prefablens-raw-hidden", hidden);
+        if (hidden) ensureHideRule(region.ownerDocument);
+        // Inline fallback for bodies the CSS rule misses (markup drift): the rescan
+        // hides them one debounce late instead of never
         for (const child of region.children) {
           if (child === headerBlock() || child.hasAttribute("data-prefablens-view")) continue;
           (child as HTMLElement).style.display = hidden ? "none" : "";

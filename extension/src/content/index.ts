@@ -261,7 +261,10 @@ async function init(): Promise<void> {
     render(view.root, view.json, { resolving: msg.done ? 0 : Math.max(countUnresolved(view.json), 1) });
   });
 
-  // GitHub is an SPA: an initial scan + MutationObserver follows lazy loading and tab navigation (200ms debounce).
+  // GitHub is an SPA: an initial scan + MutationObserver follows lazy loading and tab navigation.
+  // 50ms debounce keeps collapse/expand tracking under the ~100ms sluggishness threshold while
+  // still batching mutation storms: a full scan pass measured ~0.75ms on a 21-file PR, so even
+  // back-to-back rescans are negligible (the scan is fetch-free and idempotent).
   attach(state);
   let scheduled = false;
   new MutationObserver(() => {
@@ -270,7 +273,7 @@ async function init(): Promise<void> {
     setTimeout(() => {
       scheduled = false;
       attach(state);
-    }, 200);
+    }, 50);
   }).observe(document.body, { childList: true, subtree: true });
 }
 

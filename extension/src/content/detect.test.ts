@@ -217,7 +217,7 @@ const REACT_FIXTURE = `
               <button type="button" aria-expanded="true"><svg class="octicon octicon-chevron-down"></svg></button>
             </div>
           </div>
-          <div class="Diff-module__diffContent">raw diff</div>
+          <div class="border position-relative rounded-bottom-2">raw diff</div>
         </div>
       </div>
       <div class="PullRequestDiffsList-module__diffEntry__djnVa">
@@ -228,7 +228,7 @@ const REACT_FIXTURE = `
               <button type="button" aria-expanded="true"><svg class="octicon octicon-chevron-down"></svg></button>
             </div>
           </div>
-          <div class="Diff-module__diffContent">raw diff</div>
+          <div class="border position-relative rounded-bottom-2">raw diff</div>
         </div>
       </div>
     </div>
@@ -262,7 +262,7 @@ describe("scanUnityFiles (react ui)", () => {
     const region = must(document.querySelector("#diff-aaa111"));
     expect(region.children[1]).toBe(host);
     entry.setRawHidden(true);
-    const body = must(region.querySelector<HTMLElement>(".Diff-module__diffContent"));
+    const body = must(region.querySelector<HTMLElement>(".border.rounded-bottom-2"));
     expect(body.style.display).toBe("none");
     expect(host.style.display).not.toBe("none");
     expect(must(region.querySelector<HTMLElement>(".Diff-module__diffHeaderWrapper")).style.display).not.toBe("none");
@@ -274,14 +274,59 @@ describe("scanUnityFiles (react ui)", () => {
     document.body.innerHTML = REACT_FIXTURE;
     const entry = must(scanUnityFiles(document)[0]);
     entry.setRawHidden(true);
-    // Simulate a react remount: fresh body node without our inline style
+    // Simulate a react remount whose body does NOT carry today's border classes:
+    // the inline-style loop is the markup-drift fallback and must still hide it
     const region = must(document.querySelector("#diff-aaa111"));
-    must(region.querySelector(".Diff-module__diffContent")).remove();
+    must(region.querySelector(".border.rounded-bottom-2")).remove();
     const fresh = document.createElement("div");
     fresh.className = "Diff-module__diffContent";
     region.append(fresh);
     entry.setRawHidden(true);
     expect(fresh.style.display).toBe("none");
+  });
+
+  it("gives the host the card frame that the hidden body carried", () => {
+    document.body.innerHTML = REACT_FIXTURE;
+    const entry = must(scanUnityFiles(document)[0]);
+    const host = document.createElement("div");
+    host.setAttribute("data-prefablens-view", "");
+    entry.attachHost(host);
+    // On this layout the border/rounded-bottom card chrome lives on the diff body,
+    // not the region: hiding the body removes the frame, so the host must recreate
+    // it (theme-following Primer variables, with fallbacks for non-github pages)
+    const style = host.getAttribute("style") ?? "";
+    expect(style).toContain("border:");
+    expect(style).toContain("var(--borderColor-default");
+    expect(style).toContain("border-radius: 0 0 6px 6px");
+    expect(style).toContain("var(--bgColor-default");
+  });
+
+  it("stamps a marker attribute and injects a stylesheet that hides fresh bodies", () => {
+    document.head.innerHTML = "";
+    document.body.innerHTML = REACT_FIXTURE;
+    const entry = must(scanUnityFiles(document)[0]);
+    const region = must(document.querySelector("#diff-aaa111"));
+    entry.setRawHidden(true);
+    // React remounts the body with no inline styles when a collapsed file expands;
+    // the debounced rescan re-hides it only ~200ms later. The marker + document-level
+    // rule pair hides the fresh body before first paint instead.
+    expect(region.hasAttribute("data-prefablens-raw-hidden")).toBe(true);
+    const style = document.head.querySelector("style[data-prefablens-hide-rule]");
+    expect(style?.textContent).toContain("[data-prefablens-raw-hidden] > .border.rounded-bottom-2");
+    // Un-hiding must lift the CSS rule too, or the restored body would stay invisible
+    entry.setRawHidden(false);
+    expect(region.hasAttribute("data-prefablens-raw-hidden")).toBe(false);
+  });
+
+  it("injects the hide stylesheet only once", () => {
+    document.head.innerHTML = "";
+    document.body.innerHTML = REACT_FIXTURE;
+    const entry = must(scanUnityFiles(document)[0]);
+    // sync() re-runs setRawHidden on every debounced scan, so injection must be idempotent
+    entry.setRawHidden(true);
+    entry.setRawHidden(true);
+    must(scanUnityFiles(document)[0]).setRawHidden(true);
+    expect(document.head.querySelectorAll("style[data-prefablens-hide-rule]")).toHaveLength(1);
   });
 
   it("reports the chevron collapse state", () => {

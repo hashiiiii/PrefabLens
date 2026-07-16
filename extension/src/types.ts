@@ -62,6 +62,24 @@ export type DiffV2 = {
 
 export type DiffErrorV1 = { schema: "prefablens.error.v1"; error: string };
 
+// Which diff page a request is for. Every kind shares the blob/diff pipeline; only
+// the refs + changed-file discovery differs (PR API / commit API / compare API).
+export type DiffTarget =
+  | { kind: "pull"; prNumber: number }
+  | { kind: "commit"; sha: string }
+  | { kind: "compare"; base: string; head: string };
+
+/** Stable identity of a target within a repo — context caches and view keys derive from it. */
+export function targetKey(owner: string, repo: string, target: DiffTarget): string {
+  const suffix =
+    target.kind === "pull"
+      ? `#${target.prNumber}`
+      : target.kind === "commit"
+        ? `@${target.sha}`
+        : `@${target.base}...${target.head}`;
+  return `${owner}/${repo}${suffix}`;
+}
+
 // content ↔ background messages (chrome.runtime only serializes JSON)
 export type SemanticDiffRequest = {
   type: "semanticDiff";

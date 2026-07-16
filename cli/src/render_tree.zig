@@ -389,7 +389,6 @@ test "render: structural summary row shows label only, no dangling value" {
 
 const model = core.model;
 const display = @import("display.zig");
-const builtin_refs = @import("builtin_refs.zig");
 
 pub const Color = struct {
     pub const reset = "\x1b[0m";
@@ -639,28 +638,15 @@ fn writeValueText(w: *std.Io.Writer, node: ?*const model.Node, resolved: ?*const
     };
     switch (n.*) {
         .scalar => |s| try w.writeAll(s),
-        .ref => |r| {
-            if (r.guid) |g| {
-                // Same rule as render_html's writeValue (and the extension's
-                // formatValue): a resolved external ref reads as its asset path,
-                // a Unity built-in ref as its object name.
-                if (resolved) |rr| {
-                    if (rr.get(g)) |p| {
-                        try w.writeAll(p);
-                        return;
-                    }
-                }
-                if (builtin_refs.name(g, r.file_id)) |builtin| {
-                    try w.print("{s} (built-in)", .{builtin});
-                    return;
-                }
-                try w.print("guid:{s}", .{g});
-            } else if (r.file_id == 0) {
-                // Unity's null reference; the Inspector shows it as None.
-                try w.writeAll("None");
-            } else {
-                try w.print("#{d}", .{r.file_id});
-            }
+        // The resolution ladder lives in display.refDisplay, the single Zig
+        // source of truth (the extension's formatValue mirrors it); this
+        // switch adds only the plain-text decoration.
+        .ref => |r| switch (display.refDisplay(r, resolved)) {
+            .path => |p| try w.writeAll(p),
+            .builtin => |b| try w.print("{s} (built-in)", .{b}),
+            .guid => |g| try w.print("guid:{s}", .{g}),
+            .none => try w.writeAll("None"),
+            .file_id => |id| try w.print("#{d}", .{id}),
         },
         .map => try w.writeAll("{...}"),
         .seq => try w.writeAll("[...]"),

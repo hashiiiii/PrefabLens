@@ -90,8 +90,11 @@ function scanReact(root: ParentNode): FileEntry[] {
           (child as HTMLElement).style.display = hidden ? "none" : "";
         }
       },
-      // React swaps the chevron octicon per state; a collapsed file shows chevron-right
-      collapsed: () => headerBlock().querySelector(".octicon-chevron-right") !== null,
+      // Two independent collapse signals: github swaps the chevron octicon per state and
+      // stamps a DiffFileHeader-module__collapsed class on the header row
+      collapsed: () =>
+        headerBlock().querySelector(".octicon-chevron-right") !== null ||
+        headerBlock().querySelector('[class*="DiffFileHeader-module__collapsed"]') !== null,
       globalAnchor: () => region.closest('[data-testid="progressive-diffs-list"]') ?? region.parentElement,
     });
   }

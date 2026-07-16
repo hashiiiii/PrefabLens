@@ -236,6 +236,15 @@ describe("scanUnityFiles (react ui)", () => {
     expect(entry.collapsed()).toBe(true);
   });
 
+  it("also reads collapse from the header's collapsed module class", () => {
+    // Second signal, independent of the icon: github stamps this class on the header row
+    document.body.innerHTML = REACT_FIXTURE;
+    const entry = scanUnityFiles(document)[0]!;
+    const header = document.querySelector("#diff-aaa111 .DiffFileHeader-module__diff-file-header")!;
+    header.classList.add("DiffFileHeader-module__collapsed__aB3cD");
+    expect(entry.collapsed()).toBe(true);
+  });
+
   it("anchors the global bar on the virtualized list root", () => {
     document.body.innerHTML = REACT_FIXTURE;
     const entry = scanUnityFiles(document)[0]!;

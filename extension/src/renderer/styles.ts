@@ -1,8 +1,11 @@
 /** Shadow-DOM stylesheet. Colors read Primer CSS variables (custom properties
  *  inherit through the shadow boundary on github.com, so every GitHub theme is
- *  followed automatically) and fall back to a built-in light/dark palette. */
+ *  followed automatically) and fall back to a built-in light/dark palette.
+ *  The host declares display: block because all: initial resets display to its
+ *  spec initial value (inline), which would break the card frame the react
+ *  layout draws on the host. */
 export const STYLES = `
-  :host { all: initial; }
+  :host { all: initial; display: block; }
   .pl-root {
     --pl-fg: var(--fgColor-default, #1f2328);
     --pl-muted: var(--fgColor-muted, #59636e);

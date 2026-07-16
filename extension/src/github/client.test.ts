@@ -182,6 +182,63 @@ describe("GithubClient", () => {
       ).getPrRefs("o", "r", 1),
     ).rejects.toBeInstanceOf(AuthError);
   });
+
+  it("getCommit returns the first parent as base and maps files", async () => {
+    const { fn } = fakeFetch({
+      "/commits/abc1234?": () =>
+        json({
+          sha: "abc1234full",
+          parents: [{ sha: "parent-sha" }, { sha: "merge-second-parent" }],
+          files: [{ filename: "Assets/Foo.prefab", status: "modified", sha: "blob-head" }],
+        }),
+    });
+    const client = new GithubClient("https://api.github.com", "tok", fn);
+    const commit = await client.getCommit("o", "r", "abc1234");
+    // GitHub's commit page diffs against the first parent; so do we
+    expect(commit).toEqual({
+      sha: "abc1234full",
+      parentSha: "parent-sha",
+      files: [{ path: "Assets/Foo.prefab", status: "modified", previousPath: undefined, sha: "blob-head" }],
+    });
+  });
+
+  it("getCommit paginates past 300 files and flags a root commit", async () => {
+    // The commit API pages files 300 at a time (3,000-file cap on GitHub's side)
+    const page1 = Array.from({ length: 300 }, (_, i) => ({ filename: `f${i}.cs`, status: "added" }));
+    const { fn } = fakeFetch({
+      "&page=1": () => json({ sha: "root-sha", parents: [], files: page1 }),
+      "&page=2": () => json({ sha: "root-sha", parents: [], files: [{ filename: "last.cs", status: "added" }] }),
+    });
+    const client = new GithubClient("https://api.github.com", "tok", fn);
+    const commit = await client.getCommit("o", "r", "root-sha");
+    expect(commit.parentSha).toBeNull(); // root commit: every file is added, no base side exists
+    expect(commit.files).toHaveLength(301);
+  });
+
+  it("compareRefs returns the merge base and maps files", async () => {
+    const { fn, calls } = fakeFetch({
+      "/compare/feat%2Fx...main": () =>
+        json({
+          merge_base_commit: { sha: "merge-base" },
+          files: [{ filename: "Assets/Foo.prefab", status: "removed", sha: "blob-base" }],
+        }),
+    });
+    const client = new GithubClient("https://api.github.com", "tok", fn);
+    const cmp = await client.compareRefs("o", "r", "feat/x", "main");
+    expect(cmp).toEqual({
+      mergeBaseSha: "merge-base",
+      files: [{ path: "Assets/Foo.prefab", status: "removed", previousPath: undefined, sha: "blob-base" }],
+    });
+    // refs are encoded per side so branch slashes can't be misread as path segments
+    expect(calls[0]?.url).toContain("/compare/feat%2Fx...main");
+  });
+
+  it("resolveRefSha asks for the sha media type and trims the text body", async () => {
+    const { fn, calls } = fakeFetch({ "/commits/main": () => new Response("full-head-sha\n") });
+    const client = new GithubClient("https://api.github.com", "tok", fn);
+    await expect(client.resolveRefSha("o", "r", "main")).resolves.toBe("full-head-sha");
+    expect(calls[0]?.headers.accept).toBe("application/vnd.github.sha");
+  });
 });
 
 describe("graphqlUrl", () => {

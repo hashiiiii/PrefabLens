@@ -163,7 +163,7 @@ test("recovers after an error response", async ({ page }) => {
         sendMessage: (msg: { type?: string }) => {
           if (msg?.type !== "semanticDiff") return Promise.resolve();
           const w = window as unknown as Record<string, number>;
-          const call = w.__prefablensCalls!;
+          const call = w.__prefablensCalls ?? 0;
           w.__prefablensCalls = call + 1;
           return Promise.resolve(call === 0 ? { ok: false, error: "pat-missing" } : res);
         },

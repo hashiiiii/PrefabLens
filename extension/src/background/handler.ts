@@ -18,6 +18,7 @@ import {
   targetKey,
 } from "../types";
 import { isUnityPath } from "../unity";
+import { must } from "../util/must";
 import { DiffError, type Differ } from "../wasm/differ";
 
 type ClientLike = Pick<
@@ -133,7 +134,8 @@ export function createHandler(deps: Deps): Handler {
     const resolved: Record<string, string> = {};
     const unknown: string[] = [];
     for (const g of guids) {
-      if (Object.hasOwn(cached, g)) resolved[g] = cached[g]!;
+      const hit = Object.hasOwn(cached, g) ? cached[g] : undefined;
+      if (hit !== undefined) resolved[g] = hit;
       else unknown.push(g);
     }
     const searchable = unknown.filter((g) => !misses.has(`${repoKey}:${g}`));
@@ -213,7 +215,7 @@ export function createHandler(deps: Deps): Handler {
       : client.getFileAtRef(owner, repo, path, sha);
     p.catch(() => blobs.delete(key)); // don't keep failures: the next call can re-fetch
     blobs.set(key, p);
-    if (blobs.size > BLOB_CACHE_MAX) blobs.delete(blobs.keys().next().value!);
+    if (blobs.size > BLOB_CACHE_MAX) blobs.delete(must(blobs.keys().next().value));
     return p;
   }
 
@@ -404,7 +406,10 @@ export function createHandler(deps: Deps): Handler {
       const fromIndex: Record<string, string> = {};
       let leftover = remaining;
       if (index) {
-        for (const g of remaining) if (Object.hasOwn(index, g)) fromIndex[g] = index[g]!;
+        for (const g of remaining) {
+          const hit = Object.hasOwn(index, g) ? index[g] : undefined;
+          if (hit !== undefined) fromIndex[g] = hit;
+        }
         leftover = remaining.filter((g) => !Object.hasOwn(fromIndex, g));
         if (Object.keys(fromIndex).length) {
           // Also land it in guidCache: searchUnresolved inside mergeSources rebuilds resolved

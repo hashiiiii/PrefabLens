@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { must } from "../util/must";
 import { ApiError, AuthError, GithubClient, graphqlUrl, RateLimitError } from "./client";
 
 // fetch fake that returns a fixed path→response table. It also records calls.
@@ -76,7 +77,7 @@ describe("GithubClient", () => {
     const { fn, calls } = fakeFetch({ "/git/blobs/": () => new Response(new Uint8Array([1, 2, 3])) });
     const client = new GithubClient("https://api.github.com", "tok", fn);
     const bytes = await client.getBlobRaw("o", "r", "blob1");
-    expect([...bytes!]).toEqual([1, 2, 3]);
+    expect([...must(bytes)]).toEqual([1, 2, 3]);
     expect(calls[0]?.url).toBe("https://api.github.com/repos/o/r/git/blobs/blob1");
     expect(calls[0]?.headers.accept).toBe("application/vnd.github.raw+json");
   });
@@ -91,7 +92,7 @@ describe("GithubClient", () => {
     const { fn, calls } = fakeFetch({ "/contents/": () => new Response(new Uint8Array([1, 2, 3])) });
     const client = new GithubClient("https://api.github.com", "tok", fn);
     const bytes = await client.getFileAtRef("o", "r", "Assets/My Prefab#1.prefab", "sha1");
-    expect([...bytes!]).toEqual([1, 2, 3]);
+    expect([...must(bytes)]).toEqual([1, 2, 3]);
     expect(calls[0]?.url).toContain("/contents/Assets/My%20Prefab%231.prefab?ref=sha1");
     expect(calls[0]?.headers.accept).toBe("application/vnd.github.raw+json");
   });

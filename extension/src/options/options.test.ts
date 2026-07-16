@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
 import type { DeviceCode, PollResult } from "../github/deviceFlow";
+import { must } from "../util/must";
 import { initOptions, OPTIONS_BODY, type SignInFlow } from "./options";
 
 function fakeStorage(initial: Record<string, unknown> = {}) {
@@ -173,7 +174,7 @@ describe("initOptions", () => {
       fakeStorage(),
       fakeFlow(() => pending),
     );
-    const signin = document.querySelector<HTMLButtonElement>("#signin")!;
+    const signin = must(document.querySelector<HTMLButtonElement>("#signin"));
     signin.click();
     await flush();
     // Poll still unresolved: a second click must be impossible

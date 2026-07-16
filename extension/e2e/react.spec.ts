@@ -104,8 +104,9 @@ test("a body remounted while semantic is active is hidden before it can paint", 
   // Remount and measure inside ONE evaluate: the debounced rescan cannot run in
   // between, so only the injected CSS rule can be hiding the fresh node here
   const displayRightAfterAppend = await page.evaluate(() => {
-    const region = document.querySelector("#diff-aaa111")!;
-    region.querySelector(".border.rounded-bottom-2")!.remove();
+    const region = document.querySelector("#diff-aaa111");
+    if (!region) throw new Error("diff region missing");
+    region.querySelector(".border.rounded-bottom-2")?.remove();
     const fresh = document.createElement("div");
     fresh.className = "border position-relative rounded-bottom-2";
     fresh.textContent = "raw github diff table";
@@ -137,17 +138,19 @@ test("github's collapse chevron hides the semantic view and re-hides a remounted
 
   // Collapse: react swaps the chevron icon and unmounts the body node
   await page.evaluate(() => {
-    const region = document.querySelector("#diff-aaa111")!;
-    region.querySelector(".octicon-chevron-down")!.setAttribute("class", "octicon octicon-chevron-right");
-    region.querySelector(".border.rounded-bottom-2")!.remove();
+    const region = document.querySelector("#diff-aaa111");
+    if (!region) throw new Error("diff region missing");
+    region.querySelector(".octicon-chevron-down")?.setAttribute("class", "octicon octicon-chevron-right");
+    region.querySelector(".border.rounded-bottom-2")?.remove();
   });
   await expect(view).toBeHidden();
 
   // Expand: react remounts a FRESH body node (no inline style) and swaps the icon back.
   // The per-scan sync must re-hide the new body and re-show our view.
   await page.evaluate(() => {
-    const region = document.querySelector("#diff-aaa111")!;
-    region.querySelector(".octicon-chevron-right")!.setAttribute("class", "octicon octicon-chevron-down");
+    const region = document.querySelector("#diff-aaa111");
+    if (!region) throw new Error("diff region missing");
+    region.querySelector(".octicon-chevron-right")?.setAttribute("class", "octicon octicon-chevron-down");
     const body = document.createElement("div");
     body.className = "border position-relative rounded-bottom-2";
     body.textContent = "raw github diff table";
@@ -167,7 +170,8 @@ test("virtualization: a fully remounted file re-attaches and inherits the semant
   // Scroll-out + scroll-in: react discards the whole list item and recreates it fresh,
   // without any of our nodes, marker attributes, or inline styles.
   await page.evaluate(() => {
-    const entry = document.querySelector("#diff-aaa111")!.parentElement!;
+    const entry = document.querySelector("#diff-aaa111")?.parentElement;
+    if (!entry) throw new Error("diff region missing");
     const clone = entry.cloneNode(true) as HTMLElement;
     clone.querySelector("[data-prefablens-view]")?.remove();
     clone.querySelector("[data-prefablens-toggle]")?.remove();

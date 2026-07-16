@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { AuthError, type ChangedFile, RateLimitError } from "../github/client";
 import type { DiffV2, GuidResolvedPush, SemanticDiffRequest } from "../types";
+import { must } from "../util/must";
 import { DiffError, type Differ } from "../wasm/differ";
 import { createHandler, type Deps, type Handler } from "./handler";
 
@@ -598,8 +599,8 @@ describe("createHandler", () => {
       const res = await resolveFully(createHandler(deps), REQ);
       // side=after, so the source is fetched from head and its bytes land in assets.
       expect(client.getFileAtRef).toHaveBeenCalledWith("o", "r", "Assets/Cyl.prefab", "head-sha");
-      const assets = diffWithAssets.mock.calls[0]?.[2];
-      expect(new TextDecoder().decode(assets.get("src1")!)).toBe("SRC");
+      const assets = must(diffWithAssets.mock.calls[0]?.[2]);
+      expect(new TextDecoder().decode(must(assets.get("src1")))).toBe("SRC");
       // Even after the re-diff, resolved is restored from guidCache and persists.
       expect(res).toEqual({ ok: true, json: { ...MERGED, resolved: { src1: "Assets/Cyl.prefab" } } });
     });
@@ -656,7 +657,7 @@ describe("createHandler", () => {
       };
       const merged: DiffV2 = { ...DIFF, unresolvedGuids: ["src1"] };
       const diffWithAssets = vi.fn(() => merged);
-      const { deps, client } = makeDeps({
+      const { deps } = makeDeps({
         files: [
           { path: "Assets/Foo.prefab", status: "modified" },
           { path: "Assets/Src.prefab.meta", status: "modified" },
@@ -765,7 +766,7 @@ describe("semanticDiff with push (two-stage)", () => {
     const { res, pushes } = await serveAndResolve(createHandler(deps), REQ);
     // The response returns immediately with empty resolved + pending. Names arrive via push (the crux of B4)
     expect(res).toEqual({ ok: true, json: { ...DIFF, resolved: {} }, pending: true });
-    const last = pushes.at(-1)!;
+    const last = must(pushes.at(-1));
     expect(last.done).toBe(true);
     expect(last.json?.resolved).toEqual({ g1: "Assets/Scripts/S.cs" });
     expect(guidCache.save).toHaveBeenCalledWith("https://api.github.com/o/r", { g1: "Assets/Scripts/S.cs" });

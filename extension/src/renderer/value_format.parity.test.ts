@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { expect, it } from "vitest";
+import { must } from "../util/must";
 
 // The diff.v2 value display rules are hand-copied in four places: the
 // extension's formatValue (render.ts), the Unity editor's ValueFormat.cs, and
@@ -34,7 +35,7 @@ function fnSlice(src: string, header: string): string {
 function extract(src: string, re: RegExp, what: string): string {
   const m = src.match(re);
   expect(m, `${what} not found`).not.toBeNull();
-  return m![1]!;
+  return must(m?.[1]);
 }
 
 // Assert the guid branch tries its lookups in order: resolved → built-in → raw.

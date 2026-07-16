@@ -13,6 +13,7 @@ import { createViewState } from "./content/viewstate";
 import { applyResolved } from "./github/resolved";
 import { render, renderError, renderLoading } from "./renderer/render";
 import type { DiffV2 } from "./types";
+import { must } from "./util/must";
 import { createDiffer, type Differ } from "./wasm/differ";
 
 async function fetchBytes(url: string | undefined): Promise<Uint8Array<ArrayBuffer>> {
@@ -60,7 +61,7 @@ function attachFile(
   initial: View,
 ): (view: View) => void {
   // Non-null: site/build.mjs always nests the header in a .file with a .js-file-content sibling.
-  const content = header.parentElement!.querySelector<HTMLElement>(".js-file-content")!;
+  const content = must(header.parentElement?.querySelector<HTMLElement>(".js-file-content"));
   let host: HTMLDivElement | undefined;
   let root: ShadowRoot | undefined;
   let rendered = false;
@@ -123,7 +124,7 @@ async function main(): Promise<void> {
   });
 
   // Global bar above the first Unity file, same anchor rule as the content script.
-  const firstFile = headers[0].closest(".file")!;
+  const firstFile = must(headers[0]?.closest(".file"));
   const bar = document.createElement("div");
   bar.setAttribute("data-prefablens-global", "");
   const label = document.createElement("span");

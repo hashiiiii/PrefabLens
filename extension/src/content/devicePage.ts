@@ -10,7 +10,7 @@ export function fillDeviceCode(doc: Document, pending: PendingSignIn, now: numbe
   const chars = pending.userCode.replace(/-/g, "");
   if (boxes.length !== chars.length || boxes.some((box) => box.value)) return false;
   boxes.forEach((box, i) => {
-    box.value = chars[i]!;
+    box.value = chars.charAt(i);
     // GitHub's auto-advance JS listens per box; keep it in sync with the programmatic fill.
     box.dispatchEvent(new Event("input", { bubbles: true }));
   });

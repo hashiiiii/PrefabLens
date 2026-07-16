@@ -1,4 +1,5 @@
 import { RateLimitError } from "../github/client";
+import { must } from "../util/must";
 
 type Job = {
   run: () => Promise<unknown>;
@@ -37,7 +38,7 @@ export function createQueue(
 
   const pump = (): void => {
     while (!paused && active < limit && pending.length) {
-      const job = pending.shift()!;
+      const job = must(pending.shift());
       active++;
       // Normalize even a synchronous throw into a rejection: a leak here leaves active undecremented and jams the queue forever
       Promise.resolve()

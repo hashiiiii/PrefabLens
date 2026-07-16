@@ -1,4 +1,5 @@
 import { type DeviceCode, type PollResult, pollForToken, requestDeviceCode } from "../github/deviceFlow";
+import { must } from "../util/must";
 
 // Keep the form body on the TS side: options.html and the jsdom tests share the same markup.
 export const OPTIONS_BODY = `
@@ -31,13 +32,13 @@ export type SignInFlow = {
 };
 
 export async function initOptions(doc: Document, storage: StorageLike, flow: SignInFlow): Promise<void> {
-  const signinState = doc.querySelector<HTMLElement>("#signin-state")!;
-  const signinButton = doc.querySelector<HTMLButtonElement>("#signin")!;
-  const flowArea = doc.querySelector<HTMLElement>("#flow")!;
-  const userCode = doc.querySelector<HTMLElement>("#user-code")!;
-  const verifyLink = doc.querySelector<HTMLAnchorElement>("#verify-link")!;
-  const copyButton = doc.querySelector<HTMLButtonElement>("#copy-code")!;
-  const status = doc.querySelector<HTMLElement>("#status")!;
+  const signinState = must(doc.querySelector<HTMLElement>("#signin-state"));
+  const signinButton = must(doc.querySelector<HTMLButtonElement>("#signin"));
+  const flowArea = must(doc.querySelector<HTMLElement>("#flow"));
+  const userCode = must(doc.querySelector<HTMLElement>("#user-code"));
+  const verifyLink = must(doc.querySelector<HTMLAnchorElement>("#verify-link"));
+  const copyButton = must(doc.querySelector<HTMLButtonElement>("#copy-code"));
+  const status = must(doc.querySelector<HTMLElement>("#status"));
 
   const showSignedIn = (pat: unknown): void => {
     signinState.textContent = pat ? "Signed in" : "Not signed in";

@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
+import { must } from "../util/must";
 import { parseDiffUrl, parsePrPage, scanUnityFiles } from "./detect";
 
 const FIXTURE = `
@@ -127,18 +128,19 @@ describe("scanUnityFiles", () => {
       "Assets/Data/Config.asset",
     ]);
     // Behavior replaces the old `content` field: hiding acts on the .js-file-content element
-    const content = document.querySelector<HTMLElement>(".file .js-file-content")!;
-    entries[0]!.setRawHidden(true);
+    const content = must(document.querySelector<HTMLElement>(".file .js-file-content"));
+    const entry = must(entries[0]);
+    entry.setRawHidden(true);
     expect(content.style.display).toBe("none");
-    entries[0]!.setRawHidden(false);
+    entry.setRawHidden(false);
     expect(content.style.display).toBe("");
     // Classic collapse is handled by Primer's Details CSS, not by us
-    expect(entries[0]!.collapsed()).toBe(false);
+    expect(entry.collapsed()).toBe(false);
     // The global bar anchors on the .file container
-    expect(entries[0]!.globalAnchor()).toBe(document.querySelector(".file"));
+    expect(entry.globalAnchor()).toBe(document.querySelector(".file"));
     // The host lands right after the content and opts into the Details collapse CSS
     const host = document.createElement("div");
-    entries[0]!.attachHost(host);
+    entry.attachHost(host);
     expect(content.nextElementSibling).toBe(host);
     expect(host.classList.contains("Details-content--hidden")).toBe(true);
   });
@@ -252,30 +254,30 @@ describe("scanUnityFiles (react ui)", () => {
 
   it("hides every region child except the header block and our host", () => {
     document.body.innerHTML = REACT_FIXTURE;
-    const entry = scanUnityFiles(document)[0]!;
+    const entry = must(scanUnityFiles(document)[0]);
     const host = document.createElement("div");
     host.setAttribute("data-prefablens-view", "");
     entry.attachHost(host);
     // Host goes right after the header wrapper, inside the region
-    const region = document.querySelector("#diff-aaa111")!;
+    const region = must(document.querySelector("#diff-aaa111"));
     expect(region.children[1]).toBe(host);
     entry.setRawHidden(true);
-    const body = region.querySelector<HTMLElement>(".border.rounded-bottom-2")!;
+    const body = must(region.querySelector<HTMLElement>(".border.rounded-bottom-2"));
     expect(body.style.display).toBe("none");
     expect(host.style.display).not.toBe("none");
-    expect(region.querySelector<HTMLElement>(".Diff-module__diffHeaderWrapper")!.style.display).not.toBe("none");
+    expect(must(region.querySelector<HTMLElement>(".Diff-module__diffHeaderWrapper")).style.display).not.toBe("none");
     entry.setRawHidden(false);
     expect(body.style.display).toBe("");
   });
 
   it("re-resolves body nodes on every call because react recreates them", () => {
     document.body.innerHTML = REACT_FIXTURE;
-    const entry = scanUnityFiles(document)[0]!;
+    const entry = must(scanUnityFiles(document)[0]);
     entry.setRawHidden(true);
     // Simulate a react remount whose body does NOT carry today's border classes:
     // the inline-style loop is the markup-drift fallback and must still hide it
-    const region = document.querySelector("#diff-aaa111")!;
-    region.querySelector(".border.rounded-bottom-2")!.remove();
+    const region = must(document.querySelector("#diff-aaa111"));
+    must(region.querySelector(".border.rounded-bottom-2")).remove();
     const fresh = document.createElement("div");
     fresh.className = "Diff-module__diffContent";
     region.append(fresh);
@@ -285,7 +287,7 @@ describe("scanUnityFiles (react ui)", () => {
 
   it("gives the host the card frame that the hidden body carried", () => {
     document.body.innerHTML = REACT_FIXTURE;
-    const entry = scanUnityFiles(document)[0]!;
+    const entry = must(scanUnityFiles(document)[0]);
     const host = document.createElement("div");
     host.setAttribute("data-prefablens-view", "");
     entry.attachHost(host);
@@ -302,8 +304,8 @@ describe("scanUnityFiles (react ui)", () => {
   it("stamps a marker attribute and injects a stylesheet that hides fresh bodies", () => {
     document.head.innerHTML = "";
     document.body.innerHTML = REACT_FIXTURE;
-    const entry = scanUnityFiles(document)[0]!;
-    const region = document.querySelector("#diff-aaa111")!;
+    const entry = must(scanUnityFiles(document)[0]);
+    const region = must(document.querySelector("#diff-aaa111"));
     entry.setRawHidden(true);
     // React remounts the body with no inline styles when a collapsed file expands;
     // the debounced rescan re-hides it only ~200ms later. The marker + document-level
@@ -319,20 +321,20 @@ describe("scanUnityFiles (react ui)", () => {
   it("injects the hide stylesheet only once", () => {
     document.head.innerHTML = "";
     document.body.innerHTML = REACT_FIXTURE;
-    const entry = scanUnityFiles(document)[0]!;
+    const entry = must(scanUnityFiles(document)[0]);
     // sync() re-runs setRawHidden on every debounced scan, so injection must be idempotent
     entry.setRawHidden(true);
     entry.setRawHidden(true);
-    scanUnityFiles(document)[0]!.setRawHidden(true);
+    must(scanUnityFiles(document)[0]).setRawHidden(true);
     expect(document.head.querySelectorAll("style[data-prefablens-hide-rule]")).toHaveLength(1);
   });
 
   it("reports the chevron collapse state", () => {
     document.body.innerHTML = REACT_FIXTURE;
-    const entry = scanUnityFiles(document)[0]!;
+    const entry = must(scanUnityFiles(document)[0]);
     expect(entry.collapsed()).toBe(false);
     // React swaps the chevron icon when the file is collapsed
-    const icon = document.querySelector("#diff-aaa111 .octicon-chevron-down")!;
+    const icon = must(document.querySelector("#diff-aaa111 .octicon-chevron-down"));
     icon.setAttribute("class", "octicon octicon-chevron-right");
     expect(entry.collapsed()).toBe(true);
   });
@@ -340,15 +342,15 @@ describe("scanUnityFiles (react ui)", () => {
   it("also reads collapse from the header's collapsed module class", () => {
     // Second signal, independent of the icon: github stamps this class on the header row
     document.body.innerHTML = REACT_FIXTURE;
-    const entry = scanUnityFiles(document)[0]!;
-    const header = document.querySelector("#diff-aaa111 .DiffFileHeader-module__diff-file-header")!;
+    const entry = must(scanUnityFiles(document)[0]);
+    const header = must(document.querySelector("#diff-aaa111 .DiffFileHeader-module__diff-file-header"));
     header.classList.add("DiffFileHeader-module__collapsed__aB3cD");
     expect(entry.collapsed()).toBe(true);
   });
 
   it("anchors the global bar on the virtualized list root", () => {
     document.body.innerHTML = REACT_FIXTURE;
-    const entry = scanUnityFiles(document)[0]!;
+    const entry = must(scanUnityFiles(document)[0]);
     expect(entry.globalAnchor()).toBe(document.querySelector('[data-testid="progressive-diffs-list"]'));
   });
 

@@ -1,5 +1,6 @@
 import type { DiffTarget } from "../types";
 import { isUnityPath } from "../unity";
+import { must } from "../util/must";
 
 export type FileEntry = {
   path: string;
@@ -32,17 +33,18 @@ export function parseDiffUrl(pathname: string): DiffPage | null {
     /^\/([^/]+)\/([^/]+)\/pull\/(\d+)\/(?:files(?:\/|$)|changes(?:\/[\da-f]{7,40}\.\.[\da-f]{7,40})?\/?$)/.exec(
       pathname,
     );
-  if (pr) return { owner: pr[1]!, repo: pr[2]!, target: { kind: "pull", prNumber: Number(pr[3]!) } };
+  if (pr) return { owner: must(pr[1]), repo: must(pr[2]), target: { kind: "pull", prNumber: Number(must(pr[3])) } };
   // Single-commit views: standalone /commit/SHA, plus the in-PR classic /commits/SHA and
   // react /changes/SHA — all show one commit against its parent
   const commit = /^\/([^/]+)\/([^/]+)\/(?:pull\/\d+\/(?:commits|changes)|commit)\/([\da-f]{7,40})\/?$/.exec(pathname);
-  if (commit) return { owner: commit[1]!, repo: commit[2]!, target: { kind: "commit", sha: commit[3]! } };
+  if (commit)
+    return { owner: must(commit[1]), repo: must(commit[2]), target: { kind: "commit", sha: must(commit[3]) } };
   const compare = /^\/([^/]+)\/([^/]+)\/compare\/(.+?)\.\.\.(.+?)\/?$/.exec(pathname);
   if (compare) {
-    const base = decodeRef(compare[3]!);
-    const head = decodeRef(compare[4]!);
+    const base = decodeRef(must(compare[3]));
+    const head = decodeRef(must(compare[4]));
     if (base.includes(":") || head.includes(":")) return null;
-    return { owner: compare[1]!, repo: compare[2]!, target: { kind: "compare", base, head } };
+    return { owner: must(compare[1]), repo: must(compare[2]), target: { kind: "compare", base, head } };
   }
   return null;
 }
@@ -50,7 +52,7 @@ export function parseDiffUrl(pathname: string): DiffPage | null {
 /** Matches any PR tab (the prefetch trigger). Different role from the diff-page-only parseDiffUrl. */
 export function parsePrPage(pathname: string): { owner: string; repo: string; prNumber: number } | null {
   const m = /^\/([^/]+)\/([^/]+)\/pull\/(\d+)(\/|$)/.exec(pathname);
-  return m ? { owner: m[1]!, repo: m[2]!, prNumber: Number(m[3]!) } : null;
+  return m ? { owner: must(m[1]), repo: must(m[2]), prNumber: Number(must(m[3])) } : null;
 }
 
 // Defensively searches GitHub's Files changed (classic DOM). If it doesn't match, ends harmlessly with an empty array.

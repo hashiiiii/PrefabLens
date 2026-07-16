@@ -16,6 +16,7 @@ import {
   type SemanticDiffResponse,
   targetKey,
 } from "../types";
+import { must } from "../util/must";
 import { type DiffPage, type FileEntry, parseDiffUrl, parsePrPage, scanUnityFiles } from "./detect";
 import { fillDeviceCode } from "./devicePage";
 import { createSignIn, type PendingSignIn } from "./signin";
@@ -95,7 +96,8 @@ function attach(state: ViewState): void {
   // dead appliers every scan, not just on PR change (also plugs the classic soft leak).
   for (const a of [...appliers]) if (!a.header.isConnected) appliers.delete(a);
   const entries = scanUnityFiles(document);
-  if (entries.length) ensureGlobalToggle(state, entries[0]!);
+  const first = entries[0];
+  if (first) ensureGlobalToggle(state, first);
   for (const entry of entries) attachToggle(state, page, entry);
   // Re-assert view state: react remounts diff bodies under still-marked headers, which
   // silently undoes the inline hide. All sync operations are idempotent and fetch-free.
@@ -157,7 +159,7 @@ function attachToggle(state: ViewState, page: DiffPage, entry: FileEntry): void 
     }
     sync(view);
     if (requested) return; // cache only successful results per file (re-toggle doesn't re-fetch)
-    const root = host.shadowRoot!;
+    const root = must(host.shadowRoot);
     const request = (force?: boolean): void => {
       requested = true;
       renderLoading(root);

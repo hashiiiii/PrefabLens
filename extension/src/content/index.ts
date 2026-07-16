@@ -27,6 +27,7 @@ const ERROR_TEXT: Record<BackgroundError, string> = {
   "rate-limited": "GitHub rate limit exceeded. Wait a while and toggle again.",
   "fetch-failed": "Could not fetch file contents from GitHub.",
   "diff-failed": "Could not compute a semantic diff for this file.",
+  "not-unity-yaml": "This file is not a text-serialized Unity asset.",
 };
 
 // path → render target. When a push (guidResolved) arrives, merge resolved and re-render

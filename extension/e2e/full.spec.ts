@@ -21,8 +21,9 @@ MonoBehaviour:
   volume: 0.5
 `;
 const AFTER = BEFORE.replace("0.5", "0.8");
-// 26MB with no documents trips the 25MB guard; after force it finishes cheaply with an empty diff
-const BIG = "x".repeat(26 * 1024 * 1024);
+// 26MB with a UnityYAML head but no documents trips the 25MB guard; after
+// force, the content sniff passes and it finishes cheaply with an empty diff
+const BIG = `%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n${"x".repeat(26 * 1024 * 1024)}`;
 
 function startServer(): Promise<Server> {
   const server = createServer((req, res) => {

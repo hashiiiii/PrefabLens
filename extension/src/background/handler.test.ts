@@ -174,6 +174,21 @@ describe("createHandler", () => {
     expect(diff.mock.calls[0]?.[1]).toHaveLength(0); // after is empty
   });
 
+  it("rejects a file whose content is not UnityYAML on either side", async () => {
+    // Real sniff behavior lives in differ.test.ts; here the fake reproduces its
+    // contract so the outcome plumbing (computeDiff -> response) is what's tested.
+    const diff = vi.fn<Differ["diff"]>(() => DIFF);
+    const { deps } = makeDeps({
+      contents: { "Assets/Foo.prefab@base-sha": "\x00binary", "Assets/Foo.prefab@head-sha": "\x00binary2" },
+      diff,
+      isUnityYaml: () => false,
+    });
+    const res = await resolveFully(createHandler(deps), REQ);
+    expect(res).toEqual({ ok: false, error: "not-unity-yaml" });
+    // The differ must not even run on rejected content.
+    expect(diff).not.toHaveBeenCalled();
+  });
+
   it("diffs a file missing from the PR list as modified (files API caps at 3000)", async () => {
     // In a PR with over 3000 files, the listing API is truncated, so a file present in the UI may be absent from the listing
     const { deps, client } = makeDeps({ files: [{ path: "Assets/Other.prefab", status: "modified" }] });

@@ -48,7 +48,10 @@ const TOO_LARGE_BYTES = 25 * 1024 * 1024; // over 25MB renders on click
 const PREFETCH_MAX = 100; // prefetch cap per PR (bounds API usage)
 const PREFETCH_CONCURRENCY = 4;
 
-type DiffOutcome = { ok: true; json: DiffV2 } | { ok: false; error: "too-large"; bytes: number };
+type DiffOutcome =
+  | { ok: true; json: DiffV2 }
+  | { ok: false; error: "too-large"; bytes: number }
+  | { ok: false; error: "not-unity-yaml" };
 
 export function createHandler(deps: Deps): Handler {
   // Per-PR context cache. The SW may be killed at any time; then we just re-fetch.
@@ -294,6 +297,11 @@ export function createHandler(deps: Deps): Handler {
       return { ok: false, error: "too-large", bytes: before.length + after.length };
     }
     const differ = await deps.getDiffer();
+    // Path passed the extension prefilter, but some .asset files are binary
+    // regardless of Force Text: content is the ground truth.
+    if (!differ.isUnityYaml(before) && !differ.isUnityYaml(after)) {
+      return { ok: false, error: "not-unity-yaml" };
+    }
     return { ok: true, json: differ.diff(before, after) };
   }
 

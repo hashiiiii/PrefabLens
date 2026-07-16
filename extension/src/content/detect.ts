@@ -3,7 +3,11 @@ import { isUnityPath } from "../unity";
 export type FileEntry = { path: string; header: HTMLElement; content: HTMLElement };
 
 export function parsePrUrl(pathname: string): { owner: string; repo: string; prNumber: number } | null {
-  const m = /^\/([^/]+)\/([^/]+)\/pull\/(\d+)\/files(\/|$)/.exec(pathname);
+  // files: any suffix (ranges render inline). changes (react ui): bare tab or A..B range only —
+  // a single sha under /changes/ is the commit view, which this extension does not handle yet.
+  const m = /^\/([^/]+)\/([^/]+)\/pull\/(\d+)\/(?:files(?:\/|$)|changes(?:\/[\da-f]{7,40}\.\.[\da-f]{7,40})?\/?$)/.exec(
+    pathname,
+  );
   return m ? { owner: m[1]!, repo: m[2]!, prNumber: Number(m[3]!) } : null;
 }
 

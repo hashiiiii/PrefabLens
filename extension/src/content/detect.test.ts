@@ -31,6 +31,19 @@ describe("parsePrUrl", () => {
     expect(parsePrUrl("/owner/repo/pull/42")).toBeNull();
     expect(parsePrUrl("/owner/repo/blob/main/a.prefab")).toBeNull();
   });
+  it("matches the react ui changes tab (rolled out since december 2025)", () => {
+    expect(parsePrUrl("/owner/repo/pull/42/changes")).toEqual({ owner: "owner", repo: "repo", prNumber: 42 });
+    // "Between commit A and B" range view, same shape github-url-detection accepts
+    expect(parsePrUrl("/owner/repo/pull/42/changes/1e27d799..e1aba6f")).toEqual({
+      owner: "owner",
+      repo: "repo",
+      prNumber: 42,
+    });
+  });
+  it("rejects the single-commit changes view (commit pages are a separate issue)", () => {
+    expect(parsePrUrl("/owner/repo/pull/42/changes/1e27d7998afdd3608d9fc3bf95ccf27fa5010641")).toBeNull();
+    expect(parsePrUrl("/owner/repo/pull/42/changes/1e27d79")).toBeNull();
+  });
 });
 
 describe("parsePrPage", () => {

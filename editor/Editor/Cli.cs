@@ -4,6 +4,8 @@ using System.IO;
 using System.IO.Compression;
 using System.Net.Http;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using UnityEditor;
@@ -34,6 +36,41 @@ namespace PrefabLens
 
         public static string DownloadUrl(string version, string assetName) =>
             $"https://github.com/hashiiiii/PrefabLens/releases/download/v{version}/{assetName}";
+
+        /// Hex digest for assetName from `shasum -a 256` output (the release's SHA256SUMS); null when absent.
+        public static string ExpectedSha256(string sha256Sums, string assetName)
+        {
+            foreach (var line in sha256Sums.Split('\n'))
+            {
+                var parts = line.Trim().Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
+                if (parts.Length == 2 && parts[1] == assetName)
+                    return parts[0];
+            }
+            return null;
+        }
+
+        public static string Sha256Hex(byte[] bytes)
+        {
+            using var sha = SHA256.Create();
+            var hash = sha.ComputeHash(bytes);
+            var sb = new StringBuilder(hash.Length * 2);
+            foreach (var b in hash)
+                sb.Append(b.ToString("x2"));
+            return sb.ToString();
+        }
+
+        /// Reject a tampered or corrupted release asset before it reaches ExtractTo.
+        public static void VerifySha256(byte[] bytes, string sha256Sums, string assetName)
+        {
+            var expected = ExpectedSha256(sha256Sums, assetName);
+            if (expected == null)
+                throw new InvalidOperationException($"SHA256SUMS has no entry for {assetName}");
+            var actual = Sha256Hex(bytes);
+            if (!string.Equals(actual, expected, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException(
+                    $"SHA256 mismatch for {assetName}: expected {expected}, got {actual}"
+                );
+        }
 
         /// Bare invocation = bulk mode: HEAD vs working tree, all changed Unity files,
         /// as a [{path, diff}] JSON array.

@@ -1,7 +1,9 @@
+using System;
 using System.Diagnostics;
 using System.IO;
 using System.IO.Compression;
 using System.Runtime.InteropServices;
+using System.Text;
 using System.Threading;
 using NUnit.Framework;
 
@@ -226,6 +228,56 @@ namespace PrefabLens.Tests
             // Cleanup must be a silent no-op, not a DirectoryNotFoundException.
             var root = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
             Assert.DoesNotThrow(() => Cli.DeleteStaleVersions(root, keep: "0.6.1"));
+        }
+
+        [Test]
+        public void ExpectedSha256FindsTheAssetLine()
+        {
+            // shasum -a 256 text-mode output: "<hex>  <name>" (two spaces), one line per asset.
+            var sums = "aaaa  prefablens-linux-x64.zip\nbbbb  prefablens-macos-arm64.zip\n";
+            Assert.AreEqual("bbbb", Cli.ExpectedSha256(sums, "prefablens-macos-arm64.zip"));
+            Assert.IsNull(Cli.ExpectedSha256(sums, "prefablens-windows-x64.zip"));
+        }
+
+        [Test]
+        public void Sha256HexMatchesAKnownVector()
+        {
+            // FIPS 180-2 test vector for "abc".
+            Assert.AreEqual(
+                "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+                Cli.Sha256Hex(Encoding.ASCII.GetBytes("abc"))
+            );
+        }
+
+        [Test]
+        public void VerifySha256AcceptsAMatchingArchive()
+        {
+            var sums = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad  prefablens-macos-arm64.zip\n";
+            Assert.DoesNotThrow(() =>
+                Cli.VerifySha256(Encoding.ASCII.GetBytes("abc"), sums, "prefablens-macos-arm64.zip")
+            );
+        }
+
+        [Test]
+        public void VerifySha256RejectsACorruptedArchive()
+        {
+            // A byte flipped after publication must fail before extraction, naming both digests.
+            var sums = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad  prefablens-macos-arm64.zip\n";
+            var e = Assert.Throws<InvalidOperationException>(() =>
+                Cli.VerifySha256(Encoding.ASCII.GetBytes("abd"), sums, "prefablens-macos-arm64.zip")
+            );
+            StringAssert.Contains("mismatch", e.Message);
+            StringAssert.Contains("ba7816bf", e.Message);
+        }
+
+        [Test]
+        public void VerifySha256RejectsAnAssetMissingFromSums()
+        {
+            // A release missing the entry is as suspect as a bad hash: never extract unverified bytes.
+            var e = Assert.Throws<InvalidOperationException>(() =>
+                Cli.VerifySha256(new byte[0], "aaaa  other.zip\n", "prefablens-linux-arm64.zip")
+            );
+            StringAssert.Contains("no entry", e.Message);
         }
     }
 }

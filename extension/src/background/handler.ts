@@ -18,8 +18,8 @@ import {
   targetKey,
 } from "../types";
 import { isUnityPath } from "../unity";
-import { must } from "../util/must";
 import { DiffError, type Differ } from "../wasm/differ";
+import { createPromiseCache } from "./promiseCache";
 
 type ClientLike = Pick<
   GithubClient,
@@ -102,18 +102,20 @@ type DiffOutcome =
   | { ok: false; error: "not-unity-yaml" };
 
 export function createHandler(deps: Deps): Handler {
-  // Per-PR context cache. The SW may be killed at any time; then we just re-fetch.
-  const contexts = new Map<string, { at: number; ctx: Promise<DiffContext> }>();
-  // sha+path → bytes Promise. Storing a Promise folds concurrent prefetch and manual-toggle requests into one fetch.
-  const blobs = new Map<string, Promise<Uint8Array | null>>();
+  // Per-PR context cache (60s ttl: a push moves headSha). The SW may be killed at any time; then we just re-fetch.
+  const contexts = createPromiseCache<DiffContext>({ ttlMs: CONTEXT_TTL_MS });
+  // sha+path → bytes. The promise fold shares one fetch between concurrent prefetch and manual-toggle requests.
+  const blobs = createPromiseCache<Uint8Array | null>({ max: BLOB_CACHE_MAX });
   // guids that missed in Code Search. Indexing lag means we don't persist these — SW lifetime only
   const misses = new Set<string>();
-  // repoKey:guid → in-flight search. Folds concurrent searches for the same guid into one (protects the 10 req/min)
-  const searches = new Map<string, Promise<string | null>>();
-  // baseSha:headSha:path → raw diff computation Promise. Keeps only successes (too-large/failure allow recomputation)
-  const diffs = new Map<string, Promise<DiffOutcome>>();
-  // repoKey@ref → whole-repo index Promise. null means not indexable (truncated/over the cap/failure)
-  const indexes = new Map<string, Promise<Record<string, string> | null>>();
+  // repoKey:guid → in-flight search, folding concurrent searches for the same guid into one (protects the
+  // 10 req/min). Nothing is retained after settling: guidCache/misses take over from there.
+  const searches = createPromiseCache<string | null>({ retain: () => false });
+  // baseSha:headSha:path → raw diff computation. too-large is dropped so force can recompute; not-unity-yaml
+  // is deterministic for the sha pair, so it stays cached alongside successes.
+  const diffs = createPromiseCache<DiffOutcome>({ retain: (o) => o.ok || o.error !== "too-large" });
+  // repoKey@ref → whole-repo index. null means not indexable (truncated/over the cap)
+  const indexes = createPromiseCache<Record<string, string> | null>();
   // A repo that hit a rate limit falls back for the SW lifetime (gives up on the index and defers to Code Search only)
   const indexFallback = new Set<string>();
 
@@ -143,13 +145,7 @@ export function createHandler(deps: Deps): Handler {
     for (const g of searchable.slice(0, MAX_SEARCHES)) {
       const key = `${repoKey}:${g}`;
       try {
-        let p = searches.get(key);
-        if (!p) {
-          p = client.searchMetaByGuid(owner, repo, g);
-          searches.set(key, p);
-          void p.catch(() => {}).then(() => searches.delete(key)); // after completion, guidCache/misses take over
-        }
-        const path = await p;
+        const path = await searches.get(key, () => client.searchMetaByGuid(owner, repo, g));
         if (path) resolved[g] = found[g] = path;
         else misses.add(key);
       } catch (err) {
@@ -185,21 +181,18 @@ export function createHandler(deps: Deps): Handler {
     ref: string,
   ): Promise<Record<string, string> | null> {
     if (indexFallback.has(repoKey)) return Promise.resolve(null);
-    const key = `${repoKey}@${ref}`;
-    const hit = indexes.get(key);
-    if (hit) return hit;
-    const p = syncRepoIndex(client, deps.repoIndexStore, owner, repo, repoKey, ref).catch((err: unknown) => {
-      indexes.delete(key); // don't cache failures: retry on the next visit
-      if (err instanceof RateLimitError) indexFallback.add(repoKey);
-      return null;
-    });
-    indexes.set(key, p);
-    return p;
+    return indexes
+      .get(`${repoKey}@${ref}`, () => syncRepoIndex(client, deps.repoIndexStore, owner, repo, repoKey, ref))
+      .catch((err: unknown) => {
+        // the cache has already dropped the failure, so the next visit retries
+        if (err instanceof RateLimitError) indexFallback.add(repoKey);
+        return null;
+      });
   }
 
   /** blobSha rides along when known (files API / merge-base tree): blob-by-sha latency is flat where
    *  contents-by-path stalls for seconds (#110). A 404 on the sha (force push) falls back to path+ref. */
-  async function fetchBlob(
+  function fetchBlob(
     client: ClientLike,
     owner: string,
     repo: string,
@@ -207,16 +200,12 @@ export function createHandler(deps: Deps): Handler {
     sha: string,
     blobSha?: string,
   ): Promise<Uint8Array | null> {
-    const key = blobSha ?? `${sha}:${path}`; // a blob sha never collides with the `${sha}:${path}` form
-    const hit = blobs.get(key); // the stored value is Promise<Uint8Array | null>, so undefined = not cached
-    if (hit !== undefined) return hit;
-    const p = blobSha
-      ? client.getBlobRaw(owner, repo, blobSha).then((bytes) => bytes ?? client.getFileAtRef(owner, repo, path, sha))
-      : client.getFileAtRef(owner, repo, path, sha);
-    p.catch(() => blobs.delete(key)); // don't keep failures: the next call can re-fetch
-    blobs.set(key, p);
-    if (blobs.size > BLOB_CACHE_MAX) blobs.delete(must(blobs.keys().next().value));
-    return p;
+    // a blob sha never collides with the `${sha}:${path}` form
+    return blobs.get(blobSha ?? `${sha}:${path}`, () =>
+      blobSha
+        ? client.getBlobRaw(owner, repo, blobSha).then((bytes) => bytes ?? client.getFileAtRef(owner, repo, path, sha))
+        : client.getFileAtRef(owner, repo, path, sha),
+    );
   }
 
   /** Retrieves the before/after blobs (status/previousPath rules follow the files API). */
@@ -295,10 +284,7 @@ export function createHandler(deps: Deps): Handler {
   }
 
   function loadContext(client: ClientLike, owner: string, repo: string, target: DiffTarget): Promise<DiffContext> {
-    const key = targetKey(owner, repo, target);
-    const entry = contexts.get(key);
-    if (entry && Date.now() - entry.at < CONTEXT_TTL_MS) return entry.ctx;
-    const ctx = (async () => {
+    return contexts.get(targetKey(owner, repo, target), async () => {
       const { refs, files } = await loadRefsAndFiles(client, owner, repo, target);
       const bySha = new Map(files.map((f) => [f.path, f.sha]));
       const [guidIndex, baseShas] = await Promise.all([
@@ -324,10 +310,7 @@ export function createHandler(deps: Deps): Handler {
         ),
       ]);
       return { refs, files, guidIndex, baseShas };
-    })();
-    contexts.set(key, { at: Date.now(), ctx });
-    ctx.catch(() => contexts.delete(key)); // don't cache failures
-    return ctx;
+    });
   }
 
   /** blob fetch → 25MB guard → plain diff, no further. Don't put resolution or mergeSources here
@@ -364,25 +347,13 @@ export function createHandler(deps: Deps): Handler {
     force: boolean,
   ): Promise<DiffOutcome> {
     const key = `${ctx.refs.baseSha}:${ctx.refs.headSha}:${path}`;
-    const hit = diffs.get(key);
-    if (hit) return hit;
-    const p = (async (): Promise<DiffOutcome> => {
+    return diffs.get(key, async (): Promise<DiffOutcome> => {
       const stored = await deps.diffStore.load(key); // a result left by a prior SW life
       if (stored) return { ok: true, json: stored };
       const outcome = await computeDiff(client, ctx, owner, repo, path, force);
       if (outcome.ok) void deps.diffStore.save(key, outcome.json);
       return outcome;
-    })();
-    diffs.set(key, p);
-    p.then(
-      (o) => {
-        // too-large allows a force recomputation; not-unity-yaml is
-        // deterministic for the sha pair, so keep it cached in memory
-        if (!o.ok && o.error === "too-large") diffs.delete(key);
-      },
-      () => diffs.delete(key),
-    );
-    return p;
+    });
   }
 
   /** Runs the rest of the 3-stage resolution (index → Code Search) and source re-merge in the background, delivering results via push.

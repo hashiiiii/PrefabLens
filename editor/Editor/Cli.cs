@@ -107,11 +107,17 @@ namespace PrefabLens
                         Stderr = e.Message,
                     };
                 }
-                if (ctx != null)
-                    ctx.Post(_ => onDone(res), null);
-                else
-                    onDone(res);
+                Post(ctx, () => onDone(res));
             });
+        }
+
+        /// Invoke on the captured context when there is one (Unity's main thread), directly otherwise.
+        static void Post(SynchronizationContext ctx, Action action)
+        {
+            if (ctx != null)
+                ctx.Post(_ => action(), null);
+            else
+                action();
         }
 
         /// Minimal quoting for ProcessStartInfo.Arguments (handles asset paths with spaces).
@@ -191,27 +197,34 @@ namespace PrefabLens
         )
         {
             var ctx = SynchronizationContext.Current;
+            // Coalesce the per-chunk callbacks (network reads can be TCP-segment sized) so the
+            // main thread sees one post per visible change, not thousands per download.
+            Action<long, long> progress = null;
+            if (onProgress != null)
+            {
+                long lastStep = -1;
+                progress = (read, total) =>
+                {
+                    var step = total > 0 ? read * 100 / total : read >> 18;
+                    if (step == lastStep)
+                        return;
+                    lastStep = step;
+                    Post(ctx, () => onProgress(read, total));
+                };
+            }
             Task.Run(() =>
             {
                 string path = null;
                 string error = null;
                 try
                 {
-                    path = Download(
-                        onProgress == null || ctx == null
-                            ? onProgress
-                            : (read, total) => ctx.Post(_ => onProgress(read, total), null),
-                        ct
-                    );
+                    path = Download(progress, ct);
                 }
                 catch (Exception e)
                 {
                     error = e.Message;
                 }
-                if (ctx != null)
-                    ctx.Post(_ => onDone(path, error), null);
-                else
-                    onDone(path, error);
+                Post(ctx, () => onDone(path, error));
             });
         }
 
@@ -235,7 +248,8 @@ namespace PrefabLens
             res.EnsureSuccessStatusCode();
             var total = res.Content.Headers.ContentLength ?? -1;
             using var src = res.Content.ReadAsStreamAsync().GetAwaiter().GetResult();
-            using var dst = new MemoryStream();
+            // Sized up front so a multi-MB body doesn't go through doubling reallocations.
+            using var dst = new MemoryStream(total > 0 && total <= int.MaxValue ? (int)total : 0);
             var buf = new byte[64 * 1024];
             int n;
             while ((n = src.ReadAsync(buf, 0, buf.Length, ct).GetAwaiter().GetResult()) > 0)

@@ -23,6 +23,11 @@ namespace PrefabLens
         /// the CLI surfaces its own specific error first. This is the last-resort safety net against freezing the Unity main thread.
         public const int RunTimeoutMs = 90_000;
 
+        /// Upper bound on the whole download (SHA256SUMS + zip). Explicit so a stalled connection
+        /// can't silently hold the status line for HttpClient's default 100 s; generous for slow
+        /// links because the window offers Cancel.
+        public const int DownloadTimeoutMs = 120_000;
+
         // ---- Pure functions (EditMode test targets) ----
 
         public static string ReleaseAssetName(bool isWindows, bool isMac, bool isArm64)
@@ -135,22 +140,39 @@ namespace PrefabLens
             return File.Exists(DefaultPath) ? DefaultPath : null;
         }
 
-        /// Fetch from GitHub Releases and extract under Library. Returns the executable path on success, throws on failure.
+        /// Fetch from GitHub Releases, verify against the release's SHA256SUMS, and extract under
+        /// Library. Returns the executable path on success, throws on failure (TimeoutException
+        /// after DownloadTimeoutMs, OperationCanceledException when ct is cancelled).
         /// Synchronous and free of Unity API calls so it can run on a worker thread (see DownloadAsync).
-        public static string Download()
+        public static string Download(Action<long, long> onProgress = null, CancellationToken ct = default)
         {
             var asset = ReleaseAssetName(
                 RuntimeInformation.IsOSPlatform(OSPlatform.Windows),
                 RuntimeInformation.IsOSPlatform(OSPlatform.OSX),
                 RuntimeInformation.ProcessArchitecture == Architecture.Arm64
             );
-            var url = DownloadUrl(Version, asset);
             var dir = Path.GetDirectoryName(DefaultPath);
             Directory.CreateDirectory(dir);
 
             using var http = new HttpClient();
-            // GetAwaiter().GetResult() unwraps AggregateException so onDone sees the HttpRequestException message.
-            var bytes = http.GetByteArrayAsync(url).GetAwaiter().GetResult();
+            // One deadline for the whole operation. HttpClient.Timeout is disabled because it
+            // only covers the headers once the body is streamed.
+            http.Timeout = Timeout.InfiniteTimeSpan;
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            cts.CancelAfter(DownloadTimeoutMs);
+            byte[] bytes;
+            string sums;
+            try
+            {
+                // SHA256SUMS first: a missing/broken release fails fast, before the multi-MB zip.
+                sums = Encoding.UTF8.GetString(FetchBytes(http, DownloadUrl(Version, "SHA256SUMS"), null, cts.Token));
+                bytes = FetchBytes(http, DownloadUrl(Version, asset), onProgress, cts.Token);
+            }
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+            {
+                throw new TimeoutException($"download timed out after {DownloadTimeoutMs / 1000}s");
+            }
+            VerifySha256(bytes, sums, asset);
             ExtractTo(bytes, dir);
 
             if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
@@ -159,10 +181,14 @@ namespace PrefabLens
             return DefaultPath;
         }
 
-        /// Run Download() off the main thread. The outcome is posted back through the caller's
-        /// SynchronizationContext (Unity's main thread when called from the window).
+        /// Run Download() off the main thread. Progress and the outcome are posted back through
+        /// the caller's SynchronizationContext (Unity's main thread when called from the window).
         /// Exactly one of (path, error) is non-null.
-        public static void DownloadAsync(Action<string, string> onDone)
+        public static void DownloadAsync(
+            Action<string, string> onDone,
+            Action<long, long> onProgress = null,
+            CancellationToken ct = default
+        )
         {
             var ctx = SynchronizationContext.Current;
             Task.Run(() =>
@@ -171,7 +197,12 @@ namespace PrefabLens
                 string error = null;
                 try
                 {
-                    path = Download();
+                    path = Download(
+                        onProgress == null || ctx == null
+                            ? onProgress
+                            : (read, total) => ctx.Post(_ => onProgress(read, total), null),
+                        ct
+                    );
                 }
                 catch (Exception e)
                 {

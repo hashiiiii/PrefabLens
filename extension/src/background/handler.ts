@@ -1,7 +1,15 @@
 import { API_BASE, AuthError, type GithubClient, type PrFile, type PrRefs, RateLimitError } from "../github/client";
 import { applyResolved, buildGuidIndex, type GuidCache } from "../github/guids";
 import { type RepoIndexStore, syncRepoIndex } from "../github/repoIndex";
-import type { DiffV2, GuidResolvedPush, PrefetchRequest, SemanticDiffRequest, SemanticDiffResponse } from "../types";
+import {
+  type DiffTarget,
+  type DiffV2,
+  type GuidResolvedPush,
+  type PrefetchRequest,
+  type SemanticDiffRequest,
+  type SemanticDiffResponse,
+  targetKey,
+} from "../types";
 import { isUnityPath } from "../unity";
 import { DiffError, type Differ } from "../wasm/differ";
 
@@ -9,6 +17,9 @@ type ClientLike = Pick<
   GithubClient,
   | "getPrRefs"
   | "listPrFiles"
+  | "getCommit"
+  | "compareRefs"
+  | "resolveRefSha"
   | "getFileAtRef"
   | "getBlobRaw"
   | "listBlobShas"
@@ -31,13 +42,40 @@ export type Handler = {
   prefetch(req: PrefetchRequest): Promise<void>;
 };
 
-// baseShas: path → blob sha at the merge base. null = tree unavailable (truncated/failed) → contents-api fallback
-type PrContext = {
+// baseShas: path → blob sha at the base ref. null = tree unavailable (truncated/failed) → contents-api fallback
+type DiffContext = {
   refs: PrRefs;
   files: PrFile[];
   guidIndex: Map<string, string>;
   baseShas: Map<string, string> | null;
 };
+
+/** The only per-kind logic: refs + changed-file discovery. Everything downstream is target-agnostic. */
+async function loadRefsAndFiles(
+  client: ClientLike,
+  owner: string,
+  repo: string,
+  target: DiffTarget,
+): Promise<{ refs: PrRefs; files: PrFile[] }> {
+  if (target.kind === "pull") {
+    const [refs, files] = await Promise.all([
+      client.getPrRefs(owner, repo, target.prNumber),
+      client.listPrFiles(owner, repo, target.prNumber),
+    ]);
+    return { refs, files };
+  }
+  if (target.kind === "commit") {
+    const commit = await client.getCommit(owner, repo, target.sha);
+    // Root commit: every file is added, so the before side is never fetched; using the commit's
+    // own sha as baseSha keeps downstream tree lookups harmless.
+    return { refs: { baseSha: commit.parentSha ?? commit.sha, headSha: commit.sha }, files: commit.files };
+  }
+  const [cmp, headSha] = await Promise.all([
+    client.compareRefs(owner, repo, target.base, target.head),
+    client.resolveRefSha(owner, repo, target.head), // cache keys need an immutable sha, not a branch name
+  ]);
+  return { refs: { baseSha: cmp.mergeBaseSha, headSha }, files: cmp.files };
+}
 
 const EMPTY = new Uint8Array(0);
 const MAX_SEARCHES = 10; // Code Search is authenticated 10 req/min — don't burn it all in one response
@@ -55,7 +93,7 @@ type DiffOutcome =
 
 export function createHandler(deps: Deps): Handler {
   // Per-PR context cache. The SW may be killed at any time; then we just re-fetch.
-  const contexts = new Map<string, { at: number; ctx: Promise<PrContext> }>();
+  const contexts = new Map<string, { at: number; ctx: Promise<DiffContext> }>();
   // sha+path → bytes Promise. Storing a Promise folds concurrent prefetch and manual-toggle requests into one fetch.
   const blobs = new Map<string, Promise<Uint8Array | null>>();
   // guids that missed in Code Search. Indexing lag means we don't persist these — SW lifetime only
@@ -173,7 +211,7 @@ export function createHandler(deps: Deps): Handler {
   /** Retrieves the before/after blobs (status/previousPath rules follow the files API). */
   async function fetchPair(
     client: ClientLike,
-    ctx: PrContext,
+    ctx: DiffContext,
     owner: string,
     repo: string,
     path: string,
@@ -201,7 +239,7 @@ export function createHandler(deps: Deps): Handler {
     differ: Differ,
     before: Uint8Array,
     after: Uint8Array,
-    ctx: PrContext,
+    ctx: DiffContext,
     client: ClientLike,
     owner: string,
     repo: string,
@@ -245,15 +283,12 @@ export function createHandler(deps: Deps): Handler {
     return current;
   }
 
-  function loadContext(client: ClientLike, owner: string, repo: string, prNumber: number): Promise<PrContext> {
-    const key = `${owner}/${repo}#${prNumber}`;
+  function loadContext(client: ClientLike, owner: string, repo: string, target: DiffTarget): Promise<DiffContext> {
+    const key = targetKey(owner, repo, target);
     const entry = contexts.get(key);
     if (entry && Date.now() - entry.at < CONTEXT_TTL_MS) return entry.ctx;
     const ctx = (async () => {
-      const [refs, files] = await Promise.all([
-        client.getPrRefs(owner, repo, prNumber),
-        client.listPrFiles(owner, repo, prNumber),
-      ]);
+      const { refs, files } = await loadRefsAndFiles(client, owner, repo, target);
       const bySha = new Map(files.map((f) => [f.path, f.sha]));
       const [guidIndex, baseShas] = await Promise.all([
         buildGuidIndex(files, async (path, side) => {
@@ -288,7 +323,7 @@ export function createHandler(deps: Deps): Handler {
    *  (resolved improves later via Code Search, so the raw diff determined by sha alone is the cache unit). */
   async function computeDiff(
     client: ClientLike,
-    ctx: PrContext,
+    ctx: DiffContext,
     owner: string,
     repo: string,
     path: string,
@@ -311,7 +346,7 @@ export function createHandler(deps: Deps): Handler {
   /** sha-keyed, so a push naturally produces a different key (no invalidation needed). */
   function getDiff(
     client: ClientLike,
-    ctx: PrContext,
+    ctx: DiffContext,
     owner: string,
     repo: string,
     path: string,
@@ -347,11 +382,11 @@ export function createHandler(deps: Deps): Handler {
     client: ClientLike,
     req: SemanticDiffRequest,
     base: string,
-    ctx: PrContext,
+    ctx: DiffContext,
     push: (msg: GuidResolvedPush) => void,
   ): Promise<void> {
     const repoKey = `${base}/${req.owner}/${req.repo}`;
-    const at = { owner: req.owner, repo: req.repo, prNumber: req.prNumber, path: req.path };
+    const at = { owner: req.owner, repo: req.repo, target: req.target, path: req.path };
     try {
       // If remaining is empty (source re-merge only), don't wait on the index: the first index build can take tens of seconds and doesn't help resolution
       const index = remaining.length
@@ -396,7 +431,7 @@ export function createHandler(deps: Deps): Handler {
       if (!settings.pat) return { ok: false, error: "pat-missing" };
       const base = API_BASE;
       const client = deps.makeClient(base, settings.pat, "user");
-      const ctx = await loadContext(client, req.owner, req.repo, req.prNumber);
+      const ctx = await loadContext(client, req.owner, req.repo, req.target);
       const outcome = await getDiff(client, ctx, req.owner, req.repo, req.path, req.force === true);
       if (!outcome.ok) return outcome;
       const withPr = applyResolved(outcome.json, ctx.guidIndex);
@@ -422,7 +457,7 @@ export function createHandler(deps: Deps): Handler {
       if (!settings.pat) return;
       const base = API_BASE;
       const client = deps.makeClient(base, settings.pat, "prefetch");
-      const ctx = await loadContext(client, req.owner, req.repo, req.prNumber);
+      const ctx = await loadContext(client, req.owner, req.repo, { kind: "pull", prNumber: req.prNumber });
       // Run independently of raw-diff prefetch (index sync speeds up the 3-stage resolution at serve time)
       void getRepoIndex(client, req.owner, req.repo, `${base}/${req.owner}/${req.repo}`, ctx.refs.headSha);
       const unity = ctx.files.filter((f) => isUnityPath(f.path)).slice(0, PREFETCH_MAX);

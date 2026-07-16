@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
-import { parsePrPage, parsePrUrl, scanUnityFiles } from "./detect";
+import { parseDiffUrl, parsePrPage, scanUnityFiles } from "./detect";
 
 const FIXTURE = `
   <div class="file">
@@ -22,27 +22,67 @@ const FIXTURE = `
   <div class="file-header" data-path="Assets/Orphan.prefab"></div>
 `;
 
-describe("parsePrUrl", () => {
+describe("parseDiffUrl", () => {
   it("matches the PR files tab", () => {
-    expect(parsePrUrl("/owner/repo/pull/42/files")).toEqual({ owner: "owner", repo: "repo", prNumber: 42 });
-    expect(parsePrUrl("/owner/repo/pull/42/files/abc123")).toEqual({ owner: "owner", repo: "repo", prNumber: 42 });
-  });
-  it("rejects other pages", () => {
-    expect(parsePrUrl("/owner/repo/pull/42")).toBeNull();
-    expect(parsePrUrl("/owner/repo/blob/main/a.prefab")).toBeNull();
-  });
-  it("matches the react ui changes tab (rolled out since december 2025)", () => {
-    expect(parsePrUrl("/owner/repo/pull/42/changes")).toEqual({ owner: "owner", repo: "repo", prNumber: 42 });
-    // "Between commit A and B" range view, same shape github-url-detection accepts
-    expect(parsePrUrl("/owner/repo/pull/42/changes/1e27d799..e1aba6f")).toEqual({
+    expect(parseDiffUrl("/owner/repo/pull/42/files")).toEqual({
       owner: "owner",
       repo: "repo",
+      target: { kind: "pull", prNumber: 42 },
+    });
+    expect(parseDiffUrl("/owner/repo/pull/42/files/abc123")?.target).toEqual({ kind: "pull", prNumber: 42 });
+  });
+  it("matches the react ui changes tab and its commit range view", () => {
+    expect(parseDiffUrl("/owner/repo/pull/42/changes")?.target).toEqual({ kind: "pull", prNumber: 42 });
+    // "Between commit A and B" range view, same shape github-url-detection accepts
+    expect(parseDiffUrl("/owner/repo/pull/42/changes/1e27d799..e1aba6f")?.target).toEqual({
+      kind: "pull",
       prNumber: 42,
     });
   });
-  it("rejects the single-commit changes view (commit pages are a separate issue)", () => {
-    expect(parsePrUrl("/owner/repo/pull/42/changes/1e27d7998afdd3608d9fc3bf95ccf27fa5010641")).toBeNull();
-    expect(parsePrUrl("/owner/repo/pull/42/changes/1e27d79")).toBeNull();
+  it("maps single-commit views inside a PR to a commit target", () => {
+    // react ui: /changes/SHA, classic: /commits/SHA — both show one commit against its parent
+    expect(parseDiffUrl("/owner/repo/pull/42/changes/1e27d7998afdd3608d9fc3bf95ccf27fa5010641")?.target).toEqual({
+      kind: "commit",
+      sha: "1e27d7998afdd3608d9fc3bf95ccf27fa5010641",
+    });
+    expect(parseDiffUrl("/owner/repo/pull/42/commits/1e27d79")?.target).toEqual({ kind: "commit", sha: "1e27d79" });
+  });
+  it("matches commit pages", () => {
+    expect(parseDiffUrl("/owner/repo/commit/1e27d7998afdd3608d9fc3bf95ccf27fa5010641")).toEqual({
+      owner: "owner",
+      repo: "repo",
+      target: { kind: "commit", sha: "1e27d7998afdd3608d9fc3bf95ccf27fa5010641" },
+    });
+    expect(parseDiffUrl("/owner/repo/commit/1e27d79/")?.target).toEqual({ kind: "commit", sha: "1e27d79" });
+    expect(parseDiffUrl("/owner/repo/commit/not-a-sha")).toBeNull();
+  });
+  it("matches same-repo three-dot compare pages", () => {
+    expect(parseDiffUrl("/owner/repo/compare/main...feature")).toEqual({
+      owner: "owner",
+      repo: "repo",
+      target: { kind: "compare", base: "main", head: "feature" },
+    });
+    // branch names keep their slashes; encoded characters are decoded per side
+    expect(parseDiffUrl("/owner/repo/compare/feat/a...feat/b")?.target).toEqual({
+      kind: "compare",
+      base: "feat/a",
+      head: "feat/b",
+    });
+    expect(parseDiffUrl("/owner/repo/compare/v1%2E0...main")?.target).toEqual({
+      kind: "compare",
+      base: "v1.0",
+      head: "main",
+    });
+  });
+  it("rejects compare pages this extension cannot serve", () => {
+    expect(parseDiffUrl("/owner/repo/compare/main...other:branch")).toBeNull(); // cross-fork
+    expect(parseDiffUrl("/owner/repo/compare/main")).toBeNull(); // single ref
+    expect(parseDiffUrl("/owner/repo/compare")).toBeNull(); // picker page
+  });
+  it("rejects other pages", () => {
+    expect(parseDiffUrl("/owner/repo/pull/42")).toBeNull();
+    expect(parseDiffUrl("/owner/repo/pull/42/commits")).toBeNull(); // commit list, no diff
+    expect(parseDiffUrl("/owner/repo/blob/main/a.prefab")).toBeNull();
   });
 });
 

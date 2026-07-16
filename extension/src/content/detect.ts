@@ -1,3 +1,4 @@
+import type { DiffTarget } from "../types";
 import { isUnityPath } from "../unity";
 
 export type FileEntry = {
@@ -9,16 +10,34 @@ export type FileEntry = {
   globalAnchor(): Element | null; // element the global bar is inserted before
 };
 
-export function parsePrUrl(pathname: string): { owner: string; repo: string; prNumber: number } | null {
-  // files: any suffix (ranges render inline). changes (react ui): bare tab or A..B range only —
-  // a single sha under /changes/ is the commit view, which this extension does not handle yet.
-  const m = /^\/([^/]+)\/([^/]+)\/pull\/(\d+)\/(?:files(?:\/|$)|changes(?:\/[\da-f]{7,40}\.\.[\da-f]{7,40})?\/?$)/.exec(
-    pathname,
-  );
-  return m ? { owner: m[1]!, repo: m[2]!, prNumber: Number(m[3]!) } : null;
+export type DiffPage = { owner: string; repo: string; target: DiffTarget };
+
+/** Recognizes every diff page the pipeline can serve. Compare is same-repo three-dot only:
+ *  fork syntax (owner:branch) would need a second repo's blobs, and GitHub's compare page
+ *  itself is three-dot (merge base), which is exactly what the compare API returns. */
+export function parseDiffUrl(pathname: string): DiffPage | null {
+  // files: any suffix (ranges render inline). changes (react ui): bare tab or A..B range only.
+  const pr =
+    /^\/([^/]+)\/([^/]+)\/pull\/(\d+)\/(?:files(?:\/|$)|changes(?:\/[\da-f]{7,40}\.\.[\da-f]{7,40})?\/?$)/.exec(
+      pathname,
+    );
+  if (pr) return { owner: pr[1]!, repo: pr[2]!, target: { kind: "pull", prNumber: Number(pr[3]!) } };
+  // Single-commit views inside a PR (classic /commits/SHA, react /changes/SHA) share the commit pipeline
+  const prCommit = /^\/([^/]+)\/([^/]+)\/pull\/\d+\/(?:commits|changes)\/([\da-f]{7,40})\/?$/.exec(pathname);
+  if (prCommit) return { owner: prCommit[1]!, repo: prCommit[2]!, target: { kind: "commit", sha: prCommit[3]! } };
+  const commit = /^\/([^/]+)\/([^/]+)\/commit\/([\da-f]{7,40})\/?$/.exec(pathname);
+  if (commit) return { owner: commit[1]!, repo: commit[2]!, target: { kind: "commit", sha: commit[3]! } };
+  const compare = /^\/([^/]+)\/([^/]+)\/compare\/(.+?)\.\.\.(.+)$/.exec(pathname);
+  if (compare) {
+    const base = decodeURIComponent(compare[3]!);
+    const head = decodeURIComponent(compare[4]!);
+    if (base.includes(":") || head.includes(":")) return null;
+    return { owner: compare[1]!, repo: compare[2]!, target: { kind: "compare", base, head } };
+  }
+  return null;
 }
 
-/** Matches any PR tab (the prefetch trigger). Different role from the files-only parsePrUrl. */
+/** Matches any PR tab (the prefetch trigger). Different role from the diff-page-only parseDiffUrl. */
 export function parsePrPage(pathname: string): { owner: string; repo: string; prNumber: number } | null {
   const m = /^\/([^/]+)\/([^/]+)\/pull\/(\d+)(\/|$)/.exec(pathname);
   return m ? { owner: m[1]!, repo: m[2]!, prNumber: Number(m[3]!) } : null;

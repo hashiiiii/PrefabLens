@@ -85,7 +85,7 @@ export type SemanticDiffRequest = {
   type: "semanticDiff";
   owner: string;
   repo: string;
-  prNumber: number;
+  target: DiffTarget;
   path: string;
   force?: boolean; // render past the 25MB guard ("Render anyway" click)
 };
@@ -111,7 +111,7 @@ export type GuidResolvedPush = {
   type: "guidResolved";
   owner: string;
   repo: string;
-  prNumber: number;
+  target: DiffTarget;
   path: string;
   resolved: Record<string, string>;
   json?: DiffV2; // carried on the final push when mergeSources updated the structure (content replaces the view)

@@ -1,0 +1,37 @@
+name: Build site inputs
+description: Install tools and build the CLI, WASM bundle, and demo bundle shared by the CI site job and the Pages deploy job
+
+runs:
+  using: composite
+  steps:
+    - name: Install tools
+      uses: jdx/mise-action@v4
+    - name: Restore Zig global cache
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/zig
+        key: ${{ runner.os }}-zig-${{ hashFiles('build.zig.zon') }}
+        restore-keys: |
+          ${{ runner.os }}-zig-
+    - name: Resolve pnpm store directory
+      id: pnpm-store
+      shell: bash
+      run: echo "path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+    - name: Restore pnpm store cache
+      uses: actions/cache@v4
+      with:
+        path: ${{ steps.pnpm-store.outputs.path }}
+        key: ${{ runner.os }}-pnpm-${{ hashFiles('extension/pnpm-lock.yaml') }}
+        restore-keys: |
+          ${{ runner.os }}-pnpm-
+    - name: Build CLI and WASM
+      shell: bash
+      run: |
+        zig build
+        zig build wasm
+    - name: Build demo bundle
+      shell: bash
+      working-directory: extension
+      run: |
+        pnpm install --frozen-lockfile
+        pnpm run demo

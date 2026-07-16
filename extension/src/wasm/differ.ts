@@ -21,18 +21,15 @@ type Exports = {
  *  1:1 with parseAssets in core/src/wasm.zig. */
 export function encodeAssets(assets: Map<string, Uint8Array>): Uint8Array {
   const enc = new TextEncoder();
-  const guids = [...assets.keys()].map((g) => enc.encode(g));
+  const entries = [...assets].map(([guid, data]) => ({ guid: enc.encode(guid), data }));
   let total = 4;
-  let i = 0;
-  for (const data of assets.values()) total += 8 + guids[i++]?.length + data.length;
+  for (const { guid, data } of entries) total += 8 + guid.length + data.length;
   const out = new Uint8Array(total);
   const view = new DataView(out.buffer);
   let off = 0;
   view.setUint32(off, assets.size, true);
   off += 4;
-  i = 0;
-  for (const data of assets.values()) {
-    const guid = guids[i++]!;
+  for (const { guid, data } of entries) {
     view.setUint32(off, guid.length, true);
     out.set(guid, off + 4);
     off += 4 + guid.length;
@@ -48,16 +45,21 @@ export async function createDiffer(wasmBytes: BufferSource): Promise<Differ> {
   const exp = instance.exports as unknown as Exports;
 
   function call(before: Uint8Array, after: Uint8Array, assets?: Uint8Array): DiffV2 {
-    const bufs = assets === undefined ? [before, after] : [before, after, assets];
-    const ptrs = bufs.map((b) => (b.length ? exp.alloc(b.length) : 0));
+    const alloc = (b: Uint8Array): number => (b.length ? exp.alloc(b.length) : 0);
+    const bp = alloc(before);
+    const ap = alloc(after);
+    const tp = assets === undefined ? 0 : alloc(assets);
     // Copy after the last alloc: memory.grow detaches older views
-    bufs.forEach((b, i) => {
-      new Uint8Array(exp.memory.buffer, ptrs[i]!, b.length).set(b);
-    });
+    const copy = (ptr: number, b: Uint8Array): void => {
+      new Uint8Array(exp.memory.buffer, ptr, b.length).set(b);
+    };
+    copy(bp, before);
+    copy(ap, after);
+    if (assets !== undefined) copy(tp, assets);
     const rp =
       assets === undefined
-        ? exp.diff(ptrs[0]!, before.length, ptrs[1]!, after.length)
-        : exp.diff_with_assets(ptrs[0]!, before.length, ptrs[1]!, after.length, ptrs[2]!, assets.length);
+        ? exp.diff(bp, before.length, ap, after.length)
+        : exp.diff_with_assets(bp, before.length, ap, after.length, tp, assets.length);
     try {
       if (rp === 0) throw new DiffError("OutOfMemory");
       const len = new DataView(exp.memory.buffer).getUint32(rp, true);
@@ -67,9 +69,9 @@ export async function createDiffer(wasmBytes: BufferSource): Promise<Differ> {
       if (parsed.schema !== "prefablens.diff.v2") throw new DiffError((parsed as DiffErrorV1).error);
       return parsed;
     } finally {
-      bufs.forEach((b, i) => {
-        if (b.length) exp.free(ptrs[i]!, b.length);
-      });
+      if (before.length) exp.free(bp, before.length);
+      if (after.length) exp.free(ap, after.length);
+      if (assets !== undefined && assets.length) exp.free(tp, assets.length);
     }
   }
 

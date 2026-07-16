@@ -70,12 +70,49 @@ test("detects unity files on the react layout and renders the semantic view", as
   await fooHeader(page).getByRole("button", { name: "Semantic" }).click();
   const view = page.locator("#diff-aaa111 [data-prefablens-view]");
   await expect(view).toContainText("MonoBehaviour");
-  await expect(page.locator("#diff-aaa111 .Diff-module__diffContent")).toBeHidden();
+  await expect(page.locator("#diff-aaa111 .border.rounded-bottom-2")).toBeHidden();
 
   // Back to raw restores github's body and hides ours
   await fooHeader(page).getByRole("button", { name: "Raw" }).click();
-  await expect(page.locator("#diff-aaa111 .Diff-module__diffContent")).toBeVisible();
+  await expect(page.locator("#diff-aaa111 .border.rounded-bottom-2")).toBeVisible();
   await expect(view).toBeHidden();
+});
+
+test("the semantic host recreates github's card frame in place of the hidden body", async ({ page }) => {
+  await stubChrome(page, cannedResponse);
+  await open(page);
+
+  await fooHeader(page).getByRole("button", { name: "Semantic" }).click();
+  const view = page.locator("#diff-aaa111 [data-prefablens-view]");
+  await expect(view).toContainText("MonoBehaviour");
+
+  // :host{all:initial} resets display to its spec initial value (inline), which
+  // would collapse the border into a line-box fragment — the host must be a block
+  await expect(view).toHaveCSS("display", "block");
+  // The frame github draws on the body it replaces: border + bottom-rounded corners
+  await expect(view).toHaveCSS("border-bottom-width", "1px");
+  await expect(view).toHaveCSS("border-bottom-left-radius", "6px");
+});
+
+test("a body remounted while semantic is active is hidden before it can paint", async ({ page }) => {
+  await stubChrome(page, cannedResponse);
+  await open(page);
+
+  await fooHeader(page).getByRole("button", { name: "Semantic" }).click();
+  await expect(page.locator("#diff-aaa111 [data-prefablens-view]")).toContainText("MonoBehaviour");
+
+  // Remount and measure inside ONE evaluate: the debounced rescan cannot run in
+  // between, so only the injected CSS rule can be hiding the fresh node here
+  const displayRightAfterAppend = await page.evaluate(() => {
+    const region = document.querySelector("#diff-aaa111")!;
+    region.querySelector(".border.rounded-bottom-2")!.remove();
+    const fresh = document.createElement("div");
+    fresh.className = "border position-relative rounded-bottom-2";
+    fresh.textContent = "raw github diff table";
+    region.append(fresh);
+    return getComputedStyle(fresh).display;
+  });
+  expect(displayRightAfterAppend).toBe("none");
 });
 
 test("global toggle mounts before the virtualized list, not inside a recycled item", async ({ page }) => {
@@ -102,7 +139,7 @@ test("github's collapse chevron hides the semantic view and re-hides a remounted
   await page.evaluate(() => {
     const region = document.querySelector("#diff-aaa111")!;
     region.querySelector(".octicon-chevron-down")!.setAttribute("class", "octicon octicon-chevron-right");
-    region.querySelector(".Diff-module__diffContent")!.remove();
+    region.querySelector(".border.rounded-bottom-2")!.remove();
   });
   await expect(view).toBeHidden();
 
@@ -112,12 +149,12 @@ test("github's collapse chevron hides the semantic view and re-hides a remounted
     const region = document.querySelector("#diff-aaa111")!;
     region.querySelector(".octicon-chevron-right")!.setAttribute("class", "octicon octicon-chevron-down");
     const body = document.createElement("div");
-    body.className = "Diff-module__diffContent";
+    body.className = "border position-relative rounded-bottom-2";
     body.textContent = "raw github diff table";
     region.append(body);
   });
   await expect(view).toBeVisible();
-  await expect(page.locator("#diff-aaa111 .Diff-module__diffContent")).toBeHidden();
+  await expect(page.locator("#diff-aaa111 .border.rounded-bottom-2")).toBeHidden();
 });
 
 test("virtualization: a fully remounted file re-attaches and inherits the semantic default", async ({ page }) => {
@@ -140,5 +177,5 @@ test("virtualization: a fully remounted file re-attaches and inherits the semant
   });
 
   await expect(page.locator("#diff-aaa111 [data-prefablens-view]")).toBeVisible();
-  await expect(page.locator("#diff-aaa111 .Diff-module__diffContent")).toBeHidden();
+  await expect(page.locator("#diff-aaa111 .border.rounded-bottom-2")).toBeHidden();
 });

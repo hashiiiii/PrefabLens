@@ -25,8 +25,17 @@ export class ApiError extends Error {
 }
 
 // sha is the blob at head (at base for removed files) — the files API provides it for every status.
-export type PrFile = { path: string; status: string; previousPath?: string; sha?: string };
-export type PrRefs = { baseSha: string; headSha: string };
+export type ChangedFile = { path: string; status: string; previousPath?: string; sha?: string };
+export type RefPair = { baseSha: string; headSha: string };
+
+// GitHub's shared "diff entry" schema: PR files, commit files, and compare files all use it.
+type DiffEntry = { filename: string; status: string; previous_filename?: string; sha?: string };
+const toChangedFile = (f: DiffEntry): ChangedFile => ({
+  path: f.filename,
+  status: f.status,
+  previousPath: f.previous_filename,
+  sha: f.sha,
+});
 
 // The REST base is fixed at build time (see build.mjs's esbuild define).
 export const API_BASE = __API_BASE__;
@@ -80,26 +89,78 @@ export class GithubClient {
   }
 
   // The before side is the merge-base: GitHub's PR diff compares against the merge-base, not the base branch tip.
-  async getPrRefs(owner: string, repo: string, prNumber: number): Promise<PrRefs> {
+  async getPrRefs(owner: string, repo: string, prNumber: number): Promise<RefPair> {
     const pr = await this.json<{ base: { sha: string }; head: { sha: string } }>(
       `/repos/${owner}/${repo}/pulls/${prNumber}`,
     );
-    const cmp = await this.json<{ merge_base_commit: { sha: string } }>(
-      `/repos/${owner}/${repo}/compare/${pr.base.sha}...${pr.head.sha}`,
-    );
-    return { baseSha: cmp.merge_base_commit.sha, headSha: pr.head.sha };
+    const cmp = await this.compareRefs(owner, repo, pr.base.sha, pr.head.sha);
+    return { baseSha: cmp.mergeBaseSha, headSha: pr.head.sha };
   }
 
-  async listPrFiles(owner: string, repo: string, prNumber: number): Promise<PrFile[]> {
-    const out: PrFile[] = [];
+  async listPrFiles(owner: string, repo: string, prNumber: number): Promise<ChangedFile[]> {
+    const out: ChangedFile[] = [];
     for (let page = 1; ; page++) {
-      const batch = await this.json<
-        Array<{ filename: string; status: string; previous_filename?: string; sha?: string }>
-      >(`/repos/${owner}/${repo}/pulls/${prNumber}/files?per_page=100&page=${page}`);
-      for (const f of batch)
-        out.push({ path: f.filename, status: f.status, previousPath: f.previous_filename, sha: f.sha });
+      const batch = await this.json<DiffEntry[]>(
+        `/repos/${owner}/${repo}/pulls/${prNumber}/files?per_page=100&page=${page}`,
+      );
+      for (const f of batch) out.push(toChangedFile(f));
       if (batch.length < 100) return out;
     }
+  }
+
+  /** Commit metadata + changed files vs the first parent (what GitHub's commit page shows).
+   *  Files paginate 300 per page up to GitHub's 3,000-file cap; sha in the response is
+   *  full-length even when the request ref is abbreviated. */
+  async getCommit(
+    owner: string,
+    repo: string,
+    ref: string,
+  ): Promise<{ sha: string; parentSha: string | null; files: ChangedFile[] }> {
+    const files: ChangedFile[] = [];
+    let sha = "";
+    let parentSha: string | null = null;
+    // GitHub documents a 3,000-file cap for this endpoint: 10 pages of 300 bounds the loop
+    // even if the API ever stops honoring the paging params.
+    for (let page = 1; page <= 10; page++) {
+      const body = await this.json<{ sha: string; parents: Array<{ sha: string }>; files?: DiffEntry[] }>(
+        `/repos/${owner}/${repo}/commits/${encodeURIComponent(ref)}?per_page=300&page=${page}`,
+      );
+      if (page === 1) {
+        sha = body.sha;
+        parentSha = body.parents[0]?.sha ?? null;
+      }
+      const batch = body.files ?? [];
+      for (const f of batch) files.push(toChangedFile(f));
+      if (batch.length < 300) break;
+    }
+    return { sha, parentSha, files };
+  }
+
+  /** Three-dot comparison (what GitHub's compare page shows): merge base + changed files.
+   *  GitHub returns compare files only on the first page, capped at 300 for the whole
+   *  comparison — like the PR 3,000-file cap, unlisted files degrade to the handler's
+   *  treat-as-modified / 404→EMPTY path. */
+  async compareRefs(
+    owner: string,
+    repo: string,
+    base: string,
+    head: string,
+  ): Promise<{ mergeBaseSha: string; files: ChangedFile[] }> {
+    const basehead = `${encodeURIComponent(base)}...${encodeURIComponent(head)}`;
+    const body = await this.json<{ merge_base_commit: { sha: string }; files?: DiffEntry[] }>(
+      `/repos/${owner}/${repo}/compare/${basehead}`,
+    );
+    return { mergeBaseSha: body.merge_base_commit.sha, files: (body.files ?? []).map(toChangedFile) };
+  }
+
+  /** Resolves a ref (branch, tag, abbreviated sha) to the full commit sha via the sha media type. */
+  async resolveRefSha(owner: string, repo: string, ref: string): Promise<string> {
+    const res = await this.request(
+      `/repos/${owner}/${repo}/commits/${encodeURIComponent(ref)}`,
+      "application/vnd.github.sha",
+    );
+    if (!res.ok) throw new ApiError(res.status);
+    return (await res.text()).trim();
   }
 
   /** Looks up guid → asset path (with .meta stripped) via Code Search. No hit / not indexed (422) → null.

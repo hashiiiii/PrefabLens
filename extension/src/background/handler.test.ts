@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { AuthError, type PrFile, RateLimitError } from "../github/client";
+import { AuthError, type ChangedFile, RateLimitError } from "../github/client";
 import type { DiffV2, GuidResolvedPush, SemanticDiffRequest } from "../types";
 import { DiffError, type Differ } from "../wasm/differ";
 import { createHandler, type Deps, type Handler } from "./handler";
@@ -8,14 +8,14 @@ const REQ: SemanticDiffRequest = {
   type: "semanticDiff",
   owner: "o",
   repo: "r",
-  prNumber: 1,
+  target: { kind: "pull", prNumber: 1 },
   path: "Assets/Foo.prefab",
 };
 
 const DIFF: DiffV2 = { schema: "prefablens.diff.v2", unresolvedGuids: ["g1"], roots: [], loose: [] };
 
 function makeDeps(overrides?: {
-  files?: PrFile[];
+  files?: ChangedFile[];
   contents?: Record<string, string>; // `${path}@${ref}` → text
   blobs?: Record<string, string>; // blob sha → text (getBlobRaw; absent sha = 404 → null)
   baseShas?: Record<string, string>; // path → blob sha at the merge base (listBlobShas)
@@ -35,6 +35,10 @@ function makeDeps(overrides?: {
   const client = {
     getPrRefs: vi.fn(async () => ({ baseSha: "base-sha", headSha: "head-sha" })),
     listPrFiles: vi.fn(async () => files),
+    // Commit/compare fakes mirror the PR refs so the same contents table serves every target kind
+    getCommit: vi.fn(async () => ({ sha: "head-sha", parentSha: "base-sha" as string | null, files })),
+    compareRefs: vi.fn(async () => ({ mergeBaseSha: "base-sha", files })),
+    resolveRefSha: vi.fn(async () => "head-sha"),
     getFileAtRef,
     getBlobRaw: vi.fn(async (_o: string, _r: string, sha: string) => {
       const text = overrides?.blobs?.[sha];
@@ -150,6 +154,35 @@ describe("createHandler", () => {
     });
     const res = await resolveFully(createHandler(deps), REQ);
     expect(res).toEqual({ ok: true, json: { ...DIFF, resolved: { g1: "Assets/S.cs" } } });
+  });
+
+  it("serves a commit target from the commit API with the first parent as base", async () => {
+    const { deps, client } = makeDeps();
+    const res = await resolveFully(createHandler(deps), { ...REQ, target: { kind: "commit", sha: "head-sha" } });
+    expect(res).toEqual({ ok: true, json: { ...DIFF, resolved: {} } });
+    expect(client.getCommit).toHaveBeenCalledWith("o", "r", "head-sha");
+    expect(client.getPrRefs).not.toHaveBeenCalled(); // commit pages never touch the PR API
+  });
+
+  it("serves a root commit (no parent) as an all-added diff", async () => {
+    const files = [{ path: "Assets/Foo.prefab", status: "added", sha: "blob-head" }];
+    const { deps, client } = makeDeps({ files, blobs: { "blob-head": "a" } });
+    client.getCommit.mockResolvedValue({ sha: "head-sha", parentSha: null, files });
+    const res = await resolveFully(createHandler(deps), { ...REQ, target: { kind: "commit", sha: "head-sha" } });
+    // The before side is never fetched for added files, so a missing parent is harmless
+    expect(res).toEqual({ ok: true, json: { ...DIFF, resolved: {} } });
+  });
+
+  it("serves a compare target from the merge base and resolves the head ref", async () => {
+    const { deps, client } = makeDeps();
+    const res = await resolveFully(createHandler(deps), {
+      ...REQ,
+      target: { kind: "compare", base: "main", head: "feature" },
+    });
+    expect(res).toEqual({ ok: true, json: { ...DIFF, resolved: {} } });
+    expect(client.compareRefs).toHaveBeenCalledWith("o", "r", "main", "feature");
+    // Cache keys need an immutable sha, not a branch name that a push would silently move
+    expect(client.resolveRefSha).toHaveBeenCalledWith("o", "r", "feature");
   });
 
   it("uses an empty before for added files without fetching the base side", async () => {
@@ -675,7 +708,7 @@ describe("prefetch", () => {
   });
 
   it("prefetches only unity files and caps at 100", async () => {
-    const files: PrFile[] = Array.from({ length: 120 }, (_, i) => ({
+    const files: ChangedFile[] = Array.from({ length: 120 }, (_, i) => ({
       path: `Assets/F${i}.prefab`,
       status: "modified",
     }));

@@ -7,15 +7,16 @@ import {
   renderSignInPending,
   renderTooLarge,
 } from "../renderer/render";
-import type {
-  BackgroundError,
-  DiffV2,
-  GuidResolvedPush,
-  PrefetchRequest,
-  SemanticDiffRequest,
-  SemanticDiffResponse,
+import {
+  type BackgroundError,
+  type DiffV2,
+  type GuidResolvedPush,
+  type PrefetchRequest,
+  type SemanticDiffRequest,
+  type SemanticDiffResponse,
+  targetKey,
 } from "../types";
-import { type FileEntry, parsePrPage, parsePrUrl, scanUnityFiles } from "./detect";
+import { type DiffPage, type FileEntry, parseDiffUrl, parsePrPage, scanUnityFiles } from "./detect";
 import { fillDeviceCode } from "./devicePage";
 import { createSignIn, type PendingSignIn } from "./signin";
 import { createToggle, type Toggle, type View } from "./toggle";
@@ -41,7 +42,7 @@ function countUnresolved(json: DiffV2): number {
 type Applier = { header: HTMLElement; apply(view: View): void; sync(): void };
 const appliers = new Set<Applier>();
 let globalToggle: Toggle | undefined;
-let currentPr = ""; // overrides are valid only while on the PR: discard when the PR changes
+let currentPage = ""; // overrides are valid only while on the diff page: discard when it changes
 let prefetchedPr = ""; // send prefetch just once across all PR tabs, including the conversation tab
 
 // Files whose panels are stuck on an auth error: all retried once a token lands in storage.
@@ -71,21 +72,22 @@ function signInPanel(root: ShadowRoot, message: string): void {
 }
 
 function attach(state: ViewState): void {
-  const page = parsePrPage(location.pathname);
-  if (!page) return;
-  const pageKey = `${page.owner}/${page.repo}#${page.prNumber}`;
-  if (pageKey !== prefetchedPr) {
-    prefetchedPr = pageKey;
-    // fire-and-forget: don't wait on the response, ignore failures (the manual-toggle path is separately alive)
-    void (
-      chrome.runtime.sendMessage({ type: "prefetch", ...page } satisfies PrefetchRequest) as Promise<unknown>
-    ).catch(() => {});
+  const prPage = parsePrPage(location.pathname);
+  if (prPage) {
+    const prKey = targetKey(prPage.owner, prPage.repo, { kind: "pull", prNumber: prPage.prNumber });
+    if (prKey !== prefetchedPr) {
+      prefetchedPr = prKey;
+      // fire-and-forget: don't wait on the response, ignore failures (the manual-toggle path is separately alive)
+      void (
+        chrome.runtime.sendMessage({ type: "prefetch", ...prPage } satisfies PrefetchRequest) as Promise<unknown>
+      ).catch(() => {});
+    }
   }
-  const pr = parsePrUrl(location.pathname);
-  if (!pr) return;
-  const key = `${pr.owner}/${pr.repo}#${pr.prNumber}`;
-  if (key !== currentPr) {
-    currentPr = key;
+  const page = parseDiffUrl(location.pathname);
+  if (!page) return;
+  const key = targetKey(page.owner, page.repo, page.target);
+  if (key !== currentPage) {
+    currentPage = key;
     state.clearOverrides();
     for (const [k, v] of views) if (!v.root.host.isConnected) views.delete(k); // not only ignore late pushes to views killed by navigation, but also cut the reference
   }
@@ -94,7 +96,7 @@ function attach(state: ViewState): void {
   for (const a of [...appliers]) if (!a.header.isConnected) appliers.delete(a);
   const entries = scanUnityFiles(document);
   if (entries.length) ensureGlobalToggle(state, entries[0]!);
-  for (const entry of entries) attachToggle(state, pr, entry);
+  for (const entry of entries) attachToggle(state, page, entry);
   // Re-assert view state: react remounts diff bodies under still-marked headers, which
   // silently undoes the inline hide. All sync operations are idempotent and fetch-free.
   for (const a of appliers) a.sync();
@@ -118,10 +120,10 @@ function ensureGlobalToggle(state: ViewState, first: FileEntry): void {
   globalToggle = toggle;
 }
 
-function attachToggle(state: ViewState, pr: { owner: string; repo: string; prNumber: number }, entry: FileEntry): void {
+function attachToggle(state: ViewState, page: DiffPage, entry: FileEntry): void {
   if (entry.header.hasAttribute("data-prefablens")) return;
   entry.header.setAttribute("data-prefablens", "");
-  const viewKey = `${pr.owner}/${pr.repo}#${pr.prNumber}:${entry.path}`;
+  const viewKey = `${targetKey(page.owner, page.repo, page.target)}:${entry.path}`;
 
   let host: HTMLElement | undefined;
   let requested = false;
@@ -159,7 +161,14 @@ function attachToggle(state: ViewState, pr: { owner: string; repo: string; prNum
     const request = (force?: boolean): void => {
       requested = true;
       renderLoading(root);
-      void requestDiff({ type: "semanticDiff", ...pr, path: entry.path, force }).then((res) => {
+      void requestDiff({
+        type: "semanticDiff",
+        owner: page.owner,
+        repo: page.repo,
+        target: page.target,
+        path: entry.path,
+        force,
+      }).then((res) => {
         if (res.ok) {
           views.set(viewKey, { root, json: res.json });
           // Always show it while pending: even if all names are resolved, source merging may remain
@@ -243,8 +252,8 @@ async function init(): Promise<void> {
   // guid resolution push from background (the second stage of the two-stage response): re-render if the matching view exists
   chrome.runtime.onMessage.addListener((msg: GuidResolvedPush) => {
     if (msg?.type !== "guidResolved") return;
-    const view = views.get(`${msg.owner}/${msg.repo}#${msg.prNumber}:${msg.path}`);
-    if (!view) return; // already navigated to a different PR, etc.: drop silently
+    const view = views.get(`${targetKey(msg.owner, msg.repo, msg.target)}:${msg.path}`);
+    if (!view) return; // already navigated to a different diff page, etc.: drop silently
     // The final push replaces json (mergeSources may change the structure), an intermediate push merges resolved
     view.json = msg.json ?? { ...view.json, resolved: { ...view.json.resolved, ...msg.resolved } };
     render(view.root, view.json, { resolving: msg.done ? 0 : Math.max(countUnresolved(view.json), 1) });

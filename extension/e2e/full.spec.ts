@@ -33,6 +33,8 @@ function startServer(): Promise<Server> {
       res.end(body);
     };
     const json = (body: unknown): void => send(JSON.stringify(body), "application/json");
+    // Every ref pair shares one empty tree: blob fetches then fall back to the contents API below
+    if (url.pathname.startsWith("/repos/o/r/git/trees/")) return json({ truncated: false, tree: [] });
     switch (url.pathname) {
       case "/o/r/pull/1/files":
         return send(fixture, "text/html");
@@ -46,10 +48,30 @@ function startServer(): Promise<Server> {
         return json({ base: { sha: "B" }, head: { sha: "H" } });
       case "/repos/o/r/compare/B...H":
         return json({ merge_base_commit: { sha: "MB" } });
-      case "/repos/o/r/git/trees/H":
-        return json({ truncated: false, tree: [] });
-      case "/repos/o/r/contents/Assets/Foo.prefab":
-        return send(url.searchParams.get("ref") === "MB" ? BEFORE : AFTER, "application/vnd.github.raw+json");
+      // Commit page: same classic DOM, but discovery goes through the commit API (base = first parent)
+      case "/o/r/commit/abcdef0":
+        return send(fixture, "text/html");
+      case "/repos/o/r/commits/abcdef0":
+        return json({
+          sha: "HC",
+          parents: [{ sha: "PC" }],
+          files: [{ filename: "Assets/Foo.prefab", status: "modified" }],
+        });
+      // Compare page: merge base from the compare API, head resolved via the sha media type
+      case "/o/r/compare/main...topic":
+        return send(fixture, "text/html");
+      case "/repos/o/r/compare/main...topic":
+        return json({
+          merge_base_commit: { sha: "MC" },
+          files: [{ filename: "Assets/Foo.prefab", status: "modified" }],
+        });
+      case "/repos/o/r/commits/topic":
+        return send("HT\n", "application/vnd.github.sha");
+      case "/repos/o/r/contents/Assets/Foo.prefab": {
+        // MB/PC/MC are the base side of the pull/commit/compare flows respectively
+        const ref = url.searchParams.get("ref") ?? "";
+        return send(["MB", "PC", "MC"].includes(ref) ? BEFORE : AFTER, "application/vnd.github.raw+json");
+      }
       case "/repos/o/r/contents/Assets/Big.unity":
         return send(BIG, "application/vnd.github.raw+json");
       // A binary-serialized .asset (LightingDataAsset etc.): passes the path
@@ -106,6 +128,33 @@ test("renders a real wasm diff with code-search guid resolution", async () => {
   // Via Code Search, guid def resolves to Sound.cs, so the script name shows instead of the type name
   await expect(view).toContainText("Sound");
   await expect(view).toContainText("Volume");
+  await expect(view).toContainText("0.5");
+  await expect(view).toContainText("0.8");
+  await page.close();
+});
+
+test("serves a commit page against the commit API", async () => {
+  const page = await context.newPage();
+  await page.goto(`http://127.0.0.1:${PORT}/o/r/commit/abcdef0`);
+
+  const header = page.locator('.file-header[data-path="Assets/Foo.prefab"]');
+  await header.getByRole("button", { name: "Semantic" }).click();
+
+  const view = page.locator("[data-prefablens-view]");
+  // BEFORE at the first parent, AFTER at the commit itself: the same real-wasm diff as the PR flow
+  await expect(view).toContainText("0.5");
+  await expect(view).toContainText("0.8");
+  await page.close();
+});
+
+test("serves a compare page from the merge base", async () => {
+  const page = await context.newPage();
+  await page.goto(`http://127.0.0.1:${PORT}/o/r/compare/main...topic`);
+
+  const header = page.locator('.file-header[data-path="Assets/Foo.prefab"]');
+  await header.getByRole("button", { name: "Semantic" }).click();
+
+  const view = page.locator("[data-prefablens-view]");
   await expect(view).toContainText("0.5");
   await expect(view).toContainText("0.8");
   await page.close();

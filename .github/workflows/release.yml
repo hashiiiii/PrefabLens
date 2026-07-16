@@ -57,10 +57,12 @@ jobs:
             zig build -Dtarget="$1" -Doptimize=ReleaseSafe
             (cd zig-out/bin && zip -j "../../dist/prefablens-$2.zip" "$3")
           }
-          build aarch64-macos    macos-arm64  prefablens
-          build x86_64-macos     macos-x64    prefablens
-          build x86_64-linux-gnu linux-x64    prefablens
-          build x86_64-windows   windows-x64  prefablens.exe
+          build aarch64-macos      macos-arm64   prefablens
+          build x86_64-macos       macos-x64     prefablens
+          build x86_64-linux-gnu   linux-x64     prefablens
+          build aarch64-linux-gnu  linux-arm64   prefablens
+          build x86_64-windows     windows-x64   prefablens.exe
+          build aarch64-windows    windows-arm64 prefablens.exe
       - name: Build and package extension
         run: |
           set -euo pipefail

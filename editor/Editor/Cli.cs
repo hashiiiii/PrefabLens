@@ -26,10 +26,10 @@ namespace PrefabLens
         public static string ReleaseAssetName(bool isWindows, bool isMac, bool isArm64)
         {
             if (isWindows)
-                return "prefablens-windows-x64.zip";
+                return isArm64 ? "prefablens-windows-arm64.zip" : "prefablens-windows-x64.zip";
             if (isMac)
                 return isArm64 ? "prefablens-macos-arm64.zip" : "prefablens-macos-x64.zip";
-            return "prefablens-linux-x64.zip";
+            return isArm64 ? "prefablens-linux-arm64.zip" : "prefablens-linux-x64.zip";
         }
 
         public static string DownloadUrl(string version, string assetName) =>

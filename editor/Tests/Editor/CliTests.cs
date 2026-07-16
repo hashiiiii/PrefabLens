@@ -17,6 +17,10 @@ namespace PrefabLens.Tests
                 Cli.ReleaseAssetName(isWindows: true, isMac: false, isArm64: false)
             );
             Assert.AreEqual(
+                "prefablens-windows-arm64.zip",
+                Cli.ReleaseAssetName(isWindows: true, isMac: false, isArm64: true)
+            );
+            Assert.AreEqual(
                 "prefablens-macos-arm64.zip",
                 Cli.ReleaseAssetName(isWindows: false, isMac: true, isArm64: true)
             );
@@ -27,6 +31,10 @@ namespace PrefabLens.Tests
             Assert.AreEqual(
                 "prefablens-linux-x64.zip",
                 Cli.ReleaseAssetName(isWindows: false, isMac: false, isArm64: false)
+            );
+            Assert.AreEqual(
+                "prefablens-linux-arm64.zip",
+                Cli.ReleaseAssetName(isWindows: false, isMac: false, isArm64: true)
             );
         }
 

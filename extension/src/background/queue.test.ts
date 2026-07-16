@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { RateLimitError } from "../github/client";
+import { must } from "../util/must";
 import { createQueue } from "./queue";
 
 // Line up manually-resolvable deferreds to observe execution order and concurrency
@@ -120,7 +121,7 @@ describe("createQueue rate limit backoff", () => {
     await flush();
     expect(waits.map((w) => w.ms)).toEqual([5_000]); // paused for exactly the advice
     expect(attempts).toBe(1); // nothing reruns while paused
-    waits[0]!.resolve();
+    must(waits[0]).resolve();
     await expect(task).resolves.toBe("ok");
     expect(attempts).toBe(2);
   });
@@ -134,9 +135,9 @@ describe("createQueue rate limit backoff", () => {
     });
     const cappedRejects = expect(capped).rejects.toBeInstanceOf(RateLimitError);
     await flush();
-    waits[0]!.resolve();
+    must(waits[0]).resolve();
     await flush();
-    waits[1]!.resolve();
+    must(waits[1]).resolve();
     await cappedRejects;
     // A secondary limit without headers gets the fallback wait
     const noAdvice = queue(async () => {
@@ -144,9 +145,9 @@ describe("createQueue rate limit backoff", () => {
     });
     const noAdviceRejects = expect(noAdvice).rejects.toBeInstanceOf(RateLimitError);
     await flush();
-    waits[2]!.resolve();
+    must(waits[2]).resolve();
     await flush();
-    waits[3]!.resolve();
+    must(waits[3]).resolve();
     await noAdviceRejects;
     expect(waits.map((w) => w.ms)).toEqual([60_000, 60_000, 30_000, 30_000]);
   });
@@ -161,9 +162,9 @@ describe("createQueue rate limit backoff", () => {
     });
     const taskRejects = expect(task).rejects.toBeInstanceOf(RateLimitError);
     await flush();
-    waits[0]!.resolve(); // resume → retry 1 fails
+    must(waits[0]).resolve(); // resume → retry 1 fails
     await flush();
-    waits[1]!.resolve(); // resume → retry 2 fails → reject
+    must(waits[1]).resolve(); // resume → retry 2 fails → reject
     await taskRejects;
     expect(attempts).toBe(3); // initial + 2 retries, then the manual-retry UI takes over
     expect(waits).toHaveLength(2);
@@ -186,7 +187,7 @@ describe("createQueue rate limit backoff", () => {
     });
     await flush();
     expect(ran).toBe(false); // held back while the queue is paused, not rejected
-    waits[0]!.resolve();
+    must(waits[0]).resolve();
     await expect(limited).resolves.toBe("retried");
     await expect(queued).resolves.toBe("later");
   });
@@ -210,7 +211,7 @@ describe("createQueue rate limit backoff", () => {
       { front: true },
     );
     await flush();
-    waits[0]!.resolve();
+    must(waits[0]).resolve();
     await Promise.all([prefetchTask, user]);
     expect(order).toEqual(["user", "prefetch-retry"]);
   });

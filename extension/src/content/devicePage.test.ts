@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
+import { must } from "../util/must";
 import { fillDeviceCode } from "./devicePage";
 
 const PENDING = { userCode: "ABCD-1234", expiresAt: 10_000 };
@@ -47,8 +48,8 @@ describe("fillDeviceCode", () => {
     document.body.innerHTML = FORM;
     expect(fillDeviceCode(document, PENDING, 5_000)).toBe(true);
     // The hyphen input carries value "-" from the server; it must neither block the fill nor be overwritten.
-    expect(document.querySelector<HTMLInputElement>('input[name="user-code-4"]')!.value).toBe("-");
-    expect(document.querySelector<HTMLInputElement>('input[name="authenticity_token"]')!.value).toBe("tok");
+    expect(must(document.querySelector<HTMLInputElement>('input[name="user-code-4"]')).value).toBe("-");
+    expect(must(document.querySelector<HTMLInputElement>('input[name="authenticity_token"]')).value).toBe("tok");
   });
 
   it("does not touch anything once the pending code expired", () => {
@@ -59,15 +60,15 @@ describe("fillDeviceCode", () => {
 
   it("does not clobber a box the user already typed into", () => {
     document.body.innerHTML = FORM;
-    boxes()[2]!.value = "X";
+    must(boxes()[2]).value = "X";
     expect(fillDeviceCode(document, PENDING, 5_000)).toBe(false);
-    expect(boxes()[0]!.value).toBe("");
-    expect(boxes()[2]!.value).toBe("X");
+    expect(must(boxes()[0]).value).toBe("");
+    expect(must(boxes()[2]).value).toBe("X");
   });
 
   it("no-ops when the box count does not match the code length (unknown layout)", () => {
     document.body.innerHTML = FORM;
-    boxes()[7]!.remove();
+    must(boxes()[7]).remove();
     expect(fillDeviceCode(document, PENDING, 5_000)).toBe(false);
     expect(boxes().every((b) => b.value === "")).toBe(true);
   });

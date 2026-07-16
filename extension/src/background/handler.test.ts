@@ -657,7 +657,7 @@ describe("createHandler", () => {
       };
       const merged: DiffV2 = { ...DIFF, unresolvedGuids: ["src1"] };
       const diffWithAssets = vi.fn(() => merged);
-      const { deps, client } = makeDeps({
+      const { deps } = makeDeps({
         files: [
           { path: "Assets/Foo.prefab", status: "modified" },
           { path: "Assets/Src.prefab.meta", status: "modified" },
@@ -766,7 +766,7 @@ describe("semanticDiff with push (two-stage)", () => {
     const { res, pushes } = await serveAndResolve(createHandler(deps), REQ);
     // The response returns immediately with empty resolved + pending. Names arrive via push (the crux of B4)
     expect(res).toEqual({ ok: true, json: { ...DIFF, resolved: {} }, pending: true });
-    const last = pushes.at(-1)!;
+    const last = must(pushes.at(-1));
     expect(last.done).toBe(true);
     expect(last.json?.resolved).toEqual({ g1: "Assets/Scripts/S.cs" });
     expect(guidCache.save).toHaveBeenCalledWith("https://api.github.com/o/r", { g1: "Assets/Scripts/S.cs" });

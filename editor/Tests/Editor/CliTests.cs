@@ -1,8 +1,14 @@
+using System;
 using System.Diagnostics;
 using System.IO;
 using System.IO.Compression;
+using System.Net;
+using System.Net.Http;
+using System.Net.Sockets;
 using System.Runtime.InteropServices;
+using System.Text;
 using System.Threading;
+using System.Threading.Tasks;
 using NUnit.Framework;
 
 namespace PrefabLens.Tests
@@ -17,6 +23,10 @@ namespace PrefabLens.Tests
                 Cli.ReleaseAssetName(isWindows: true, isMac: false, isArm64: false)
             );
             Assert.AreEqual(
+                "prefablens-windows-arm64.zip",
+                Cli.ReleaseAssetName(isWindows: true, isMac: false, isArm64: true)
+            );
+            Assert.AreEqual(
                 "prefablens-macos-arm64.zip",
                 Cli.ReleaseAssetName(isWindows: false, isMac: true, isArm64: true)
             );
@@ -27,6 +37,10 @@ namespace PrefabLens.Tests
             Assert.AreEqual(
                 "prefablens-linux-x64.zip",
                 Cli.ReleaseAssetName(isWindows: false, isMac: false, isArm64: false)
+            );
+            Assert.AreEqual(
+                "prefablens-linux-arm64.zip",
+                Cli.ReleaseAssetName(isWindows: false, isMac: false, isArm64: true)
             );
         }
 
@@ -218,6 +232,143 @@ namespace PrefabLens.Tests
             // Cleanup must be a silent no-op, not a DirectoryNotFoundException.
             var root = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
             Assert.DoesNotThrow(() => Cli.DeleteStaleVersions(root, keep: "0.6.1"));
+        }
+
+        /// One-shot HTTP server on a loopback socket: real HttpClient traffic, no mocks.
+        /// Sends Content-Length: body.Length but only the first sendOnly bytes, then blocks
+        /// on release — that models a stalled connection for the cancellation test.
+        static TcpListener ServeOnce(byte[] body, int sendOnly, ManualResetEventSlim release, out int port)
+        {
+            var listener = new TcpListener(IPAddress.Loopback, 0);
+            listener.Start();
+            port = ((IPEndPoint)listener.LocalEndpoint).Port;
+            Task.Run(() =>
+            {
+                using var client = listener.AcceptTcpClient();
+                var stream = client.GetStream();
+                // Drain the request head so the client is not reset mid-request.
+                stream.Read(new byte[4096], 0, 4096);
+                var head = Encoding.ASCII.GetBytes(
+                    $"HTTP/1.1 200 OK\r\nContent-Length: {body.Length}\r\nConnection: close\r\n\r\n"
+                );
+                stream.Write(head, 0, head.Length);
+                stream.Write(body, 0, sendOnly);
+                stream.Flush();
+                if (sendOnly < body.Length)
+                    release.Wait(30_000);
+            });
+            return listener;
+        }
+
+        [Test]
+        public void FetchBytesReportsProgressAndReturnsTheExactBody()
+        {
+            var body = new byte[200_000];
+            new Random(42).NextBytes(body);
+            using var release = new ManualResetEventSlim();
+            var listener = ServeOnce(body, sendOnly: body.Length, release, out var port);
+            try
+            {
+                using var http = new HttpClient();
+                long lastRead = 0,
+                    lastTotal = 0;
+                var got = Cli.FetchBytes(
+                    http,
+                    $"http://127.0.0.1:{port}/",
+                    (read, total) =>
+                    {
+                        lastRead = read;
+                        lastTotal = total;
+                    },
+                    CancellationToken.None
+                );
+                Assert.AreEqual(body, got);
+                // The final callback must report completion against the advertised Content-Length,
+                // otherwise the window's percentage never reaches 100%.
+                Assert.AreEqual(body.Length, lastRead);
+                Assert.AreEqual(body.Length, lastTotal);
+            }
+            finally
+            {
+                release.Set();
+                listener.Stop();
+            }
+        }
+
+        [Test]
+        public void FetchBytesCancelsMidStream()
+        {
+            // The server stalls after half the body; cancelling from the first progress
+            // callback must abort the blocked read instead of waiting for more bytes.
+            var body = new byte[200_000];
+            using var release = new ManualResetEventSlim();
+            var listener = ServeOnce(body, sendOnly: body.Length / 2, release, out var port);
+            try
+            {
+                using var http = new HttpClient();
+                using var cts = new CancellationTokenSource();
+                var sw = Stopwatch.StartNew();
+                Assert.Catch<OperationCanceledException>(() =>
+                    Cli.FetchBytes(http, $"http://127.0.0.1:{port}/", (read, total) => cts.Cancel(), cts.Token)
+                );
+                sw.Stop();
+                Assert.Less(sw.ElapsedMilliseconds, 30_000, "cancellation must not degrade into a full wait");
+            }
+            finally
+            {
+                release.Set();
+                listener.Stop();
+            }
+        }
+
+        [Test]
+        public void ExpectedSha256FindsTheAssetLine()
+        {
+            // shasum -a 256 text-mode output: "<hex>  <name>" (two spaces), one line per asset.
+            var sums = "aaaa  prefablens-linux-x64.zip\nbbbb  prefablens-macos-arm64.zip\n";
+            Assert.AreEqual("bbbb", Cli.ExpectedSha256(sums, "prefablens-macos-arm64.zip"));
+            Assert.IsNull(Cli.ExpectedSha256(sums, "prefablens-windows-x64.zip"));
+        }
+
+        [Test]
+        public void Sha256HexMatchesAKnownVector()
+        {
+            // FIPS 180-2 test vector for "abc".
+            Assert.AreEqual(
+                "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+                Cli.Sha256Hex(Encoding.ASCII.GetBytes("abc"))
+            );
+        }
+
+        [Test]
+        public void VerifySha256AcceptsAMatchingArchive()
+        {
+            var sums = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad  prefablens-macos-arm64.zip\n";
+            Assert.DoesNotThrow(() =>
+                Cli.VerifySha256(Encoding.ASCII.GetBytes("abc"), sums, "prefablens-macos-arm64.zip")
+            );
+        }
+
+        [Test]
+        public void VerifySha256RejectsACorruptedArchive()
+        {
+            // A byte flipped after publication must fail before extraction, naming both digests.
+            var sums = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad  prefablens-macos-arm64.zip\n";
+            var e = Assert.Throws<InvalidOperationException>(() =>
+                Cli.VerifySha256(Encoding.ASCII.GetBytes("abd"), sums, "prefablens-macos-arm64.zip")
+            );
+            StringAssert.Contains("mismatch", e.Message);
+            StringAssert.Contains("ba7816bf", e.Message);
+        }
+
+        [Test]
+        public void VerifySha256RejectsAnAssetMissingFromSums()
+        {
+            // A release missing the entry is as suspect as a bad hash: never extract unverified bytes.
+            var e = Assert.Throws<InvalidOperationException>(() =>
+                Cli.VerifySha256(new byte[0], "aaaa  other.zip\n", "prefablens-linux-arm64.zip")
+            );
+            StringAssert.Contains("no entry", e.Message);
         }
     }
 }

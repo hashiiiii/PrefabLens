@@ -4,6 +4,8 @@ using System.IO;
 using System.IO.Compression;
 using System.Net.Http;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using UnityEditor;
@@ -21,19 +23,59 @@ namespace PrefabLens
         /// the CLI surfaces its own specific error first. This is the last-resort safety net against freezing the Unity main thread.
         public const int RunTimeoutMs = 90_000;
 
+        /// Upper bound on the whole download (SHA256SUMS + zip). Explicit so a stalled connection
+        /// can't silently hold the status line for HttpClient's default 100 s; generous for slow
+        /// links because the window offers Cancel.
+        public const int DownloadTimeoutMs = 120_000;
+
         // ---- Pure functions (EditMode test targets) ----
 
         public static string ReleaseAssetName(bool isWindows, bool isMac, bool isArm64)
         {
             if (isWindows)
-                return "prefablens-windows-x64.zip";
+                return isArm64 ? "prefablens-windows-arm64.zip" : "prefablens-windows-x64.zip";
             if (isMac)
                 return isArm64 ? "prefablens-macos-arm64.zip" : "prefablens-macos-x64.zip";
-            return "prefablens-linux-x64.zip";
+            return isArm64 ? "prefablens-linux-arm64.zip" : "prefablens-linux-x64.zip";
         }
 
         public static string DownloadUrl(string version, string assetName) =>
             $"https://github.com/hashiiiii/PrefabLens/releases/download/v{version}/{assetName}";
+
+        /// Hex digest for assetName from `shasum -a 256` output (the release's SHA256SUMS); null when absent.
+        public static string ExpectedSha256(string sha256Sums, string assetName)
+        {
+            foreach (var line in sha256Sums.Split('\n'))
+            {
+                var parts = line.Trim().Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
+                if (parts.Length == 2 && parts[1] == assetName)
+                    return parts[0];
+            }
+            return null;
+        }
+
+        public static string Sha256Hex(byte[] bytes)
+        {
+            using var sha = SHA256.Create();
+            var hash = sha.ComputeHash(bytes);
+            var sb = new StringBuilder(hash.Length * 2);
+            foreach (var b in hash)
+                sb.Append(b.ToString("x2"));
+            return sb.ToString();
+        }
+
+        /// Reject a tampered or corrupted release asset before it reaches ExtractTo.
+        public static void VerifySha256(byte[] bytes, string sha256Sums, string assetName)
+        {
+            var expected = ExpectedSha256(sha256Sums, assetName);
+            if (expected == null)
+                throw new InvalidOperationException($"SHA256SUMS has no entry for {assetName}");
+            var actual = Sha256Hex(bytes);
+            if (!string.Equals(actual, expected, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException(
+                    $"SHA256 mismatch for {assetName}: expected {expected}, got {actual}"
+                );
+        }
 
         /// Bare invocation = bulk mode: HEAD vs working tree, all changed Unity files,
         /// as a [{path, diff}] JSON array.
@@ -65,11 +107,17 @@ namespace PrefabLens
                         Stderr = e.Message,
                     };
                 }
-                if (ctx != null)
-                    ctx.Post(_ => onDone(res), null);
-                else
-                    onDone(res);
+                Post(ctx, () => onDone(res));
             });
+        }
+
+        /// Invoke on the captured context when there is one (Unity's main thread), directly otherwise.
+        static void Post(SynchronizationContext ctx, Action action)
+        {
+            if (ctx != null)
+                ctx.Post(_ => action(), null);
+            else
+                action();
         }
 
         /// Minimal quoting for ProcessStartInfo.Arguments (handles asset paths with spaces).
@@ -98,22 +146,39 @@ namespace PrefabLens
             return File.Exists(DefaultPath) ? DefaultPath : null;
         }
 
-        /// Fetch from GitHub Releases and extract under Library. Returns the executable path on success, throws on failure.
+        /// Fetch from GitHub Releases, verify against the release's SHA256SUMS, and extract under
+        /// Library. Returns the executable path on success, throws on failure (TimeoutException
+        /// after DownloadTimeoutMs, OperationCanceledException when ct is cancelled).
         /// Synchronous and free of Unity API calls so it can run on a worker thread (see DownloadAsync).
-        public static string Download()
+        public static string Download(Action<long, long> onProgress = null, CancellationToken ct = default)
         {
             var asset = ReleaseAssetName(
                 RuntimeInformation.IsOSPlatform(OSPlatform.Windows),
                 RuntimeInformation.IsOSPlatform(OSPlatform.OSX),
                 RuntimeInformation.ProcessArchitecture == Architecture.Arm64
             );
-            var url = DownloadUrl(Version, asset);
             var dir = Path.GetDirectoryName(DefaultPath);
             Directory.CreateDirectory(dir);
 
             using var http = new HttpClient();
-            // GetAwaiter().GetResult() unwraps AggregateException so onDone sees the HttpRequestException message.
-            var bytes = http.GetByteArrayAsync(url).GetAwaiter().GetResult();
+            // One deadline for the whole operation. HttpClient.Timeout is disabled because it
+            // only covers the headers once the body is streamed.
+            http.Timeout = Timeout.InfiniteTimeSpan;
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            cts.CancelAfter(DownloadTimeoutMs);
+            byte[] bytes;
+            string sums;
+            try
+            {
+                // SHA256SUMS first: a missing/broken release fails fast, before the multi-MB zip.
+                sums = Encoding.UTF8.GetString(FetchBytes(http, DownloadUrl(Version, "SHA256SUMS"), null, cts.Token));
+                bytes = FetchBytes(http, DownloadUrl(Version, asset), onProgress, cts.Token);
+            }
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+            {
+                throw new TimeoutException($"download timed out after {DownloadTimeoutMs / 1000}s");
+            }
+            VerifySha256(bytes, sums, asset);
             ExtractTo(bytes, dir);
 
             if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
@@ -122,29 +187,77 @@ namespace PrefabLens
             return DefaultPath;
         }
 
-        /// Run Download() off the main thread. The outcome is posted back through the caller's
-        /// SynchronizationContext (Unity's main thread when called from the window).
+        /// Run Download() off the main thread. Progress and the outcome are posted back through
+        /// the caller's SynchronizationContext (Unity's main thread when called from the window).
         /// Exactly one of (path, error) is non-null.
-        public static void DownloadAsync(Action<string, string> onDone)
+        public static void DownloadAsync(
+            Action<string, string> onDone,
+            Action<long, long> onProgress = null,
+            CancellationToken ct = default
+        )
         {
             var ctx = SynchronizationContext.Current;
+            // Coalesce the per-chunk callbacks (network reads can be TCP-segment sized) so the
+            // main thread sees one post per visible change, not thousands per download.
+            Action<long, long> progress = null;
+            if (onProgress != null)
+            {
+                long lastStep = -1;
+                progress = (read, total) =>
+                {
+                    var step = total > 0 ? read * 100 / total : read >> 18;
+                    if (step == lastStep)
+                        return;
+                    lastStep = step;
+                    Post(ctx, () => onProgress(read, total));
+                };
+            }
             Task.Run(() =>
             {
                 string path = null;
                 string error = null;
                 try
                 {
-                    path = Download();
+                    path = Download(progress, ct);
                 }
                 catch (Exception e)
                 {
                     error = e.Message;
                 }
-                if (ctx != null)
-                    ctx.Post(_ => onDone(path, error), null);
-                else
-                    onDone(path, error);
+                Post(ctx, () => onDone(path, error));
             });
+        }
+
+        /// GET url into memory, reporting (bytesSoFar, contentLengthOrMinusOne) after each chunk.
+        /// Blocking by design: Download() runs on a worker thread (see DownloadAsync).
+        public static byte[] FetchBytes(
+            HttpClient http,
+            string url,
+            Action<long, long> onProgress,
+            CancellationToken ct
+        )
+        {
+            // GetAwaiter().GetResult() unwraps AggregateException so callers see the original message.
+            using var res = http.SendAsync(
+                    new HttpRequestMessage(HttpMethod.Get, url),
+                    HttpCompletionOption.ResponseHeadersRead,
+                    ct
+                )
+                .GetAwaiter()
+                .GetResult();
+            res.EnsureSuccessStatusCode();
+            var total = res.Content.Headers.ContentLength ?? -1;
+            using var src = res.Content.ReadAsStreamAsync().GetAwaiter().GetResult();
+            // Sized up front so a multi-MB body doesn't go through doubling reallocations.
+            using var dst = new MemoryStream(total > 0 && total <= int.MaxValue ? (int)total : 0);
+            var buf = new byte[64 * 1024];
+            int n;
+            while ((n = src.ReadAsync(buf, 0, buf.Length, ct).GetAwaiter().GetResult()) > 0)
+            {
+                dst.Write(buf, 0, n);
+                onProgress?.Invoke(dst.Length, total);
+            }
+            return dst.ToArray();
         }
 
         public static void ExtractTo(byte[] zipBytes, string dir)

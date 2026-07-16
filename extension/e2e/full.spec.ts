@@ -27,7 +27,7 @@ const BIG = `%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n${"x".repeat(26 * 1024 *
 
 function startServer(): Promise<Server> {
   const server = createServer((req, res) => {
-    const url = new URL(req.url!, "http://127.0.0.1");
+    const url = new URL(req.url ?? "/", "http://127.0.0.1");
     const send = (body: string, type: string): void => {
       res.writeHead(200, { "content-type": type });
       res.end(body);

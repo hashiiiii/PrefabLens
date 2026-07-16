@@ -165,6 +165,56 @@ test "run: bulk mode with no matching files reports and exits 0" {
     try testing.expect(std.mem.indexOf(u8, aw.toArrayList().items, "no Unity YAML changes") != null);
 }
 
+test "run: bulk mode skips files whose content is not UnityYAML" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const dir = try tmp.dir.realPathFileAlloc(testing.io, ".", arena);
+    // Fake.asset passes the extension gate but is binary on both sides, like a
+    // LightingDataAsset: the content sniff must drop it, not render an empty diff.
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "Foo.prefab", .data = "--- !u!114 &1\nMonoBehaviour:\n  hp: 1\n" });
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "Fake.asset", .data = "\x00\x01binary-v1" });
+    try gitInit(arena, dir);
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "Foo.prefab", .data = "--- !u!114 &1\nMonoBehaviour:\n  hp: 2\n" });
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "Fake.asset", .data = "\x00\x01binary-v2" });
+
+    var out: std.ArrayList(u8) = .empty;
+    var aw = std.Io.Writer.Allocating.fromArrayList(arena, &out);
+    var err_out: std.ArrayList(u8) = .empty;
+    var aw_err = std.Io.Writer.Allocating.fromArrayList(arena, &err_out);
+    const code = try run(testing.io, arena, &.{ "--project", dir }, &aw.writer, &aw_err.writer, false, null);
+    try testing.expectEqual(@as(u8, 0), code);
+    const text = aw.toArrayList().items;
+    try testing.expect(std.mem.indexOf(u8, text, "Foo.prefab") != null);
+    try testing.expect(std.mem.indexOf(u8, text, "Fake.asset") == null);
+}
+
+test "run: bulk mode reports when every candidate fails the content sniff" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const dir = try tmp.dir.realPathFileAlloc(testing.io, ".", arena);
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "Fake.asset", .data = "\x00\x01binary-v1" });
+    try gitInit(arena, dir);
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "Fake.asset", .data = "\x00\x01binary-v2" });
+
+    var out: std.ArrayList(u8) = .empty;
+    var aw = std.Io.Writer.Allocating.fromArrayList(arena, &out);
+    var err_out: std.ArrayList(u8) = .empty;
+    var aw_err = std.Io.Writer.Allocating.fromArrayList(arena, &err_out);
+    const code = try run(testing.io, arena, &.{ "--project", dir }, &aw.writer, &aw_err.writer, false, null);
+    try testing.expectEqual(@as(u8, 0), code);
+    // Same wording as the "no candidates at all" early exit: to the user both
+    // cases mean the same thing.
+    try testing.expect(std.mem.indexOf(u8, aw.toArrayList().items, "no Unity YAML changes") != null);
+}
+
 test "run: bulk json emits an array of path/diff objects" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
@@ -942,11 +992,22 @@ pub fn run(io: std.Io, arena: std.mem.Allocator, args: []const []const u8, stdou
                             try stderr.print("error: git show failed for '{s}:{s}'\n", .{ g.after_ref, p });
                         return 1;
                     };
+                // Bulk mode trusts content over extension: some .asset files
+                // are binary regardless of Force Text and would render as an
+                // empty diff. An explicit path operand is never second-guessed.
+                if (g.path == null and !core.isUnityYaml(before) and !core.isUnityYaml(after)) continue;
                 const res = diffOne(io, arena, before, after, resolver_ptr, &assets, repo_dir) catch |err| return diffError(stderr, err);
                 // Single explicit path keeps the headerless single-file output.
                 try diffs.append(arena, .{ .path = if (g.path != null) null else p, .before = before, .after = after, .res = res });
             }
         },
+    }
+
+    // Every bulk candidate can be sniffed away (binary .asset only): same
+    // outcome as having no candidates, so reuse that message and exit code.
+    if (diffs.items.len == 0) {
+        try stdout.writeAll("no Unity YAML changes\n");
+        return 0;
     }
 
     // Default guid resolution: with no --project and no --no-project, git mode

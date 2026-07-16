@@ -32,8 +32,10 @@ test "isUnityPath rejects git refs, .meta and unknown extensions" {
     for (no) |p| try testing.expect(!isUnityPath(p));
 }
 
-// Same set as unityyamlmerge targets. Excludes .meta (not !u! document
-// format) and JSON like .asmdef.
+// Same set as unityyamlmerge targets, i.e. the community Unity.gitattributes:
+// https://github.com/gitattributes/gitattributes/blob/master/Unity.gitattributes
+// Excludes .meta (not !u! document format) and JSON like .asmdef. This is a
+// prefilter; content is the ground truth (core isUnityYaml).
 const extensions = [_][]const u8{
     ".prefab",             ".unity",          ".asset",
     ".mat",                ".anim",           ".controller",

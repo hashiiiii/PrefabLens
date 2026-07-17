@@ -27,6 +27,33 @@ function fakeClipboard() {
   };
 }
 
+// Records permission/registration calls; grant=false simulates the user declining Chrome's prompt.
+function fakeInstanceIo(grant = true) {
+  const granted: string[][] = [];
+  const removed: string[][] = [];
+  const registered: string[] = [];
+  const unregistered: string[] = [];
+  return {
+    granted,
+    removed,
+    registered,
+    unregistered,
+    async requestPermission(patterns: string[]) {
+      granted.push(patterns);
+      return grant;
+    },
+    async removePermission(patterns: string[]) {
+      removed.push(patterns);
+    },
+    async registerScript(origin: string) {
+      registered.push(origin);
+    },
+    async unregisterScript(origin: string) {
+      unregistered.push(origin);
+    },
+  };
+}
+
 const code: DeviceCode = {
   deviceCode: "dc1",
   userCode: "ABCD-1234",
@@ -54,6 +81,7 @@ describe("initOptions", () => {
       document,
       fakeStorage({ pat: "tok" }),
       fakeFlow(async () => ({ status: "ok", token: "tok" })),
+      fakeInstanceIo(),
     );
     expect(document.querySelector("#signin-state")?.textContent).toBe("Signed in");
   });
@@ -64,6 +92,7 @@ describe("initOptions", () => {
       document,
       fakeStorage(),
       fakeFlow(async () => ({ status: "ok", token: "tok" })),
+      fakeInstanceIo(),
     );
     expect(document.querySelector("#signin-state")?.textContent).toBe("Not signed in");
   });
@@ -75,6 +104,7 @@ describe("initOptions", () => {
       document,
       storage,
       fakeFlow(async () => ({ status: "ok", token: "tok123" })),
+      fakeInstanceIo(),
     );
     document.querySelector<HTMLButtonElement>("#signin")?.click();
     await flush();
@@ -92,6 +122,7 @@ describe("initOptions", () => {
       document,
       storage,
       fakeFlow(async () => ({ status: "denied" })),
+      fakeInstanceIo(),
     );
     document.querySelector<HTMLButtonElement>("#signin")?.click();
     await flush();
@@ -108,6 +139,7 @@ describe("initOptions", () => {
       document,
       storage,
       fakeFlow(async () => ({ status: "expired" })),
+      fakeInstanceIo(),
     );
     document.querySelector<HTMLButtonElement>("#signin")?.click();
     await flush();
@@ -129,6 +161,7 @@ describe("initOptions", () => {
           throw new Error("network down");
         },
       ),
+      fakeInstanceIo(),
     );
     document.querySelector<HTMLButtonElement>("#signin")?.click();
     await flush();
@@ -148,6 +181,7 @@ describe("initOptions", () => {
       document,
       storage,
       fakeFlow(() => pending),
+      fakeInstanceIo(),
     );
     document.querySelector<HTMLButtonElement>("#signin")?.click();
     await flush();
@@ -173,6 +207,7 @@ describe("initOptions", () => {
       document,
       fakeStorage(),
       fakeFlow(() => pending),
+      fakeInstanceIo(),
     );
     const signin = must(document.querySelector<HTMLButtonElement>("#signin"));
     signin.click();
@@ -188,11 +223,85 @@ describe("initOptions", () => {
   it("copies the user code to the clipboard", async () => {
     document.body.innerHTML = OPTIONS_BODY;
     const flow = fakeFlow(async () => ({ status: "denied" }));
-    await initOptions(document, fakeStorage(), flow);
+    await initOptions(document, fakeStorage(), flow, fakeInstanceIo());
     document.querySelector<HTMLButtonElement>("#signin")?.click();
     await flush();
     document.querySelector<HTMLButtonElement>("#copy-code")?.click();
     await flush();
     expect(flow.clipboard.writes).toEqual(["ABCD-1234"]);
+  });
+});
+
+describe("enterprise instances", () => {
+  const denied = () => fakeFlow(async () => ({ status: "denied" }));
+
+  it("adds an instance: permission request, script registration, storage entry", async () => {
+    document.body.innerHTML = OPTIONS_BODY;
+    const storage = fakeStorage();
+    const io = fakeInstanceIo();
+    await initOptions(document, storage, denied(), io);
+    // input beyond the origin is normalized away
+    must(document.querySelector<HTMLInputElement>("#instance-origin")).value = "https://github.example.com/some/page";
+    must(document.querySelector<HTMLButtonElement>("#instance-add-button")).click();
+    await flush();
+    // GHES needs only its own origin pattern (the API is same-origin under /api/v3)
+    expect(io.granted).toEqual([["https://github.example.com/*"]]);
+    expect(io.registered).toEqual(["https://github.example.com"]);
+    expect(storage.data.instances).toEqual({ "https://github.example.com": {} });
+    expect(document.querySelector('[data-origin="https://github.example.com"]')).not.toBeNull();
+  });
+
+  it("rejects github.com and invalid input without requesting permission", async () => {
+    document.body.innerHTML = OPTIONS_BODY;
+    const io = fakeInstanceIo();
+    await initOptions(document, fakeStorage(), denied(), io);
+    for (const value of ["https://github.com", "not a url"]) {
+      must(document.querySelector<HTMLInputElement>("#instance-origin")).value = value;
+      must(document.querySelector<HTMLButtonElement>("#instance-add-button")).click();
+      await flush();
+      // each rejection explains itself instead of silently doing nothing
+      expect(document.querySelector("#instance-status")?.textContent).not.toBe("");
+    }
+    expect(io.granted).toEqual([]);
+  });
+
+  it("keeps the instance out of storage when the permission is declined", async () => {
+    document.body.innerHTML = OPTIONS_BODY;
+    const storage = fakeStorage();
+    const io = fakeInstanceIo(false);
+    await initOptions(document, storage, denied(), io);
+    must(document.querySelector<HTMLInputElement>("#instance-origin")).value = "https://github.example.com";
+    must(document.querySelector<HTMLButtonElement>("#instance-add-button")).click();
+    await flush();
+    expect(io.registered).toEqual([]);
+    expect(storage.data.instances).toBeUndefined();
+  });
+
+  it("saves a PAT for a listed instance", async () => {
+    document.body.innerHTML = OPTIONS_BODY;
+    const storage = fakeStorage({ instances: { "https://github.example.com": {} } });
+    await initOptions(document, storage, denied(), fakeInstanceIo());
+    const item = must(document.querySelector('[data-origin="https://github.example.com"]'));
+    must(item.querySelector<HTMLInputElement>("input[type=password]")).value = "ghp_x";
+    must(item.querySelector<HTMLButtonElement>("[data-save]")).click();
+    await flush();
+    expect((storage.data.instances as Record<string, { pat?: string }>)["https://github.example.com"]?.pat).toBe(
+      "ghp_x",
+    );
+  });
+
+  it("removes an instance: unregister, permission removal, storage cleanup", async () => {
+    document.body.innerHTML = OPTIONS_BODY;
+    const storage = fakeStorage({ instances: { "https://acme.ghe.com": { pat: "t" } } });
+    const io = fakeInstanceIo();
+    await initOptions(document, storage, denied(), io);
+    const item = must(document.querySelector('[data-origin="https://acme.ghe.com"]'));
+    must(item.querySelector<HTMLButtonElement>("[data-remove]")).click();
+    await flush();
+    expect(io.unregistered).toEqual(["https://acme.ghe.com"]);
+    // ghe.com carries the extra api-subdomain pattern granted at add time
+    expect(io.removed).toEqual([["https://acme.ghe.com/*", "https://api.acme.ghe.com/*"]]);
+    expect(storage.data.instances).toEqual({});
+    expect(document.querySelector('[data-origin="https://acme.ghe.com"]')).toBeNull();
   });
 });

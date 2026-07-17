@@ -201,6 +201,13 @@ function attachToggle(state: ViewState, page: DiffPage, entry: FileEntry): void 
           return render(root, res.json, { resolving: res.pending ? Math.max(countUnresolved(res.json), 1) : 0 });
         }
         requested = false; // don't cache errors: let the next toggle re-fetch
+        const view = views.get(viewKey);
+        if (view) {
+          // A failed retry must not wipe the diff the user is reading: keep the
+          // tree and re-offer the retry affordance instead of a bare error panel.
+          render(root, view.json, { incomplete: { onRetry: view.retry } });
+          return;
+        }
         if (res.error === "too-large") renderTooLarge(root, res.bytes, () => request(true));
         else if (res.error === "pat-missing" || res.error === "auth-failed") {
           authRetries.add(() => {

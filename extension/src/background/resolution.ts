@@ -131,8 +131,9 @@ export function createResolution<C extends SearchClient>(deps: ResolutionDeps<C>
     return { resolved, rateLimited };
   }
 
-  /** Thin wrapper that resolves guids unresolved by in-PR .meta in cache → Code Search order.
-   *  mergeSources calls it internally, so keep the signature and behavior unchanged. */
+  /** Thin wrapper that resolves guids unresolved by in-PR .meta in cache → Code Search
+   *  order, reporting whether a rate limit truncated the search (mergeSources folds the
+   *  flag into its own status). */
   async function searchUnresolved(
     json: DiffV2,
     client: C,

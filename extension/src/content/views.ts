@@ -24,7 +24,11 @@ export function createViewRegistry(): ViewRegistry {
     get: (key) => views.get(key),
     // Views killed by an SPA navigation: not only ignore late pushes to them, but also cut the reference
     pruneDisconnected() {
-      for (const [key, view] of views) if (!view.root.host.isConnected) views.delete(key);
+      for (const [key, view] of views) {
+        if (view.root.host.isConnected) continue;
+        clearTimeout(view.watchdog); // don't let an orphaned timer render into a detached root
+        views.delete(key);
+      }
     },
   };
 }

@@ -111,6 +111,8 @@ Full reference — every flag, exit code, and resolution rule: [docs/cli.md](doc
 
 Open `Window > PrefabLens`. The window lists every changed UnityYAML asset vs HEAD and shows the selected asset's semantic diff. The CLI binary is downloaded automatically from GitHub Releases.
 
+Details — configuration, the CLI download, troubleshooting: [docs/editor.md](docs/editor.md).
+
 ## Supported files
 
 Text-serialized Unity assets such as `.prefab`, `.unity`, `.asset`, `.mat`, `.anim`, and `.controller`. Excludes `.meta`, `.asmdef`, and other non-UnityYAML formats.

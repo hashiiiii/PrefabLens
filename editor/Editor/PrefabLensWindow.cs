@@ -114,6 +114,11 @@ namespace PrefabLens
                         + $"{loc.MissingOverride}. Falling back to the default location."
                 );
             }
+            else if (loc.MissingOverride == null)
+            {
+                // The override is gone or valid again: stop reporting it and re-arm the warning.
+                warnedOverride = null;
+            }
             var cli = loc.Path;
             if (cli == null)
             {

@@ -18,8 +18,8 @@ const DEMO = join(ROOT, "extension", "dist", "demo.js");
 const FIXTURES = join(SITE, "fixtures");
 const DIST = join(SITE, "dist");
 
-// Mirror of the UnityYAML extension gate in cli/src/unity_path.zig (and the
-// extension's detect.ts): only these paths get semantic views; anything else
+// Mirror of the UnityYAML extension gate in cli/src/unity_path.zig (and
+// extension/src/unity.ts): only these paths get semantic views; anything else
 // (e.g. .meta) would keep GitHub's plain diff in the mock.
 const UNITY_EXTENSIONS = [
   ".prefab", ".unity", ".asset", ".mat", ".anim", ".controller",

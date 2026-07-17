@@ -171,8 +171,11 @@ namespace PrefabLens
             {
                 bulk = BulkModel.Parse(res.Stdout);
             }
-            catch (Exception)
+            catch (Exception e)
             {
+                // The generic UI note stays short; the console carries the real reason
+                // (exception type + message) so a version mismatch is diagnosable.
+                Debug.LogException(e);
                 lastStdout = null;
                 status.text = "";
                 Note("Could not parse CLI output (CLI version mismatch?):");

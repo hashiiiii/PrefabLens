@@ -1,7 +1,14 @@
 import type { DiffV2 } from "../types";
 
 // json is mutated in place by the push listener (merge resolved / replace on the final push)
-export type ViewEntry = { root: ShadowRoot; json: DiffV2 };
+export type ViewEntry = {
+  root: ShadowRoot;
+  json: DiffV2;
+  /** Re-requests this file's semantic diff (incomplete-resolution affordance). */
+  retry(): void;
+  /** Timer that flips the view to the incomplete state if the final push never arrives. */
+  watchdog?: number;
+};
 
 export type ViewRegistry = {
   set(key: string, entry: ViewEntry): void;

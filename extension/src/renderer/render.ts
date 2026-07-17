@@ -13,7 +13,11 @@ export function detectTheme(doc: Document): "light" | "dark" {
   return doc.defaultView?.matchMedia?.("(prefers-color-scheme: dark)").matches ? "dark" : "light";
 }
 
-export function render(root: ShadowRoot, diff: DiffV2, opts?: { resolving?: number }): void {
+export function render(
+  root: ShadowRoot,
+  diff: DiffV2,
+  opts?: { resolving?: number; incomplete?: { onRetry(): void } },
+): void {
   const container = mount(root);
   // Resolving indicator: the diff body is correct from the start, only reference names fill in later
   if (opts?.resolving) {
@@ -22,6 +26,16 @@ export function render(root: ShadowRoot, diff: DiffV2, opts?: { resolving?: numb
     spin.className = "pl-spinner";
     busy.prepend(spin);
     container.append(busy);
+  } else if (opts?.incomplete) {
+    // Resolution gave up (rate limit or error): say so instead of pretending it finished (#194).
+    const bar = note("pl-resolving", "Some references were not resolved (GitHub rate limit or error).", ALERT);
+    const retry = document.createElement("button");
+    retry.type = "button";
+    retry.className = "pl-render";
+    retry.textContent = "Retry";
+    retry.addEventListener("click", opts.incomplete.onRetry);
+    bar.append(retry);
+    container.append(bar);
   }
   for (const node of diff.roots) container.append(renderNode(node, diff));
   const loose = diff.loose.map((c) => renderComponent(c, diff));

@@ -70,7 +70,16 @@ chrome.runtime.onMessage.addListener((msg: BackgroundRequest, sender, sendRespon
     const tabId = sender.tab?.id;
     // semanticDiff requests always originate in a tab content script; guard defensively so a non-tab sender no-ops.
     const push = (m: GuidResolvedPush) => {
-      if (tabId !== undefined) void chrome.tabs.sendMessage(tabId, m).catch(() => {});
+      if (tabId === undefined) return;
+      // The final push releases the content-side indicator: retry a dropped tab message
+      // (SPA navigation races, transient port loss) before giving up. Intermediate pushes
+      // stay fire-and-forget — losing one only delays names until the final push.
+      const attempt = (left: number): void => {
+        void chrome.tabs.sendMessage(tabId, m).catch(() => {
+          if (m.done && left > 0) setTimeout(() => attempt(left - 1), 1000);
+        });
+      };
+      attempt(2);
     };
     void handler.semanticDiff(msg, push).then(sendResponse);
     return true; // async response

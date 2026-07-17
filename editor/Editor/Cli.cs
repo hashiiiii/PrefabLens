@@ -88,10 +88,20 @@ namespace PrefabLens
 
         /// Run bulk mode off the main thread. The callback is posted back through the
         /// caller's SynchronizationContext (Unity's main thread when called from the window).
-        public static void RunBulkAsync(string cliPath, string baseRef, Action<Result> onDone) =>
-            RunAsync(cliPath, QuoteArgs(BuildBulkArgs(baseRef)), onDone, SynchronizationContext.Current);
+        public static void RunBulkAsync(
+            string cliPath,
+            string baseRef,
+            Action<Result> onDone,
+            CancellationToken ct = default
+        ) => RunAsync(cliPath, QuoteArgs(BuildBulkArgs(baseRef)), onDone, SynchronizationContext.Current, ct);
 
-        public static void RunAsync(string file, string arguments, Action<Result> onDone, SynchronizationContext ctx)
+        public static void RunAsync(
+            string file,
+            string arguments,
+            Action<Result> onDone,
+            SynchronizationContext ctx,
+            CancellationToken ct = default
+        )
         {
             var workDir = Directory.GetCurrentDirectory();
             Task.Run(() =>
@@ -99,7 +109,7 @@ namespace PrefabLens
                 Result res;
                 try
                 {
-                    res = RunProcess(file, arguments, workDir, RunTimeoutMs);
+                    res = RunProcess(file, arguments, workDir, RunTimeoutMs, ct);
                 }
                 catch (Exception e)
                 {
@@ -304,9 +314,16 @@ namespace PrefabLens
             public string Stdout;
             public string Stderr;
             public bool TimedOut;
+            public bool Canceled;
         }
 
-        public static Result RunProcess(string file, string arguments, string workDir, int timeoutMs)
+        public static Result RunProcess(
+            string file,
+            string arguments,
+            string workDir,
+            int timeoutMs,
+            CancellationToken ct = default
+        )
         {
             var psi = new ProcessStartInfo(file, arguments)
             {
@@ -317,6 +334,21 @@ namespace PrefabLens
                 WorkingDirectory = workDir,
             };
             using var p = Process.Start(psi);
+            // Cancellation kills the child like the timeout path does; WaitForExit then
+            // returns promptly and the ct check below reports the run as canceled.
+            using var reg = ct.Register(() =>
+            {
+                try
+                {
+                    p.Kill();
+                }
+                catch (InvalidOperationException)
+                { /* race between cancel and exit */
+                }
+                catch (System.ComponentModel.Win32Exception)
+                { /* already terminating */
+                }
+            });
             // Avoid a two-way ReadToEnd deadlock: read one side asynchronously
             var stdout = p.StandardOutput.ReadToEndAsync();
             var stderr = p.StandardError.ReadToEndAsync();
@@ -340,6 +372,17 @@ namespace PrefabLens
                     Stdout = "",
                     Stderr = $"prefablens timed out after {timeoutMs / 1000}s and was killed",
                     TimedOut = true,
+                };
+            }
+            if (ct.IsCancellationRequested)
+            {
+                // Same rationale as the timeout path: the child was killed, don't block on its pipes.
+                return new Result
+                {
+                    ExitCode = -1,
+                    Stdout = "",
+                    Stderr = "prefablens run canceled",
+                    Canceled = true,
                 };
             }
             return new Result

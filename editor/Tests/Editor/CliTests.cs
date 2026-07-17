@@ -392,5 +392,64 @@ namespace PrefabLens.Tests
             );
             StringAssert.Contains("no entry", e.Message);
         }
+
+        [Test]
+        public void RunProcessCancellationKillsTheChildQuickly()
+        {
+            // Closing the window cancels an in-flight run: the child must die immediately,
+            // not survive until the 90 s timeout safety net fires.
+            var isWindows = RuntimeInformation.IsOSPlatform(OSPlatform.Windows);
+            var file = isWindows ? "cmd.exe" : "/bin/sh";
+            var args = isWindows ? "/c ping -n 60 127.0.0.1 > NUL" : "-c \"sleep 60\"";
+            using var cts = new CancellationTokenSource();
+            cts.CancelAfter(300);
+            var sw = Stopwatch.StartNew();
+            var res = Cli.RunProcess(file, args, ".", timeoutMs: 60_000, ct: cts.Token);
+            sw.Stop();
+            Assert.IsTrue(res.Canceled, "expected the killed run to be reported as canceled");
+            Assert.AreNotEqual(0, res.ExitCode);
+            Assert.Less(sw.ElapsedMilliseconds, 30_000, "cancellation must not degrade into waiting out the timeout");
+        }
+
+        [Test]
+        public void RunProcessWithAnUncanceledTokenBehavesAsBefore()
+        {
+            // The token is additive: a live token must not disturb the normal exit path.
+            var isWindows = RuntimeInformation.IsOSPlatform(OSPlatform.Windows);
+            var file = isWindows ? "cmd.exe" : "/bin/sh";
+            var args = isWindows ? "/c echo hello" : "-c \"echo hello\"";
+            using var cts = new CancellationTokenSource();
+            var res = Cli.RunProcess(file, args, ".", timeoutMs: Cli.RunTimeoutMs, ct: cts.Token);
+            Assert.IsFalse(res.Canceled);
+            Assert.AreEqual(0, res.ExitCode);
+            StringAssert.Contains("hello", res.Stdout);
+        }
+
+        [Test]
+        public void RunAsyncCancellationPostsACanceledResult()
+        {
+            // OnDisable cancels the window CTS; the posted Result must say Canceled so
+            // OnBulkDone can skip touching the (closing) UI instead of rendering into it.
+            var isWindows = RuntimeInformation.IsOSPlatform(OSPlatform.Windows);
+            var file = isWindows ? "cmd.exe" : "/bin/sh";
+            var args = isWindows ? "/c ping -n 60 127.0.0.1 > NUL" : "-c \"sleep 60\"";
+            using var cts = new CancellationTokenSource();
+            Cli.Result? got = null;
+            using var done = new ManualResetEventSlim();
+            Cli.RunAsync(
+                file,
+                args,
+                r =>
+                {
+                    got = r;
+                    done.Set();
+                },
+                ctx: null,
+                ct: cts.Token
+            );
+            cts.CancelAfter(300);
+            Assert.IsTrue(done.Wait(30_000), "callback never fired");
+            Assert.IsTrue(got.Value.Canceled);
+        }
     }
 }

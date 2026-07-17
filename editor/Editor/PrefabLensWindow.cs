@@ -22,6 +22,8 @@ namespace PrefabLens
         bool downloadAttempted;
         string downloadError;
         CancellationTokenSource downloadCts;
+        bool pendingRefresh;
+        CancellationTokenSource runCts;
 
         [MenuItem("Window/PrefabLens")]
         public static void Open() => GetWindow<PrefabLensWindow>("PrefabLens");
@@ -79,6 +81,8 @@ namespace PrefabLens
             content = new VisualElement { style = { flexGrow = 1 } };
             split.Add(content);
             rootVisualElement.Add(split);
+            // Window-lifetime token for CLI runs; domain reload re-enters CreateGUI with a fresh one.
+            runCts = new CancellationTokenSource();
             Refresh();
         }
 
@@ -91,8 +95,15 @@ namespace PrefabLens
 
         void Refresh()
         {
-            if (content == null || refreshing)
+            if (content == null)
                 return;
+            if (refreshing)
+            {
+                // A base-ref edit landed mid-run: run again when the in-flight run returns,
+                // instead of silently dropping the edit.
+                pendingRefresh = true;
+                return;
+            }
             var cli = Cli.Find();
             if (cli == null)
             {
@@ -107,19 +118,34 @@ namespace PrefabLens
             }
             refreshing = true;
             status.text = "Refreshing…";
-            Cli.RunBulkAsync(cli, baseRef.value, OnBulkDone);
+            // Capture the ref this run compares against: the field can change before it completes,
+            // and the completion callback must label the data with the ref it was produced from.
+            var runRef = baseRef.value;
+            Cli.RunBulkAsync(cli, runRef, res => OnBulkDone(res, runRef), runCts.Token);
         }
 
-        void OnBulkDone(Cli.Result res)
+        void OnBulkDone(Cli.Result res, string runRef)
         {
             refreshing = false;
-            if (content == null)
-                return; // unreachable given Refresh's own guard; kept as cheap defense
+            if (content == null || res.Canceled)
+                return; // window gone or closing: leave the UI alone
+            ShowBulkResult(res, runRef);
+            if (pendingRefresh)
+            {
+                // The base ref changed mid-run: the result above is already labeled with its own
+                // ref; now run again with the current field value.
+                pendingRefresh = false;
+                Refresh();
+            }
+        }
+
+        void ShowBulkResult(Cli.Result res, string runRef)
+        {
             // Unchanged output — the common focus-triggered refresh. Leave the whole UI
             // alone so the user's tree fold state survives; only restore the status line.
             if (res.ExitCode == 0 && res.Stdout == lastStdout)
             {
-                status.text = CountText();
+                status.text = CountText(runRef);
                 return;
             }
             content.Clear();
@@ -146,7 +172,7 @@ namespace PrefabLens
             lastStdout = res.Stdout;
             list.itemsSource = bulk.Entries;
             list.RefreshItems();
-            status.text = CountText();
+            status.text = CountText(runRef);
 
             if (bulk.Entries.Count == 0)
                 return;
@@ -159,12 +185,14 @@ namespace PrefabLens
             ShowEntry(bulk.Entries[idx]);
         }
 
-        string CountText() =>
-            bulk.Entries.Count == 0 ? $"No changes vs {BaseLabel()}" : $"{bulk.Entries.Count} changed vs {BaseLabel()}";
+        string CountText(string runRef) =>
+            bulk.Entries.Count == 0
+                ? $"No changes vs {BaseLabel(runRef)}"
+                : $"{bulk.Entries.Count} changed vs {BaseLabel(runRef)}";
 
-        string BaseLabel()
+        static string BaseLabel(string runRef)
         {
-            var r = baseRef.value?.Trim();
+            var r = runRef?.Trim();
             return string.IsNullOrEmpty(r) ? "HEAD" : r;
         }
 
@@ -278,8 +306,13 @@ namespace PrefabLens
             Refresh();
         }
 
-        /// Unity calls this when the window closes (and on domain reload): stop an in-flight download.
-        void OnDisable() => downloadCts?.Cancel();
+        /// Unity calls this when the window closes (and on domain reload): stop an
+        /// in-flight download and kill an in-flight CLI run (no 90 s orphan).
+        void OnDisable()
+        {
+            downloadCts?.Cancel();
+            runCts?.Cancel();
+        }
 
         void Note(string text)
         {

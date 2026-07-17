@@ -22,6 +22,15 @@ comment and is converted to draft until the issue-first flow catches up.
 For security vulnerabilities, do **not** open a public issue — follow
 [SECURITY.md](SECURITY.md) instead.
 
+## Releases and changelog
+
+There is no curated `CHANGELOG.md`, by decision. The release history lives in
+[GitHub Releases](https://github.com/hashiiiii/PrefabLens/releases): notes are
+generated from the squash-merged pull requests since the previous tag, and PR
+titles follow the `type: subject` convention, so the generated notes are already
+grouped and readable. When writing a PR title, remember it becomes a release
+note line verbatim.
+
 ## License
 
 By contributing, you agree that your contributions are licensed under the

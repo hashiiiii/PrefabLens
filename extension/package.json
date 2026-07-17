@@ -8,7 +8,7 @@
     "build": "node build.mjs",
     "demo": "node build.mjs --demo",
     "typecheck": "tsc --noEmit",
-    "lint": "biome ci .",
+    "lint": "biome ci --reporter=default .",
     "fmt": "biome check --write .",
     "pretest": "zig build wasm",
     "test": "vitest run",

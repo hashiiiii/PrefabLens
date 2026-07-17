@@ -1,3 +1,5 @@
+import type { HostApi } from "./hosts";
+
 export class AuthError extends Error {}
 export class RateLimitError extends Error {
   /** Backoff advice from response headers; undefined when GitHub gave none. */
@@ -37,17 +39,10 @@ const toChangedFile = (f: DiffEntry): ChangedFile => ({
   sha: f.sha,
 });
 
-// The REST base is fixed at build time (see build.mjs's esbuild define).
-export const API_BASE = __API_BASE__;
-
-/** Derives the GraphQL endpoint from the REST base. */
-export function graphqlUrl(restBase: string): string {
-  return `${restBase}/graphql`;
-}
-
 export class GithubClient {
   constructor(
-    private readonly base: string,
+    // REST base, GraphQL URL, and version-header policy resolved per instance (see hosts.ts).
+    private readonly api: HostApi,
     private readonly token: string,
     // Defaulting to bare `fetch` makes `this` in `this.fetchFn(...)` the instance,
     // which fails with Illegal invocation on Chrome (Node's fetch ignores this).
@@ -73,13 +68,9 @@ export class GithubClient {
   }
 
   private async request(path: string, accept: string): Promise<Response> {
-    return this.rawRequest(`${this.base}${path}`, {
-      headers: {
-        accept,
-        authorization: `Bearer ${this.token}`,
-        "x-github-api-version": "2022-11-28",
-      },
-    });
+    const headers: Record<string, string> = { accept, authorization: `Bearer ${this.token}` };
+    if (this.api.versioned) headers["x-github-api-version"] = "2022-11-28";
+    return this.rawRequest(`${this.api.restBase}${path}`, { headers });
   }
 
   private async json<T>(path: string): Promise<T> {
@@ -236,7 +227,7 @@ export class GithubClient {
       .map((oid, i) => `b${i}: object(oid: ${JSON.stringify(oid)}) { ... on Blob { text } }`)
       .join("\n");
     const query = `query { repository(owner: ${JSON.stringify(owner)}, name: ${JSON.stringify(repo)}) {\n${aliases}\n} }`;
-    const res = await this.rawRequest(graphqlUrl(this.base), {
+    const res = await this.rawRequest(this.api.graphqlUrl, {
       method: "POST",
       headers: {
         accept: "application/json",

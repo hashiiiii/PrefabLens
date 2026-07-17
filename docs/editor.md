@@ -37,8 +37,9 @@ Open **Window > PrefabLens**.
   on Enter or focus loss, and each committed edit triggers exactly one CLI run —
   edits made while a run is in flight are queued and re-run automatically once
   the in-flight run returns.
-- The status line always names the ref the displayed data was produced from
-  (for example `3 changed vs HEAD`).
+- After a refresh completes, the status line names the ref the displayed data was
+  produced from (for example `3 changed vs HEAD`) — even if the Base field has
+  already been edited again. While a run is in flight it shows `Refreshing…`.
 - The window refreshes when it gains focus and via the **Refresh** button.
 - Reference fields resolve guids through the local `AssetDatabase`, so script
   and prefab references display as project paths.
@@ -108,9 +109,9 @@ override re-arms it, so a later broken path is reported too.
 |---|---|
 | `Download failed: …` in the window | Network/proxy blocked GitHub Releases, or the SHA-256 check failed. Retry, or download the zip manually from Releases and point the CLI path override at the extracted binary. |
 | A one-line error from the CLI, or `prefablens exited with N` when the CLI printed nothing | The CLI's own error (stderr) — most commonly the project is not inside a git repository, or git timed out. See [docs/cli.md](cli.md) for the CLI's error contract. |
-| `Could not parse CLI output (CLI version mismatch?)` | The binary at the override path is too old/new for this package. The Unity console carries the exact parse exception. Clear the override or update the binary. |
+| `Could not parse CLI output (CLI version mismatch?):` | The binary at the override path is too old/new for this package. The Unity console carries the exact parse exception. Clear the override or update the binary. |
 | `prefablens timed out after 90s and was killed` | A hung git or an enormous working tree. Check `git status` performance in that repository. |
-| Everything shows as changed / nothing parses | The project is serializing assets as binary. Switch to Force Text. |
+| Edited assets never appear in the changed list | The project is serializing assets as binary; bulk mode content-sniffs candidates and silently skips non-text files (see [docs/cli.md](cli.md)). Switch Edit > Project Settings > Editor > Asset Serialization to Force Text. |
 
 ## How the window invokes the CLI
 

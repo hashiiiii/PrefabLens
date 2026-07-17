@@ -21,7 +21,16 @@ namespace UnityEditor
 
     public static class EditorPrefs
     {
-        public static string GetString(string key, string defaultValue) => defaultValue;
+        // In-memory store: PathOverride round-trips are real behavior under the
+        // DotNet harness (real Unity persists to the registry/plist instead).
+        static readonly System.Collections.Generic.Dictionary<string, string> strings = new();
+
+        public static string GetString(string key, string defaultValue) =>
+            strings.TryGetValue(key, out var v) ? v : defaultValue;
+
+        public static void SetString(string key, string value) => strings[key] = value;
+
+        public static void DeleteKey(string key) => strings.Remove(key);
     }
 
     public static class EditorUtility

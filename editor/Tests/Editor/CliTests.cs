@@ -555,5 +555,49 @@ namespace PrefabLens.Tests
             var e = Assert.Throws<InvalidOperationException>(() => Cli.MarkExecutable(missing));
             StringAssert.Contains(missing, e.Message);
         }
+
+        [Test]
+        public void PathOverrideRoundTripsAndUnsetsThroughEditorPrefs()
+        {
+            // Save/restore: under real Unity EditMode this touches the developer's
+            // actual EditorPrefs, so the original value must survive the test.
+            var original = Cli.PathOverride;
+            try
+            {
+                Cli.PathOverride = "/tmp/custom-prefablens";
+                Assert.AreEqual("/tmp/custom-prefablens", Cli.PathOverride);
+                // Clearing must remove the key entirely, not store an empty string:
+                // Locate() treats "" as unset either way, but a deleted key keeps
+                // the Preferences page's "unset" state honest.
+                Cli.PathOverride = "";
+                Assert.AreEqual("", Cli.PathOverride);
+                Cli.PathOverride = null;
+                Assert.AreEqual("", Cli.PathOverride);
+            }
+            finally
+            {
+                Cli.PathOverride = original;
+            }
+        }
+
+        [Test]
+        public void LocateReadsThePathOverride()
+        {
+            var original = Cli.PathOverride;
+            var dir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+            Directory.CreateDirectory(dir);
+            var manual = Path.Combine(dir, "prefablens");
+            File.WriteAllText(manual, "bin");
+            try
+            {
+                Cli.PathOverride = manual;
+                Assert.AreEqual(manual, Cli.Locate().Path);
+            }
+            finally
+            {
+                Cli.PathOverride = original;
+                Directory.Delete(dir, recursive: true);
+            }
+        }
     }
 }

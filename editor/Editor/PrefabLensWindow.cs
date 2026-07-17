@@ -18,13 +18,10 @@ namespace PrefabLens
         BulkModel bulk = new();
         string selectedPath;
         string lastStdout;
-        bool refreshing;
-        bool downloadAttempted;
         string downloadError;
         CancellationTokenSource downloadCts;
-        bool pendingRefresh;
         CancellationTokenSource runCts;
-        string warnedOverride; // last missing-override path already logged (no console spam on every focus)
+        readonly RefreshGate gate = new RefreshGate();
 
         [MenuItem("Window/PrefabLens")]
         public static void Open() => GetWindow<PrefabLensWindow>("PrefabLens");
@@ -98,60 +95,41 @@ namespace PrefabLens
         {
             if (content == null)
                 return;
-            if (refreshing)
-            {
-                // A base-ref edit landed mid-run: run again when the in-flight run returns,
-                // instead of silently dropping the edit.
-                pendingRefresh = true;
-                return;
-            }
             var loc = Cli.Locate();
-            if (loc.MissingOverride != null && loc.MissingOverride != warnedOverride)
-            {
-                warnedOverride = loc.MissingOverride;
+            var d = gate.OnRefresh(loc);
+            if (d.Warn != null)
                 Debug.LogWarning(
                     $"PrefabLens: EditorPrefs '{Cli.CliPathPref}' points at a missing file: "
-                        + $"{loc.MissingOverride}. Falling back to the default location."
+                        + $"{d.Warn}. Falling back to the default location."
                 );
-            }
-            else if (loc.MissingOverride == null)
+            switch (d.Step)
             {
-                // The override is gone or valid again: stop reporting it and re-arm the warning.
-                warnedOverride = null;
-            }
-            var cli = loc.Path;
-            if (cli == null)
-            {
-                // Fetch the pinned binary automatically, once per session; after a
-                // failure, fall back to the manual screen instead of re-downloading
-                // on every focus.
-                if (downloadAttempted)
-                    ShowMissingCli();
-                else
+                case RefreshGate.Step.Run:
+                    status.text = "Refreshing…";
+                    // Capture the ref this run compares against: the field can change before
+                    // it completes, and the callback must label the data with its own ref.
+                    var runRef = baseRef.value;
+                    Cli.RunBulkAsync(loc.Path, runRef, res => OnBulkDone(res, runRef), runCts.Token);
+                    break;
+                case RefreshGate.Step.StartDownload:
                     StartDownload();
-                return;
+                    break;
+                case RefreshGate.Step.ShowMissingCli:
+                    ShowMissingCli();
+                    break;
             }
-            refreshing = true;
-            status.text = "Refreshing…";
-            // Capture the ref this run compares against: the field can change before it completes,
-            // and the completion callback must label the data with the ref it was produced from.
-            var runRef = baseRef.value;
-            Cli.RunBulkAsync(cli, runRef, res => OnBulkDone(res, runRef), runCts.Token);
         }
 
         void OnBulkDone(Cli.Result res, string runRef)
         {
-            refreshing = false;
+            // Runs even when content is already null: harmless, content is never nulled
+            // after CreateGUI, and a close-time completion arrives Canceled (queue kept).
+            var rerun = gate.OnRunDone(res.Canceled);
             if (content == null || res.Canceled)
                 return; // window gone or closing: leave the UI alone
             ShowBulkResult(res, runRef);
-            if (pendingRefresh)
-            {
-                // The base ref changed mid-run: the result above is already labeled with its own
-                // ref; now run again with the current field value.
-                pendingRefresh = false;
-                Refresh();
-            }
+            if (rerun)
+                Refresh(); // the base ref changed mid-run: run again with the current field
         }
 
         void ShowBulkResult(Cli.Result res, string runRef)
@@ -246,18 +224,25 @@ namespace PrefabLens
                 content.Add(BuildTree(entry.Diff));
         }
 
-        void ShowMissingCli()
+        /// Clears the list pane and status; the missing-CLI screen and the download
+        /// start share this exact reset.
+        void ResetList()
         {
             bulk = new BulkModel();
             list.itemsSource = bulk.Entries;
             list.RefreshItems();
             lastStdout = null;
             status.text = "";
+        }
+
+        void ShowMissingCli()
+        {
+            ResetList();
             content.Clear();
             if (downloadError != null)
                 Note($"Download failed: {downloadError}");
-            if (warnedOverride != null)
-                Note($"Override '{Cli.CliPathPref}' points at a missing file: {warnedOverride}");
+            if (gate.MissingOverride != null)
+                Note($"Override '{Cli.CliPathPref}' points at a missing file: {gate.MissingOverride}");
             Note($"prefablens CLI not found (v{Cli.Version}).");
             content.Add(
                 new Button(StartDownload)
@@ -272,13 +257,9 @@ namespace PrefabLens
         /// Shared by the automatic trigger in Refresh and the manual retry button.
         void StartDownload()
         {
-            downloadAttempted = true;
-            refreshing = true; // keeps focus-triggered Refresh calls out while the download runs
-            bulk = new BulkModel();
-            list.itemsSource = bulk.Entries;
-            list.RefreshItems();
-            lastStdout = null;
-            status.text = $"Downloading prefablens v{Cli.Version}…";
+            gate.OnDownloadStart();
+            ResetList();
+            status.text = DownloadingText;
             content.Clear();
             downloadCts = new CancellationTokenSource();
             content.Add(
@@ -293,21 +274,22 @@ namespace PrefabLens
             Cli.DownloadAsync(OnDownloadDone, OnDownloadProgress, downloadCts.Token);
         }
 
+        /// Built once: the progress line appends to this exact prefix.
+        static readonly string DownloadingText = $"Downloading prefablens v{Cli.Version}…";
+
         void OnDownloadProgress(long read, long total)
         {
             if (content == null)
                 return;
             status.text =
-                total > 0
-                    ? $"Downloading prefablens v{Cli.Version}… {read * 100 / total}%"
-                    : $"Downloading prefablens v{Cli.Version}… {read / 1024} KB";
+                total > 0 ? $"{DownloadingText} {read * 100 / total}%" : $"{DownloadingText} {read / 1024} KB";
         }
 
         /// The success path re-resolves through Cli.Locate instead of using the returned
         /// path, so the manual EditorPrefs override keeps precedence.
         void OnDownloadDone(string path, string error)
         {
-            refreshing = false;
+            gate.OnDownloadDone();
             // A user-initiated cancel is not a failure: show the plain missing-CLI screen
             // with its retry button instead of "Download failed: …".
             var canceled = downloadCts != null && downloadCts.IsCancellationRequested;

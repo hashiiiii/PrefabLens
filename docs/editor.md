@@ -50,7 +50,7 @@ The window runs the `prefablens` CLI as a child process. On first use it
 downloads the pinned version automatically from GitHub Releases:
 
 - Download target: `Library/PrefabLens/<version>/prefablens` (`.exe` on
-  Windows), relative to the project root. `Library/` is not version-controlled,
+  Windows), relative to the project root. `Library/` is not meant to be version-controlled,
   so the binary never enters your repository.
 - Integrity: the release's `SHA256SUMS` is fetched first and the zip is verified
   against it before extraction. A mismatch aborts the install.

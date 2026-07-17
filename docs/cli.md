@@ -4,7 +4,7 @@
 component / field level changes instead of raw YAML lines. It reads either a git
 repository (comparing refs and the working tree) or two files directly.
 
-Quick-start examples live in the [README](../README.md#cli-2); this page is the full
+Quick-start examples live in the [README](../README.md#usage); this page is the full
 reference.
 
 ## Synopsis
@@ -17,8 +17,9 @@ prefablens [flags] <before> <after>
 ## Operands and argument resolution
 
 An operand ending in a Unity YAML extension (case-insensitive) is a **path**;
-anything else is a **git ref**. There are no positional rules beyond that — flags,
-refs, and paths may appear in any order.
+anything else is a **git ref**. Flags may appear anywhere among the operands. Among
+operands of the same kind, order is significant: the first ref (or path) is the
+before side and the second is the after side.
 
 | Operands | Meaning |
 |---|---|
@@ -26,8 +27,8 @@ refs, and paths may appear in any order.
 | `<path>` | HEAD vs working tree, one file |
 | `<ref>` | ref vs working tree, all changed Unity files |
 | `<ref> <path>` | ref vs working tree, one file |
-| `<ref> <ref>` | ref vs ref, all changed Unity files |
-| `<ref> <ref> <path>` | ref vs ref, one file |
+| `<ref> <ref>` | first ref (before) vs second ref (after), all changed Unity files |
+| `<ref> <ref> <path>` | first ref (before) vs second ref (after), one file |
 | `<before> <after>` (two paths) | plain two-file compare, no git involved |
 
 More than two refs, more than two paths, or mixing two paths with a ref is an
@@ -96,7 +97,7 @@ in `unresolvedGuids` in JSON.
 
 | Code | Meaning |
 |---|---|
-| 0 | Success — including bulk mode finding nothing to diff (prints `no Unity YAML changes`). |
+| 0 | Success — including bulk mode finding nothing to diff (prints `no Unity YAML changes`, or `[]` with `--json`). |
 | 1 | Runtime error: git failed or timed out, a file could not be read, the `--project` directory could not be read, input nested too deeply, or the `--open` report could not be written. One-line `error: …` message on stderr. |
 | 2 | Usage error: unknown flag, too many arguments, conflicting flags, or a missing operand after `--project`. Usage/hint on stderr. |
 

@@ -122,6 +122,8 @@ namespace PrefabLens
 
         void OnBulkDone(Cli.Result res, string runRef)
         {
+            // Runs even when content is already null: harmless, content is never nulled
+            // after CreateGUI, and a close-time completion arrives Canceled (queue kept).
             var rerun = gate.OnRunDone(res.Canceled);
             if (content == null || res.Canceled)
                 return; // window gone or closing: leave the UI alone
@@ -273,7 +275,7 @@ namespace PrefabLens
         }
 
         /// Built once: the progress line appends to this exact prefix.
-        static string DownloadingText => $"Downloading prefablens v{Cli.Version}…";
+        static readonly string DownloadingText = $"Downloading prefablens v{Cli.Version}…";
 
         void OnDownloadProgress(long read, long total)
         {

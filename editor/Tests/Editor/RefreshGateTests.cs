@@ -48,6 +48,10 @@ namespace PrefabLens.Tests
             gate.OnDownloadDone();
             // After a failed download the missing screen shows instead of re-downloading.
             Assert.AreEqual(RefreshGate.Step.ShowMissingCli, gate.OnRefresh(NotFound()).Step);
+            // The refresh queued mid-download survives OnDownloadDone and rides the next
+            // run's completion — the accepted one-redundant-refresh behavior from #195.
+            Assert.AreEqual(RefreshGate.Step.Run, gate.OnRefresh(Found("bin/prefablens")).Step);
+            Assert.IsTrue(gate.OnRunDone(canceled: false));
         }
 
         [Test]

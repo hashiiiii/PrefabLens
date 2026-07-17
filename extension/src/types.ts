@@ -106,6 +106,10 @@ export type SemanticDiffResponse =
   | { ok: false; error: BackgroundError }
   | { ok: false; error: "too-large"; bytes: number };
 
+// Outcome of the background resolution pipeline. Anything but "complete" means the run
+// gave up early (rate limit or error) and a manual retry may resolve more references.
+export type ResolutionStatus = "complete" | "rateLimited" | "failed";
+
 // Async push from background → content (the second stage of the two-stage response).
 export type GuidResolvedPush = {
   type: "guidResolved";
@@ -116,4 +120,5 @@ export type GuidResolvedPush = {
   resolved: Record<string, string>;
   json?: DiffV2; // carried on the final push when mergeSources updated the structure (content replaces the view)
   done: boolean; // when true, resolution is finished (sent even with empty resolved = the cue to turn off the indicator)
+  status?: ResolutionStatus; // rides on every done push: the content script keeps the indicator up unless "complete"
 };

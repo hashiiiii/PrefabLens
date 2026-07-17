@@ -92,8 +92,8 @@ describe("searchGuids", () => {
       cached: { g1: "Assets/Cached.cs" },
       search: { g2: "Assets/Found.cs" },
     });
-    const resolved = await resolution.searchGuids(["g1", "g2"], client, "o", "r", REPO_KEY);
-    expect(resolved).toEqual({ g1: "Assets/Cached.cs", g2: "Assets/Found.cs" });
+    const result = await resolution.searchGuids(["g1", "g2"], client, "o", "r", REPO_KEY);
+    expect(result).toEqual({ resolved: { g1: "Assets/Cached.cs", g2: "Assets/Found.cs" }, rateLimited: false });
     expect(client.searchMetaByGuid).toHaveBeenCalledTimes(1);
     expect(client.searchMetaByGuid).toHaveBeenCalledWith("o", "r", "g2");
     expect(guidCache.save).toHaveBeenCalledWith(REPO_KEY, { g2: "Assets/Found.cs" });
@@ -109,18 +109,20 @@ describe("searchGuids", () => {
   it("does not re-search misses but still emits their cached names later", async () => {
     // misses gates the search, not the name: an index resolution can land in guidCache afterwards.
     const { resolution, client, guidCache } = makeResolution(); // search misses
-    expect(await resolution.searchGuids(["g1"], client, "o", "r", REPO_KEY)).toEqual({});
+    expect((await resolution.searchGuids(["g1"], client, "o", "r", REPO_KEY)).resolved).toEqual({});
     guidCache.data[REPO_KEY] = { g1: "Assets/Later.cs" }; // as if the repo index wrote it later
-    expect(await resolution.searchGuids(["g1"], client, "o", "r", REPO_KEY)).toEqual({ g1: "Assets/Later.cs" });
+    expect((await resolution.searchGuids(["g1"], client, "o", "r", REPO_KEY)).resolved).toEqual({
+      g1: "Assets/Later.cs",
+    });
     expect(client.searchMetaByGuid).toHaveBeenCalledTimes(1);
   });
 
-  it("returns partial results when the rate limit interrupts the search loop", async () => {
+  it("returns partial results and reports the rate limit that interrupted the search loop", async () => {
     const { resolution, client } = makeResolution();
     client.searchMetaByGuid.mockResolvedValueOnce("Assets/First.cs").mockRejectedValueOnce(new RateLimitError("x"));
-    const resolved = await resolution.searchGuids(["g1", "g2", "g3"], client, "o", "r", REPO_KEY);
+    const result = await resolution.searchGuids(["g1", "g2", "g3"], client, "o", "r", REPO_KEY);
     // g1 survives, g2 aborts the loop, g3 is never attempted (the budget is already gone).
-    expect(resolved).toEqual({ g1: "Assets/First.cs" });
+    expect(result).toEqual({ resolved: { g1: "Assets/First.cs" }, rateLimited: true });
     expect(client.searchMetaByGuid).toHaveBeenCalledTimes(2);
   });
 
@@ -139,15 +141,18 @@ describe("searchGuids", () => {
     ];
     await vi.waitFor(() => expect(client.searchMetaByGuid).toHaveBeenCalled());
     release("Assets/S.cs");
-    expect(await Promise.all([a, b])).toEqual([{ g1: "Assets/S.cs" }, { g1: "Assets/S.cs" }]);
+    expect(await Promise.all([a, b])).toEqual([
+      { resolved: { g1: "Assets/S.cs" }, rateLimited: false },
+      { resolved: { g1: "Assets/S.cs" }, rateLimited: false },
+    ]);
     expect(client.searchMetaByGuid).toHaveBeenCalledTimes(1);
   });
 
   it("does not treat Object.prototype members as cache hits (hostile guid)", async () => {
     const { resolution, client } = makeResolution({ cached: { g9: "Assets/X.cs" } });
-    const resolved = await resolution.searchGuids(["constructor"], client, "o", "r", REPO_KEY);
+    const result = await resolution.searchGuids(["constructor"], client, "o", "r", REPO_KEY);
     expect(client.searchMetaByGuid).toHaveBeenCalledWith("o", "r", "constructor");
-    expect(resolved).toEqual({});
+    expect(result.resolved).toEqual({});
   });
 });
 
@@ -205,7 +210,8 @@ describe("mergeSources", () => {
     expect(fetchBlob).toHaveBeenCalledWith(client, "o", "r", "Assets/Cyl.prefab", "head-sha", undefined);
     const assets = must(diffWithAssets.mock.calls[0]?.[2]);
     expect(new TextDecoder().decode(must(assets.get("src1")))).toBe("SRC");
-    expect(result).toMatchObject({ unresolvedGuids: [] });
+    expect(result.json).toMatchObject({ unresolvedGuids: [] });
+    expect(result.status).toBe("complete");
   });
 
   it("fetches a before-side source at base, riding the base-tree blob sha", async () => {
@@ -228,7 +234,7 @@ describe("mergeSources", () => {
     const unresolved: DiffV2 = { ...NEEDS, resolved: {} };
     const result = await resolution.mergeSources(unresolved, differ, ...BYTES, CTX, client, "o", "r", REPO_KEY);
     expect(diffWithAssets).not.toHaveBeenCalled();
-    expect(result).toEqual(unresolved);
+    expect(result).toEqual({ json: unresolved, status: "complete" });
   });
 
   it("skips binary-serialized sources without counting them as progress", async () => {
@@ -242,16 +248,25 @@ describe("mergeSources", () => {
     const result = await resolution.mergeSources(NEEDS, differ, ...BYTES, CTX, client, "o", "r", REPO_KEY);
     // Merging a binary source would be a no-op re-diff: give up and keep the first pass.
     expect(diffWithAssets).not.toHaveBeenCalled();
-    expect(result).toEqual(NEEDS);
+    expect(result).toEqual({ json: NEEDS, status: "complete" });
   });
 
-  it("degrades to the current diff when the source fetch fails", async () => {
+  it("degrades to the current diff and reports rateLimited when the source fetch hits the limit", async () => {
     const diffWithAssets = vi.fn<Differ["diffWithAssets"]>(() => MERGED);
     const { resolution, client, fetchBlob } = makeResolution({ diffWithAssets });
     fetchBlob.mockRejectedValue(new RateLimitError("x"));
     const differ = { diff: vi.fn(() => DIFF), diffWithAssets, isUnityYaml: () => true };
     const result = await resolution.mergeSources(NEEDS, differ, ...BYTES, CTX, client, "o", "r", REPO_KEY);
-    expect(result).toEqual(NEEDS);
+    expect(result).toEqual({ json: NEEDS, status: "rateLimited" });
+  });
+
+  it("degrades to the current diff and reports failed on a non-rate-limit fetch error", async () => {
+    const diffWithAssets = vi.fn<Differ["diffWithAssets"]>(() => MERGED);
+    const { resolution, client, fetchBlob } = makeResolution({ diffWithAssets });
+    fetchBlob.mockRejectedValue(new Error("socket"));
+    const differ = { diff: vi.fn(() => DIFF), diffWithAssets, isUnityYaml: () => true };
+    const result = await resolution.mergeSources(NEEDS, differ, ...BYTES, CTX, client, "o", "r", REPO_KEY);
+    expect(result).toEqual({ json: NEEDS, status: "failed" });
   });
 
   it("caps source re-diff rounds at 3 even while progressing", async () => {
@@ -280,7 +295,7 @@ describe("mergeSources", () => {
     };
     const result = await resolution.mergeSources(first, differ, ...BYTES, CTX, client, "o", "r", REPO_KEY);
     expect(diffWithAssets).toHaveBeenCalledTimes(3);
-    expect(result.neededSources).toEqual([{ guid: "s3", side: "after" }]); // degraded at the cap
+    expect(result.json.neededSources).toEqual([{ guid: "s3", side: "after" }]); // degraded at the cap
   });
 });
 
@@ -309,7 +324,7 @@ describe("resolveRemaining", () => {
     const pushes = await run(resolution, client, first, ["g1", "g2"]);
     // Index names arrive in an intermediate push; the final push carries the full json.
     expect(pushes[0]).toMatchObject({ resolved: { g1: "Assets/S.cs" }, done: false });
-    expect(must(pushes.at(-1))).toMatchObject({ done: true });
+    expect(must(pushes.at(-1))).toMatchObject({ done: true, status: "complete" });
     expect(must(pushes.at(-1)).json?.resolved).toEqual({ g1: "Assets/S.cs", g2: "Assets/Other.cs" });
     expect(client.searchMetaByGuid).toHaveBeenCalledTimes(1);
     expect(client.searchMetaByGuid).toHaveBeenCalledWith("o", "r", "g2");
@@ -335,17 +350,36 @@ describe("resolveRemaining", () => {
     const pushes = await run(resolution, client, first, []);
     expect(client.listMetaTree).not.toHaveBeenCalled();
     expect(diffWithAssets).toHaveBeenCalledTimes(1);
+    expect(must(pushes.at(-1))).toMatchObject({ done: true, status: "complete" });
     expect(must(pushes.at(-1)).json).toMatchObject({ unresolvedGuids: [] });
   });
 
-  it("still emits the done push when the pipeline fails", async () => {
+  it("marks the final push rateLimited when Code Search hits the limit", async () => {
+    // Rate-limited runs must be distinguishable from completed ones (issue #194).
+    const { resolution, client } = makeResolution();
+    client.searchMetaByGuid.mockRejectedValue(new RateLimitError("x"));
+    const first: DiffV2 = { ...DIFF, unresolvedGuids: ["g1"] };
+    const pushes = await run(resolution, client, first, ["g1"]);
+    expect(must(pushes.at(-1))).toMatchObject({ done: true, status: "rateLimited" });
+  });
+
+  it("still emits the done push, marked failed, when the pipeline crashes", async () => {
     // Waiters key off done: a crash that swallowed it would leave the indicator spinning forever.
     const { resolution, client, fetchPair } = makeResolution();
     fetchPair.mockRejectedValue(new Error("socket"));
     const first: DiffV2 = { ...DIFF, unresolvedGuids: [], neededSources: [{ guid: "src1", side: "after" }] };
     const pushes = await run(resolution, client, first, []);
     expect(pushes).toEqual([
-      { type: "guidResolved", owner: "o", repo: "r", target: REQ.target, path: REQ.path, resolved: {}, done: true },
+      {
+        type: "guidResolved",
+        owner: "o",
+        repo: "r",
+        target: REQ.target,
+        path: REQ.path,
+        resolved: {},
+        done: true,
+        status: "failed",
+      },
     ]);
   });
 });

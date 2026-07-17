@@ -218,9 +218,7 @@ namespace PrefabLens
             }
             VerifySha256(bytes, sums, asset);
             ExtractTo(bytes, dir);
-
-            if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
-                RunProcess("chmod", "+x \"" + DefaultPath + "\"", ".", RunTimeoutMs);
+            MarkExecutable(DefaultPath);
             DeleteStaleVersions(Path.GetDirectoryName(dir), Version);
             return DefaultPath;
         }
@@ -309,6 +307,21 @@ namespace PrefabLens
                 using var dst = File.Create(dest);
                 src.CopyTo(dst);
             }
+        }
+
+        /// Make the extracted binary executable (no-op on Windows). A silently failed chmod
+        /// used to surface later as an unrelated Process.Start error on first run, so a
+        /// non-zero exit fails the download step here, naming the binary path.
+        public static void MarkExecutable(string path)
+        {
+            if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+                return;
+            var res = RunProcess("chmod", "+x \"" + path + "\"", ".", RunTimeoutMs);
+            if (res.ExitCode != 0)
+                throw new InvalidOperationException(
+                    $"chmod +x failed for {path}: "
+                        + (string.IsNullOrEmpty(res.Stderr) ? $"exit {res.ExitCode}" : res.Stderr.Trim())
+                );
         }
 
         /// Drop cached binaries of other versions once the pinned one is in place.

@@ -523,5 +523,37 @@ namespace PrefabLens.Tests
                 Directory.Delete(dir, recursive: true);
             }
         }
+
+        [Test]
+        public void MarkExecutableMakesARealFileRunnable()
+        {
+            if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+                Assert.Ignore("chmod is a unix concern");
+            var file = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+            File.WriteAllText(file, "#!/bin/sh\nexit 0\n");
+            try
+            {
+                Cli.MarkExecutable(file);
+                // The proof is execution: a fresh file is not executable until chmod succeeds.
+                var res = Cli.RunProcess(file, "", ".", timeoutMs: 10_000);
+                Assert.AreEqual(0, res.ExitCode);
+            }
+            finally
+            {
+                File.Delete(file);
+            }
+        }
+
+        [Test]
+        public void MarkExecutableFailsTheDownloadStepNamingTheBinaryPath()
+        {
+            // A swallowed chmod failure used to resurface later as an unrelated
+            // Process.Start error on first run; it must fail here, naming the path.
+            if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+                Assert.Ignore("chmod is a unix concern");
+            var missing = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName(), "prefablens");
+            var e = Assert.Throws<InvalidOperationException>(() => Cli.MarkExecutable(missing));
+            StringAssert.Contains(missing, e.Message);
+        }
     }
 }

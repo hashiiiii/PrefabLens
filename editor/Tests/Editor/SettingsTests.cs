@@ -5,11 +5,21 @@ namespace PrefabLens.Tests
     public class SettingsTests
     {
         [Test]
-        public void ResolvedLabelNamesTheBinaryThatWouldRun()
+        public void ResolvedLabelTagsTheDownloadedBinary()
         {
-            var loc = new Cli.Location("Library/PrefabLens/0.7.1/prefablens", null);
+            var loc = new Cli.Location(Cli.DefaultPath, null);
             Assert.AreEqual(
-                "Resolved CLI: Library/PrefabLens/0.7.1/prefablens",
+                $"Resolved CLI (downloaded): {Cli.DefaultPath}",
+                PrefabLensSettings.ResolvedLabel(loc, "0.7.1")
+            );
+        }
+
+        [Test]
+        public void ResolvedLabelTagsAnOverrideBinary()
+        {
+            var loc = new Cli.Location("/custom/prefablens", null);
+            Assert.AreEqual(
+                "Resolved CLI (override): /custom/prefablens",
                 PrefabLensSettings.ResolvedLabel(loc, "0.7.1")
             );
         }
@@ -20,7 +30,7 @@ namespace PrefabLens.Tests
             // The page must not show a blank/None path: say what will happen instead.
             var loc = new Cli.Location(null, null);
             Assert.AreEqual(
-                "Resolved CLI: not found — v0.7.1 downloads on the next refresh",
+                "Resolved CLI: not found — the PrefabLens window downloads v0.7.1 on its next refresh",
                 PrefabLensSettings.ResolvedLabel(loc, "0.7.1")
             );
         }

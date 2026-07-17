@@ -8,11 +8,15 @@ namespace PrefabLens
     /// page can never drift from the window's resolution behavior.
     public static class PrefabLensSettings
     {
-        /// One line naming the binary Locate would run right now.
-        public static string ResolvedLabel(Cli.Location loc, string version) =>
-            loc.Path != null
-                ? $"Resolved CLI: {loc.Path}"
-                : $"Resolved CLI: not found — v{version} downloads on the next refresh";
+        /// One line naming the binary Locate would run right now, tagged with its source
+        /// (the broken-override case gets its own MissingOverrideNote line instead).
+        public static string ResolvedLabel(Cli.Location loc, string version)
+        {
+            if (loc.Path == null)
+                return $"Resolved CLI: not found — the PrefabLens window downloads v{version} on its next refresh";
+            var source = loc.Path == Cli.DefaultPath ? "downloaded" : "override";
+            return $"Resolved CLI ({source}): {loc.Path}";
+        }
 
         /// Warning line for an override pointing at a missing file; null when healthy.
         public static string MissingOverrideNote(Cli.Location loc) =>
@@ -44,7 +48,9 @@ namespace PrefabLens
             };
             path.RegisterValueChangedCallback(e =>
             {
-                Cli.PathOverride = e.newValue;
+                // Trim: a pasted path with trailing whitespace would otherwise fail
+                // File.Exists with an invisible cause in the warning line.
+                Cli.PathOverride = e.newValue?.Trim();
                 Sync(resolved, warning);
             });
             box.Add(path);

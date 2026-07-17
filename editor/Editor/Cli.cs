@@ -48,6 +48,21 @@ namespace PrefabLens
             return new Location(File.Exists(defaultPath) ? defaultPath : null, null);
         }
 
-        public static Location Locate() => Locate(EditorPrefs.GetString(CliPathPref, ""), DefaultPath);
+        /// The manual CLI path override, EditorPrefs-backed. Empty = unset. The single
+        /// get/set surface shared by the window and the settings page (#162); clearing
+        /// deletes the key so "unset" and "empty" cannot drift apart.
+        public static string PathOverride
+        {
+            get => EditorPrefs.GetString(CliPathPref, "");
+            set
+            {
+                if (string.IsNullOrEmpty(value))
+                    EditorPrefs.DeleteKey(CliPathPref);
+                else
+                    EditorPrefs.SetString(CliPathPref, value);
+            }
+        }
+
+        public static Location Locate() => Locate(PathOverride, DefaultPath);
     }
 }

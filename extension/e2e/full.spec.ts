@@ -1,7 +1,9 @@
 /// <reference types="node" />
 // Runs detection → real background → real WASM → render end-to-end with the actual extension (--load-extension).
-// Uses a local HTTP server as "GitHub": the --e2e build bakes __API_BASE__ to this fixed port and
-// statically registers the content script for it (see build.mjs), so no dynamic permission grant is needed.
+// Uses a local HTTP server as "GitHub": the --e2e build statically registers the content script for it
+// (see build.mjs), so no dynamic permission grant is needed. The loopback origin resolves to the GHES
+// API shape (REST under /api/v3, GraphQL at /api/graphql) with a per-instance PAT, so this suite
+// exercises the Enterprise layout end-to-end; github.com shapes are covered by unit tests.
 
 import { readFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
@@ -11,7 +13,7 @@ import { type BrowserContext, chromium, expect, test } from "@playwright/test";
 const DIST = fileURLToPath(new URL("../dist", import.meta.url));
 const fixture = readFileSync(new URL("./fixtures/pr-files.html", import.meta.url), "utf8");
 
-// Matches the port baked into __API_BASE__ by build.mjs --e2e
+// Matches the loopback host the --e2e build statically injects into (see build.mjs)
 const PORT = 8471;
 
 // Same minimal prefab as core/tests/wasm_golden.test.mjs: the output is pinned by the golden
@@ -34,24 +36,24 @@ function startServer(): Promise<Server> {
     };
     const json = (body: unknown): void => send(JSON.stringify(body), "application/json");
     // Every ref pair shares one empty tree: blob fetches then fall back to the contents API below
-    if (url.pathname.startsWith("/repos/o/r/git/trees/")) return json({ truncated: false, tree: [] });
+    if (url.pathname.startsWith("/api/v3/repos/o/r/git/trees/")) return json({ truncated: false, tree: [] });
     switch (url.pathname) {
       case "/o/r/pull/1/files":
         return send(fixture, "text/html");
-      case "/repos/o/r/pulls/1/files":
+      case "/api/v3/repos/o/r/pulls/1/files":
         return json([
           { filename: "Assets/Foo.prefab", status: "modified" },
           { filename: "Assets/Big.unity", status: "modified" },
           { filename: "Assets/Baked.asset", status: "modified" },
         ]);
-      case "/repos/o/r/pulls/1":
+      case "/api/v3/repos/o/r/pulls/1":
         return json({ base: { sha: "B" }, head: { sha: "H" } });
-      case "/repos/o/r/compare/B...H":
+      case "/api/v3/repos/o/r/compare/B...H":
         return json({ merge_base_commit: { sha: "MB" } });
       // Commit page: same classic DOM, but discovery goes through the commit API (base = first parent)
       case "/o/r/commit/abcdef0":
         return send(fixture, "text/html");
-      case "/repos/o/r/commits/abcdef0":
+      case "/api/v3/repos/o/r/commits/abcdef0":
         return json({
           sha: "HC",
           parents: [{ sha: "PC" }],
@@ -60,27 +62,27 @@ function startServer(): Promise<Server> {
       // Compare page: merge base from the compare API, head resolved via the sha media type
       case "/o/r/compare/main...topic":
         return send(fixture, "text/html");
-      case "/repos/o/r/compare/main...topic":
+      case "/api/v3/repos/o/r/compare/main...topic":
         return json({
           merge_base_commit: { sha: "MC" },
           files: [{ filename: "Assets/Foo.prefab", status: "modified" }],
         });
-      case "/repos/o/r/commits/topic":
+      case "/api/v3/repos/o/r/commits/topic":
         return send("HT\n", "application/vnd.github.sha");
-      case "/repos/o/r/contents/Assets/Foo.prefab": {
+      case "/api/v3/repos/o/r/contents/Assets/Foo.prefab": {
         // MB/PC/MC are the base side of the pull/commit/compare flows respectively
         const ref = url.searchParams.get("ref") ?? "";
         return send(["MB", "PC", "MC"].includes(ref) ? BEFORE : AFTER, "application/vnd.github.raw+json");
       }
-      case "/repos/o/r/contents/Assets/Big.unity":
+      case "/api/v3/repos/o/r/contents/Assets/Big.unity":
         return send(BIG, "application/vnd.github.raw+json");
       // A binary-serialized .asset (LightingDataAsset etc.): passes the path
       // prefilter, must be rejected by the real wasm content sniff.
-      case "/repos/o/r/contents/Assets/Baked.asset":
+      case "/api/v3/repos/o/r/contents/Assets/Baked.asset":
         return send("\x00\x01PK-binary-payload", "application/vnd.github.raw+json");
-      case "/search/code":
+      case "/api/v3/search/code":
         return json({ items: [{ path: "Assets/Scripts/Sound.cs.meta" }] });
-      case "/graphql":
+      case "/api/graphql":
         return json({ data: { repository: {} } });
       default:
         res.writeHead(404);
@@ -105,10 +107,14 @@ test.beforeAll(async () => {
   sw ??= await context.waitForEvent("serviceworker");
   const extensionId = new URL(sw.url()).host;
 
-  // Seed the token directly in storage (sign-in is the only UI path; the fake server ignores its value)
+  // Seed a per-instance token directly in storage (the options UI is the real path; the fake
+  // server ignores its value). The loopback origin is an enterprise instance, not github.com.
   const options = await context.newPage();
   await options.goto(`chrome-extension://${extensionId}/options.html`);
-  await options.evaluate(() => chrome.storage.local.set({ pat: "tok" }));
+  await options.evaluate(
+    (origin) => chrome.storage.local.set({ instances: { [origin]: { pat: "tok" } } }),
+    `http://127.0.0.1:${PORT}`,
+  );
   await options.close();
 });
 

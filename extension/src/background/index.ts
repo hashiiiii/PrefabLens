@@ -24,7 +24,7 @@ const handler = createHandler({
       return { pat: stored.pat as string | undefined };
     }
     const stored = await chrome.storage.local.get(["instances"]);
-    return { pat: ((stored.instances as Instances | undefined) ?? {})[origin]?.pat };
+    return { pat: (stored.instances as Instances | undefined)?.[origin]?.pat };
   },
   makeClient: (api, token, lane) => new GithubClient(api, token, queuedFetch(lane === "user")),
   getDiffer() {

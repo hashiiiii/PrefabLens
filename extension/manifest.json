@@ -9,8 +9,9 @@
     "48": "images/icon48.png",
     "128": "images/icon128.png"
   },
-  "permissions": ["storage"],
+  "permissions": ["storage", "scripting"],
   "host_permissions": ["https://api.github.com/*", "https://github.com/*"],
+  "optional_host_permissions": ["*://*/*"],
   "background": { "service_worker": "background.js" },
   "content_scripts": [
     {

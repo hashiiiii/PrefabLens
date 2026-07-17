@@ -34,7 +34,8 @@ await build({
 
 const manifest = JSON.parse(readFileSync("manifest.json", "utf8"));
 if (e2e) {
-  // --e2e: grant and target the fixed port the fake-GitHub server in full.spec.ts listens on
+  // --e2e: grant and statically inject into the fake-GitHub server from full.spec.ts. The API
+  // base needs no wiring — the runtime resolves it from the page origin (GHES shape for loopback).
   manifest.host_permissions.push("http://127.0.0.1/*");
   manifest.content_scripts.push({ matches: ["http://127.0.0.1/*"], js: ["content.js"], run_at: "document_idle" });
 }

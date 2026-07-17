@@ -179,7 +179,9 @@ test("recovers after an error response", async ({ page }) => {
     };
   }, cannedResponse);
 
-  await page.goto("https://prefablens.test/owner/repo/pull/1/files");
+  // The sign-in panel is github.com-only (enterprise instances get the PAT panel instead),
+  // so this test must run on the real origin — every request is intercepted by the routes above.
+  await page.goto("https://github.com/owner/repo/pull/1/files");
   await page.addScriptTag({ path: "dist/content.js" });
 
   const unityHeader = page.locator('.file-header[data-path="Assets/Foo.prefab"]');
@@ -316,7 +318,9 @@ test("signs in with the device flow from the PR page and auto-recovers", async (
     };
   }, cannedResponse);
 
-  await page.goto("https://prefablens.test/owner/repo/pull/1/files");
+  // The device flow only runs on github.com (enterprise instances get the PAT panel instead),
+  // so this test must run on the real origin — every request is intercepted by the routes above.
+  await page.goto("https://github.com/owner/repo/pull/1/files");
   await page.addScriptTag({ path: "dist/content.js" });
 
   const unityHeader = page.locator('.file-header[data-path="Assets/Foo.prefab"]');

@@ -726,7 +726,13 @@ describe("prefetch", () => {
 
   it("persists prefetched diffs to the diff store (sw restart survival)", async () => {
     const { deps } = makeDeps();
-    await createHandler(deps).prefetch({ type: "prefetch", origin: "https://github.com", owner: "o", repo: "r", prNumber: 1 });
+    await createHandler(deps).prefetch({
+      type: "prefetch",
+      origin: "https://github.com",
+      owner: "o",
+      repo: "r",
+      prNumber: 1,
+    });
     expect(deps.diffStore.save).toHaveBeenCalledWith("base-sha:head-sha:Assets/Foo.prefab", DIFF);
   });
 
@@ -746,7 +752,13 @@ describe("prefetch", () => {
     }));
     files.push({ path: "README.md", status: "modified" });
     const { deps, client } = makeDeps({ files });
-    await createHandler(deps).prefetch({ type: "prefetch", origin: "https://github.com", owner: "o", repo: "r", prNumber: 1 });
+    await createHandler(deps).prefetch({
+      type: "prefetch",
+      origin: "https://github.com",
+      owner: "o",
+      repo: "r",
+      prNumber: 1,
+    });
     const paths = new Set(client.getFileAtRef.mock.calls.map((c) => c[2]));
     expect(paths.has("README.md")).toBe(false);
     expect(paths.size).toBe(100); // cut off at the cap
@@ -767,13 +779,25 @@ describe("prefetch", () => {
     const { deps, client } = makeDeps();
     client.getFileAtRef.mockRejectedValue(new RateLimitError("x"));
     await expect(
-      createHandler(deps).prefetch({ type: "prefetch", origin: "https://github.com", owner: "o", repo: "r", prNumber: 1 }),
+      createHandler(deps).prefetch({
+        type: "prefetch",
+        origin: "https://github.com",
+        owner: "o",
+        repo: "r",
+        prNumber: 1,
+      }),
     ).resolves.toBeUndefined();
   });
 
   it("returns without network when the pat is missing", async () => {
     const { deps, client } = makeDeps({ pat: undefined });
-    await createHandler(deps).prefetch({ type: "prefetch", origin: "https://github.com", owner: "o", repo: "r", prNumber: 1 });
+    await createHandler(deps).prefetch({
+      type: "prefetch",
+      origin: "https://github.com",
+      owner: "o",
+      repo: "r",
+      prNumber: 1,
+    });
     expect(client.getPrRefs).not.toHaveBeenCalled();
   });
 });
@@ -885,7 +909,13 @@ describe("semanticDiff with push (two-stage)", () => {
 
   it("kicks the repo index sync from prefetch", async () => {
     const { deps, client } = makeDeps();
-    await createHandler(deps).prefetch({ type: "prefetch", origin: "https://github.com", owner: "o", repo: "r", prNumber: 1 });
+    await createHandler(deps).prefetch({
+      type: "prefetch",
+      origin: "https://github.com",
+      owner: "o",
+      repo: "r",
+      prNumber: 1,
+    });
     await vi.waitFor(() => expect(client.listMetaTree).toHaveBeenCalledWith("o", "r", "head-sha"));
   });
 });

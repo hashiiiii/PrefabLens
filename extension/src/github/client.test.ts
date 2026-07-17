@@ -126,11 +126,7 @@ describe("GithubClient", () => {
   });
 
   it("searchMetaByGuid returns null on no hits, non-meta hits, and 422", async () => {
-    const empty = new GithubClient(
-      GITHUB_API,
-      "tok",
-      fakeFetch({ "/search/code": () => json({ items: [] }) }).fn,
-    );
+    const empty = new GithubClient(GITHUB_API, "tok", fakeFetch({ "/search/code": () => json({ items: [] }) }).fn);
     expect(await empty.searchMetaByGuid("o", "r", "g")).toBeNull();
     const odd = new GithubClient(
       GITHUB_API,
@@ -161,11 +157,7 @@ describe("GithubClient", () => {
     // secondary is 403 + retry-after, and newer APIs use 429.
     // secondary sometimes has no header (only the body message) — octokit also decides by the message.
     const at = (status: number, headers: Record<string, string>, body = "") =>
-      new GithubClient(
-        GITHUB_API,
-        "tok",
-        fakeFetch({ "/pulls/1": () => new Response(body, { status, headers }) }).fn,
-      );
+      new GithubClient(GITHUB_API, "tok", fakeFetch({ "/pulls/1": () => new Response(body, { status, headers }) }).fn);
     await expect(at(403, { "x-ratelimit-remaining": "0" }).getPrRefs("o", "r", 1)).rejects.toBeInstanceOf(
       RateLimitError,
     );

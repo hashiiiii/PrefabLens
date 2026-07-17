@@ -82,6 +82,13 @@ test "parseArgs: --help short-circuits" {
     try testing.expect(short.help);
 }
 
+test "parseArgs: --version short-circuits" {
+    // Same convention as --help: the first informational flag wins and
+    // everything after it (even nonsense operands) is ignored.
+    const opt = try parseArgs(&.{ "--version", "whatever" });
+    try testing.expect(opt.version);
+}
+
 test "parseArgs: --no-project parses and conflicts with --project" {
     const opt = try parseArgs(&.{ "--no-project", "main" });
     try testing.expect(opt.no_project);
@@ -273,6 +280,36 @@ test "run: --help prints usage on stdout and exits 0" {
     try testing.expectEqual(@as(u8, 0), code);
     try testing.expect(std.mem.indexOf(u8, aw.toArrayList().items, "usage: prefablens") != null);
     try testing.expectEqual(@as(usize, 0), aw_err.toArrayList().items.len);
+}
+
+test "run: --version prints the version on stdout and exits 0" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var out: std.ArrayList(u8) = .empty;
+    var aw = std.Io.Writer.Allocating.fromArrayList(arena, &out);
+    var err_out: std.ArrayList(u8) = .empty;
+    var aw_err = std.Io.Writer.Allocating.fromArrayList(arena, &err_out);
+    const code = try run(testing.io, arena, &.{"--version"}, &aw.writer, &aw_err.writer, false, null);
+    try testing.expectEqual(@as(u8, 0), code);
+    // Exact match against the compiled-in constant: one line, nothing else,
+    // so the output stays scriptable (`prefablens --version | cut -d' ' -f2`).
+    const expected = try std.fmt.allocPrint(arena, "prefablens {s}\n", .{version});
+    try testing.expectEqualStrings(expected, aw.toArrayList().items);
+    try testing.expectEqual(@as(usize, 0), aw_err.toArrayList().items.len);
+}
+
+test "run: --help documents --version" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var out: std.ArrayList(u8) = .empty;
+    var aw = std.Io.Writer.Allocating.fromArrayList(arena, &out);
+    var err_out: std.ArrayList(u8) = .empty;
+    var aw_err = std.Io.Writer.Allocating.fromArrayList(arena, &err_out);
+    const code = try run(testing.io, arena, &.{"--help"}, &aw.writer, &aw_err.writer, false, null);
+    try testing.expectEqual(@as(u8, 0), code);
+    try testing.expect(std.mem.indexOf(u8, aw.toArrayList().items, "--version") != null);
 }
 
 test "run: no operands in a repo with no commits fails with a git error" {
@@ -723,6 +760,7 @@ pub const Options = struct {
     no_color: bool = false,
     force_color: bool = false,
     help: bool = false,
+    version: bool = false,
     open: bool = false,
 };
 
@@ -750,6 +788,7 @@ const help_text = usage_line ++
     \\  --no-project   skip the default guid-resolution scan
     \\  --color        force ANSI colors on in tree output (useful when piping)
     \\  --no-color     disable ANSI colors in tree output
+    \\  --version      print the version and exit
     \\  -h, --help     show this help
     \\
 ;
@@ -781,6 +820,8 @@ pub fn parseArgs(args: []const []const u8) ArgError!Options {
             open = true;
         } else if (std.mem.eql(u8, a, "--help") or std.mem.eql(u8, a, "-h")) {
             return .{ .target = .{ .git = .{ .before_ref = "HEAD", .after_ref = "", .path = null } }, .help = true };
+        } else if (std.mem.eql(u8, a, "--version")) {
+            return .{ .target = .{ .git = .{ .before_ref = "HEAD", .after_ref = "", .path = null } }, .version = true };
         } else if (std.mem.eql(u8, a, "--project")) {
             i += 1;
             if (i >= args.len) return ArgError.MissingOperands;
@@ -1109,6 +1150,10 @@ pub fn run(io: std.Io, arena: std.mem.Allocator, args: []const []const u8, stdou
     };
     if (opt.help) {
         try stdout.writeAll(help_text);
+        return 0;
+    }
+    if (opt.version) {
+        try stdout.print("prefablens {s}\n", .{version});
         return 0;
     }
 

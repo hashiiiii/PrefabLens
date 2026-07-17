@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { AuthError, type ChangedFile, RateLimitError } from "../github/client";
+import type { HostApi } from "../github/hosts";
 import type { DiffV2, GuidResolvedPush, SemanticDiffRequest } from "../types";
 import { must } from "../util/must";
 import { DiffError, type Differ } from "../wasm/differ";
@@ -7,6 +8,7 @@ import { createHandler, type Deps, type Handler } from "./handler";
 
 const REQ: SemanticDiffRequest = {
   type: "semanticDiff",
+  origin: "https://github.com",
   owner: "o",
   repo: "r",
   target: { kind: "pull", prNumber: 1 },
@@ -95,10 +97,10 @@ function makeDeps(overrides?: {
     }),
   };
   const deps: Deps = {
-    getSettings: async () => ({
+    getSettings: async (_origin: string) => ({
       pat: Object.hasOwn(overrides ?? {}, "pat") ? overrides?.pat : "tok",
     }),
-    makeClient: (_base: string, _token: string, _lane: "user" | "prefetch") => client,
+    makeClient: (_api: HostApi, _token: string, _lane: "user" | "prefetch") => client,
     getDiffer: async () => differ,
     guidCache,
     diffStore,
@@ -139,6 +141,35 @@ describe("createHandler", () => {
     const res = await resolveFully(createHandler(deps), REQ);
     expect(res).toEqual({ ok: false, error: "pat-missing" });
     expect(client.getPrRefs).not.toHaveBeenCalled();
+  });
+
+  it("resolves the API per request origin and keys repo caches by the instance REST base", async () => {
+    const apis: HostApi[] = [];
+    const { deps, guidCache } = makeDeps({ search: { g1: "Assets/S.cs" } });
+    const inner = deps.makeClient;
+    deps.makeClient = (api, token, lane) => {
+      apis.push(api);
+      return inner(api, token, lane);
+    };
+    const res = await resolveFully(createHandler(deps), { ...REQ, origin: "https://github.example.com" });
+    expect(res.ok).toBe(true);
+    expect(apis[0]?.restBase).toBe("https://github.example.com/api/v3");
+    // Code-Search resolutions must land under the GHES-keyed repo, not the github.com one:
+    // two instances hosting the same o/r must never share guid caches (AC: host-keyed caches)
+    expect(guidCache.data["https://github.example.com/api/v3/o/r"]).toEqual({ g1: "Assets/S.cs" });
+    expect(guidCache.data["https://api.github.com/o/r"]).toBeUndefined();
+  });
+
+  it("passes the request origin to getSettings (per-instance credentials)", async () => {
+    const origins: string[] = [];
+    const { deps } = makeDeps();
+    const inner = deps.getSettings;
+    deps.getSettings = (origin) => {
+      origins.push(origin);
+      return inner(origin);
+    };
+    await resolveFully(createHandler(deps), { ...REQ, origin: "https://acme.ghe.com" });
+    expect(origins).toEqual(["https://acme.ghe.com"]);
   });
 
   it("diffs base/head blobs and attaches resolved guids", async () => {
@@ -672,7 +703,7 @@ describe("createHandler", () => {
         diffWithAssets,
       });
       const handler = createHandler(deps);
-      await handler.prefetch({ type: "prefetch", owner: "o", repo: "r", prNumber: 1 });
+      await handler.prefetch({ type: "prefetch", origin: "https://github.com", owner: "o", repo: "r", prNumber: 1 });
       expect(diffWithAssets).not.toHaveBeenCalled(); // prefetch stops at raw
       const res = await resolveFully(handler, REQ);
       expect(res.ok).toBe(true);
@@ -685,7 +716,7 @@ describe("prefetch", () => {
   it("precomputes diffs so a later toggle serves without new blob fetches", async () => {
     const { deps, client } = makeDeps();
     const handler = createHandler(deps);
-    await handler.prefetch({ type: "prefetch", owner: "o", repo: "r", prNumber: 1 });
+    await handler.prefetch({ type: "prefetch", origin: "https://github.com", owner: "o", repo: "r", prNumber: 1 });
     expect(client.searchMetaByGuid).not.toHaveBeenCalled(); // prefetch doesn't touch the 10 req/min Code Search
     const fetchesAfterPrefetch = client.getFileAtRef.mock.calls.length;
     const res = await resolveFully(handler, REQ);
@@ -695,7 +726,7 @@ describe("prefetch", () => {
 
   it("persists prefetched diffs to the diff store (sw restart survival)", async () => {
     const { deps } = makeDeps();
-    await createHandler(deps).prefetch({ type: "prefetch", owner: "o", repo: "r", prNumber: 1 });
+    await createHandler(deps).prefetch({ type: "prefetch", origin: "https://github.com", owner: "o", repo: "r", prNumber: 1 });
     expect(deps.diffStore.save).toHaveBeenCalledWith("base-sha:head-sha:Assets/Foo.prefab", DIFF);
   });
 
@@ -715,7 +746,7 @@ describe("prefetch", () => {
     }));
     files.push({ path: "README.md", status: "modified" });
     const { deps, client } = makeDeps({ files });
-    await createHandler(deps).prefetch({ type: "prefetch", owner: "o", repo: "r", prNumber: 1 });
+    await createHandler(deps).prefetch({ type: "prefetch", origin: "https://github.com", owner: "o", repo: "r", prNumber: 1 });
     const paths = new Set(client.getFileAtRef.mock.calls.map((c) => c[2]));
     expect(paths.has("README.md")).toBe(false);
     expect(paths.size).toBe(100); // cut off at the cap
@@ -726,7 +757,7 @@ describe("prefetch", () => {
     const { deps, client } = makeDeps();
     client.getFileAtRef.mockResolvedValue(big);
     const handler = createHandler(deps);
-    await handler.prefetch({ type: "prefetch", owner: "o", repo: "r", prNumber: 1 });
+    await handler.prefetch({ type: "prefetch", origin: "https://github.com", owner: "o", repo: "r", prNumber: 1 });
     expect(deps.diffStore.save).not.toHaveBeenCalled();
     // A later manual toggle still shows the too-large gate as before
     expect(await resolveFully(handler, REQ)).toEqual({ ok: false, error: "too-large", bytes: big.length * 2 });
@@ -736,13 +767,13 @@ describe("prefetch", () => {
     const { deps, client } = makeDeps();
     client.getFileAtRef.mockRejectedValue(new RateLimitError("x"));
     await expect(
-      createHandler(deps).prefetch({ type: "prefetch", owner: "o", repo: "r", prNumber: 1 }),
+      createHandler(deps).prefetch({ type: "prefetch", origin: "https://github.com", owner: "o", repo: "r", prNumber: 1 }),
     ).resolves.toBeUndefined();
   });
 
   it("returns without network when the pat is missing", async () => {
     const { deps, client } = makeDeps({ pat: undefined });
-    await createHandler(deps).prefetch({ type: "prefetch", owner: "o", repo: "r", prNumber: 1 });
+    await createHandler(deps).prefetch({ type: "prefetch", origin: "https://github.com", owner: "o", repo: "r", prNumber: 1 });
     expect(client.getPrRefs).not.toHaveBeenCalled();
   });
 });
@@ -752,7 +783,7 @@ it("dedupes a concurrent user toggle against an in-flight prefetch compute", asy
   const { deps, client } = makeDeps();
   const handler = createHandler(deps);
   const [, res] = await Promise.all([
-    handler.prefetch({ type: "prefetch", owner: "o", repo: "r", prNumber: 1 }),
+    handler.prefetch({ type: "prefetch", origin: "https://github.com", owner: "o", repo: "r", prNumber: 1 }),
     resolveFully(handler, REQ),
   ]);
   expect(res.ok).toBe(true);
@@ -854,7 +885,7 @@ describe("semanticDiff with push (two-stage)", () => {
 
   it("kicks the repo index sync from prefetch", async () => {
     const { deps, client } = makeDeps();
-    await createHandler(deps).prefetch({ type: "prefetch", owner: "o", repo: "r", prNumber: 1 });
+    await createHandler(deps).prefetch({ type: "prefetch", origin: "https://github.com", owner: "o", repo: "r", prNumber: 1 });
     await vi.waitFor(() => expect(client.listMetaTree).toHaveBeenCalledWith("o", "r", "head-sha"));
   });
 });

@@ -1,8 +1,8 @@
 // Live demo for the site's extension.html: the mock PR page runs the
 // extension's real renderer, toggle, and WASM diff engine, wired the same way
 // as the content script minus the GitHub API and auth layers (never import
-// anything that pulls github/client.ts — its module init needs the build-time
-// __API_BASE__ define, absent from the demo build). Living in the extension
+// anything that pulls github/client.ts — the demo has no GitHub instance to
+// talk to and must stay free of that dependency). Living in the extension
 // toolchain keeps the demo type-checked against the modules it uses;
 // `node build.mjs --demo` bundles it as dist/demo.js for site/build.mjs.
 // Diff inputs are fixture files served next to the page; site/build.mjs marks

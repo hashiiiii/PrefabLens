@@ -94,7 +94,11 @@ function attach(state: ViewState): void {
       prefetchedPr = prKey;
       // fire-and-forget: don't wait on the response, ignore failures (the manual-toggle path is separately alive)
       void (
-        chrome.runtime.sendMessage({ type: "prefetch", ...prPage } satisfies PrefetchRequest) as Promise<unknown>
+        chrome.runtime.sendMessage({
+          type: "prefetch",
+          origin: location.origin,
+          ...prPage,
+        } satisfies PrefetchRequest) as Promise<unknown>
       ).catch(() => {});
     }
   }
@@ -179,6 +183,7 @@ function attachToggle(state: ViewState, page: DiffPage, entry: FileEntry): void 
       renderLoading(root);
       void requestDiff({
         type: "semanticDiff",
+        origin: location.origin,
         owner: page.owner,
         repo: page.repo,
         target: page.target,

@@ -1,12 +1,6 @@
-import {
-  API_BASE,
-  AuthError,
-  type ChangedFile,
-  type GithubClient,
-  RateLimitError,
-  type RefPair,
-} from "../github/client";
+import { AuthError, type ChangedFile, type GithubClient, RateLimitError, type RefPair } from "../github/client";
 import { applyResolved, buildGuidIndex, type GuidCache } from "../github/guids";
+import { type HostApi, resolveApi } from "../github/hosts";
 import type { RepoIndexStore } from "../github/repoIndex";
 import {
   type DiffTarget,
@@ -38,8 +32,8 @@ type ClientLike = Pick<
 >;
 
 export type Deps = {
-  getSettings(): Promise<{ pat?: string }>;
-  makeClient(base: string, token: string, lane: "user" | "prefetch"): ClientLike;
+  getSettings(origin: string): Promise<{ pat?: string }>;
+  makeClient(api: HostApi, token: string, lane: "user" | "prefetch"): ClientLike;
   getDiffer(): Promise<Differ>;
   guidCache: GuidCache;
   diffStore: { load(key: string): Promise<DiffV2 | undefined>; save(key: string, json: DiffV2): Promise<void> };
@@ -150,8 +144,16 @@ export function createHandler(deps: Deps): Handler {
     fetchPair,
   });
 
-  function loadContext(client: ClientLike, owner: string, repo: string, target: DiffTarget): Promise<DiffContext> {
-    return contexts.get(targetKey(owner, repo, target), async () => {
+  function loadContext(
+    origin: string,
+    client: ClientLike,
+    owner: string,
+    repo: string,
+    target: DiffTarget,
+  ): Promise<DiffContext> {
+    // Two instances can host the same owner/repo/PR number, so the context key carries the
+    // origin. The sha-keyed blob/diff caches stay shared: shas are content-addressed.
+    return contexts.get(`${origin}:${targetKey(owner, repo, target)}`, async () => {
       const { refs, files } = await loadRefsAndFiles(client, owner, repo, target);
       const bySha = new Map(files.map((f) => [f.path, f.sha]));
       const [guidIndex, baseShas] = await Promise.all([
@@ -228,11 +230,11 @@ export function createHandler(deps: Deps): Handler {
     push: (msg: GuidResolvedPush) => void,
   ): Promise<SemanticDiffResponse> {
     try {
-      const settings = await deps.getSettings();
+      const api = resolveApi(req.origin);
+      const settings = await deps.getSettings(req.origin);
       if (!settings.pat) return { ok: false, error: "pat-missing" };
-      const base = API_BASE;
-      const client = deps.makeClient(base, settings.pat, "user");
-      const ctx = await loadContext(client, req.owner, req.repo, req.target);
+      const client = deps.makeClient(api, settings.pat, "user");
+      const ctx = await loadContext(req.origin, client, req.owner, req.repo, req.target);
       const outcome = await getDiff(client, ctx, req.owner, req.repo, req.path, req.force === true);
       if (!outcome.ok) return outcome;
       const withPr = applyResolved(outcome.json, ctx.guidIndex);
@@ -240,7 +242,7 @@ export function createHandler(deps: Deps): Handler {
       // Two-stage path: return the diff immediately, continue resolution and source merging in the background, deliver via push
       const remaining = withPr.unresolvedGuids.filter((g) => !Object.hasOwn(withPr.resolved ?? {}, g));
       if (!remaining.length && !withPr.neededSources?.length) return { ok: true, json: withPr };
-      void resolution.resolveRemaining(withPr, remaining, client, req, base, ctx, push);
+      void resolution.resolveRemaining(withPr, remaining, client, req, api.restBase, ctx, push);
       return { ok: true, json: withPr, pending: true };
     } catch (err) {
       if (err instanceof RateLimitError) return { ok: false, error: "rate-limited" };
@@ -254,13 +256,19 @@ export function createHandler(deps: Deps): Handler {
    *  — Code Search is a scarce 10 req/min resource and mergeSources depends on resolution, so leave them to serve time. */
   async function prefetch(req: PrefetchRequest): Promise<void> {
     try {
-      const settings = await deps.getSettings();
+      const api = resolveApi(req.origin);
+      const settings = await deps.getSettings(req.origin);
       if (!settings.pat) return;
-      const base = API_BASE;
-      const client = deps.makeClient(base, settings.pat, "prefetch");
-      const ctx = await loadContext(client, req.owner, req.repo, { kind: "pull", prNumber: req.prNumber });
+      const client = deps.makeClient(api, settings.pat, "prefetch");
+      const ctx = await loadContext(req.origin, client, req.owner, req.repo, { kind: "pull", prNumber: req.prNumber });
       // Run independently of raw-diff prefetch (index sync speeds up the 3-stage resolution at serve time)
-      void resolution.getRepoIndex(client, req.owner, req.repo, `${base}/${req.owner}/${req.repo}`, ctx.refs.headSha);
+      void resolution.getRepoIndex(
+        client,
+        req.owner,
+        req.repo,
+        `${api.restBase}/${req.owner}/${req.repo}`,
+        ctx.refs.headSha,
+      );
       const unity = ctx.files.filter((f) => isUnityPath(f.path)).slice(0, PREFETCH_MAX);
       for (let i = 0; i < unity.length; i += PREFETCH_CONCURRENCY) {
         const chunk = unity.slice(i, i + PREFETCH_CONCURRENCY);

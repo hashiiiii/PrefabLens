@@ -83,6 +83,7 @@ export function targetKey(owner: string, repo: string, target: DiffTarget): stri
 // content ↔ background messages (chrome.runtime only serializes JSON)
 export type SemanticDiffRequest = {
   type: "semanticDiff";
+  origin: string; // page origin — selects the GitHub instance (API base + credentials)
   owner: string;
   repo: string;
   target: DiffTarget;
@@ -90,8 +91,10 @@ export type SemanticDiffRequest = {
   force?: boolean; // render past the 25MB guard ("Render anyway" click)
 };
 
-export type PrefetchRequest = { type: "prefetch"; owner: string; repo: string; prNumber: number };
-export type BackgroundRequest = SemanticDiffRequest | PrefetchRequest;
+export type PrefetchRequest = { type: "prefetch"; origin: string; owner: string; repo: string; prNumber: number };
+// Sent by content scripts on non-github.com instances, where the device flow cannot run.
+export type OpenOptionsRequest = { type: "openOptions" };
+export type BackgroundRequest = SemanticDiffRequest | PrefetchRequest | OpenOptionsRequest;
 
 export type BackgroundError =
   | "pat-missing"

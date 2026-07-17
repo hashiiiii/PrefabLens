@@ -24,6 +24,7 @@ namespace PrefabLens
         CancellationTokenSource downloadCts;
         bool pendingRefresh;
         CancellationTokenSource runCts;
+        string warnedOverride; // last missing-override path already logged (no console spam on every focus)
 
         [MenuItem("Window/PrefabLens")]
         public static void Open() => GetWindow<PrefabLensWindow>("PrefabLens");
@@ -104,7 +105,16 @@ namespace PrefabLens
                 pendingRefresh = true;
                 return;
             }
-            var cli = Cli.Find();
+            var loc = Cli.Locate();
+            if (loc.MissingOverride != null && loc.MissingOverride != warnedOverride)
+            {
+                warnedOverride = loc.MissingOverride;
+                Debug.LogWarning(
+                    $"PrefabLens: EditorPrefs '{Cli.CliPathPref}' points at a missing file: "
+                        + $"{loc.MissingOverride}. Falling back to the default location."
+                );
+            }
+            var cli = loc.Path;
             if (cli == null)
             {
                 // Fetch the pinned binary automatically, once per session; after a
@@ -238,6 +248,8 @@ namespace PrefabLens
             content.Clear();
             if (downloadError != null)
                 Note($"Download failed: {downloadError}");
+            if (warnedOverride != null)
+                Note($"Override '{Cli.CliPathPref}' points at a missing file: {warnedOverride}");
             Note($"prefablens CLI not found (v{Cli.Version}).");
             content.Add(
                 new Button(StartDownload)
@@ -283,7 +295,7 @@ namespace PrefabLens
                     : $"Downloading prefablens v{Cli.Version}… {read / 1024} KB";
         }
 
-        /// The success path re-resolves through Cli.Find instead of using the returned
+        /// The success path re-resolves through Cli.Locate instead of using the returned
         /// path, so the manual EditorPrefs override keeps precedence.
         void OnDownloadDone(string path, string error)
         {

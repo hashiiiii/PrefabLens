@@ -42,4 +42,11 @@ namespace UnityEngine
         LowerCenter,
         LowerRight,
     }
+
+    public static class Debug
+    {
+        public static void LogException(System.Exception exception) { }
+
+        public static void LogWarning(object message) { }
+    }
 }

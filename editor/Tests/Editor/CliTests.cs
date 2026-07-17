@@ -451,5 +451,77 @@ namespace PrefabLens.Tests
             Assert.IsTrue(done.Wait(30_000), "callback never fired");
             Assert.IsTrue(got.Value.Canceled);
         }
+
+        [Test]
+        public void LocateUsesAnExistingOverrideAndReportsNothingMissing()
+        {
+            var dir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+            Directory.CreateDirectory(dir);
+            var manual = Path.Combine(dir, "custom-prefablens");
+            File.WriteAllText(manual, "bin");
+            try
+            {
+                var loc = Cli.Locate(manual, Path.Combine(dir, "default-prefablens"));
+                Assert.AreEqual(manual, loc.Path);
+                Assert.IsNull(loc.MissingOverride);
+            }
+            finally
+            {
+                Directory.Delete(dir, recursive: true);
+            }
+        }
+
+        [Test]
+        public void LocateReportsAMissingOverrideWhileFallingBackToTheDefault()
+        {
+            // The silent-fallback bug: an override pointing at a deleted binary used to be
+            // indistinguishable from "no override set". The state must be reportable.
+            var dir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+            Directory.CreateDirectory(dir);
+            var def = Path.Combine(dir, "default-prefablens");
+            File.WriteAllText(def, "bin");
+            var gone = Path.Combine(dir, "gone-prefablens");
+            try
+            {
+                var loc = Cli.Locate(gone, def);
+                Assert.AreEqual(def, loc.Path);
+                Assert.AreEqual(gone, loc.MissingOverride);
+            }
+            finally
+            {
+                Directory.Delete(dir, recursive: true);
+            }
+        }
+
+        [Test]
+        public void LocateReportsAMissingOverrideEvenWhenNothingElseExists()
+        {
+            var dir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+            var gone = Path.Combine(dir, "gone-prefablens");
+            var loc = Cli.Locate(gone, Path.Combine(dir, "default-prefablens"));
+            Assert.IsNull(loc.Path);
+            Assert.AreEqual(gone, loc.MissingOverride);
+        }
+
+        [Test]
+        public void LocateWithoutAnOverrideUsesTheDefaultOrNothing()
+        {
+            var dir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+            Directory.CreateDirectory(dir);
+            var def = Path.Combine(dir, "default-prefablens");
+            File.WriteAllText(def, "bin");
+            try
+            {
+                Assert.AreEqual(def, Cli.Locate("", def).Path);
+                Assert.IsNull(Cli.Locate("", def).MissingOverride);
+                var none = Cli.Locate("", Path.Combine(dir, "absent"));
+                Assert.IsNull(none.Path);
+                Assert.IsNull(none.MissingOverride);
+            }
+            finally
+            {
+                Directory.Delete(dir, recursive: true);
+            }
+        }
     }
 }

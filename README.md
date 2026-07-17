@@ -105,6 +105,8 @@ prefablens --open main                  # write the report to a temp file and op
 Operands ending in a Unity YAML extension (`.prefab`, `.unity`, `.asset`, ...) are
 treated as paths; everything else is a git ref.
 
+Full reference — every flag, exit code, and resolution rule: [docs/cli.md](docs/cli.md).
+
 ### Unity Editor
 
 Open `Window > PrefabLens`. The window lists every changed UnityYAML asset vs HEAD and shows the selected asset's semantic diff. The CLI binary is downloaded automatically from GitHub Releases.

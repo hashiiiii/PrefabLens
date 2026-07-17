@@ -451,5 +451,109 @@ namespace PrefabLens.Tests
             Assert.IsTrue(done.Wait(30_000), "callback never fired");
             Assert.IsTrue(got.Value.Canceled);
         }
+
+        [Test]
+        public void LocateUsesAnExistingOverrideAndReportsNothingMissing()
+        {
+            var dir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+            Directory.CreateDirectory(dir);
+            var manual = Path.Combine(dir, "custom-prefablens");
+            File.WriteAllText(manual, "bin");
+            try
+            {
+                var loc = Cli.Locate(manual, Path.Combine(dir, "default-prefablens"));
+                Assert.AreEqual(manual, loc.Path);
+                Assert.IsNull(loc.MissingOverride);
+            }
+            finally
+            {
+                Directory.Delete(dir, recursive: true);
+            }
+        }
+
+        [Test]
+        public void LocateReportsAMissingOverrideWhileFallingBackToTheDefault()
+        {
+            // The silent-fallback bug: an override pointing at a deleted binary used to be
+            // indistinguishable from "no override set". The state must be reportable.
+            var dir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+            Directory.CreateDirectory(dir);
+            var def = Path.Combine(dir, "default-prefablens");
+            File.WriteAllText(def, "bin");
+            var gone = Path.Combine(dir, "gone-prefablens");
+            try
+            {
+                var loc = Cli.Locate(gone, def);
+                Assert.AreEqual(def, loc.Path);
+                Assert.AreEqual(gone, loc.MissingOverride);
+            }
+            finally
+            {
+                Directory.Delete(dir, recursive: true);
+            }
+        }
+
+        [Test]
+        public void LocateReportsAMissingOverrideEvenWhenNothingElseExists()
+        {
+            var dir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+            var gone = Path.Combine(dir, "gone-prefablens");
+            var loc = Cli.Locate(gone, Path.Combine(dir, "default-prefablens"));
+            Assert.IsNull(loc.Path);
+            Assert.AreEqual(gone, loc.MissingOverride);
+        }
+
+        [Test]
+        public void LocateWithoutAnOverrideUsesTheDefaultOrNothing()
+        {
+            var dir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+            Directory.CreateDirectory(dir);
+            var def = Path.Combine(dir, "default-prefablens");
+            File.WriteAllText(def, "bin");
+            try
+            {
+                Assert.AreEqual(def, Cli.Locate("", def).Path);
+                Assert.IsNull(Cli.Locate("", def).MissingOverride);
+                var none = Cli.Locate("", Path.Combine(dir, "absent"));
+                Assert.IsNull(none.Path);
+                Assert.IsNull(none.MissingOverride);
+            }
+            finally
+            {
+                Directory.Delete(dir, recursive: true);
+            }
+        }
+
+        [Test]
+        public void MarkExecutableMakesARealFileRunnable()
+        {
+            if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+                Assert.Ignore("chmod is a unix concern");
+            var file = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+            File.WriteAllText(file, "#!/bin/sh\nexit 0\n");
+            try
+            {
+                Cli.MarkExecutable(file);
+                // The proof is execution: a fresh file is not executable until chmod succeeds.
+                var res = Cli.RunProcess(file, "", ".", timeoutMs: 10_000);
+                Assert.AreEqual(0, res.ExitCode);
+            }
+            finally
+            {
+                File.Delete(file);
+            }
+        }
+
+        [Test]
+        public void MarkExecutableFailsTheDownloadStepNamingTheBinaryPath()
+        {
+            // A swallowed chmod failure used to resurface later as an unrelated
+            // Process.Start error on first run; it must fail here, naming the path.
+            if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+                Assert.Ignore("chmod is a unix concern");
+            var missing = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName(), "prefablens");
+            var e = Assert.Throws<InvalidOperationException>(() => Cli.MarkExecutable(missing));
+            StringAssert.Contains(missing, e.Message);
+        }
     }
 }

@@ -24,6 +24,7 @@ namespace PrefabLens
         CancellationTokenSource downloadCts;
         bool pendingRefresh;
         CancellationTokenSource runCts;
+        string warnedOverride; // last missing-override path already logged (no console spam on every focus)
 
         [MenuItem("Window/PrefabLens")]
         public static void Open() => GetWindow<PrefabLensWindow>("PrefabLens");
@@ -104,7 +105,21 @@ namespace PrefabLens
                 pendingRefresh = true;
                 return;
             }
-            var cli = Cli.Find();
+            var loc = Cli.Locate();
+            if (loc.MissingOverride != null && loc.MissingOverride != warnedOverride)
+            {
+                warnedOverride = loc.MissingOverride;
+                Debug.LogWarning(
+                    $"PrefabLens: EditorPrefs '{Cli.CliPathPref}' points at a missing file: "
+                        + $"{loc.MissingOverride}. Falling back to the default location."
+                );
+            }
+            else if (loc.MissingOverride == null)
+            {
+                // The override is gone or valid again: stop reporting it and re-arm the warning.
+                warnedOverride = null;
+            }
+            var cli = loc.Path;
             if (cli == null)
             {
                 // Fetch the pinned binary automatically, once per session; after a
@@ -161,8 +176,11 @@ namespace PrefabLens
             {
                 bulk = BulkModel.Parse(res.Stdout);
             }
-            catch (Exception)
+            catch (Exception e)
             {
+                // The generic UI note stays short; the console carries the real reason
+                // (exception type + message) so a version mismatch is diagnosable.
+                Debug.LogException(e);
                 lastStdout = null;
                 status.text = "";
                 Note("Could not parse CLI output (CLI version mismatch?):");
@@ -238,6 +256,8 @@ namespace PrefabLens
             content.Clear();
             if (downloadError != null)
                 Note($"Download failed: {downloadError}");
+            if (warnedOverride != null)
+                Note($"Override '{Cli.CliPathPref}' points at a missing file: {warnedOverride}");
             Note($"prefablens CLI not found (v{Cli.Version}).");
             content.Add(
                 new Button(StartDownload)
@@ -283,7 +303,7 @@ namespace PrefabLens
                     : $"Downloading prefablens v{Cli.Version}… {read / 1024} KB";
         }
 
-        /// The success path re-resolves through Cli.Find instead of using the returned
+        /// The success path re-resolves through Cli.Locate instead of using the returned
         /// path, so the manual EditorPrefs override keeps precedence.
         void OnDownloadDone(string path, string error)
         {

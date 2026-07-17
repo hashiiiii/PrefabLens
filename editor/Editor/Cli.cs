@@ -152,14 +152,37 @@ namespace PrefabLens
         /// Default install location. Under Library, relative to cwd (= Unity project root).
         public static string DefaultPath => Path.Combine("Library", "PrefabLens", Version, BinaryName);
 
-        /// A manual EditorPrefs override takes precedence. Otherwise the default location. If neither exists, null.
-        public static string Find()
+        /// Result of the CLI lookup. MissingOverride is non-null when the EditorPrefs
+        /// override points at a file that does not exist — reportable instead of a silent
+        /// fallback, and exactly the state the #162 settings page will display.
+        public readonly struct Location
         {
-            var manual = EditorPrefs.GetString(CliPathPref, "");
-            if (!string.IsNullOrEmpty(manual) && File.Exists(manual))
-                return manual;
-            return File.Exists(DefaultPath) ? DefaultPath : null;
+            /// Executable to run, or null when neither the override nor the default exists.
+            public readonly string Path;
+
+            public readonly string MissingOverride;
+
+            public Location(string path, string missingOverride)
+            {
+                Path = path;
+                MissingOverride = missingOverride;
+            }
         }
+
+        /// Pure lookup order (EditMode test target): a manual override takes precedence;
+        /// an override pointing at a missing file is reported, not silently skipped.
+        public static Location Locate(string manual, string defaultPath)
+        {
+            if (!string.IsNullOrEmpty(manual))
+            {
+                if (File.Exists(manual))
+                    return new Location(manual, null);
+                return new Location(File.Exists(defaultPath) ? defaultPath : null, manual);
+            }
+            return new Location(File.Exists(defaultPath) ? defaultPath : null, null);
+        }
+
+        public static Location Locate() => Locate(EditorPrefs.GetString(CliPathPref, ""), DefaultPath);
 
         /// Fetch from GitHub Releases, verify against the release's SHA256SUMS, and extract under
         /// Library. Returns the executable path on success, throws on failure (TimeoutException
@@ -195,9 +218,7 @@ namespace PrefabLens
             }
             VerifySha256(bytes, sums, asset);
             ExtractTo(bytes, dir);
-
-            if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
-                RunProcess("chmod", "+x \"" + DefaultPath + "\"", ".", RunTimeoutMs);
+            MarkExecutable(DefaultPath);
             DeleteStaleVersions(Path.GetDirectoryName(dir), Version);
             return DefaultPath;
         }
@@ -286,6 +307,21 @@ namespace PrefabLens
                 using var dst = File.Create(dest);
                 src.CopyTo(dst);
             }
+        }
+
+        /// Make the extracted binary executable (no-op on Windows). A silently failed chmod
+        /// used to surface later as an unrelated Process.Start error on first run, so a
+        /// non-zero exit fails the download step here, naming the binary path.
+        public static void MarkExecutable(string path)
+        {
+            if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+                return;
+            var res = RunProcess("chmod", "+x \"" + path + "\"", ".", RunTimeoutMs);
+            if (res.ExitCode != 0)
+                throw new InvalidOperationException(
+                    $"chmod +x failed for {path}: "
+                        + (string.IsNullOrEmpty(res.Stderr) ? $"exit {res.ExitCode}" : res.Stderr.Trim())
+                );
         }
 
         /// Drop cached binaries of other versions once the pinned one is in place.

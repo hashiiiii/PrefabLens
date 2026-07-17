@@ -19,6 +19,7 @@ test {
     _ = render_tree;
     _ = render_html;
     _ = unity_path;
+    _ = builtin_refs;
 }
 
 test "parseArgs: no operands = HEAD vs worktree, bulk" {

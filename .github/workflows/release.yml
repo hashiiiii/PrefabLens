@@ -33,21 +33,15 @@ jobs:
         run: |
           set -euo pipefail
           [ "$GITHUB_REF_NAME" = "main" ] || { echo "::error::run this workflow from main (got $GITHUB_REF_NAME)"; exit 1; }
-      - name: Bump, commit, and tag
-        env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
-          APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
+      # The CLI compiles its version out of build.zig.zon, so the bump must
+      # precede the builds. The commit/tag/push happens after the builds so a
+      # failed build leaves nothing on origin and the workflow can be re-run.
+      - name: Bump version
         run: |
           set -euo pipefail
-          # Author the commit as the app; the +<id> email links it to the bot account.
-          user_id=$(gh api "/users/${APP_SLUG}[bot]" --jq .id)
-          git config user.name "${APP_SLUG}[bot]"
-          git config user.email "${user_id}+${APP_SLUG}[bot]@users.noreply.github.com"
           bump-my-version bump --new-version "$VERSION"
+          # Stage the bump now so build outputs cannot leak into the commit.
           git add -u
-          git diff --cached --quiet || git commit -m "chore: release v$VERSION"
-          git tag "v$VERSION"
-          git push --atomic origin main "v$VERSION"
       - name: Build CLI for all targets
         run: |
           set -euo pipefail
@@ -70,6 +64,19 @@ jobs:
           pnpm -C extension build
           # Zip the dist contents (not the directory) so manifest.json sits at the zip root
           (cd extension/dist && zip -r "../../dist/prefablens-extension-$VERSION.zip" .)
+      - name: Commit, tag, and push
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
+        run: |
+          set -euo pipefail
+          # Author the commit as the app; the +<id> email links it to the bot account.
+          user_id=$(gh api "/users/${APP_SLUG}[bot]" --jq .id)
+          git config user.name "${APP_SLUG}[bot]"
+          git config user.email "${user_id}+${APP_SLUG}[bot]@users.noreply.github.com"
+          git diff --cached --quiet || git commit -m "chore: release v$VERSION"
+          git tag "v$VERSION"
+          git push --atomic origin main "v$VERSION"
       - name: Create release
         env:
           # Publish as the App so the release isn't attributed to github-actions[bot].

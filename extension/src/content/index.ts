@@ -22,7 +22,7 @@ import { type DiffPage, type FileEntry, parseDiffUrl, parsePrPage, scanUnityFile
 import { fillDeviceCode } from "./devicePage";
 import { createSignIn, type PendingSignIn } from "./signin";
 import { createToggle, type Toggle, type View } from "./toggle";
-import { createViewRegistry } from "./views";
+import { createViewRegistry, type ViewEntry } from "./views";
 import { createViewState, type ViewState } from "./viewstate";
 
 const ERROR_TEXT: Record<BackgroundError, string> = {
@@ -39,6 +39,18 @@ const views = createViewRegistry();
 
 function countUnresolved(json: DiffV2): number {
   return json.unresolvedGuids.filter((g) => !Object.hasOwn(json.resolved ?? {}, g)).length;
+}
+
+// If the final push is lost (dropped tab message, killed service worker), flip the
+// indicator to the retryable incomplete state instead of spinning forever.
+const WATCHDOG_MS = 120_000;
+
+function armWatchdog(view: ViewEntry): void {
+  clearTimeout(view.watchdog);
+  view.watchdog = window.setTimeout(
+    () => render(view.root, view.json, { incomplete: { onRetry: view.retry } }),
+    WATCHDOG_MS,
+  );
 }
 
 // Targets of the global switch: drives the toggle + display of already-attached files from outside
@@ -174,11 +186,28 @@ function attachToggle(state: ViewState, page: DiffPage, entry: FileEntry): void 
         force,
       }).then((res) => {
         if (res.ok) {
-          views.set(viewKey, { root, json: res.json });
+          views.set(viewKey, {
+            root,
+            json: res.json,
+            // Retry re-runs the whole request: the diff itself is cached, so this only
+            // re-enters background resolution (requested must reset or request() no-ops).
+            retry: () => {
+              requested = false;
+              request(force);
+            },
+          });
+          if (res.pending) armWatchdog(must(views.get(viewKey)));
           // Always show it while pending: even if all names are resolved, source merging may remain
           return render(root, res.json, { resolving: res.pending ? Math.max(countUnresolved(res.json), 1) : 0 });
         }
         requested = false; // don't cache errors: let the next toggle re-fetch
+        const view = views.get(viewKey);
+        if (view) {
+          // A failed retry must not wipe the diff the user is reading: keep the
+          // tree and re-offer the retry affordance instead of a bare error panel.
+          render(root, view.json, { incomplete: { onRetry: view.retry } });
+          return;
+        }
         if (res.error === "too-large") renderTooLarge(root, res.bytes, () => request(true));
         else if (res.error === "pat-missing" || res.error === "auth-failed") {
           authRetries.add(() => {
@@ -256,8 +285,15 @@ async function init(): Promise<void> {
     if (msg?.type !== "guidResolved") return;
     const view = views.get(`${targetKey(msg.owner, msg.repo, msg.target)}:${msg.path}`);
     if (!view) return; // already navigated to a different diff page, etc.: drop silently
+    clearTimeout(view.watchdog);
     // The final push replaces json (mergeSources may change the structure), an intermediate push merges resolved
     view.json = msg.json ?? { ...view.json, resolved: { ...view.json.resolved, ...msg.resolved } };
+    if (msg.done && msg.status !== undefined && msg.status !== "complete") {
+      // The run gave up: keep the names that did arrive, offer a manual retry (#194).
+      render(view.root, view.json, { incomplete: { onRetry: view.retry } });
+      return;
+    }
+    if (!msg.done) armWatchdog(view);
     render(view.root, view.json, { resolving: msg.done ? 0 : Math.max(countUnresolved(view.json), 1) });
   });
 

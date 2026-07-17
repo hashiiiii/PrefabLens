@@ -1,7 +1,7 @@
 import { type ChangedFile, type GithubClient, RateLimitError, type RefPair } from "../github/client";
 import { applyResolved, type GuidCache } from "../github/guids";
 import { type RepoIndexStore, syncRepoIndex } from "../github/repoIndex";
-import type { DiffV2, GuidResolvedPush, SemanticDiffRequest } from "../types";
+import type { DiffV2, GuidResolvedPush, ResolutionStatus, SemanticDiffRequest } from "../types";
 import type { Differ } from "../wasm/differ";
 import { createPromiseCache } from "./promiseCache";
 
@@ -44,7 +44,7 @@ export type Resolution<C extends SearchClient> = {
     owner: string,
     repo: string,
     repoKey: string,
-  ): Promise<Record<string, string>>;
+  ): Promise<{ resolved: Record<string, string>; rateLimited: boolean }>;
   getRepoIndex(
     client: C,
     owner: string,
@@ -62,7 +62,7 @@ export type Resolution<C extends SearchClient> = {
     owner: string,
     repo: string,
     repoKey: string,
-  ): Promise<DiffV2>;
+  ): Promise<{ json: DiffV2; status: ResolutionStatus }>;
   resolveRemaining(
     first: DiffV2,
     remaining: string[],
@@ -96,8 +96,8 @@ export function createResolution<C extends SearchClient>(deps: ResolutionDeps<C>
     owner: string,
     repo: string,
     repoKey: string,
-  ): Promise<Record<string, string>> {
-    if (!guids.length) return {};
+  ): Promise<{ resolved: Record<string, string>; rateLimited: boolean }> {
+    if (!guids.length) return { resolved: {}, rateLimited: false };
     // hasOwn: guids are arbitrary strings, so 'constructor' etc. don't falsely hit Object.prototype
     // The cached lookup covers all guids without going through misses: since index resolutions also land in guidCache,
     // a cached name is always emitted even if it's in misses (the search gatekeeper)
@@ -111,6 +111,7 @@ export function createResolution<C extends SearchClient>(deps: ResolutionDeps<C>
     }
     const searchable = unknown.filter((g) => !misses.has(`${repoKey}:${g}`));
     const found: Record<string, string> = {};
+    let rateLimited = false;
     for (const g of searchable.slice(0, MAX_SEARCHES)) {
       const key = `${repoKey}:${g}`;
       try {
@@ -118,27 +119,32 @@ export function createResolution<C extends SearchClient>(deps: ResolutionDeps<C>
         if (path) resolved[g] = found[g] = path;
         else misses.add(key);
       } catch (err) {
-        if (err instanceof RateLimitError) break;
+        // A rate limit truncates the run: report it instead of degrading silently (#194).
+        if (err instanceof RateLimitError) {
+          rateLimited = true;
+          break;
+        }
         misses.add(key);
       }
     }
     if (Object.keys(found).length) await deps.guidCache.save(repoKey, found);
-    return resolved;
+    return { resolved, rateLimited };
   }
 
-  /** Thin wrapper that resolves guids unresolved by in-PR .meta in cache → Code Search order.
-   *  mergeSources calls it internally, so keep the signature and behavior unchanged. */
+  /** Thin wrapper that resolves guids unresolved by in-PR .meta in cache → Code Search
+   *  order, reporting whether a rate limit truncated the search (mergeSources folds the
+   *  flag into its own status). */
   async function searchUnresolved(
     json: DiffV2,
     client: C,
     owner: string,
     repo: string,
     repoKey: string,
-  ): Promise<DiffV2> {
+  ): Promise<{ json: DiffV2; rateLimited: boolean }> {
     const resolved = { ...json.resolved };
     const pending = json.unresolvedGuids.filter((g) => !Object.hasOwn(resolved, g));
     const found = await searchGuids(pending, client, owner, repo, repoKey);
-    return { ...json, resolved: { ...resolved, ...found } };
+    return { json: { ...json, resolved: { ...resolved, ...found.resolved } }, rateLimited: found.rateLimited };
   }
 
   /** Fetches and memoizes the whole-repo guid index. A repo that hit a rate limit is pinned to fallback for the SW lifetime. */
@@ -173,9 +179,10 @@ export function createResolution<C extends SearchClient>(deps: ResolutionDeps<C>
     owner: string,
     repo: string,
     repoKey: string,
-  ): Promise<DiffV2> {
+  ): Promise<{ json: DiffV2; status: ResolutionStatus }> {
     const assets = new Map<string, Uint8Array>();
     let current = first;
+    let rateLimited = false;
     for (let round = 0; round < MAX_SOURCE_ROUNDS; round++) {
       const needed = (current.neededSources ?? []).filter((s) => !assets.has(s.guid));
       if (!needed.length) break;
@@ -189,8 +196,9 @@ export function createResolution<C extends SearchClient>(deps: ResolutionDeps<C>
         let bytes: Uint8Array | null = null;
         try {
           bytes = await deps.fetchBlob(client, owner, repo, path, sha, blobSha);
-        } catch {
-          return current; // rate limit etc.: degrade to the first-pass diff
+        } catch (err) {
+          // degrade to the first-pass diff, but tell the caller why (#194)
+          return { json: current, status: err instanceof RateLimitError ? "rateLimited" : "failed" };
         }
         if (!bytes) continue;
         // Sources resolved by guid can be binary-serialized too: merging
@@ -204,12 +212,21 @@ export function createResolution<C extends SearchClient>(deps: ResolutionDeps<C>
       try {
         merged = differ.diffWithAssets(before, after, assets);
       } catch {
-        return current; // a merge failure degrades to the current result
+        return { json: current, status: "failed" }; // a merge failure degrades to the current result
       }
       // Merging surfaces new external references (script/material) inside the source, so resolve again.
-      current = await searchUnresolved(applyResolved(merged, ctx.guidIndex), client, owner, repo, repoKey);
+      const next = await searchUnresolved(applyResolved(merged, ctx.guidIndex), client, owner, repo, repoKey);
+      rateLimited ||= next.rateLimited;
+      current = next.json;
     }
-    return current;
+    return { json: current, status: rateLimited ? "rateLimited" : "complete" };
+  }
+
+  /** rateLimited wins over failed: it is the outcome a manual retry is most likely to fix. */
+  function combine(a: ResolutionStatus, b: ResolutionStatus): ResolutionStatus {
+    if (a === "rateLimited" || b === "rateLimited") return "rateLimited";
+    if (a === "failed" || b === "failed") return "failed";
+    return "complete";
   }
 
   /** Runs the rest of the 3-stage resolution (index → Code Search) and source re-merge in the background, delivering results via push.
@@ -248,18 +265,29 @@ export function createResolution<C extends SearchClient>(deps: ResolutionDeps<C>
         }
       }
       // Only guids that aren't indexable or aren't in the index go to Code Search
-      const fromSearch = leftover.length ? await searchGuids(leftover, client, req.owner, req.repo, repoKey) : {};
-      let json: DiffV2 = { ...first, resolved: { ...first.resolved, ...fromIndex, ...fromSearch } };
+      const search = leftover.length
+        ? await searchGuids(leftover, client, req.owner, req.repo, repoKey)
+        : { resolved: {}, rateLimited: false };
+      let status: ResolutionStatus = search.rateLimited ? "rateLimited" : "complete";
+      let json: DiffV2 = { ...first, resolved: { ...first.resolved, ...fromIndex, ...search.resolved } };
       if (json.neededSources?.length) {
         // Resolution advanced, so redo source merging (picks up the case where the source guid resolved this time)
         const differ = await deps.getDiffer();
         const [before, after] = await deps.fetchPair(client, ctx, req.owner, req.repo, req.path);
-        json = await mergeSources(json, differ, before, after, ctx, client, req.owner, req.repo, repoKey);
+        const merged = await mergeSources(json, differ, before, after, ctx, client, req.owner, req.repo, repoKey);
+        json = merged.json;
+        status = combine(status, merged.status);
       }
-      push({ type: "guidResolved", ...at, resolved: {}, json, done: true }); // the final push replaces json
+      push({ type: "guidResolved", ...at, resolved: {}, json, done: true, status }); // the final push replaces json
     } catch (err) {
       console.debug("prefablens: guid resolution aborted", err);
-      push({ type: "guidResolved", ...at, resolved: {}, done: true });
+      push({
+        type: "guidResolved",
+        ...at,
+        resolved: {},
+        done: true,
+        status: err instanceof RateLimitError ? "rateLimited" : "failed",
+      });
     }
   }
 

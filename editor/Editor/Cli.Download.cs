@@ -1,0 +1,228 @@
+using System;
+using System.IO;
+using System.IO.Compression;
+using System.Net.Http;
+using System.Runtime.InteropServices;
+using System.Security.Cryptography;
+using System.Text;
+using System.Threading;
+using System.Threading.Tasks;
+
+namespace PrefabLens
+{
+    // Fetch, verify, extract, and clean up the pinned CLI release.
+    public static partial class Cli
+    {
+        /// Upper bound on the whole download (SHA256SUMS + zip). Explicit so a stalled connection
+        /// can't silently hold the status line for HttpClient's default 100 s; generous for slow
+        /// links because the window offers Cancel.
+        public const int DownloadTimeoutMs = 120_000;
+
+        public static string ReleaseAssetName(bool isWindows, bool isMac, bool isArm64)
+        {
+            if (isWindows)
+                return isArm64 ? "prefablens-windows-arm64.zip" : "prefablens-windows-x64.zip";
+            if (isMac)
+                return isArm64 ? "prefablens-macos-arm64.zip" : "prefablens-macos-x64.zip";
+            return isArm64 ? "prefablens-linux-arm64.zip" : "prefablens-linux-x64.zip";
+        }
+
+        public static string DownloadUrl(string version, string assetName) =>
+            $"https://github.com/hashiiiii/PrefabLens/releases/download/v{version}/{assetName}";
+
+        /// Hex digest for assetName from `shasum -a 256` output (the release's SHA256SUMS); null when absent.
+        public static string ExpectedSha256(string sha256Sums, string assetName)
+        {
+            foreach (var line in sha256Sums.Split('\n'))
+            {
+                var parts = line.Trim().Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
+                if (parts.Length == 2 && parts[1] == assetName)
+                    return parts[0];
+            }
+            return null;
+        }
+
+        public static string Sha256Hex(byte[] bytes)
+        {
+            using var sha = SHA256.Create();
+            var hash = sha.ComputeHash(bytes);
+            var sb = new StringBuilder(hash.Length * 2);
+            foreach (var b in hash)
+                sb.Append(b.ToString("x2"));
+            return sb.ToString();
+        }
+
+        /// Reject a tampered or corrupted release asset before it reaches ExtractTo.
+        public static void VerifySha256(byte[] bytes, string sha256Sums, string assetName)
+        {
+            var expected = ExpectedSha256(sha256Sums, assetName);
+            if (expected == null)
+                throw new InvalidOperationException($"SHA256SUMS has no entry for {assetName}");
+            var actual = Sha256Hex(bytes);
+            if (!string.Equals(actual, expected, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException(
+                    $"SHA256 mismatch for {assetName}: expected {expected}, got {actual}"
+                );
+        }
+
+        /// Fetch from GitHub Releases, verify against the release's SHA256SUMS, and extract under
+        /// Library. Returns the executable path on success, throws on failure (TimeoutException
+        /// after DownloadTimeoutMs, OperationCanceledException when ct is cancelled).
+        /// Synchronous and free of Unity API calls so it can run on a worker thread (see DownloadAsync).
+        public static string Download(Action<long, long> onProgress = null, CancellationToken ct = default)
+        {
+            var asset = ReleaseAssetName(
+                RuntimeInformation.IsOSPlatform(OSPlatform.Windows),
+                RuntimeInformation.IsOSPlatform(OSPlatform.OSX),
+                RuntimeInformation.ProcessArchitecture == Architecture.Arm64
+            );
+            var dir = Path.GetDirectoryName(DefaultPath);
+            Directory.CreateDirectory(dir);
+
+            using var http = new HttpClient();
+            // One deadline for the whole operation. HttpClient.Timeout is disabled because it
+            // only covers the headers once the body is streamed.
+            http.Timeout = Timeout.InfiniteTimeSpan;
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            cts.CancelAfter(DownloadTimeoutMs);
+            byte[] bytes;
+            string sums;
+            try
+            {
+                // SHA256SUMS first: a missing/broken release fails fast, before the multi-MB zip.
+                sums = Encoding.UTF8.GetString(FetchBytes(http, DownloadUrl(Version, "SHA256SUMS"), null, cts.Token));
+                bytes = FetchBytes(http, DownloadUrl(Version, asset), onProgress, cts.Token);
+            }
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+            {
+                throw new TimeoutException($"download timed out after {DownloadTimeoutMs / 1000}s");
+            }
+            VerifySha256(bytes, sums, asset);
+            ExtractTo(bytes, dir);
+            MarkExecutable(DefaultPath);
+            DeleteStaleVersions(Path.GetDirectoryName(dir), Version);
+            return DefaultPath;
+        }
+
+        /// Run Download() off the main thread. Progress and the outcome are posted back through
+        /// the caller's SynchronizationContext (Unity's main thread when called from the window).
+        /// Exactly one of (path, error) is non-null.
+        public static void DownloadAsync(
+            Action<string, string> onDone,
+            Action<long, long> onProgress = null,
+            CancellationToken ct = default
+        )
+        {
+            var ctx = SynchronizationContext.Current;
+            // Coalesce the per-chunk callbacks (network reads can be TCP-segment sized) so the
+            // main thread sees one post per visible change, not thousands per download.
+            Action<long, long> progress = null;
+            if (onProgress != null)
+            {
+                long lastStep = -1;
+                progress = (read, total) =>
+                {
+                    var step = total > 0 ? read * 100 / total : read >> 18;
+                    if (step == lastStep)
+                        return;
+                    lastStep = step;
+                    Post(ctx, () => onProgress(read, total));
+                };
+            }
+            Task.Run(() =>
+            {
+                string path = null;
+                string error = null;
+                try
+                {
+                    path = Download(progress, ct);
+                }
+                catch (Exception e)
+                {
+                    error = e.Message;
+                }
+                Post(ctx, () => onDone(path, error));
+            });
+        }
+
+        /// GET url into memory, reporting (bytesSoFar, contentLengthOrMinusOne) after each chunk.
+        /// Blocking by design: Download() runs on a worker thread (see DownloadAsync).
+        public static byte[] FetchBytes(
+            HttpClient http,
+            string url,
+            Action<long, long> onProgress,
+            CancellationToken ct
+        )
+        {
+            // GetAwaiter().GetResult() unwraps AggregateException so callers see the original message.
+            using var res = http.SendAsync(
+                    new HttpRequestMessage(HttpMethod.Get, url),
+                    HttpCompletionOption.ResponseHeadersRead,
+                    ct
+                )
+                .GetAwaiter()
+                .GetResult();
+            res.EnsureSuccessStatusCode();
+            var total = res.Content.Headers.ContentLength ?? -1;
+            using var src = res.Content.ReadAsStreamAsync().GetAwaiter().GetResult();
+            // Sized up front so a multi-MB body doesn't go through doubling reallocations.
+            using var dst = new MemoryStream(total > 0 && total <= int.MaxValue ? (int)total : 0);
+            var buf = new byte[64 * 1024];
+            int n;
+            while ((n = src.ReadAsync(buf, 0, buf.Length, ct).GetAwaiter().GetResult()) > 0)
+            {
+                dst.Write(buf, 0, n);
+                onProgress?.Invoke(dst.Length, total);
+            }
+            return dst.ToArray();
+        }
+
+        public static void ExtractTo(byte[] zipBytes, string dir)
+        {
+            using var zip = new ZipArchive(new MemoryStream(zipBytes));
+            foreach (var entry in zip.Entries)
+            {
+                // ZipFileExtensions (ExtractToFile) isn't referenceable under netstandard, so copy manually
+                var dest = Path.Combine(dir, entry.Name);
+                using var src = entry.Open();
+                using var dst = File.Create(dest);
+                src.CopyTo(dst);
+            }
+        }
+
+        /// Make the extracted binary executable (no-op on Windows). A silently failed chmod
+        /// used to surface later as an unrelated Process.Start error on first run, so a
+        /// non-zero exit fails the download step here, naming the binary path.
+        public static void MarkExecutable(string path)
+        {
+            if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+                return;
+            var res = RunProcess("chmod", "+x \"" + path + "\"", ".", RunTimeoutMs);
+            if (res.ExitCode != 0)
+                throw new InvalidOperationException(
+                    $"chmod +x failed for {path}: "
+                        + (string.IsNullOrEmpty(res.Stderr) ? $"exit {res.ExitCode}" : res.Stderr.Trim())
+                );
+        }
+
+        /// Drop cached binaries of other versions once the pinned one is in place.
+        /// Best-effort: a locked directory (e.g. an old prefablens.exe still running
+        /// on Windows) must not fail the download that just succeeded.
+        public static void DeleteStaleVersions(string root, string keep)
+        {
+            if (!Directory.Exists(root))
+                return;
+            foreach (var dir in Directory.GetDirectories(root))
+            {
+                if (Path.GetFileName(dir) == keep)
+                    continue;
+                try
+                {
+                    Directory.Delete(dir, recursive: true);
+                }
+                catch (IOException) { }
+                catch (UnauthorizedAccessException) { }
+            }
+        }
+    }
+}

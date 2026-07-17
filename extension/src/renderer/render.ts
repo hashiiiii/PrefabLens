@@ -101,6 +101,20 @@ export function renderSignIn(root: ShadowRoot, message: string, onSignIn: () => 
   container.append(note("pl-error", message, ALERT), button);
 }
 
+/** Non-github.com instances: the device flow cannot run there, so point at the options page instead. */
+export function renderPatNeeded(root: ShadowRoot, onOpenOptions: () => void): void {
+  const container = mount(root);
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "pl-render";
+  button.textContent = "Open extension options";
+  button.addEventListener("click", onOpenOptions);
+  container.append(
+    note("pl-error", "Set a personal access token for this GitHub instance in the extension options.", ALERT),
+    button,
+  );
+}
+
 /** Device-flow pending state: keeps the user code visible while the user authorizes on GitHub. */
 export function renderSignInPending(
   root: ShadowRoot,

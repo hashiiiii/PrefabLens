@@ -1,8 +1,10 @@
 import { pollForToken, requestDeviceCode } from "../github/deviceFlow";
+import { GITHUB_ORIGIN, type Instances } from "../github/hosts";
 import {
   render,
   renderError,
   renderLoading,
+  renderPatNeeded,
   renderSignIn,
   renderSignInPending,
   renderTooLarge,
@@ -11,6 +13,7 @@ import {
   type BackgroundError,
   type DiffV2,
   type GuidResolvedPush,
+  type OpenOptionsRequest,
   type PrefetchRequest,
   type SemanticDiffRequest,
   type SemanticDiffResponse,
@@ -63,6 +66,9 @@ let prefetchedPr = ""; // send prefetch just once across all PR tabs, including 
 // Files whose panels are stuck on an auth error: all retried once a token lands in storage.
 const authRetries = createAuthRetries();
 
+// The device flow (and its /login/device autofill) is github.com-only; enterprise instances use a PAT.
+const onGithubCom = location.origin === GITHUB_ORIGIN;
+
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 const signIn = createSignIn({
   // Same-origin on github.com: the device flow needs no background relay and no extra permissions.
@@ -77,6 +83,14 @@ const signIn = createSignIn({
 
 /** Auth-error panel driving the device flow; failures land back here so the user can retry. */
 function signInPanel(root: ShadowRoot, message: string): void {
+  if (!onGithubCom) {
+    // No per-instance OAuth app exists, so the device flow cannot run here: steer to the PAT setting.
+    renderPatNeeded(
+      root,
+      () => void chrome.runtime.sendMessage({ type: "openOptions" } satisfies OpenOptionsRequest).catch(() => {}),
+    );
+    return;
+  }
   renderSignIn(root, message, () => {
     void signIn({
       showPending: (userCode, verificationUri) =>
@@ -254,10 +268,13 @@ function requestDiff(req: SemanticDiffRequest): Promise<SemanticDiffResponse> {
 
 async function init(): Promise<void> {
   // On the device-verification page the only job is pre-filling the code the PR page issued.
+  // A GHES /login/device page never gets the autofill: the pending code was issued by github.com.
   if (location.pathname === "/login/device") {
-    const stored = await chrome.storage.local.get(["signin"]).catch(() => ({}) as Record<string, unknown>);
-    const pending = stored.signin as PendingSignIn | undefined;
-    if (pending) fillDeviceCode(document, pending, Date.now());
+    if (onGithubCom) {
+      const stored = await chrome.storage.local.get(["signin"]).catch(() => ({}) as Record<string, unknown>);
+      const pending = stored.signin as PendingSignIn | undefined;
+      if (pending) fillDeviceCode(document, pending, Date.now());
+    }
     return;
   }
 
@@ -283,6 +300,9 @@ async function init(): Promise<void> {
       // A token just landed (this tab's own flow or another surface): retry every auth-blocked panel.
       authRetries.flush();
     }
+    // Same cue for enterprise instances: a PAT saved in the options page for this origin.
+    const instances = changes.instances?.newValue as Instances | undefined;
+    if (instances?.[location.origin]?.pat) authRetries.flush();
   });
 
   // guid resolution push from background (the second stage of the two-stage response): re-render if the matching view exists

@@ -7,6 +7,7 @@ import {
   render,
   renderError,
   renderLoading,
+  renderPatNeeded,
   renderSignIn,
   renderSignInPending,
   renderTooLarge,
@@ -596,6 +597,20 @@ describe("renderSignIn", () => {
     expect(button?.textContent).toBe("Sign in with GitHub");
     button?.click();
     expect(clicks).toBe(1);
+  });
+});
+
+describe("renderPatNeeded", () => {
+  it("renders the PAT instruction and an options button that invokes the callback", () => {
+    const root = freshRoot();
+    let opened = 0;
+    renderPatNeeded(root, () => opened++);
+    // Non-github.com instances cannot run the device flow: the panel points at the options page instead
+    expect(root.querySelector(".pl-error")?.textContent).toContain("personal access token");
+    const button = root.querySelector<HTMLButtonElement>("button.pl-render");
+    expect(button?.textContent).toBe("Open extension options");
+    button?.click();
+    expect(opened).toBe(1);
   });
 });
 

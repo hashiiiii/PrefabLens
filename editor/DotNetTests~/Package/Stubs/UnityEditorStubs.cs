@@ -19,6 +19,26 @@ namespace UnityEditor
         public MenuItem(string itemName, bool isValidateFunction = false) { }
     }
 
+    public enum SettingsScope
+    {
+        User,
+        Project,
+    }
+
+    public class SettingsProvider
+    {
+        public SettingsProvider(
+            string path,
+            SettingsScope scopes,
+            System.Collections.Generic.IEnumerable<string> keywords = null
+        ) { }
+
+        public Action<string, UnityEngine.UIElements.VisualElement> activateHandler { get; set; }
+    }
+
+    [AttributeUsage(AttributeTargets.Method)]
+    public sealed class SettingsProviderAttribute : Attribute { }
+
     public static class EditorPrefs
     {
         // In-memory store: PathOverride round-trips are real behavior under the
@@ -38,6 +58,8 @@ namespace UnityEditor
         public static void DisplayProgressBar(string title, string info, float progress) { }
 
         public static void ClearProgressBar() { }
+
+        public static string OpenFilePanel(string title, string directory, string extension) => "";
     }
 
     public static class AssetDatabase

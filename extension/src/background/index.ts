@@ -1,4 +1,5 @@
 import { GithubClient } from "../github/client";
+import { GITHUB_ORIGIN, type Instances, permissionPatterns, scriptId, scriptSyncPlan } from "../github/hosts";
 import type { BackgroundRequest, GuidResolvedPush } from "../types";
 import { createDiffer, type Differ } from "../wasm/differ";
 import { createSessionDiffStore } from "./diffStore";
@@ -16,11 +17,16 @@ const queuedFetch =
     queue(() => fetch(input, init), { front });
 
 const handler = createHandler({
-  async getSettings() {
-    const stored = await chrome.storage.local.get(["pat"]);
-    return { pat: stored.pat as string | undefined };
+  async getSettings(origin) {
+    // github.com keeps its legacy `pat` key (device flow writes there); other instances live under `instances`.
+    if (origin === GITHUB_ORIGIN) {
+      const stored = await chrome.storage.local.get(["pat"]);
+      return { pat: stored.pat as string | undefined };
+    }
+    const stored = await chrome.storage.local.get(["instances"]);
+    return { pat: ((stored.instances as Instances | undefined) ?? {})[origin]?.pat };
   },
-  makeClient: (base, token, lane) => new GithubClient(base, token, queuedFetch(lane === "user")),
+  makeClient: (api, token, lane) => new GithubClient(api, token, queuedFetch(lane === "user")),
   getDiffer() {
     // Lazy singleton. If the SW restarts, just re-fetch.
     differ ??= fetch(chrome.runtime.getURL("prefablens.wasm"))
@@ -66,6 +72,8 @@ const handler = createHandler({
 });
 
 chrome.runtime.onMessage.addListener((msg: BackgroundRequest, sender, sendResponse) => {
+  // The sender is authoritative for the instance origin: a message can be crafted, sender.origin cannot.
+  const senderOrigin = sender.origin ?? (sender.url ? new URL(sender.url).origin : undefined);
   if (msg?.type === "semanticDiff") {
     const tabId = sender.tab?.id;
     // semanticDiff requests always originate in a tab content script; guard defensively so a non-tab sender no-ops.
@@ -81,9 +89,41 @@ chrome.runtime.onMessage.addListener((msg: BackgroundRequest, sender, sendRespon
       };
       attempt(2);
     };
-    void handler.semanticDiff(msg, push).then(sendResponse);
+    void handler.semanticDiff(senderOrigin ? { ...msg, origin: senderOrigin } : msg, push).then(sendResponse);
     return true; // async response
   }
-  if (msg?.type === "prefetch") void handler.prefetch(msg);
-  return undefined; // prefetch doesn't respond (fire-and-forget)
+  if (msg?.type === "prefetch") void handler.prefetch(senderOrigin ? { ...msg, origin: senderOrigin } : msg);
+  if (msg?.type === "openOptions") void chrome.runtime.openOptionsPage();
+  return undefined; // prefetch/openOptions don't respond (fire-and-forget)
 });
+
+/** Re-registers instance content scripts. Dynamic registrations are cleared on extension
+ *  update and permissions can be revoked from chrome://extensions, so every SW start
+ *  reconciles the registry against permission-granted instances. */
+async function syncInstanceScripts(): Promise<void> {
+  const stored = await chrome.storage.local.get(["instances"]);
+  const instances = (stored.instances as Instances | undefined) ?? {};
+  const granted: string[] = [];
+  for (const origin of Object.keys(instances)) {
+    const ok = await chrome.permissions.contains({ origins: permissionPatterns(origin) }).catch(() => false);
+    if (ok) granted.push(origin);
+  }
+  const registered = await chrome.scripting.getRegisteredContentScripts();
+  const plan = scriptSyncPlan(
+    registered.map((s) => s.id),
+    granted,
+  );
+  if (plan.remove.length) await chrome.scripting.unregisterContentScripts({ ids: plan.remove }).catch(() => {});
+  if (plan.add.length) {
+    await chrome.scripting.registerContentScripts(
+      plan.add.map((origin) => ({
+        id: scriptId(origin),
+        matches: [`${origin}/*`],
+        js: ["content.js"],
+        runAt: "document_idle" as const,
+        persistAcrossSessions: true,
+      })),
+    );
+  }
+}
+void syncInstanceScripts().catch((err: unknown) => console.debug("prefablens: instance script sync failed", err));

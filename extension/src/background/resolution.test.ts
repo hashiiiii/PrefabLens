@@ -18,6 +18,7 @@ const CTX: DiffContext = {
 
 const REQ: SemanticDiffRequest = {
   type: "semanticDiff",
+  origin: "https://github.com",
   owner: "o",
   repo: "r",
   target: { kind: "pull", prNumber: 1 },

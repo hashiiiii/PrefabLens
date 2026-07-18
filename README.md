@@ -19,7 +19,7 @@ Try the [live demo](https://hashiiiii.github.io/PrefabLens/).
 ## Unity Editor
 
 <p align="center">
-  <img width="1087" height="750" src="docs/images/editor-01.gif" alt="editor-01" />
+  <img width="717" height="495" src="docs/images/editor-01.gif" alt="editor-01" />
 </p>
 
 ## CLI

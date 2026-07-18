@@ -372,7 +372,7 @@ main > .hint { max-width: 720px; }
   line-height: 1.17;
   letter-spacing: -0.8px;
 }
-.window-shot { display: block; width: 100%; }
+.window-shot { display: block; width: 100%; height: auto; }
 
 .terminal pre {
   margin: 0;

@@ -51,27 +51,44 @@ pub fn refDisplay(r: model.Ref, resolved: ?*const core.json.Resolver) RefDisplay
     return .{ .file_id = r.file_id };
 }
 
-/// Heading status for the override group starting at `start`: that status if
-/// uniform within the group, modified if mixed.
-pub fn groupHeadingStatus(overrides: []const model.OverrideDiff, start: usize) model.Status {
-    const first = overrides[start];
-    for (overrides[start + 1 ..]) |ov| {
-        if (!std.mem.eql(u8, ov.group, first.group)) break;
-        if (ov.status != first.status) return .modified;
+/// Iterator over the consecutive same-group runs of an override list; each
+/// run renders as one card. The single place that derives group boundaries
+/// from `.group`, relying on the core invariant that same-group rows are
+/// contiguous (pinned by a test in core/src/diff_overrides.zig).
+pub const OverrideGroups = struct {
+    rest: []const model.OverrideDiff,
+
+    /// Rows of the next group, or null when exhausted. Never empty:
+    /// `group[0].group` is the group's heading name.
+    pub fn next(it: *OverrideGroups) ?[]const model.OverrideDiff {
+        if (it.rest.len == 0) return null;
+        var end: usize = 1;
+        while (end < it.rest.len and std.mem.eql(u8, it.rest[end].group, it.rest[0].group)) end += 1;
+        const group = it.rest[0..end];
+        it.rest = it.rest[end..];
+        return group;
     }
-    return first.status;
+};
+
+pub fn overrideGroups(overrides: []const model.OverrideDiff) OverrideGroups {
+    return .{ .rest = overrides };
+}
+
+/// Heading status for one group slice yielded by `overrideGroups`: the rows'
+/// shared status if uniform, modified if mixed.
+pub fn groupHeadingStatus(group: []const model.OverrideDiff) model.Status {
+    const first = group[0].status;
+    for (group[1..]) |ov| {
+        if (ov.status != first) return .modified;
+    }
+    return first;
 }
 
 /// Number of consecutive-group cards the overrides collapse into.
 pub fn overrideGroupCount(overrides: []const model.OverrideDiff) usize {
+    var groups = overrideGroups(overrides);
     var n: usize = 0;
-    var current: []const u8 = "";
-    for (overrides) |ov| {
-        if (!std.mem.eql(u8, current, ov.group)) {
-            current = ov.group;
-            n += 1;
-        }
-    }
+    while (groups.next() != null) n += 1;
     return n;
 }
 
@@ -86,6 +103,38 @@ pub fn unresolvedCount(res: model.DiffResult) usize {
 }
 
 const builtin_refs = @import("builtin_refs.zig");
+
+test "overrideGroups splits contiguous rows at each group-name change" {
+    const rows = [_]model.OverrideDiff{
+        .{ .group = "Transform", .label = "m_LocalPosition.x", .status = .modified, .before = null, .after = null },
+        .{ .group = "Transform", .label = "m_LocalPosition.y", .status = .added, .before = null, .after = null },
+        .{ .group = "Overrides", .label = "maxHp", .status = .added, .before = null, .after = null },
+    };
+    var groups = overrideGroups(&rows);
+
+    // First run: both Transform rows in input order.
+    const transform = groups.next().?;
+    try std.testing.expectEqual(@as(usize, 2), transform.len);
+    try std.testing.expectEqualStrings("m_LocalPosition.x", transform[0].label);
+    try std.testing.expectEqualStrings("m_LocalPosition.y", transform[1].label);
+    // Mixed statuses within the group read as modified on the heading.
+    try std.testing.expectEqual(model.Status.modified, groupHeadingStatus(transform));
+
+    // Second run: the single Overrides row; a uniform group keeps its status.
+    const overrides = groups.next().?;
+    try std.testing.expectEqual(@as(usize, 1), overrides.len);
+    try std.testing.expectEqualStrings("Overrides", overrides[0].group);
+    try std.testing.expectEqual(model.Status.added, groupHeadingStatus(overrides));
+
+    try std.testing.expectEqual(@as(?[]const model.OverrideDiff, null), groups.next());
+    // The card count is exactly the number of runs the iterator yields.
+    try std.testing.expectEqual(@as(usize, 2), overrideGroupCount(&rows));
+}
+
+test "overrideGroups yields nothing for an empty override list" {
+    var groups = overrideGroups(&.{});
+    try std.testing.expectEqual(@as(?[]const model.OverrideDiff, null), groups.next());
+}
 
 test "unresolvedCount ignores built-in guids" {
     var guids = [_][]const u8{ "abc123", builtin_refs.builtin_extra_guid };

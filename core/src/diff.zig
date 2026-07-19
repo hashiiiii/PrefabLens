@@ -2,7 +2,9 @@ const std = @import("std");
 const model = @import("model.zig");
 const testing = std.testing;
 
-fn findDoc(fd: FlatDiff, file_id: i64) ?DocDiff {
+// Test-only lookup of one document's diff by fileID.
+// pub: diff_overrides' tests use it too.
+pub fn findDoc(fd: FlatDiff, file_id: i64) ?DocDiff {
     for (fd.docs) |d| if (d.file_id == file_id) return d;
     return null;
 }
@@ -383,10 +385,6 @@ const diff_overrides = @import("diff_overrides.zig");
 const Node = model.Node;
 const Status = model.Status;
 const FieldDiff = model.FieldDiff;
-
-// Re-exported for instantiate, which reaches the override helpers through this module.
-pub const modKeyOf = diff_overrides.modKeyOf;
-pub const soleInstanceOverridesSkipping = diff_overrides.soleInstanceOverridesSkipping;
 
 pub const DocDiff = struct {
     file_id: i64,

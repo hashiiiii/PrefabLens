@@ -6,12 +6,10 @@ const std = @import("std");
 const model = @import("model.zig");
 const parser = @import("parser.zig");
 const diffmod = @import("diff.zig");
+const diff_overrides = @import("diff_overrides.zig");
 const tree = @import("tree.zig");
 
 pub const Assets = std.StringHashMapUnmanaged([]const u8);
-
-// Depth limit for nested expansion (same idea as tree.zig's max_instance_hops).
-const max_depth = 8;
 
 const Ctx = struct {
     arena: std.mem.Allocator,
@@ -54,7 +52,7 @@ fn expandNode(ctx: *Ctx, node: *model.ObjectDiff, docs: *std.AutoHashMap(i64, *m
     if (node.kind != .prefab_instance) return;
     if (node.status != .added and node.status != .removed) return;
     const guid = node.source_guid orelse return;
-    if (depth >= max_depth or inChain(ctx, guid)) return;
+    if (depth >= model.max_prefab_nesting or inChain(ctx, guid)) return;
     const side: model.SourceSide = if (node.status == .added) .after else .before;
     const bytes = ctx.assets.get(guid) orelse {
         try ctx.needed.put(ctx.arena, guid, side);
@@ -99,7 +97,7 @@ fn expandNode(ctx: *Ctx, node: *model.ObjectDiff, docs: *std.AutoHashMap(i64, *m
         node.children = try concatObjects(ctx.arena, node.children, sub.roots);
     }
     // Keep unapplied mods as rows (don't drop them silently).
-    const leftover = try diffmod.soleInstanceOverridesSkipping(ctx.arena, inst_doc, node.status, &applied);
+    const leftover = try diff_overrides.soleInstanceOverridesSkipping(ctx.arena, inst_doc, node.status, &applied);
     node.overrides = try concatOverrides(ctx.arena, leftover, inner_overrides);
 }
 
@@ -179,7 +177,7 @@ fn applyModifications(arena: std.mem.Allocator, inst_doc: *const model.Document,
             break;
         }
         if (!handled) handled = try pushDown(arena, src_docs, target.ref.file_id, pp, value, obj_ref);
-        if (handled) try applied.put(arena, try diffmod.modKeyOf(arena, target.ref.file_id, pp.scalar), {});
+        if (handled) try applied.put(arena, try diff_overrides.modKeyOf(arena, target.ref.file_id, pp.scalar), {});
     }
     return applied;
 }

@@ -84,16 +84,12 @@ fn instanceName(idx: *Index, pi_id: i64) []const u8 {
     return modificationValue(idx, pi_id, "m_Name") orelse "";
 }
 
-// Hop limit for walking the nesting chain. Stops even if stripped PrefabInstances
-// reference each other cyclically in a broken file (real projects nest a few levels).
-const max_instance_hops = 8;
-
 // Walk the m_PrefabInstance chain of a stripped PrefabInstance outward and
 // return the file_id of the real (non-stripped) PrefabInstance.
 fn resolveInstanceChain(idx: *Index, start_id: i64) ?i64 {
     var id = start_id;
     var hops: usize = 0;
-    while (hops < max_instance_hops) : (hops += 1) {
+    while (hops < model.max_prefab_nesting) : (hops += 1) {
         const doc = idx.structuralDoc(id) orelse return null;
         if (doc.class_id != 1001) return null;
         if (!doc.stripped) return id;

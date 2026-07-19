@@ -9,10 +9,7 @@ const testing = std.testing;
 const Node = model.Node;
 const Status = model.Status;
 
-fn findDoc(fd: diffmod.FlatDiff, file_id: i64) ?diffmod.DocDiff {
-    for (fd.docs) |d| if (d.file_id == file_id) return d;
-    return null;
-}
+const findDoc = diffmod.findDoc;
 
 test "diff: sortByGroup keeps same-group rows contiguous beyond known ranks" {
     // The renderer relies on "rows of the same group are contiguous" as a core invariant.

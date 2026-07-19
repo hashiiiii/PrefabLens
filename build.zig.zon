@@ -1,3 +1,4 @@
+// see: https://codeberg.org/ziglang/zig/src/branch/master/doc/build.zig.zon.md
 .{
     .name = .prefablens,
     .version = "0.8.0",

@@ -73,6 +73,12 @@ pub const Status = enum { added, removed, modified, unchanged };
 
 pub const ObjectKind = enum { game_object, prefab_instance };
 
+// Bound on prefab nesting, shared by tree building (instance-chain hops) and
+// source expansion (recursion depth). Real projects nest a few levels; the
+// bound also stops cycles in broken files where stripped PrefabInstances
+// reference each other.
+pub const max_prefab_nesting = 8;
+
 // Per-(target, propertyPath) override diff for a PrefabInstance.
 pub const OverrideDiff = struct {
     group: []const u8, // "Transform" | "GameObject" | "Overrides"

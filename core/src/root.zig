@@ -2,6 +2,7 @@ const std = @import("std");
 pub const model = @import("model.zig");
 pub const json = @import("json.zig");
 
+const assets_tlv = @import("assets_tlv.zig");
 const classid = @import("classid.zig");
 const parser = @import("parser.zig");
 const diff = @import("diff.zig");
@@ -41,6 +42,7 @@ test {
     std.testing.refAllDecls(@This());
     // refAllDecls only references pub decls; reference the internal modules
     // explicitly so their tests are still discovered.
+    _ = assets_tlv;
     _ = classid;
     _ = parser;
     _ = diff;

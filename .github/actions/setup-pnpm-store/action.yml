@@ -1,0 +1,17 @@
+name: Restore pnpm store cache
+description: Resolve the pnpm store path and restore its cache keyed on the extension lockfile; requires pnpm to be installed first
+
+runs:
+  using: composite
+  steps:
+    - name: Resolve pnpm store directory
+      id: pnpm-store
+      shell: bash
+      run: echo "path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+    - name: Restore pnpm store cache
+      uses: actions/cache@v4
+      with:
+        path: ${{ steps.pnpm-store.outputs.path }}
+        key: ${{ runner.os }}-pnpm-${{ hashFiles('extension/pnpm-lock.yaml') }}
+        restore-keys: |
+          ${{ runner.os }}-pnpm-

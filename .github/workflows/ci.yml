@@ -7,6 +7,12 @@ on:
 permissions:
   contents: read
 
+# One run per ref at a time; a superseded push cancels the in-flight run
+# instead of queueing a redundant full matrix behind it.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   core:
     strategy:
@@ -18,17 +24,16 @@ jobs:
       - name: Version sync guard
         if: matrix.os == 'ubuntu-latest'
         run: .github/scripts/check-version-sync.sh
+      - name: Packaging render test
+        # Plain bash + coreutils; folded here so it does not need its own runner
+        if: matrix.os == 'ubuntu-latest'
+        run: cli/pkg/render_test.sh
       - name: Install tools
         uses: jdx/mise-action@v4
       - name: Restore Zig global cache
         # Windows Zig caching was measured as not worth it (see PR #36 context)
         if: matrix.os == 'ubuntu-latest'
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/zig
-          key: ${{ runner.os }}-zig-${{ hashFiles('build.zig.zon') }}
-          restore-keys: |
-            ${{ runner.os }}-zig-
+        uses: ./.github/actions/setup-zig-cache
       - name: Lint
         run: zig build lint
       - name: Test
@@ -45,28 +50,16 @@ jobs:
       - name: Install tools
         uses: jdx/mise-action@v4
       - name: Restore Zig global cache
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/zig
-          key: ${{ runner.os }}-zig-${{ hashFiles('build.zig.zon') }}
-          restore-keys: |
-            ${{ runner.os }}-zig-
-      - name: Resolve pnpm store directory
-        id: pnpm-store
-        run: echo "path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+        uses: ./.github/actions/setup-zig-cache
       - name: Restore pnpm store cache
-        uses: actions/cache@v4
-        with:
-          path: ${{ steps.pnpm-store.outputs.path }}
-          key: ${{ runner.os }}-pnpm-${{ hashFiles('extension/pnpm-lock.yaml') }}
-          restore-keys: |
-            ${{ runner.os }}-pnpm-
+        uses: ./.github/actions/setup-pnpm-store
       - name: Resolve Playwright version
         id: playwright-version
         run: |
           version=$(grep -oE '@playwright/test@[0-9]+\.[0-9]+\.[0-9]+' extension/pnpm-lock.yaml | head -n 1 | cut -d '@' -f 3)
           echo "version=$version" >> "$GITHUB_OUTPUT"
       - name: Restore Playwright browser cache
+        id: playwright-cache
         uses: actions/cache@v4
         with:
           path: ~/.cache/ms-playwright
@@ -84,11 +77,20 @@ jobs:
           pnpm run typecheck
           pnpm test
           pnpm run build
+      - name: Install Playwright browsers
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        working-directory: extension
+        run: pnpm exec playwright install --with-deps chromium
+      - name: Install Playwright OS dependencies
+        # A cache hit restores the browser binaries but not the runner's OS
+        # packages; the E2E launches full Chromium (channel "chromium" with
+        # the extension loaded), so the shared libraries must still exist.
+        if: steps.playwright-cache.outputs.cache-hit == 'true'
+        working-directory: extension
+        run: pnpm exec playwright install-deps chromium
       - name: Extension E2E
         working-directory: extension
-        run: |
-          pnpm exec playwright install --with-deps chromium
-          pnpm run e2e
+        run: pnpm run e2e
 
   editor:
     runs-on: ubuntu-latest
@@ -111,13 +113,6 @@ jobs:
       - name: Test
         working-directory: editor
         run: dotnet test DotNetTests~/Tests
-
-  packaging:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - name: Render test
-        run: cli/pkg/render_test.sh
 
   site:
     runs-on: ubuntu-latest

@@ -1,0 +1,13 @@
+name: Restore Zig global cache
+description: Restore the Zig global cache keyed on build.zig.zon, shared by every job that runs zig build
+
+runs:
+  using: composite
+  steps:
+    - name: Restore Zig global cache
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/zig
+        key: ${{ runner.os }}-zig-${{ hashFiles('build.zig.zon') }}
+        restore-keys: |
+          ${{ runner.os }}-zig-

@@ -9,17 +9,18 @@ import {
 } from "../renderer/render";
 import {
   type BackgroundError,
-  type DiffV2,
   type GuidResolvedPush,
   type PrefetchRequest,
   type SemanticDiffRequest,
   type SemanticDiffResponse,
   targetKey,
+  unresolvedRemaining,
 } from "../types";
 import { must } from "../util/must";
 import { createAuthRetries } from "./authRetries";
 import { type DiffPage, type FileEntry, parseDiffUrl, parsePrPage, scanUnityFiles } from "./detect";
 import { fillDeviceCode } from "./devicePage";
+import { createFileView } from "./fileView";
 import { createSignIn, type PendingSignIn } from "./signin";
 import { createToggle, type Toggle, type View } from "./toggle";
 import { createViewRegistry, type ViewEntry } from "./views";
@@ -36,10 +37,6 @@ const ERROR_TEXT: Record<BackgroundError, string> = {
 
 // path → render target. When a push (guidResolved) arrives, merge resolved and re-render
 const views = createViewRegistry();
-
-function countUnresolved(json: DiffV2): number {
-  return json.unresolvedGuids.filter((g) => !Object.hasOwn(json.resolved ?? {}, g)).length;
-}
 
 // If the final push is lost (dropped tab message, killed service worker), flip the
 // indicator to the retryable incomplete state instead of spinning forever.
@@ -141,103 +138,70 @@ function attachToggle(state: ViewState, page: DiffPage, entry: FileEntry): void 
   entry.header.setAttribute("data-prefablens", "");
   const viewKey = `${targetKey(page.owner, page.repo, page.target)}:${entry.path}`;
 
-  let host: HTMLElement | undefined;
-  let requested = false;
+  // Set by createHost; results.set only runs after the machine created the host, so the
+  // registry (whose push listener renders into it) always sees a real shadow root.
+  let shadow: ShadowRoot | undefined;
 
-  // Display-only re-assert, never fetches: safe to run on every scan even while a panel
-  // sits on an error (a fetching sync would silently hammer retries on rate limits).
-  const sync = (view: View): void => {
-    if (view === "raw") {
-      entry.setRawHidden(false);
-      if (host) host.style.display = "none";
-      return;
-    }
-    if (!host) return; // semantic never rendered here: leave the raw diff alone
-    entry.setRawHidden(true);
-    if (!host.isConnected) entry.attachHost(host); // a react remount can drop the host together with the old body
-    // Follow github's own collapse (react ui): the classic layout handles this via the
-    // Details CSS class added in attachHost instead, where collapsed() is always false.
-    host.style.display = entry.collapsed() ? "none" : "";
-  };
-
-  const show = (view: View): void => {
-    if (view === "raw") {
-      sync(view);
-      return;
-    }
-    if (!host) {
-      host = document.createElement("div");
+  // The transitions live in fileView.ts; this block only binds them to the real DOM,
+  // the runtime channel, and the shared registries.
+  const fileView = createFileView({
+    file: entry,
+    createHost() {
+      const host = document.createElement("div");
       host.setAttribute("data-prefablens-view", "");
-      host.attachShadow({ mode: "open" });
-      entry.attachHost(host);
-    }
-    sync(view);
-    if (requested) return; // cache only successful results per file (re-toggle doesn't re-fetch)
-    const root = must(host.shadowRoot);
-    const request = (force?: boolean): void => {
-      requested = true;
-      renderLoading(root);
-      void requestDiff({
+      const root = host.attachShadow({ mode: "open" });
+      shadow = root;
+      return {
+        attach: () => entry.attachHost(host),
+        attached: () => host.isConnected,
+        setVisible: (visible) => {
+          host.style.display = visible ? "" : "none";
+        },
+        panel: {
+          loading: () => renderLoading(root),
+          diff: (json, resolving) => render(root, json, { resolving }),
+          incomplete: (json, onRetry) => render(root, json, { incomplete: { onRetry } }),
+          tooLarge: (bytes, onForce) => renderTooLarge(root, bytes, onForce),
+          authError: (error) => signInPanel(root, ERROR_TEXT[error]),
+          error: (error) => renderError(root, ERROR_TEXT[error]),
+        },
+      };
+    },
+    requestDiff: (force) =>
+      requestDiff({
         type: "semanticDiff",
         owner: page.owner,
         repo: page.repo,
         target: page.target,
         path: entry.path,
         force,
-      }).then((res) => {
-        if (res.ok) {
-          views.set(viewKey, {
-            root,
-            json: res.json,
-            // Retry re-runs the whole request: the diff itself is cached, so this only
-            // re-enters background resolution (requested must reset or request() no-ops).
-            retry: () => {
-              requested = false;
-              request(force);
-            },
-          });
-          if (res.pending) armWatchdog(must(views.get(viewKey)));
-          // Always show it while pending: even if all names are resolved, source merging may remain
-          return render(root, res.json, { resolving: res.pending ? Math.max(countUnresolved(res.json), 1) : 0 });
-        }
-        requested = false; // don't cache errors: let the next toggle re-fetch
-        const view = views.get(viewKey);
-        if (view) {
-          // A failed retry must not wipe the diff the user is reading: keep the
-          // tree and re-offer the retry affordance instead of a bare error panel.
-          render(root, view.json, { incomplete: { onRetry: view.retry } });
-          return;
-        }
-        if (res.error === "too-large") renderTooLarge(root, res.bytes, () => request(true));
-        else if (res.error === "pat-missing" || res.error === "auth-failed") {
-          authRetries.add(() => {
-            // requested flips true on the first retry, so duplicate registrations no-op.
-            if (!requested && state.effective(entry.path) === "semantic") request();
-          });
-          signInPanel(root, ERROR_TEXT[res.error]);
-        } else renderError(root, ERROR_TEXT[res.error]);
-      });
-    };
-    request();
-  };
+      }),
+    results: {
+      set: ({ json, retry }) => views.set(viewKey, { root: must(shadow), json, retry }),
+      get: () => views.get(viewKey),
+      armWatchdog: () => armWatchdog(must(views.get(viewKey))),
+    },
+    onAuthRetry: (retry) => authRetries.add(retry),
+    effectiveView: () => state.effective(entry.path),
+  });
 
   const toggle = createToggle((view) => {
     state.setOverride(entry.path, view); // a click overrides just this file
-    show(view);
+    fileView.show(view);
   }, state.effective(entry.path));
   entry.header.append(toggle.element);
   appliers.add({
     header: entry.header,
     apply: (view) => {
       toggle.set(view);
-      show(view);
+      fileView.show(view);
     },
-    sync: () => sync(state.effective(entry.path)),
+    sync: () => fileView.sync(state.effective(entry.path)),
   });
 
   // If the default is semantic, start rendering at attach time: lazy-loaded files also pass through here, so
   // "the global is semantic but a later-arriving file is raw" doesn't happen
-  if (state.effective(entry.path) === "semantic") show("semantic");
+  if (state.effective(entry.path) === "semantic") fileView.show("semantic");
 }
 
 function requestDiff(req: SemanticDiffRequest): Promise<SemanticDiffResponse> {
@@ -294,7 +258,7 @@ async function init(): Promise<void> {
       return;
     }
     if (!msg.done) armWatchdog(view);
-    render(view.root, view.json, { resolving: msg.done ? 0 : Math.max(countUnresolved(view.json), 1) });
+    render(view.root, view.json, { resolving: msg.done ? 0 : Math.max(unresolvedRemaining(view.json).length, 1) });
   });
 
   // GitHub is an SPA: an initial scan + MutationObserver follows lazy loading and tab navigation.

@@ -502,14 +502,10 @@ fn renderObject(
         defer prefix.shrinkRetainingCapacity(inner_mark);
 
         var idx: usize = 0;
-        var current: []const u8 = "";
-        var i: usize = 0;
-        while (i < o.overrides.len) : (i += 1) {
-            if (!std.mem.eql(u8, current, o.overrides[i].group)) {
-                current = o.overrides[i].group;
-                idx += 1;
-                try renderCard(arena, w, .{ .group = .{ .overrides = o.overrides, .start = i } }, resolved, color, prefix, idx == card_count);
-            }
+        var groups = display.overrideGroups(o.overrides);
+        while (groups.next()) |group| {
+            idx += 1;
+            try renderCard(arena, w, .{ .group = group }, resolved, color, prefix, idx == card_count);
         }
         for (o.components) |c| {
             idx += 1;
@@ -529,7 +525,8 @@ fn continuation(branch: []const u8) []const u8 {
 
 const Card = union(enum) {
     component: model.ComponentDiff,
-    group: struct { overrides: []const model.OverrideDiff, start: usize },
+    /// One group slice yielded by display.overrideGroups.
+    group: []const model.OverrideDiff,
 };
 
 fn renderCard(
@@ -545,7 +542,7 @@ fn renderCard(
     try w.writeAll(if (last) "└─ " else "├─ ");
     const status: model.Status = switch (card) {
         .component => |c| c.status,
-        .group => |g| display.groupHeadingStatus(g.overrides, g.start),
+        .group => |g| display.groupHeadingStatus(g),
     };
     try signed(w, color, status);
     switch (card) {
@@ -559,7 +556,7 @@ fn renderCard(
                 if (color) try w.writeAll(Color.reset);
             }
         },
-        .group => |g| try w.writeAll(g.overrides[g.start].group),
+        .group => |g| try w.writeAll(g[0].group),
     }
     try w.writeByte('\n');
 
@@ -572,12 +569,8 @@ fn renderCard(
         .component => |c| for (c.fields) |f| {
             try renderFieldRow(w, f.path, f.status, status, f.before, f.after, resolved, color, prefix);
         },
-        .group => |g| {
-            const group_name = g.overrides[g.start].group;
-            for (g.overrides[g.start..]) |ov| {
-                if (!std.mem.eql(u8, ov.group, group_name)) break;
-                try renderFieldRow(w, ov.label, ov.status, status, ov.before, ov.after, resolved, color, prefix);
-            }
+        .group => |g| for (g) |ov| {
+            try renderFieldRow(w, ov.label, ov.status, status, ov.before, ov.after, resolved, color, prefix);
         },
     }
 }

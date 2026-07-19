@@ -484,24 +484,17 @@ fn renderObject(w: *std.Io.Writer, o: model.ObjectDiff, resolved: ?*const core.j
 }
 
 fn renderOverrideGroups(w: *std.Io.Writer, overrides: []const model.OverrideDiff, resolved: ?*const core.json.Resolver) !void {
-    var current: []const u8 = "";
-    var i: usize = 0;
-    while (i < overrides.len) {
-        if (!std.mem.eql(u8, current, overrides[i].group)) {
-            if (current.len != 0) try w.writeAll("</div></details>");
-            current = overrides[i].group;
-            const hs = display.groupHeadingStatus(overrides, i);
-            try w.writeAll("<details open class=\"pl-comp");
-            try w.writeAll(statusClass(hs));
-            try w.writeAll("\">");
-            try writeSummary(w, hs, gear_svg, "pl-icon", current, .none, false);
-            try w.writeAll("<div class=\"pl-kids\">");
-        }
-        const ov = overrides[i];
-        try renderField(w, ov.label, ov.status, ov.before, ov.after, resolved);
-        i += 1;
+    var groups = display.overrideGroups(overrides);
+    while (groups.next()) |group| {
+        const hs = display.groupHeadingStatus(group);
+        try w.writeAll("<details open class=\"pl-comp");
+        try w.writeAll(statusClass(hs));
+        try w.writeAll("\">");
+        try writeSummary(w, hs, gear_svg, "pl-icon", group[0].group, .none, false);
+        try w.writeAll("<div class=\"pl-kids\">");
+        for (group) |ov| try renderField(w, ov.label, ov.status, ov.before, ov.after, resolved);
+        try w.writeAll("</div></details>");
     }
-    if (current.len != 0) try w.writeAll("</div></details>");
 }
 
 fn renderComponent(w: *std.Io.Writer, c: model.ComponentDiff, resolved: ?*const core.json.Resolver) !void {

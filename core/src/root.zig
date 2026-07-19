@@ -8,6 +8,8 @@ const parser = @import("parser.zig");
 const diff = @import("diff.zig");
 const diff_overrides = @import("diff_overrides.zig");
 const tree = @import("tree.zig");
+const tree_chain = @import("tree_chain.zig");
+const tree_order = @import("tree_order.zig");
 const inspector = @import("inspector.zig");
 const perf = @import("perf.zig");
 const instantiate = @import("instantiate.zig");
@@ -48,6 +50,8 @@ test {
     _ = diff;
     _ = diff_overrides;
     _ = tree;
+    _ = tree_chain;
+    _ = tree_order;
     _ = inspector;
     _ = perf;
     _ = instantiate;

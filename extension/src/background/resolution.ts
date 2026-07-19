@@ -1,7 +1,13 @@
 import { type ChangedFile, type GithubClient, RateLimitError, type RefPair } from "../github/client";
 import { applyResolved, type GuidCache } from "../github/guids";
 import { type RepoIndexStore, syncRepoIndex } from "../github/repoIndex";
-import type { DiffV2, GuidResolvedPush, ResolutionStatus, SemanticDiffRequest } from "../types";
+import {
+  type DiffV2,
+  type GuidResolvedPush,
+  type ResolutionStatus,
+  type SemanticDiffRequest,
+  unresolvedRemaining,
+} from "../types";
 import type { Differ } from "../wasm/differ";
 import { createPromiseCache } from "./promiseCache";
 
@@ -142,7 +148,7 @@ export function createResolution<C extends SearchClient>(deps: ResolutionDeps<C>
     repoKey: string,
   ): Promise<{ json: DiffV2; rateLimited: boolean }> {
     const resolved = { ...json.resolved };
-    const pending = json.unresolvedGuids.filter((g) => !Object.hasOwn(resolved, g));
+    const pending = unresolvedRemaining(json);
     const found = await searchGuids(pending, client, owner, repo, repoKey);
     return { json: { ...json, resolved: { ...resolved, ...found.resolved } }, rateLimited: found.rateLimited };
   }

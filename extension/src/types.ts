@@ -62,6 +62,14 @@ export type DiffV2 = {
 
 export type DiffErrorV1 = { schema: "prefablens.error.v1"; error: string };
 
+/** Guids still lacking a name after resolution so far — the single definition of
+ *  "unresolved" shared by handler, resolution, and the content indicator. Object.hasOwn
+ *  is a prototype-pollution guard: guids are arbitrary strings, so "constructor" and
+ *  friends must not falsely hit Object.prototype and count as resolved. */
+export function unresolvedRemaining(json: Pick<DiffV2, "unresolvedGuids" | "resolved">): string[] {
+  return json.unresolvedGuids.filter((g) => !Object.hasOwn(json.resolved ?? {}, g));
+}
+
 // Which diff page a request is for. Every kind shares the blob/diff pipeline; only
 // the refs + changed-file discovery differs (PR API / commit API / compare API).
 export type DiffTarget =

@@ -3,6 +3,7 @@ import type { BackgroundRequest, GuidResolvedPush } from "../types";
 import { createDiffer, type Differ } from "../wasm/differ";
 import { createSessionDiffStore } from "./diffStore";
 import { createHandler } from "./handler";
+import { createMergeStore } from "./mergeStore";
 import { createQueue } from "./queue";
 
 let differ: Promise<Differ> | undefined;
@@ -14,6 +15,9 @@ const queuedFetch =
   (front: boolean): typeof fetch =>
   (input, init) =>
     queue(() => fetch(input, init), { front });
+
+// Whole-repo .meta guid records, shared by repoIndexStore.loadGuids/saveGuids below
+const metaGuids = createMergeStore(chrome.storage.local, "metaGuids");
 
 const handler = createHandler({
   async getSettings() {
@@ -28,32 +32,12 @@ const handler = createHandler({
       .then(createDiffer);
     return differ;
   },
-  guidCache: {
-    async load(repo) {
-      const key = `guids:${repo}`;
-      const stored = await chrome.storage.local.get([key]);
-      return (stored[key] as Record<string, string> | undefined) ?? {};
-    },
-    async save(repo, entries) {
-      const key = `guids:${repo}`;
-      const stored = await chrome.storage.local.get([key]);
-      await chrome.storage.local.set({ [key]: { ...(stored[key] as Record<string, string> | undefined), ...entries } });
-    },
-  },
+  // Both guid caches are the same merge-on-save record slot, just under different prefixes
+  guidCache: createMergeStore(chrome.storage.local, "guids"),
   diffStore: createSessionDiffStore(chrome.storage.session),
   repoIndexStore: {
-    async loadGuids(repo) {
-      const key = `metaGuids:${repo}`;
-      const stored = await chrome.storage.local.get([key]);
-      return (stored[key] as Record<string, string> | undefined) ?? {};
-    },
-    async saveGuids(repo, entries) {
-      const key = `metaGuids:${repo}`;
-      const stored = await chrome.storage.local.get([key]);
-      await chrome.storage.local
-        .set({ [key]: { ...(stored[key] as Record<string, string> | undefined), ...entries } })
-        .catch(() => {}); // on quota overflow, continue in memory only
-    },
+    loadGuids: (repo) => metaGuids.load(repo),
+    saveGuids: (repo, entries) => metaGuids.save(repo, entries).catch(() => {}), // on quota overflow, continue in memory only
     async loadIndex(repo) {
       const key = `guidIndex:${repo}`;
       const stored = await chrome.storage.local.get([key]);

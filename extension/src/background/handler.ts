@@ -16,6 +16,7 @@ import {
   type SemanticDiffRequest,
   type SemanticDiffResponse,
   targetKey,
+  unresolvedRemaining,
 } from "../types";
 import { isUnityPath } from "../unity";
 import { DiffError, type Differ } from "../wasm/differ";
@@ -238,7 +239,7 @@ export function createHandler(deps: Deps): Handler {
       const withPr = applyResolved(outcome.json, ctx.guidIndex);
 
       // Two-stage path: return the diff immediately, continue resolution and source merging in the background, deliver via push
-      const remaining = withPr.unresolvedGuids.filter((g) => !Object.hasOwn(withPr.resolved ?? {}, g));
+      const remaining = unresolvedRemaining(withPr);
       if (!remaining.length && !withPr.neededSources?.length) return { ok: true, json: withPr };
       void resolution.resolveRemaining(withPr, remaining, client, req, base, ctx, push);
       return { ok: true, json: withPr, pending: true };

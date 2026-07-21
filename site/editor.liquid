@@ -1,0 +1,29 @@
+---
+title: Unity Editor | PrefabLens
+permalink: editor.html
+layout: layout.liquid
+---
+<h1>Unity Editor</h1>
+<p class="hint">An Editor window with a semantic diff for every changed asset.</p>
+
+<div class="window">
+  <div class="window-title">Unity: PrefabLens</div>
+  <img
+    class="window-shot"
+    src="images/editor-01.gif"
+    width="717"
+    height="495"
+    alt="PrefabLens window in the Unity Editor"
+  />
+</div>
+
+<h2>How it works</h2>
+<p>
+  Pure editor code with zero dependencies. On first use it downloads the CLI
+  binary from GitHub Releases; the window shells out to it for every diff.
+  Requires Unity 2022.3 or newer.
+</p>
+
+<h2>Install</h2>
+<pre><code>openupm add com.hashiiiii.prefablens</code></pre>
+<p>Or the Package Manager git URL: <code>https://github.com/hashiiiii/PrefabLens.git?path=editor</code></p>

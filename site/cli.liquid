@@ -1,0 +1,24 @@
+---
+title: CLI demo | PrefabLens
+permalink: cli.html
+layout: layout.liquid
+---
+<h1>CLI demo</h1>
+<p class="hint">Real output from the prefablens binary, generated at site build time.</p>
+
+<h2>Terminal</h2>
+<p><code>prefablens main</code> compares a ref against your working tree.</p>
+<div class="window terminal">
+  <div class="window-title">unity-project</div>
+  <pre>{% fragment "terminal.html" %}</pre>
+</div>
+
+<h2>HTML report</h2>
+<p>
+  <code>prefablens --open main</code> writes a self-contained report.
+  <a href="cli-report.html" target="_blank" rel="noopener">Open it full page</a>.
+</p>
+<div class="window">
+  <div class="window-title">prefablens-main.html</div>
+  <iframe class="report-frame" src="cli-report.html" title="PrefabLens HTML report"></iframe>
+</div>

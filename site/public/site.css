@@ -11,6 +11,7 @@
   --border: #e4e7ec;
   --code-bg: #f6f7f9;
   --link: #0b6bcb;
+  --cmd: #1a7f37;
   --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
 }
 @media (prefers-color-scheme: dark) {
@@ -22,6 +23,7 @@
     --border: #2a2d33;
     --code-bg: #1a1c20;
     --link: #58a6ff;
+    --cmd: #3fb950;
   }
 }
 
@@ -41,6 +43,7 @@ a:hover { text-decoration: underline; }
 code { font-family: var(--mono); font-size: 0.9em; background: var(--code-bg); padding: 1px 5px; border-radius: 4px; }
 pre { padding: 10px 14px; border-radius: 6px; background: var(--code-bg); overflow-x: auto; font: 13px/1.6 var(--mono); }
 pre code { background: none; padding: 0; }
+pre .cmd { color: var(--cmd); font-weight: 600; }
 h1 { font-size: 28px; line-height: 1.25; margin: 32px 0 8px; }
 h2 { font-size: 20px; margin: 40px 0 8px; }
 h3 { font-size: 15px; margin: 24px 0 4px; }

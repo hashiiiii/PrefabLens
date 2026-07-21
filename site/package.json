@@ -1,0 +1,15 @@
+{
+  "name": "prefablens-site",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@11.13.0",
+  "scripts": {
+    "dev": "vitepress dev",
+    "build": "node build.mjs && vitepress build",
+    "preview": "vitepress preview",
+    "test": "node --test src/*.test.mjs"
+  },
+  "devDependencies": {
+    "vitepress": "^1.6.4"
+  }
+}

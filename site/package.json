@@ -4,12 +4,11 @@
   "type": "module",
   "packageManager": "pnpm@11.13.0",
   "scripts": {
-    "dev": "vitepress dev",
-    "build": "node build.mjs && vitepress build",
-    "preview": "vitepress preview",
+    "dev": "eleventy --serve",
+    "build": "node build.mjs && eleventy",
     "test": "node --test src/*.test.mjs"
   },
   "devDependencies": {
-    "vitepress": "^1.6.4"
+    "@11ty/eleventy": "^3.1.6"
   }
 }

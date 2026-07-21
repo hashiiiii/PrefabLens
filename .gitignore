@@ -11,7 +11,6 @@ extension/test-results/
 site/dist/
 site/node_modules/
 site/generated/
-site/.vitepress/cache/
 site/public/demo.js
 site/public/prefablens.wasm
 site/public/fixtures/

@@ -20,6 +20,7 @@ const DEMO = join(ROOT, "extension", "dist", "demo.js");
 const FIXTURES = join(SITE, "fixtures");
 const GENERATED = join(SITE, "generated");
 const PUBLIC = join(SITE, "public");
+const DIST = join(SITE, "dist");
 
 // Mirror of the UnityYAML extension gate in cli/src/unity_path.zig (and
 // extension/src/unity.ts): only these paths get semantic views; anything else
@@ -181,6 +182,9 @@ assertBuilt(WASM, "zig build wasm");
 assertBuilt(DEMO, "pnpm run demo (in extension/)");
 rmSync(GENERATED, { recursive: true, force: true });
 mkdirSync(GENERATED, { recursive: true });
+// Eleventy does not clean its output directory, so stale files from previous
+// builds would ship; step 1 owns the clean slate.
+rmSync(DIST, { recursive: true, force: true });
 // public/ mixes committed assets (favicon.svg, images/) with generated ones,
 // so remove only what this script owns instead of wiping the directory.
 for (const entry of ["hero-report.html", "cli-report.html", "demo.js", "prefablens.wasm", "fixtures"]) {

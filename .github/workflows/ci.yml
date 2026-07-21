@@ -123,5 +123,6 @@ jobs:
       - name: Site checks
         working-directory: site
         run: |
-          node --test src/*.test.mjs
-          node build.mjs
+          pnpm install --frozen-lockfile
+          pnpm test
+          pnpm run build

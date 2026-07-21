@@ -25,7 +25,9 @@ jobs:
         uses: ./.github/actions/build-site
       - name: Build site
         working-directory: site
-        run: node build.mjs
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm run build
       - uses: actions/upload-pages-artifact@v5
         with:
           path: site/dist

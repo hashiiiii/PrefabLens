@@ -1,0 +1,14 @@
+{
+  "name": "prefablens-site",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@11.13.0",
+  "scripts": {
+    "dev": "eleventy --serve",
+    "build": "node build.mjs && eleventy",
+    "test": "node --test src/*.test.mjs"
+  },
+  "devDependencies": {
+    "@11ty/eleventy": "^3.1.6"
+  }
+}

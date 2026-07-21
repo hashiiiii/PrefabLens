@@ -1,8 +1,10 @@
-// Demo-site build. Everything visitors see is produced by the real product
-// code, and the site consumes only built artifacts: the CLI binary renders the
-// report and terminal tree, the extension's demo bundle powers the mock PR
-// page, and git provides the raw diffs. Run `zig build && zig build wasm` and
-// `pnpm run demo` (in extension/) first. The site itself needs no toolchain.
+// Demo-content build, step 1 of 2. Everything visitors see is produced by the
+// real product code: the CLI binary renders the report and terminal tree, the
+// extension's demo bundle powers the mock PR page, and git provides the raw
+// diffs. Run `zig build && zig build wasm` and `pnpm run demo` (in extension/)
+// first. Outputs land in generated/ (HTML fragments the .md pages import) and
+// public/ (runtime assets VitePress copies verbatim); step 2 is `vitepress
+// build` (see package.json "build").
 import { execFileSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -16,6 +18,8 @@ const BIN = join(ROOT, "zig-out", "bin", process.platform === "win32" ? "prefabl
 const WASM = join(ROOT, "zig-out", "bin", "prefablens.wasm");
 const DEMO = join(ROOT, "extension", "dist", "demo.js");
 const FIXTURES = join(SITE, "fixtures");
+const GENERATED = join(SITE, "generated");
+const PUBLIC = join(SITE, "public");
 const DIST = join(SITE, "dist");
 
 // Mirror of the UnityYAML extension gate in cli/src/unity_path.zig (and
@@ -157,12 +161,6 @@ function fileSection(repo, file) {
       </div>`;
 }
 
-function inject(html, token, replacement) {
-  const needle = `<!--{{${token}}}-->`;
-  if (!html.includes(needle)) throw new Error(`token ${needle} not found`);
-  return html.replace(needle, replacement);
-}
-
 /** guid → asset path from the fixture .meta files — the demo's stand-in for the
  *  extension's repo guid index (same "guid:" line rule as parseGuidFromMeta in
  *  extension/src/github/guids.ts and cli/src/resolve.zig). */
@@ -182,31 +180,29 @@ function guidIndex(side) {
 assertBuilt(BIN, "zig build");
 assertBuilt(WASM, "zig build wasm");
 assertBuilt(DEMO, "pnpm run demo (in extension/)");
+rmSync(GENERATED, { recursive: true, force: true });
+mkdirSync(GENERATED, { recursive: true });
+// Eleventy does not clean its output directory, so stale files from previous
+// builds would ship; step 1 owns the clean slate.
 rmSync(DIST, { recursive: true, force: true });
-mkdirSync(DIST, { recursive: true });
+// public/ mixes committed assets (favicon.svg, images/) with generated ones,
+// so remove only what this script owns instead of wiping the directory.
+for (const entry of ["hero-report.html", "cli-report.html", "demo.js", "prefablens.wasm", "fixtures"]) {
+  rmSync(join(PUBLIC, entry), { recursive: true, force: true });
+}
 
 const repo = makeDemoRepo();
 let report;
 let heroReport;
-let tree;
-let extension;
-let index;
 try {
   // CLI outputs: the --open report page, the tree view (--color because stdout
   // is a pipe here; a terminal gets color automatically), and the single-file
   // hero report the landing page frames next to the raw diff. Guid references
   // resolve against the fixture .meta files by default (no --project needed).
   report = execFileSync(BIN, ["--html", "main"], { cwd: repo, encoding: "utf8" });
-  tree = execFileSync(BIN, ["--color", "main"], { cwd: repo, encoding: "utf8" });
+  const tree = execFileSync(BIN, ["--color", "main"], { cwd: repo, encoding: "utf8" });
   heroReport = execFileSync(BIN, ["--html", "main", HERO_FILE], { cwd: repo, encoding: "utf8" });
-
   const files = changedFiles(repo);
-  extension = readFileSync(join(SITE, "static", "extension.html"), "utf8");
-  extension = inject(extension, "FILECOUNT", String(files.length));
-  extension = inject(extension, "FILES", files.map((f) => fileSection(repo, f)).join("\n\n"));
-
-  index = readFileSync(join(SITE, "static", "index.html"), "utf8");
-  index = inject(index, "HERODIFF", diffTable(git(repo, "diff", "main", "--", HERO_FILE)).table);
 
   // Smoke asserts: a palette, renderer, or fixture change must fail the build,
   // not ship a silently broken page.
@@ -223,29 +219,26 @@ try {
   if (paths.join("\n") !== DEMO_FILES.join("\n")) {
     throw new Error(`demo files drifted from DEMO_FILES:\n${paths.join("\n")}`);
   }
+
+  writeFileSync(join(GENERATED, "hero-diff.html"), diffTable(git(repo, "diff", "main", "--", HERO_FILE)).table);
+  const prMeta = `<p class="pr-meta">${files.length} files changed, merging <span class="branch">feat/robot-rebalance</span> into <span class="branch">main</span></p>`;
+  writeFileSync(join(GENERATED, "pr-files.html"), `${prMeta}\n${files.map((f) => fileSection(repo, f)).join("\n\n")}`);
+  writeFileSync(
+    join(GENERATED, "terminal.html"),
+    `<span class="prompt">$</span> prefablens main\n${ansiToHtml(tree.trimEnd())}`,
+  );
 } finally {
   rmSync(repo, { recursive: true, force: true });
 }
 
-writeFileSync(join(DIST, "cli-report.html"), report);
-writeFileSync(join(DIST, "hero-report.html"), heroReport);
-let cli = readFileSync(join(SITE, "static", "cli.html"), "utf8");
-cli = inject(cli, "TERMINAL", ansiToHtml(tree.trimEnd()));
-writeFileSync(join(DIST, "cli.html"), cli);
-writeFileSync(join(DIST, "extension.html"), extension);
-writeFileSync(join(DIST, "index.html"), index);
-for (const page of [cli, extension, index]) if (page.includes("{{")) throw new Error("unreplaced template token");
-
-cpSync(join(FIXTURES, "before"), join(DIST, "fixtures", "before"), { recursive: true });
-cpSync(join(FIXTURES, "after"), join(DIST, "fixtures", "after"), { recursive: true });
+writeFileSync(join(PUBLIC, "hero-report.html"), heroReport);
+writeFileSync(join(PUBLIC, "cli-report.html"), report);
+cpSync(join(FIXTURES, "before"), join(PUBLIC, "fixtures", "before"), { recursive: true });
+cpSync(join(FIXTURES, "after"), join(PUBLIC, "fixtures", "after"), { recursive: true });
 // demo.js resolves guid references and fetches needed source prefabs by path
 // through this index, standing in for the extension's GitHub-backed one.
-writeFileSync(join(DIST, "fixtures", "guids.json"), JSON.stringify(guidIndex("after"), null, 2));
-cpSync(WASM, join(DIST, "prefablens.wasm"));
-cpSync(DEMO, join(DIST, "demo.js"));
-for (const file of ["site.css", "favicon.svg", "editor.html"]) {
-  cpSync(join(SITE, "static", file), join(DIST, file));
-}
-cpSync(join(SITE, "images"), join(DIST, "images"), { recursive: true });
+writeFileSync(join(PUBLIC, "fixtures", "guids.json"), JSON.stringify(guidIndex("after"), null, 2));
+cpSync(WASM, join(PUBLIC, "prefablens.wasm"));
+cpSync(DEMO, join(PUBLIC, "demo.js"));
 
-console.log(`site built at ${DIST}`);
+console.log(`fragments in ${GENERATED}, assets in ${PUBLIC}`);

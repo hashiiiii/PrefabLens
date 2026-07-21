@@ -9,5 +9,12 @@ extension/node_modules/
 extension/dist/
 extension/test-results/
 site/dist/
+site/node_modules/
+site/generated/
+site/public/demo.js
+site/public/prefablens.wasm
+site/public/fixtures/
+site/public/hero-report.html
+site/public/cli-report.html
 editor/**/bin/
 editor/**/obj/

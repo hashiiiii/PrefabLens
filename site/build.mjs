@@ -75,19 +75,27 @@ function escapeHtml(text) {
 
 function ansiToHtml(text) {
   let out = "";
-  const active = new Set();
-  // Every text run carries its full class set, so flat spans suffice (no nesting).
+  const activeAnsiClasses = new Set();
+  // "\x1b[32m+\x1b[0m Cylinder" -> ["", "\x1b[32m", "+", "\x1b[0m", " Cylinder"]
   for (const part of text.split(/(\x1b\[[0-9;]*m)/)) {
+    // ""          -> null
+    // "\x1b[32m"  -> ["\x1b[32m", "32"]
+    // "+"         -> null
+    // "\x1b[0m"   -> ["\x1b[0m", "0"]
+    // " Cylinder" -> null
     const sgr = /^\x1b\[([0-9;]*)m$/.exec(part);
     if (!sgr) {
+      // skip "" parts
       if (!part) continue;
       const escaped = escapeHtml(part);
-      out += active.size ? `<span class="${[...active].join(" ")}">${escaped}</span>` : escaped;
+      out += activeAnsiClasses.size
+        ? `<span class="${[...activeAnsiClasses].join(" ")}">${escaped}</span>`
+        : escaped;
       continue;
     }
     for (const code of (sgr[1] === "" ? "0" : sgr[1]).split(";")) {
-      if (code === "0") active.clear();
-      else if (code in ANSI_CLASSES) active.add(ANSI_CLASSES[code]);
+      if (code === "0") activeAnsiClasses.clear();
+      else if (code in ANSI_CLASSES) activeAnsiClasses.add(ANSI_CLASSES[code]);
       else throw new Error(`unsupported SGR code: ${code}`);
     }
   }

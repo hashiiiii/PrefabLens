@@ -77,13 +77,13 @@ function ansiToHtml(text) {
   let out = "";
   const activeAnsiClasses = new Set();
   // "\x1b[32m+\x1b[0m Cylinder" -> ["", "\x1b[32m", "+", "\x1b[0m", " Cylinder"]
-  for (const part of text.split(/(\x1b\[[0-9;]*m)/)) {
+  for (const part of text.split(/(\x1b\[[0-9]*m)/)) {
     // ""          -> null
     // "\x1b[32m"  -> ["\x1b[32m", "32"]
     // "+"         -> null
     // "\x1b[0m"   -> ["\x1b[0m", "0"]
     // " Cylinder" -> null
-    const sgr = /^\x1b\[([0-9;]*)m$/.exec(part);
+    const sgr = /^\x1b\[([0-9]*)m$/.exec(part);
     if (!sgr) {
       // skip "" parts
       if (!part) continue;
@@ -93,11 +93,12 @@ function ansiToHtml(text) {
         : escaped;
       continue;
     }
-    for (const code of (sgr[1] === "" ? "0" : sgr[1]).split(";")) {
-      if (code === "0") activeAnsiClasses.clear();
-      else if (code in ANSI_CLASSES) activeAnsiClasses.add(ANSI_CLASSES[code]);
-      else throw new Error(`unsupported SGR code: ${code}`);
-    }
+    // Bare \x1b[m means reset, same as \x1b[0m
+    // That leaves sgr[1] as "", so fall back to "0"
+    const code = sgr[1] === "" ? "0" : sgr[1];
+    if (code === "0") activeAnsiClasses.clear();
+    else if (code in ANSI_CLASSES) activeAnsiClasses.add(ANSI_CLASSES[code]);
+    else throw new Error(`unsupported SGR code: ${code}`);
   }
   return out;
 }

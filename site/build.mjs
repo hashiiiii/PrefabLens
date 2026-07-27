@@ -1,7 +1,8 @@
 // Step 1 of 2:
 // - Demo content comes from the real CLI, git, and extension demo bundle
 // - Prereqs: `zig build && zig build wasm`, `pnpm run demo` (in extension/)
-// - Writes: generated/ ({% fragment %}), public/ (Eleventy passthrough)
+// - Writes: generated/fragments/ ({% fragment %}), generated/assets/ (Eleventy passthrough)
+// - public/ stays committed static files only (css, favicon, images)
 import { execFileSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -15,7 +16,8 @@ const WASM = join(ROOT, "zig-out", "bin", "prefablens.wasm");
 const DEMO = join(ROOT, "extension", "dist", "demo.js");
 const FIXTURES = join(SITE, "fixtures");
 const GENERATED = join(SITE, "generated");
-const PUBLIC = join(SITE, "public");
+const ASSETS = join(GENERATED, "assets");
+const FRAGMENTS = join(GENERATED, "fragments");
 const DIST = join(SITE, "dist");
 
 const DEMO_FILES = [
@@ -103,7 +105,6 @@ function ansiToHtml(text) {
   return out;
 }
 
-// Unified `git diff` → GitHub-style table (hunk + add/del/context + line gutters)
 function diffTable(unified) {
   const rows = [];
   let added = 0;
@@ -112,6 +113,16 @@ function diffTable(unified) {
   let newN = 0;
   let inHunk = false;
   for (const line of unified.split("\n")) {
+    // @@ -10,4 +12,5 @@
+    // ->
+    // [
+    //   "@@ -10,4 +12,5 @@",
+    //   "10",
+    //   "12",
+    //   index: 0,
+    //   input: "@@ -10,4 +12,5 @@",
+    //   groups: undefined
+    // ]
     const hunk = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(line);
     if (hunk) {
       inHunk = true;
@@ -120,44 +131,36 @@ function diffTable(unified) {
       rows.push(`<tr class="hunk"><td colspan="2"></td><td class="code">${escapeHtml(line)}</td></tr>`);
       continue;
     }
-    if (!inHunk || line === "\\ No newline at end of file") continue;
+    // skip
+    if (!inHunk || !line || line === "\\ No newline at end of file") continue;
     if (line.startsWith("+")) {
       added += 1;
       rows.push(`<tr class="add"><td class="num"></td><td class="num">${newN++}</td><td class="code">+${escapeHtml(line.slice(1))}</td></tr>`);
     } else if (line.startsWith("-")) {
       removed += 1;
       rows.push(`<tr class="del"><td class="num">${oldN++}</td><td class="num"></td><td class="code">-${escapeHtml(line.slice(1))}</td></tr>`);
-    } else if (line.startsWith(" ") || line === "") {
+    // unchanged lines
+    } else if (line.startsWith(" ")) {
       rows.push(`<tr><td class="num">${oldN++}</td><td class="num">${newN++}</td><td class="code"> ${escapeHtml(line.slice(1))}</td></tr>`);
     }
   }
   const body = rows.length
     ? `<table class="diff-table">${rows.join("")}</table>`
-    : '<p class="hint file-empty">File renamed without changes.</p>';
-  const stat = `<span class="added">+${added}</span> <span class="removed">−${removed}</span>`;
+    : '<p class="hint file-empty">File renamed without changes.</p>'; // rename line when 0
+  const stat = `<span class="added">+${added}</span> <span class="removed">-${removed}</span>`;
   return { table: body, stat };
 }
 
-const COLLAPSE_BUTTON =
-  '<button type="button" class="file-collapse" aria-label="Collapse file">' +
-  '<svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">' +
-  '<path d="M6.22 3.22a.75.75 0 0 1 1.06 0l4.25 4.25a.75.75 0 0 1 0 1.06l-4.25 4.25a.75.75 0 0 1-1.06-1.06L9.94 8 6.22 4.28a.75.75 0 0 1 0-1.06Z"/></svg></button>';
-
-// One GitHub-style file block; data-before/after URLs for demo.js (DEMO_FILES only)
-function fileSection(repo, file) {
-  const path = file.after ?? file.before;
-  const renamed = file.before !== null && file.after !== null && file.before !== file.after;
-  const args = ["diff", "-M", "main", "--"];
-  args.push(file.before ?? file.after);
-  if (renamed) args.push(file.after);
-  const { table, stat } = diffTable(git(repo, ...args));
-  const label = renamed ? `${escapeHtml(file.before)} → ${escapeHtml(path)}` : escapeHtml(path);
-  const sources =
-    ` data-before="${file.before ? `fixtures/before/${escapeHtml(file.before)}` : ""}"` +
-    ` data-after="${file.after ? `fixtures/after/${escapeHtml(file.after)}` : ""}"`;
+function fileSection(repo, { before, after }) {
+  const path = after ?? before;
+  const renamed = before !== null && after !== null && before !== after;
+  const paths = renamed ? [before, after] : [path];
+  const { table, stat } = diffTable(git(repo, "diff", "-M", "main", "--", ...paths));
+  const label = renamed ? `${escapeHtml(before)} → ${escapeHtml(after)}` : escapeHtml(path);
+  const href = (side, p) => (p ? `fixtures/${side}/${escapeHtml(p)}` : "");
   return `      <div class="file js-details-container Details Details--on open">
-        <div class="file-header" data-path="${escapeHtml(path)}"${sources}>
-          ${COLLAPSE_BUTTON}
+        <div class="file-header" data-path="${escapeHtml(path)}" data-before="${href("before", before)}" data-after="${href("after", after)}">
+          <button type="button" class="file-collapse" aria-label="Collapse file"><svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M6.22 3.22a.75.75 0 0 1 1.06 0l4.25 4.25a.75.75 0 0 1 0 1.06l-4.25 4.25a.75.75 0 0 1-1.06-1.06L9.94 8 6.22 4.28a.75.75 0 0 1 0-1.06Z"/></svg></button>
           <span class="file-info">${label}</span>
           <span class="file-stat">${stat}</span>
         </div>
@@ -181,12 +184,13 @@ function guidIndex(side) {
 
 function clean() {
   rmSync(GENERATED, { recursive: true, force: true });
-  mkdirSync(GENERATED, { recursive: true });
+  mkdirSync(ASSETS, { recursive: true });
+  mkdirSync(FRAGMENTS, { recursive: true });
   // Eleventy leaves stale dist/ files; step 1 owns the clean slate
   rmSync(DIST, { recursive: true, force: true });
-  // public/ mixes committed + generated assets — delete only what we own
+  // Drop pre-split leftovers in public/ so passthrough does not revive them
   for (const entry of ["hero-report.html", "cli-report.html", "demo.js", "prefablens.wasm", "fixtures"]) {
-    rmSync(join(PUBLIC, entry), { recursive: true, force: true });
+    rmSync(join(SITE, "public", entry), { recursive: true, force: true });
   }
 }
 
@@ -214,11 +218,11 @@ function generateFragments(repo) {
     throw new Error(`demo files drifted from DEMO_FILES:\n${paths.join("\n")}`);
   }
 
-  writeFileSync(join(GENERATED, "hero-diff.html"), heroDiff.table);
+  writeFileSync(join(FRAGMENTS, "hero-diff.html"), heroDiff.table);
   const prMeta = `<p class="pr-meta">${files.length} commits into <span class="branch">main</span> from <span class="branch">feat/robot-rebalance</span></p>`;
-  writeFileSync(join(GENERATED, "pr-files.html"), `${prMeta}\n${files.map((f) => fileSection(repo, f)).join("\n\n")}`);
+  writeFileSync(join(FRAGMENTS, "pr-files.html"), `${prMeta}\n${files.map((f) => fileSection(repo, f)).join("\n\n")}`);
   writeFileSync(
-    join(GENERATED, "terminal.html"),
+    join(FRAGMENTS, "terminal.html"),
     `<span class="prompt">$</span> prefablens main\n${ansiToHtml(tree.trimEnd())}`,
   );
 
@@ -226,15 +230,15 @@ function generateFragments(repo) {
 }
 
 function publish(report, heroReport) {
-  writeFileSync(join(PUBLIC, "hero-report.html"), heroReport);
-  writeFileSync(join(PUBLIC, "cli-report.html"), report);
-  cpSync(join(FIXTURES, "before"), join(PUBLIC, "fixtures", "before"), { recursive: true });
-  cpSync(join(FIXTURES, "after"), join(PUBLIC, "fixtures", "after"), { recursive: true });
+  writeFileSync(join(ASSETS, "hero-report.html"), heroReport);
+  writeFileSync(join(ASSETS, "cli-report.html"), report);
+  cpSync(join(FIXTURES, "before"), join(ASSETS, "fixtures", "before"), { recursive: true });
+  cpSync(join(FIXTURES, "after"), join(ASSETS, "fixtures", "after"), { recursive: true });
   // Stand-in for the extension's GitHub guid index (demo.js fetches by path)
-  writeFileSync(join(PUBLIC, "fixtures", "guids.json"), JSON.stringify(guidIndex("after"), null, 2));
-  cpSync(WASM, join(PUBLIC, "prefablens.wasm"));
-  cpSync(DEMO, join(PUBLIC, "demo.js"));
-  console.log(`fragments in ${GENERATED}, assets in ${PUBLIC}`);
+  writeFileSync(join(ASSETS, "fixtures", "guids.json"), JSON.stringify(guidIndex("after"), null, 2));
+  cpSync(WASM, join(ASSETS, "prefablens.wasm"));
+  cpSync(DEMO, join(ASSETS, "demo.js"));
+  console.log(`fragments in ${FRAGMENTS}, assets in ${ASSETS}`);
 }
 
 function main() {

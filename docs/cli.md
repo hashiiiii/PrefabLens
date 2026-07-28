@@ -58,8 +58,8 @@ Switch the project to text serialization for meaningful diffs.
 | `--open` | Implies `--html`; writes the report to a temp file, prints its path on stdout, and opens it in a browser. Conflicts with `--json`. |
 | `--project DIR` | Unity project root for guid resolution, and the git repo dir. An unreadable DIR is an error (exit 1). |
 | `--no-project` | Skip the default guid-resolution scan. Conflicts with `--project`. |
-| `--color` | Force ANSI colors in tree output (useful when piping). |
-| `--no-color` | Disable ANSI colors; wins over `--color` and TTY detection. |
+| `--color` | Force ANSI colors when stdout is not a TTY (e.g. piping). |
+| `--no-color` | Disable ANSI colors (overrides TTY detection and `--color`). |
 | `--version` | Print `prefablens X.Y.Z` on stdout and exit 0. Short-circuits everything else. |
 | `-h`, `--help` | Print usage on stdout and exit 0. Short-circuits everything else. |
 

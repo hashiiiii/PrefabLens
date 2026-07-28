@@ -6,7 +6,8 @@ export default function (eleventyConfig) {
   eleventyConfig.ignores.add("public/**");
   eleventyConfig.addPassthroughCopy({ public: "/" });
   eleventyConfig.addPassthroughCopy({ "generated/assets": "/" });
-  // Raw read instead of {% include %}
-  eleventyConfig.addShortcode("fragment", (name) => readFileSync(`generated/fragments/${name}`, "utf8"));
+  eleventyConfig.addGlobalData("pullRequest", () => JSON.parse(readFileSync("generated/pull-request.json", "utf8")));
+  // Raw read instead of {% include %}: generated diff content must never be parsed as Liquid
+  eleventyConfig.addShortcode("rawHtml", (name) => readFileSync(`generated/raw-html/${name}`, "utf8"));
   return { dir: { output: "dist" } };
 }

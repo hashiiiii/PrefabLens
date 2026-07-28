@@ -12,7 +12,14 @@ layout: layout.liquid
   <div class="window-title">github.com/you/unity-project/pull/1/files</div>
   <div class="gh-page">
     <h1 class="pr-header">Rebalance robot physics and rework the playground scene <span class="pr-number">#1</span></h1>
-    {% fragment "pr-files.html" %}
+    <p class="pr-meta">
+      {{ pullRequest.files.size }} commits into <span class="branch">{{ pullRequest.base }}</span> from
+      <span class="branch">{{ pullRequest.head }}</span>
+    </p>
+    {% comment %} Files changed: one file-card per changed path {% endcomment %}
+    {% for file in pullRequest.files %}
+      {% include 'file-card.liquid', file: file %}
+    {% endfor %}
   </div>
 </div>
 <script src="demo.js" defer></script>

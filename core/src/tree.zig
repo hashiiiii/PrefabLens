@@ -8,6 +8,7 @@ const root = @import("root.zig");
 const testing = std.testing;
 
 const diffmod = @import("diff.zig");
+const inspector = @import("inspector.zig");
 const tree_chain = @import("tree_chain.zig");
 const tree_order = @import("tree_order.zig");
 
@@ -47,6 +48,22 @@ fn makeComponent(dd: diffmod.DocDiff) ComponentDiff {
         .status = dd.status,
         .fields = dd.fields,
     };
+}
+
+fn goFieldsToOverrides(arena: std.mem.Allocator, fields: []const model.FieldDiff) ![]model.OverrideDiff {
+    var out: std.ArrayList(model.OverrideDiff) = .empty;
+    for (fields) |f| {
+        if (std.mem.eql(u8, f.path, "Name") and !inspector.shouldEmitNameOverride(f.status, f.before, f.after))
+            continue;
+        try out.append(arena, .{
+            .group = "GameObject",
+            .label = f.path,
+            .status = f.status,
+            .before = f.before,
+            .after = f.after,
+        });
+    }
+    return out.toOwnedSlice(arena);
 }
 
 pub fn build(arena: std.mem.Allocator, fd: diffmod.FlatDiff) !model.DiffResult {
@@ -116,6 +133,7 @@ pub fn build(arena: std.mem.Allocator, fd: diffmod.FlatDiff) !model.DiffResult {
             .file_id = go_id,
             .name = goName(&idx, go_id),
             .status = gd.status,
+            .overrides = if (gd.status == .added) &.{} else try goFieldsToOverrides(arena, gd.fields),
             .components = comps,
             .children = &.{},
         });
@@ -213,6 +231,99 @@ fn materialize(
 pub fn findRoot(res: model.DiffResult, file_id: i64) ?model.ObjectDiff {
     for (res.roots) |o| if (o.file_id == file_id) return o;
     return null;
+}
+
+test "tree: GameObject rename appears as GameObject Name override" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const before =
+        \\--- !u!1 &1
+        \\GameObject:
+        \\  m_Name: Head
+        \\  m_Component:
+        \\  - component: {fileID: 4}
+        \\--- !u!4 &4
+        \\Transform:
+        \\  m_GameObject: {fileID: 1}
+        \\  m_Father: {fileID: 0}
+    ;
+    const after =
+        \\--- !u!1 &1
+        \\GameObject:
+        \\  m_Name: Sensor
+        \\  m_Component:
+        \\  - component: {fileID: 4}
+        \\--- !u!4 &4
+        \\Transform:
+        \\  m_GameObject: {fileID: 1}
+        \\  m_Father: {fileID: 0}
+    ;
+    const res = try root.diffBytes(arena, before, after);
+    const go = res.roots[0];
+    try testing.expectEqualStrings("Sensor", go.name);
+    try testing.expectEqual(model.Status.modified, go.status);
+    try testing.expectEqual(@as(usize, 1), go.overrides.len);
+    try testing.expectEqualStrings("GameObject", go.overrides[0].group);
+    try testing.expectEqualStrings("Name", go.overrides[0].label);
+    try testing.expectEqualStrings("Head", go.overrides[0].before.?.scalar);
+    try testing.expectEqualStrings("Sensor", go.overrides[0].after.?.scalar);
+}
+
+test "tree: GameObject Active change is an override; added GO omits Name" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const before_active =
+        \\--- !u!1 &1
+        \\GameObject:
+        \\  m_Name: Lamp
+        \\  m_IsActive: 1
+        \\  m_Component:
+        \\  - component: {fileID: 4}
+        \\--- !u!4 &4
+        \\Transform:
+        \\  m_GameObject: {fileID: 1}
+        \\  m_Father: {fileID: 0}
+    ;
+    const after_active =
+        \\--- !u!1 &1
+        \\GameObject:
+        \\  m_Name: Lamp
+        \\  m_IsActive: 0
+        \\  m_Component:
+        \\  - component: {fileID: 4}
+        \\--- !u!4 &4
+        \\Transform:
+        \\  m_GameObject: {fileID: 1}
+        \\  m_Father: {fileID: 0}
+    ;
+    const res_active = try root.diffBytes(arena, before_active, after_active);
+    const go_active = res_active.roots[0];
+    try testing.expectEqual(@as(usize, 1), go_active.overrides.len);
+    try testing.expectEqualStrings("Active", go_active.overrides[0].label);
+    try testing.expectEqualStrings("1", go_active.overrides[0].before.?.scalar);
+    try testing.expectEqualStrings("0", go_active.overrides[0].after.?.scalar);
+
+    const after_added =
+        \\--- !u!1 &2
+        \\GameObject:
+        \\  m_Name: Widget
+        \\  m_IsActive: 1
+        \\  m_Component:
+        \\  - component: {fileID: 5}
+        \\--- !u!4 &5
+        \\Transform:
+        \\  m_GameObject: {fileID: 2}
+        \\  m_Father: {fileID: 0}
+    ;
+    const res_added = try root.diffBytes(arena, "", after_added);
+    const go_added = res_added.roots[0];
+    try testing.expectEqualStrings("Widget", go_added.name);
+    try testing.expectEqual(model.Status.added, go_added.status);
+    for (go_added.overrides) |o| {
+        try testing.expect(!std.mem.eql(u8, o.label, "Name"));
+    }
 }
 
 test "tree: GameObject groups its components; modified component bubbles up" {

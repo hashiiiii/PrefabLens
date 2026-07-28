@@ -1,5 +1,15 @@
 const std = @import("std");
+const model = @import("model.zig");
 const testing = std.testing;
+
+test "inspector: shouldEmitNameOverride only for modified renames" {
+    var before_n = model.Node{ .scalar = "Head" };
+    var after_n = model.Node{ .scalar = "Sensor" };
+    try testing.expect(shouldEmitNameOverride(.modified, &before_n, &after_n));
+    try testing.expect(!shouldEmitNameOverride(.added, null, &after_n));
+    try testing.expect(!shouldEmitNameOverride(.removed, &before_n, null));
+    try testing.expect(!shouldEmitNameOverride(.modified, &before_n, &before_n));
+}
 
 test "inspector: hidden fields are hidden by first path segment" {
     try testing.expect(isHidden("m_ObjectHideFlags"));
@@ -136,4 +146,11 @@ pub fn groupOf(property_path: []const u8) []const u8 {
     for (transform_props) |t| if (std.mem.eql(u8, head, t)) return "Transform";
     for (game_object_props) |g| if (std.mem.eql(u8, head, g)) return "GameObject";
     return "Overrides";
+}
+
+pub fn shouldEmitNameOverride(status: model.Status, before: ?*const model.Node, after: ?*const model.Node) bool {
+    if (status != .modified) return false;
+    const b = before orelse return false;
+    const a = after orelse return false;
+    return !model.Node.eql(b, a);
 }

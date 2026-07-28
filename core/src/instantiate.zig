@@ -91,7 +91,8 @@ fn expandNode(ctx: *Ctx, node: *model.ObjectDiff, docs: *std.AutoHashMap(i64, *m
     if (sub.roots.len == 1) {
         node.components = try concatComponents(ctx.arena, node.components, sub.roots[0].components, sub.loose);
         node.children = try concatObjects(ctx.arena, node.children, sub.roots[0].children);
-        inner_overrides = sub.roots[0].overrides;
+        // Variant PrefabInstance roots may carry nested override rows; GameObject roots must not.
+        inner_overrides = if (sub.roots[0].kind == .prefab_instance) sub.roots[0].overrides else &.{};
     } else {
         node.components = try concatComponents(ctx.arena, node.components, &.{}, sub.loose);
         node.children = try concatObjects(ctx.arena, node.children, sub.roots);

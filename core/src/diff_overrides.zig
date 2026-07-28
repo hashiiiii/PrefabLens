@@ -208,14 +208,17 @@ test "diff: added prefab instance emits placement summary rows" {
     const d = findDoc(fd, 1001).?;
     try testing.expectEqual(model.Status.added, d.status);
     // Recorded placement is emitted as a single synthesized row even at default values (identity Rotation).
-    // EulerAnglesHint (hidden in Inspector) is not emitted; m_Name stays absent on added instances.
-    try testing.expectEqual(@as(usize, 2), d.overrides.len);
+    // EulerAnglesHint (hidden in Inspector) is not emitted; m_Name appears as a GameObject row.
+    try testing.expectEqual(@as(usize, 3), d.overrides.len);
     try testing.expectEqualStrings("Transform", d.overrides[0].group);
     try testing.expectEqualStrings("Position", d.overrides[0].label);
     try testing.expectEqualStrings("(2.03, 3.63, 1.11797)", d.overrides[0].after.?.scalar);
     try testing.expectEqualStrings("Transform", d.overrides[1].group);
     try testing.expectEqualStrings("Rotation", d.overrides[1].label);
     try testing.expectEqualStrings("(0, 0, 0, 1)", d.overrides[1].after.?.scalar);
+    try testing.expectEqualStrings("GameObject", d.overrides[2].group);
+    try testing.expectEqualStrings("Name", d.overrides[2].label);
+    try testing.expectEqualStrings("Cylinder Variant", d.overrides[2].after.?.scalar);
 }
 
 test "diff: added prefab instance keeps partial scale override" {

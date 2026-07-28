@@ -2,13 +2,14 @@ const std = @import("std");
 const model = @import("model.zig");
 const testing = std.testing;
 
-test "inspector: shouldEmitNameOverride only for modified renames" {
+test "inspector: shouldEmitNameOverride for added and modified renames" {
     var before_n = model.Node{ .scalar = "Head" };
     var after_n = model.Node{ .scalar = "Sensor" };
     try testing.expect(shouldEmitNameOverride(.modified, &before_n, &after_n));
-    try testing.expect(!shouldEmitNameOverride(.added, null, &after_n));
+    try testing.expect(shouldEmitNameOverride(.added, null, &after_n));
     try testing.expect(!shouldEmitNameOverride(.removed, &before_n, null));
     try testing.expect(!shouldEmitNameOverride(.modified, &before_n, &before_n));
+    try testing.expect(!shouldEmitNameOverride(.added, null, null));
 }
 
 test "inspector: hidden fields are hidden by first path segment" {
@@ -149,8 +150,13 @@ pub fn groupOf(property_path: []const u8) []const u8 {
 }
 
 pub fn shouldEmitNameOverride(status: model.Status, before: ?*const model.Node, after: ?*const model.Node) bool {
-    if (status != .modified) return false;
-    const b = before orelse return false;
-    const a = after orelse return false;
-    return !model.Node.eql(b, a);
+    return switch (status) {
+        .added => after != null,
+        .modified => blk: {
+            const b = before orelse return false;
+            const a = after orelse return false;
+            break :blk !model.Node.eql(b, a);
+        },
+        else => false,
+    };
 }

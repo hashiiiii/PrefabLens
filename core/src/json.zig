@@ -231,7 +231,7 @@ test "json: v2 prefab instance node with overrides" {
     try testing.expect(std.mem.indexOf(u8, out, "\"kind\":\"prefabInstance\"") != null);
     try testing.expect(std.mem.indexOf(u8, out, "\"name\":\"Cylinder Variant\"") != null);
     try testing.expect(std.mem.indexOf(u8, out, "\"sourceGuid\":\"aaa\"") != null);
-    try testing.expect(std.mem.indexOf(u8, out, "\"overrides\":[{\"group\":\"Transform\",\"label\":\"Scale.y\",\"status\":\"added\",\"before\":null,\"after\":\"2\"}]") != null);
+    try testing.expect(std.mem.indexOf(u8, out, "\"overrides\":[{\"group\":\"Transform\",\"label\":\"Scale.y\",\"status\":\"added\",\"before\":null,\"after\":\"2\"},{\"group\":\"GameObject\",\"label\":\"Name\",\"status\":\"added\",\"before\":null,\"after\":\"Cylinder Variant\"}]") != null);
 }
 
 test "json: needed sources are emitted only when unresolved" {
@@ -314,7 +314,7 @@ test "json: v2 root node shape matches golden" {
     // Regression pin fixing the full node shape on the roots side (gameObject + components + child
     // prefabInstance + overrides + structural summary) byte-for-byte.
     const golden =
-        \\{"schema":"prefablens.diff.v2","unresolvedGuids":["def","aaa"],"neededSources":[{"guid":"aaa","side":"after"}],"roots":[{"kind":"gameObject","fileId":"1","name":"Plane","status":"unchanged","components":[{"kind":"component","fileId":"5","classId":114,"typeName":"MonoBehaviour","scriptGuid":"def","className":null,"status":"modified","fields":[{"path":"Hp","status":"modified","before":"1","after":"2"}]}],"children":[{"kind":"prefabInstance","fileId":"1001","name":"Cylinder","status":"added","sourceGuid":"aaa","overrides":[{"group":"Transform","label":"Scale.y","status":"added","before":null,"after":"2"},{"group":"Overrides","label":"Added Components (1)","status":"added","before":null,"after":null}],"components":[],"children":[]}]}],"loose":[]}
+        \\{"schema":"prefablens.diff.v2","unresolvedGuids":["def","aaa"],"neededSources":[{"guid":"aaa","side":"after"}],"roots":[{"kind":"gameObject","fileId":"1","name":"Plane","status":"unchanged","components":[{"kind":"component","fileId":"5","classId":114,"typeName":"MonoBehaviour","scriptGuid":"def","className":null,"status":"modified","fields":[{"path":"Hp","status":"modified","before":"1","after":"2"}]}],"children":[{"kind":"prefabInstance","fileId":"1001","name":"Cylinder","status":"added","sourceGuid":"aaa","overrides":[{"group":"Transform","label":"Scale.y","status":"added","before":null,"after":"2"},{"group":"GameObject","label":"Name","status":"added","before":null,"after":"Cylinder"},{"group":"Overrides","label":"Added Components (1)","status":"added","before":null,"after":null}],"components":[],"children":[]}]}],"loose":[]}
     ;
     try testing.expectEqualStrings(golden, out);
 }

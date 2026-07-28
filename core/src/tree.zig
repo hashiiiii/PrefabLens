@@ -133,7 +133,7 @@ pub fn build(arena: std.mem.Allocator, fd: diffmod.FlatDiff) !model.DiffResult {
             .file_id = go_id,
             .name = goName(&idx, go_id),
             .status = gd.status,
-            .overrides = if (gd.status == .added) &.{} else try goFieldsToOverrides(arena, gd.fields),
+            .overrides = try goFieldsToOverrides(arena, gd.fields),
             .components = comps,
             .children = &.{},
         });
@@ -270,7 +270,7 @@ test "tree: GameObject rename appears as GameObject Name override" {
     try testing.expectEqualStrings("Sensor", go.overrides[0].after.?.scalar);
 }
 
-test "tree: GameObject Active change is an override; added GO omits Name" {
+test "tree: GameObject Active change is an override; added GO includes Name and Active" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
@@ -321,9 +321,21 @@ test "tree: GameObject Active change is an override; added GO omits Name" {
     const go_added = res_added.roots[0];
     try testing.expectEqualStrings("Widget", go_added.name);
     try testing.expectEqual(model.Status.added, go_added.status);
+    var saw_name = false;
+    var saw_active = false;
     for (go_added.overrides) |o| {
-        try testing.expect(!std.mem.eql(u8, o.label, "Name"));
+        if (std.mem.eql(u8, o.label, "Name")) {
+            saw_name = true;
+            try testing.expectEqualStrings("GameObject", o.group);
+            try testing.expectEqualStrings("Widget", o.after.?.scalar);
+        }
+        if (std.mem.eql(u8, o.label, "Active")) {
+            saw_active = true;
+            try testing.expectEqualStrings("GameObject", o.group);
+            try testing.expectEqualStrings("1", o.after.?.scalar);
+        }
     }
+    try testing.expect(saw_name and saw_active);
 }
 
 test "tree: GameObject groups its components; modified component bubbles up" {

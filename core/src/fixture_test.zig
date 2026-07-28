@@ -111,7 +111,7 @@ test "fixture: deleted Cylinder Variant.prefab mirrors the added enumeration" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
-    // Mirror of added (the previous test): the same 3 rows appear with before values and removed.
+    // Mirror of added (the previous test) minus the Name row: removed omits Name via shouldEmitNameOverride.
     const res = try root.diffBytes(arena, cylinder_variant_after, "");
     try testing.expectEqual(@as(usize, 1), res.roots.len);
     const inst = res.roots[0];

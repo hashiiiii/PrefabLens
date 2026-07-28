@@ -321,6 +321,7 @@ test "tree: GameObject Active change is an override; added GO includes Name and 
     const go_added = res_added.roots[0];
     try testing.expectEqualStrings("Widget", go_added.name);
     try testing.expectEqual(model.Status.added, go_added.status);
+    // Added GameObjects emit all visible presentFields (not only Name/Active); spot-check the two we care about here.
     var saw_name = false;
     var saw_active = false;
     for (go_added.overrides) |o| {

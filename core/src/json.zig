@@ -78,13 +78,13 @@ fn writeObject(w: *std.Io.Writer, o: model.ObjectDiff, resolved: ?*const Resolve
     if (o.kind == .prefab_instance) {
         try w.writeAll(",\"sourceGuid\":");
         if (o.source_guid) |g| try writeJsonString(w, g) else try w.writeAll("null");
-        try w.writeAll(",\"overrides\":[");
-        for (o.overrides, 0..) |ov, i| {
-            if (i != 0) try w.writeByte(',');
-            try writeOverride(w, ov);
-        }
-        try w.writeByte(']');
     }
+    try w.writeAll(",\"overrides\":[");
+    for (o.overrides, 0..) |ov, i| {
+        if (i != 0) try w.writeByte(',');
+        try writeOverride(w, ov);
+    }
+    try w.writeByte(']');
     try w.writeAll(",\"components\":[");
     for (o.components, 0..) |c, i| {
         if (i != 0) try w.writeByte(',');
@@ -314,9 +314,41 @@ test "json: v2 root node shape matches golden" {
     // Regression pin fixing the full node shape on the roots side (gameObject + components + child
     // prefabInstance + overrides + structural summary) byte-for-byte.
     const golden =
-        \\{"schema":"prefablens.diff.v2","unresolvedGuids":["def","aaa"],"neededSources":[{"guid":"aaa","side":"after"}],"roots":[{"kind":"gameObject","fileId":"1","name":"Plane","status":"unchanged","components":[{"kind":"component","fileId":"5","classId":114,"typeName":"MonoBehaviour","scriptGuid":"def","className":null,"status":"modified","fields":[{"path":"Hp","status":"modified","before":"1","after":"2"}]}],"children":[{"kind":"prefabInstance","fileId":"1001","name":"Cylinder","status":"added","sourceGuid":"aaa","overrides":[{"group":"Transform","label":"Scale.y","status":"added","before":null,"after":"2"},{"group":"GameObject","label":"Name","status":"added","before":null,"after":"Cylinder"},{"group":"Overrides","label":"Added Components (1)","status":"added","before":null,"after":null}],"components":[],"children":[]}]}],"loose":[]}
+        \\{"schema":"prefablens.diff.v2","unresolvedGuids":["def","aaa"],"neededSources":[{"guid":"aaa","side":"after"}],"roots":[{"kind":"gameObject","fileId":"1","name":"Plane","status":"unchanged","overrides":[],"components":[{"kind":"component","fileId":"5","classId":114,"typeName":"MonoBehaviour","scriptGuid":"def","className":null,"status":"modified","fields":[{"path":"Hp","status":"modified","before":"1","after":"2"}]}],"children":[{"kind":"prefabInstance","fileId":"1001","name":"Cylinder","status":"added","sourceGuid":"aaa","overrides":[{"group":"Transform","label":"Scale.y","status":"added","before":null,"after":"2"},{"group":"GameObject","label":"Name","status":"added","before":null,"after":"Cylinder"},{"group":"Overrides","label":"Added Components (1)","status":"added","before":null,"after":null}],"components":[],"children":[]}]}],"loose":[]}
     ;
     try testing.expectEqualStrings(golden, out);
+}
+
+test "json: gameObject rename emits Name override" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const before =
+        \\--- !u!1 &1
+        \\GameObject:
+        \\  m_Name: Head
+        \\  m_Component:
+        \\  - component: {fileID: 4}
+        \\--- !u!4 &4
+        \\Transform:
+        \\  m_GameObject: {fileID: 1}
+        \\  m_Father: {fileID: 0}
+    ;
+    const after =
+        \\--- !u!1 &1
+        \\GameObject:
+        \\  m_Name: Sensor
+        \\  m_Component:
+        \\  - component: {fileID: 4}
+        \\--- !u!4 &4
+        \\Transform:
+        \\  m_GameObject: {fileID: 1}
+        \\  m_Father: {fileID: 0}
+    ;
+    const out = try root.diffToJson(arena, before, after);
+    try testing.expect(std.mem.indexOf(u8, out, "\"label\":\"Name\"") != null);
+    try testing.expect(std.mem.indexOf(u8, out, "\"before\":\"Head\"") != null);
+    try testing.expect(std.mem.indexOf(u8, out, "\"after\":\"Sensor\"") != null);
 }
 
 test "json: component carries className" {

@@ -22,6 +22,7 @@ const DIFF: DiffV2 = {
       fileId: "1",
       name: "Player",
       status: "modified",
+      overrides: [],
       components: [
         {
           kind: "component",
@@ -43,7 +44,9 @@ const DIFF: DiffV2 = {
           ],
         },
       ],
-      children: [{ kind: "gameObject", fileId: "3", name: "Weapon", status: "added", components: [], children: [] }],
+      children: [
+        { kind: "gameObject", fileId: "3", name: "Weapon", status: "added", overrides: [], components: [], children: [] },
+      ],
     },
   ],
   loose: [],
@@ -59,6 +62,7 @@ const INSTANCE: DiffV2 = {
       fileId: "1",
       name: "Plane",
       status: "unchanged",
+      overrides: [],
       components: [],
       children: [
         {
@@ -208,6 +212,7 @@ describe("render", () => {
           fileId: "1",
           name: "<img src=x onerror=alert(1)>",
           status: "added",
+          overrides: [],
           components: [],
           children: [],
         },
@@ -242,6 +247,33 @@ describe("render", () => {
     const root = freshRoot();
     renderError(root, "Set a GitHub token in the PrefabLens options page.");
     expect(root.textContent).toContain("Set a GitHub token");
+  });
+
+  it("renders game object overrides in the components section", () => {
+    const diff: DiffV2 = {
+      schema: "prefablens.diff.v2",
+      unresolvedGuids: [],
+      roots: [
+        {
+          kind: "gameObject",
+          fileId: "1",
+          name: "Sensor",
+          status: "modified",
+          overrides: [
+            { group: "GameObject", label: "Name", status: "modified", before: "Head", after: "Sensor" },
+          ],
+          components: [],
+          children: [],
+        },
+      ],
+      loose: [],
+    };
+    const root = freshRoot();
+    render(root, diff);
+    const row = root.querySelector(".pl-components .pl-field.pl-modified");
+    expect(row?.textContent).toContain("Name");
+    expect(row?.textContent).toContain("Head");
+    expect(row?.textContent).toContain("Sensor");
   });
 
   it("renders prefab instance with badge, components section and open override card", () => {
@@ -326,6 +358,7 @@ describe("render", () => {
           fileId: "1",
           name: "Cylinder",
           status: "modified",
+          overrides: [],
           components: [
             {
               kind: "component",

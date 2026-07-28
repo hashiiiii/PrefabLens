@@ -230,7 +230,7 @@ function renderNode(node: NodeDiff, diff: DiffV2): HTMLElement {
   const kids = kidsBox();
   // Display-hierarchy rule: component/override cards live only under the components section.
   const cards: HTMLElement[] = [];
-  if (node.kind === "prefabInstance") cards.push(...renderOverrideGroups(node.overrides, diff));
+  cards.push(...renderOverrideGroups(node.overrides, diff));
   cards.push(...node.components.map((c) => renderComponent(c, diff)));
   if (cards.length) kids.append(componentsSection(cards));
   for (const child of node.children) kids.append(renderNode(child, diff));

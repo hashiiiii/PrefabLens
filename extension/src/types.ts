@@ -30,6 +30,7 @@ export type GameObjectDiff = {
   fileId: string;
   name: string;
   status: Status;
+  overrides: OverrideDiff[];
   components: ComponentDiff[];
   children: NodeDiff[];
 };

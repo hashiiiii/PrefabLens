@@ -62,6 +62,26 @@ namespace PrefabLens.Tests
         }
 
         [Test]
+        public void ParsesGameObjectOverrides()
+        {
+            const string json =
+                @"{
+                ""unresolvedGuids"":[],
+                ""roots"":[{""kind"":""gameObject"",""fileId"":""1"",""name"":""Plane"",""status"":""modified"",
+                    ""overrides"":[{""group"":"""",""label"":""Name"",""status"":""modified"",""before"":""Old"",""after"":""New""}],
+                    ""components"":[],""children"":[]}],
+                ""loose"":[]
+            }";
+            var m = DiffModel.Parse(json);
+            var go = (GameObjectDiff)m.Roots[0];
+            Assert.AreEqual(1, go.Overrides.Count);
+            Assert.AreEqual("Name", go.Overrides[0].Label);
+            Assert.AreEqual(DiffStatus.Modified, go.Overrides[0].Status);
+            Assert.AreEqual("Old", go.Overrides[0].Before.Scalar);
+            Assert.AreEqual("New", go.Overrides[0].After.Scalar);
+        }
+
+        [Test]
         public void SkipsUnknownNodeKindsAndToleratesMissingFields()
         {
             const string json =

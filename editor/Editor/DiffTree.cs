@@ -95,9 +95,8 @@ namespace PrefabLens
                     Palette.Muted
                 );
             var item = new Item(row);
-            if (pi != null)
-                foreach (var ov in pi.Overrides)
-                    item.Children.Add(new Item(OverrideRow(ov, m)));
+            foreach (var ov in n.Overrides)
+                item.Children.Add(new Item(OverrideRow(ov, m)));
             if (n.Components.Count > 0)
             {
                 // Components fold as their own group one level below the object row (extension parity).

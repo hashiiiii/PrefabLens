@@ -138,7 +138,7 @@ cd extension && pnpm install && pnpm run build && pnpm test
 cd editor && dotnet test DotNetTests~/Tests
 
 # Site (build the CLI, WASM, and extension demo bundle first: `pnpm run demo`)
-cd site && node --test src/*.test.mjs && node build.mjs
+cd site && node build.mjs
 ```
 
 ## Contributing

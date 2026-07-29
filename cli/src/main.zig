@@ -787,8 +787,8 @@ const help_text = usage_line ++
     \\  --project DIR  Unity project root for guid resolution (and git repo dir);
     \\                 git mode resolves against the repository root by default
     \\  --no-project   skip the default guid-resolution scan
-    \\  --color        force ANSI colors on in tree output (useful when piping)
-    \\  --no-color     disable ANSI colors in tree output
+    \\  --color        force ANSI colors when stdout is not a TTY (e.g. piping)
+    \\  --no-color     disable ANSI colors (overrides TTY detection and --color)
     \\  --version      print the version and exit
     \\  -h, --help     show this help
     \\

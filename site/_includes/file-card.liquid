@@ -1,0 +1,20 @@
+{% comment %} One file on the PR "Files changed" tab. {% endcomment %}
+<div class="file js-details-container Details Details--on open">
+  <div
+    class="file-header"
+    data-path="{{ file.path | escape }}"
+    data-before="{{ file.before | escape }}"
+    data-after="{{ file.after | escape }}"
+  >
+    <button type="button" class="file-collapse" aria-label="Collapse file">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+        <path d="M6.22 3.22a.75.75 0 0 1 1.06 0l4.25 4.25a.75.75 0 0 1 0 1.06l-4.25 4.25a.75.75 0 0 1-1.06-1.06L9.94 8 6.22 4.28a.75.75 0 0 1 0-1.06Z"/>
+      </svg>
+    </button>
+    <span class="file-info">{{ file.label | escape }}</span>
+    <span class="file-stat"
+      ><span class="added">+{{ file.added }}</span> <span class="removed">-{{ file.removed }}</span></span
+    >
+  </div>
+  <div class="js-file-content Details-content--hidden">{% rawHtml file.table %}</div>
+</div>

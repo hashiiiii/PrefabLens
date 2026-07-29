@@ -1,12 +1,1 @@
-allowBuilds:
-  esbuild: true
-
-# Supply-chain cooldown: refuse packages published less than 3 days ago at install
-# time. This is a deliberate, explicit opt-in (pnpm 11 already defaults this to 1 day);
-# stating it here documents intent and survives any future change to the pnpm default.
-# It is defense-in-depth alongside Renovate's 7-day minimumReleaseAge, which only gates
-# Renovate-proposed direct-dependency PRs and cannot see transitive deps pulled in at
-# install time. Keep this <= Renovate's value so Renovate updates always clear this gate.
-# Setting it explicitly also enables strict mode (fail-closed) instead of the silent
-# fallback the built-in default uses. 4320 = 3 days in minutes.
 minimumReleaseAge: 4320

@@ -5,15 +5,21 @@ layout: layout.liquid
 ---
 <h1>Extension demo</h1>
 <p class="hint">
-  A simulated pull request page. The Raw / Semantic toggle runs the real
-  extension code and WASM diff engine.
+  A simulated pull request page. The Raw / Semantic toggle runs the real extension code and WASM diff engine.
 </p>
 
 <div class="window">
-  <div class="window-title">github.com/you/unity-project/pull/2/files</div>
+  <div class="window-title">github.com/you/unity-project/pull/1/files</div>
   <div class="gh-page">
-    <h1 class="pr-header">Rebalance robot physics and rework the playground scene <span class="pr-number">#2</span></h1>
-    {% fragment "pr-files.html" %}
+    <h1 class="pr-header">Rebalance robot physics and rework the playground scene <span class="pr-number">#1</span></h1>
+    <p class="pr-meta">
+      {{ pullRequest.files.size }} commits into <span class="branch">{{ pullRequest.base }}</span> from
+      <span class="branch">{{ pullRequest.head }}</span>
+    </p>
+    {% comment %} Files changed: one file-card per changed path {% endcomment %}
+    {% for file in pullRequest.files %}
+      {% include 'file-card.liquid', file: file %}
+    {% endfor %}
   </div>
 </div>
 <script src="demo.js" defer></script>

@@ -8,15 +8,14 @@ import { createQueue } from "./queue";
 
 let differ: Promise<Differ> | undefined;
 
-// Six concurrent across all REST/GraphQL. GraphQL also goes through fetchFn, so it shares the same budget.
-// User-action-originated requests jump the queue via front
+// Six concurrent across REST/GraphQL (GraphQL shares fetchFn). User-action jumps via front.
 const queue = createQueue(6);
 const queuedFetch =
   (front: boolean): typeof fetch =>
   (input, init) =>
     queue(() => fetch(input, init), { front });
 
-// Whole-repo .meta guid records, shared by repoIndexStore.loadGuids/saveGuids below
+// Whole-repo .meta guid records for repoIndexStore.loadGuids/saveGuids
 const metaGuids = createMergeStore(chrome.storage.local, "metaGuids");
 
 const handler = createHandler({
@@ -26,18 +25,18 @@ const handler = createHandler({
   },
   makeClient: (base, token, lane) => new GithubClient(base, token, queuedFetch(lane === "user")),
   getDiffer() {
-    // Lazy singleton. If the SW restarts, just re-fetch.
+    // Lazy singleton; SW restart → re-fetch
     differ ??= fetch(chrome.runtime.getURL("prefablens.wasm"))
       .then((r) => r.arrayBuffer())
       .then(createDiffer);
     return differ;
   },
-  // Both guid caches are the same merge-on-save record slot, just under different prefixes
+  // Same merge-on-save slot under different prefixes
   guidCache: createMergeStore(chrome.storage.local, "guids"),
   diffStore: createSessionDiffStore(chrome.storage.session),
   repoIndexStore: {
     loadGuids: (repo) => metaGuids.load(repo),
-    saveGuids: (repo, entries) => metaGuids.save(repo, entries).catch(() => {}), // on quota overflow, continue in memory only
+    saveGuids: (repo, entries) => metaGuids.save(repo, entries).catch(() => {}), // quota overflow → memory only
     async loadIndex(repo) {
       const key = `guidIndex:${repo}`;
       const stored = await chrome.storage.local.get([key]);
@@ -52,12 +51,11 @@ const handler = createHandler({
 chrome.runtime.onMessage.addListener((msg: BackgroundRequest, sender, sendResponse) => {
   if (msg?.type === "semanticDiff") {
     const tabId = sender.tab?.id;
-    // semanticDiff requests always originate in a tab content script; guard defensively so a non-tab sender no-ops.
+    // semanticDiff always originates in a tab content script; non-tab sender no-ops
     const push = (m: GuidResolvedPush) => {
       if (tabId === undefined) return;
-      // The final push releases the content-side indicator: retry a dropped tab message
-      // (SPA navigation races, transient port loss) before giving up. Intermediate pushes
-      // stay fire-and-forget — losing one only delays names until the final push.
+      // Final push releases the indicator: retry a dropped tab message before giving up.
+      // Intermediate pushes stay fire-and-forget — losing one only delays names until final.
       const attempt = (left: number): void => {
         void chrome.tabs.sendMessage(tabId, m).catch(() => {
           if (m.done && left > 0) setTimeout(() => attempt(left - 1), 1000);
@@ -69,5 +67,5 @@ chrome.runtime.onMessage.addListener((msg: BackgroundRequest, sender, sendRespon
     return true; // async response
   }
   if (msg?.type === "prefetch") void handler.prefetch(msg);
-  return undefined; // prefetch doesn't respond (fire-and-forget)
+  return undefined; // prefetch is fire-and-forget
 });

@@ -12,13 +12,11 @@ type Job = {
 export type Queue = <T>(task: () => Promise<T>, opts?: { front?: boolean }) => Promise<T>;
 
 const MAX_RATE_LIMIT_RETRIES = 2; // per job, on top of the initial attempt
-const BACKOFF_CAP_MS = 60_000; // a primary-limit reset can be an hour away: fail into the manual message instead
-const BACKOFF_FALLBACK_MS = 30_000; // secondary limits sometimes advise nothing; they clear within a minute
+const BACKOFF_CAP_MS = 60_000; // primary-limit reset can be an hour: fail into the manual message instead
+const BACKOFF_FALLBACK_MS = 30_000; // secondary limits sometimes advise nothing; clear within a minute
 
-/** Throttles REST concurrency (GitHub secondary rate limits trigger on bursts).
- *  front is for user-action interrupts: it jumps the prefetch queue.
- *  A RateLimitError pauses the whole queue for the advised (capped) duration and re-enqueues
- *  the failed job by lane — front jobs re-enter at the front so prefetch never starves them. */
+// Throttles REST concurrency. front jumps the prefetch queue for user actions.
+// RateLimitError pauses the whole queue and re-enqueues by lane so prefetch never starves front.
 export function createQueue(
   limit: number,
   sleep: (ms: number) => Promise<void> = (ms) => new Promise((r) => setTimeout(r, ms)),
@@ -40,7 +38,7 @@ export function createQueue(
     while (!paused && active < limit && pending.length) {
       const job = must(pending.shift());
       active++;
-      // Normalize even a synchronous throw into a rejection: a leak here leaves active undecremented and jams the queue forever
+      // Normalize sync throws into rejections: a leak here jams the queue forever
       Promise.resolve()
         .then(job.run)
         .then(

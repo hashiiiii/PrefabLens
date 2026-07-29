@@ -1,7 +1,6 @@
 import type { DeviceCode, PollResult } from "../github/deviceFlow";
 
-// Written to storage.local before the verification tab opens; the /login/device
-// content script reads it to pre-fill the code.
+// Written before the verification tab opens; /login/device reads it to pre-fill
 export type PendingSignIn = { userCode: string; expiresAt: number };
 
 export type SignInIo = {
@@ -26,7 +25,7 @@ export const FAILURE_TEXT = {
 } as const;
 
 export function createSignIn(io: SignInIo): (ui: SignInUi) => Promise<void> {
-  let inFlight = false; // one flow per page: a second click while polling is a no-op
+  let inFlight = false; // one flow per page; second click while polling is a no-op
   return async (ui) => {
     if (inFlight) return;
     inFlight = true;
@@ -36,8 +35,7 @@ export function createSignIn(io: SignInIo): (ui: SignInUi) => Promise<void> {
       ui.showPending(code.userCode, code.verificationUri);
       io.openTab(code.verificationUri);
       const result = await io.pollForToken(code);
-      // Success needs no ui call: saveToken writes `pat`, and the storage.onChanged
-      // retry in content/index.ts repaints every auth-blocked panel, including this one.
+      // Success: saveToken → storage.onChanged in index.ts retries auth-blocked panels
       if (result.status === "ok") await io.saveToken(result.token);
       else ui.showFailure(FAILURE_TEXT[result.status]);
       await io.clearPending();

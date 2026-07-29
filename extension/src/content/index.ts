@@ -35,11 +35,10 @@ const ERROR_TEXT: Record<BackgroundError, string> = {
   "not-unity-yaml": "This file is not a text-serialized Unity asset.",
 };
 
-// path → render target. When a push (guidResolved) arrives, merge resolved and re-render
+// path → render target for guidResolved pushes
 const views = createViewRegistry();
 
-// If the final push is lost (dropped tab message, killed service worker), flip the
-// indicator to the retryable incomplete state instead of spinning forever.
+// Lost final push → flip to retryable incomplete instead of spinning forever
 const WATCHDOG_MS = 120_000;
 
 function armWatchdog(view: ViewEntry): void {
@@ -50,19 +49,19 @@ function armWatchdog(view: ViewEntry): void {
   );
 }
 
-// Targets of the global switch: drives the toggle + display of already-attached files from outside
+// Global switch targets: toggle + display for already-attached files
 type Applier = { header: HTMLElement; apply(view: View): void; sync(): void };
 const appliers = new Set<Applier>();
 let globalToggle: Toggle | undefined;
-let currentPage = ""; // overrides are valid only while on the diff page: discard when it changes
-let prefetchedPr = ""; // send prefetch just once across all PR tabs, including the conversation tab
+let currentPage = ""; // drop overrides when leaving this diff page
+let prefetchedPr = ""; // prefetch once per PR across conversation + files tabs
 
-// Files whose panels are stuck on an auth error: all retried once a token lands in storage.
+// Auth-blocked panels: retry all when a token lands
 const authRetries = createAuthRetries();
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 const signIn = createSignIn({
-  // Same-origin on github.com: the device flow needs no background relay and no extra permissions.
+  // Same-origin on github.com: no background relay or extra permissions.
   requestDeviceCode: () => requestDeviceCode(fetch),
   pollForToken: (code) => pollForToken(fetch, sleep, code),
   savePending: (pending) => chrome.storage.local.set({ signin: pending }),
@@ -72,7 +71,7 @@ const signIn = createSignIn({
   now: () => Date.now(),
 });
 
-/** Auth-error panel driving the device flow; failures land back here so the user can retry. */
+// Auth-error panel: device flow; failures land back here for retry
 function signInPanel(root: ShadowRoot, message: string): void {
   renderSignIn(root, message, () => {
     void signIn({
@@ -83,13 +82,13 @@ function signInPanel(root: ShadowRoot, message: string): void {
   });
 }
 
-function attach(state: ViewState): void {
+function attach(viewState: ViewState): void {
   const prPage = parsePrPage(location.pathname);
   if (prPage) {
     const prKey = targetKey(prPage.owner, prPage.repo, { kind: "pull", prNumber: prPage.prNumber });
     if (prKey !== prefetchedPr) {
       prefetchedPr = prKey;
-      // fire-and-forget: don't wait on the response, ignore failures (the manual-toggle path is separately alive)
+      // Fire-and-forget; manual toggle stays available if prefetch fails
       void (
         chrome.runtime.sendMessage({ type: "prefetch", ...prPage } satisfies PrefetchRequest) as Promise<unknown>
       ).catch(() => {});
@@ -100,25 +99,21 @@ function attach(state: ViewState): void {
   const key = targetKey(page.owner, page.repo, page.target);
   if (key !== currentPage) {
     currentPage = key;
-    state.clearOverrides();
-    views.pruneDisconnected(); // not only ignore late pushes to views killed by navigation, but also cut the reference
+    viewState.clearOverrides();
+    views.pruneDisconnected(); // drop refs so late pushes can't revive dead views
   }
-  // The react ui virtualizes the list and discards off-screen DOM continuously, so prune
-  // dead appliers every scan, not just on PR change (also plugs the classic soft leak).
+  // React virtualizes and discards off-screen DOM; prune every scan (also plugs classic soft leak)
   for (const a of [...appliers]) if (!a.header.isConnected) appliers.delete(a);
   const entries = scanUnityFiles(document);
   const first = entries[0];
-  if (first) ensureGlobalToggle(state, first);
-  for (const entry of entries) attachToggle(state, page, entry);
-  // Re-assert view state: react remounts diff bodies under still-marked headers, which
-  // silently undoes the inline hide. All sync operations are idempotent and fetch-free.
+  if (first) ensureGlobalToggle(viewState, first);
+  for (const entry of entries) attachToggle(viewState, page, entry);
+  // React remounts can undo inline hide under still-marked headers; sync is idempotent/fetch-free
   for (const a of appliers) a.sync();
 }
 
-/** Injects exactly one global toggle right before the first Unity file's layout anchor:
- *  the .file container on classic, the virtualized list root on the react ui (a bar inside
- *  a recycled list item would be discarded on scroll). */
-function ensureGlobalToggle(state: ViewState, first: FileEntry): void {
+// Global bar must sit outside recycled react list items (classic: before .file; react: list root)
+function ensureGlobalToggle(viewState: ViewState, first: FileEntry): void {
   if (globalToggle?.element.closest("[data-prefablens-global]")?.isConnected) return;
   const anchor = first.globalAnchor();
   if (!anchor?.parentElement) return;
@@ -127,23 +122,21 @@ function ensureGlobalToggle(state: ViewState, first: FileEntry): void {
   const label = document.createElement("span");
   label.className = "prefablens-eyebrow";
   label.textContent = "PrefabLens";
-  const toggle = createToggle((view) => state.setDefault(view), state.defaultView());
+  const toggle = createToggle((view) => viewState.setDefault(view), viewState.defaultView());
   bar.append(label, toggle.element);
   anchor.before(bar);
   globalToggle = toggle;
 }
 
-function attachToggle(state: ViewState, page: DiffPage, entry: FileEntry): void {
+function attachToggle(viewState: ViewState, page: DiffPage, entry: FileEntry): void {
   if (entry.header.hasAttribute("data-prefablens")) return;
   entry.header.setAttribute("data-prefablens", "");
   const viewKey = `${targetKey(page.owner, page.repo, page.target)}:${entry.path}`;
 
-  // Set by createHost; results.set only runs after the machine created the host, so the
-  // registry (whose push listener renders into it) always sees a real shadow root.
+  // Set by createHost before results.set so the push listener always has a real shadow root
   let shadow: ShadowRoot | undefined;
 
-  // The transitions live in fileView.ts; this block only binds them to the real DOM,
-  // the runtime channel, and the shared registries.
+  // Transitions live in fileView.ts; here we bind them to DOM, runtime, and registries
   const fileView = createFileView({
     file: entry,
     createHost() {
@@ -182,13 +175,13 @@ function attachToggle(state: ViewState, page: DiffPage, entry: FileEntry): void 
       armWatchdog: () => armWatchdog(must(views.get(viewKey))),
     },
     onAuthRetry: (retry) => authRetries.add(retry),
-    effectiveView: () => state.effective(entry.path),
+    effectiveView: () => viewState.effective(entry.path),
   });
 
   const toggle = createToggle((view) => {
-    state.setOverride(entry.path, view); // a click overrides just this file
+    viewState.setOverride(entry.path, view); // per-file override
     fileView.show(view);
-  }, state.effective(entry.path));
+  }, viewState.effective(entry.path));
   entry.header.append(toggle.element);
   appliers.add({
     header: entry.header,
@@ -196,12 +189,11 @@ function attachToggle(state: ViewState, page: DiffPage, entry: FileEntry): void 
       toggle.set(view);
       fileView.show(view);
     },
-    sync: () => fileView.sync(state.effective(entry.path)),
+    sync: () => fileView.sync(viewState.effective(entry.path)),
   });
 
-  // If the default is semantic, start rendering at attach time: lazy-loaded files also pass through here, so
-  // "the global is semantic but a later-arriving file is raw" doesn't happen
-  if (state.effective(entry.path) === "semantic") fileView.show("semantic");
+  // Start semantic at attach so late-arriving files inherit a semantic global default
+  if (viewState.effective(entry.path) === "semantic") fileView.show("semantic");
 }
 
 function requestDiff(req: SemanticDiffRequest): Promise<SemanticDiffResponse> {
@@ -212,7 +204,7 @@ function requestDiff(req: SemanticDiffRequest): Promise<SemanticDiffResponse> {
 }
 
 async function init(): Promise<void> {
-  // On the device-verification page the only job is pre-filling the code the PR page issued.
+  // Device page: only pre-fill the code the PR page issued
   if (location.pathname === "/login/device") {
     const stored = await chrome.storage.local.get(["signin"]).catch(() => ({}) as Record<string, unknown>);
     const pending = stored.signin as PendingSignIn | undefined;
@@ -222,38 +214,41 @@ async function init(): Promise<void> {
 
   const stored = await chrome.storage.local.get(["viewMode"]).catch(() => ({}) as Record<string, unknown>);
   const initial: View = stored.viewMode === "semantic" ? "semantic" : "raw";
-  const state = createViewState(initial, (view) => void chrome.storage.local.set({ viewMode: view }).catch(() => {}));
-  state.onDefaultChange((view) => {
+  const viewState = createViewState(
+    initial,
+    (view) => void chrome.storage.local.set({ viewMode: view }).catch(() => {}),
+  );
+  viewState.onDefaultChange((view) => {
     globalToggle?.set(view);
     for (const a of [...appliers]) {
       if (!a.header.isConnected) {
-        appliers.delete(a); // clean up DOM killed by an SPA navigation
+        appliers.delete(a); // SPA navigation may have killed the DOM
         continue;
       }
       a.apply(view);
     }
   });
-  // Follow default changes in other tabs (the echo to the originating set tab is ignored inside applyExternal)
+  // Cross-tab default sync; applyExternal ignores the originating tab's echo
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== "local") return;
     const next = changes.viewMode?.newValue;
-    if (next === "raw" || next === "semantic") state.applyExternal(next);
+    if (next === "raw" || next === "semantic") viewState.applyExternal(next);
     if (typeof changes.pat?.newValue === "string" && changes.pat.newValue) {
-      // A token just landed (this tab's own flow or another surface): retry every auth-blocked panel.
+      // Token landed (this tab or elsewhere): retry every auth-blocked panel
       authRetries.flush();
     }
   });
 
-  // guid resolution push from background (the second stage of the two-stage response): re-render if the matching view exists
+  // guidResolved: second-stage push from background; re-render if this view still exists
   chrome.runtime.onMessage.addListener((msg: GuidResolvedPush) => {
     if (msg?.type !== "guidResolved") return;
     const view = views.get(`${targetKey(msg.owner, msg.repo, msg.target)}:${msg.path}`);
-    if (!view) return; // already navigated to a different diff page, etc.: drop silently
+    if (!view) return; // navigated away: drop silently
     clearTimeout(view.watchdog);
-    // The final push replaces json (mergeSources may change the structure), an intermediate push merges resolved
+    // Final push replaces json (mergeSources can reshape); intermediate merges resolved
     view.json = msg.json ?? { ...view.json, resolved: { ...view.json.resolved, ...msg.resolved } };
     if (msg.done && msg.status !== undefined && msg.status !== "complete") {
-      // The run gave up: keep the names that did arrive, offer a manual retry (#194).
+      // Gave up: keep arrived names, offer manual retry (#194)
       render(view.root, view.json, { incomplete: { onRetry: view.retry } });
       return;
     }
@@ -261,18 +256,16 @@ async function init(): Promise<void> {
     render(view.root, view.json, { resolving: msg.done ? 0 : Math.max(unresolvedRemaining(view.json).length, 1) });
   });
 
-  // GitHub is an SPA: an initial scan + MutationObserver follows lazy loading and tab navigation.
-  // 50ms debounce keeps collapse/expand tracking under the ~100ms sluggishness threshold while
-  // still batching mutation storms: a full scan pass measured ~0.75ms on a 21-file PR, so even
-  // back-to-back rescans are negligible (the scan is fetch-free and idempotent).
-  attach(state);
+  // SPA: MutationObserver + 50ms debounce follows lazy loads without feeling sluggish
+  // (~100ms threshold); scans are fetch-free/~0.75ms so storms stay cheap.
+  attach(viewState);
   let scheduled = false;
   new MutationObserver(() => {
     if (scheduled) return;
     scheduled = true;
     setTimeout(() => {
       scheduled = false;
-      attach(state);
+      attach(viewState);
     }, 50);
   }).observe(document.body, { childList: true, subtree: true });
 }

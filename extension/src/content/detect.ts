@@ -4,18 +4,16 @@ import { must } from "../util/must";
 
 export type FileEntry = {
   path: string;
-  header: HTMLElement; // toggle mount point + data-prefablens marker
-  attachHost(host: HTMLElement): void; // insert the semantic-view host at the layout's spot
-  setRawHidden(hidden: boolean): void; // idempotent, re-resolves live DOM every call
-  collapsed(): boolean; // github-level file collapse state (react ui chevron)
-  globalAnchor(): Element | null; // element the global bar is inserted before
+  header: HTMLElement; // toggle mount + data-prefablens marker
+  attachHost(host: HTMLElement): void; // insert semantic host at the layout's spot
+  setRawHidden(hidden: boolean): void; // idempotent; re-resolves live DOM each call
+  collapsed(): boolean; // github file collapse (react chevron)
+  globalAnchor(): Element | null; // element the global bar inserts before
 };
 
 export type DiffPage = { owner: string; repo: string; target: DiffTarget };
 
-/** decodeURIComponent that tolerates malformed escapes: a pathname can carry a bare %
- *  (browsers pass invalid sequences through verbatim), and parseDiffUrl runs unguarded
- *  in attach() — throwing here would kill the whole page scan. */
+// Tolerate bare % in pathnames — throwing here would kill the whole page scan
 function decodeRef(s: string): string {
   try {
     return decodeURIComponent(s);
@@ -24,18 +22,15 @@ function decodeRef(s: string): string {
   }
 }
 
-/** Recognizes every diff page the pipeline can serve. Compare is same-repo three-dot only:
- *  fork syntax (owner:branch) would need a second repo's blobs, and GitHub's compare page
- *  itself is three-dot (merge base), which is exactly what the compare API returns. */
+// Diff pages we can serve. Compare is same-repo three-dot only (fork owner:branch needs a second repo).
 export function parseDiffUrl(pathname: string): DiffPage | null {
-  // files: any suffix (ranges render inline). changes (react ui): bare tab or A..B range only.
+  // files: any suffix. changes (react): bare tab or A..B range only.
   const pr =
     /^\/([^/]+)\/([^/]+)\/pull\/(\d+)\/(?:files(?:\/|$)|changes(?:\/[\da-f]{7,40}\.\.[\da-f]{7,40})?\/?$)/.exec(
       pathname,
     );
   if (pr) return { owner: must(pr[1]), repo: must(pr[2]), target: { kind: "pull", prNumber: Number(must(pr[3])) } };
-  // Single-commit views: standalone /commit/SHA, plus the in-PR classic /commits/SHA and
-  // react /changes/SHA — all show one commit against its parent
+  // /commit/SHA, classic /commits/SHA, react /changes/SHA — one commit vs parent
   const commit = /^\/([^/]+)\/([^/]+)\/(?:pull\/\d+\/(?:commits|changes)|commit)\/([\da-f]{7,40})\/?$/.exec(pathname);
   if (commit)
     return { owner: must(commit[1]), repo: must(commit[2]), target: { kind: "commit", sha: must(commit[3]) } };
@@ -49,13 +44,13 @@ export function parseDiffUrl(pathname: string): DiffPage | null {
   return null;
 }
 
-/** Matches any PR tab (the prefetch trigger). Different role from the diff-page-only parseDiffUrl. */
+// Any PR tab (prefetch trigger); unlike parseDiffUrl this is not diff-page-only
 export function parsePrPage(pathname: string): { owner: string; repo: string; prNumber: number } | null {
   const m = /^\/([^/]+)\/([^/]+)\/pull\/(\d+)(\/|$)/.exec(pathname);
   return m ? { owner: must(m[1]), repo: must(m[2]), prNumber: Number(must(m[3])) } : null;
 }
 
-// Defensively searches GitHub's Files changed (classic DOM). If it doesn't match, ends harmlessly with an empty array.
+// Classic Files changed DOM; no match → empty array
 function scanClassic(root: ParentNode): FileEntry[] {
   const out: FileEntry[] = [];
   for (const header of root.querySelectorAll<HTMLElement>(".file-header[data-path]")) {
@@ -68,15 +63,14 @@ function scanClassic(root: ParentNode): FileEntry[] {
       path,
       header,
       attachHost(host) {
-        // Same Primer class github puts on .js-file-content: the chevron / Viewed collapse
-        // only toggles Details--on on .file, so the host must opt into that CSS itself
+        // Opt into Details--on CSS the way .js-file-content does
         host.classList.add("Details-content--hidden");
         content.after(host);
       },
       setRawHidden(hidden) {
         content.style.display = hidden ? "none" : "";
       },
-      collapsed: () => false, // the Details--on CSS contract hides collapsed content without our help
+      collapsed: () => false, // Details--on CSS hides collapsed content without our help
       globalAnchor: () => container,
     });
   }
@@ -85,9 +79,8 @@ function scanClassic(root: ParentNode): FileEntry[] {
 
 const BIDI_MARKS = /[‎‏]/g;
 
-/** The react ui has no path attribute: the path only exists as header text wrapped in
- *  LRM marks, and renames add a visually hidden "OLD renamed to NEW" span. */
-function reactPath(header: HTMLElement): string | null {
+// React has no path attribute: header text (+ LRM marks); renames hide "OLD renamed to NEW"
+function filePathFromReactHeader(header: HTMLElement): string | null {
   const code = header.querySelector('[class*="file-name"] code');
   if (!code) return null;
   const renamed = code.querySelector("span.sr-only")?.textContent?.split(" renamed to ", 2)[1];
@@ -95,13 +88,10 @@ function reactPath(header: HTMLElement): string | null {
   return text || null;
 }
 
-/** React remounts diff bodies with no inline styles (collapse/expand, re-renders), and
- *  the debounced rescan re-hides them only ~200ms later — long enough to flash the raw
- *  diff. This document-level rule, keyed on the region marker set by setRawHidden, hides
- *  a fresh body before first paint. It targets the body's own classes rather than
- *  "everything but the header" so github markup drift degrades back to the debounced
- *  flash instead of hiding the file header. */
-function ensureHideRule(doc: Document): void {
+// React remounts strip inline styles; debounced rescan is ~200ms late and flashes raw.
+// Document rule keyed on setRawHidden's marker hides a fresh body before first paint.
+// Targets the body's own classes, not "everything but the header": drift degrades to a flash, never a hidden header.
+function ensureReactRawHideStyle(doc: Document): void {
   if (doc.head.querySelector("style[data-prefablens-hide-rule]")) return;
   const style = doc.createElement("style");
   style.setAttribute("data-prefablens-hide-rule", "");
@@ -109,17 +99,15 @@ function ensureHideRule(doc: Document): void {
   doc.head.append(style);
 }
 
-// GitHub's react diff UI (login-gated rollout). Class names are hashed CSS modules, so
-// anchors are role/id plus class-prefix matches; the body is "any region child that isn't
-// the header block", because its class is unstable and react recreates it constantly.
+// React diff UI: hashed CSS modules → role/id + class-prefix anchors; body class is unstable
 function scanReact(root: ParentNode): FileEntry[] {
   const out: FileEntry[] = [];
   for (const region of root.querySelectorAll<HTMLElement>('div[role="region"][id^="diff-"]')) {
     const header = region.querySelector<HTMLElement>('[class*="diff-file-header"]');
     if (!header) continue;
-    const path = reactPath(header);
+    const path = filePathFromReactHeader(header);
     if (!path || !isUnityPath(path)) continue;
-    // The region child containing the header (normally the diffHeaderWrapper)
+    // Region child that contains the header (normally diffHeaderWrapper)
     const headerBlock = (): Element => {
       let el: Element = header;
       while (el.parentElement && el.parentElement !== region) el = el.parentElement;
@@ -129,25 +117,21 @@ function scanReact(root: ParentNode): FileEntry[] {
       path,
       header,
       attachHost(host) {
-        // The card frame lives on the diff body in this layout, so hiding the body
-        // strips it: recreate the same chrome on the host (theme-following variables,
-        // fallbacks for pages without Primer)
+        // Card frame lives on the body here; recreate chrome on the host when body is hidden
         host.style.cssText =
           "border: 1px solid var(--borderColor-default, #d1d9e0); border-radius: 0 0 6px 6px; background: var(--bgColor-default, #ffffff);";
         headerBlock().after(host);
       },
       setRawHidden(hidden) {
         region.toggleAttribute("data-prefablens-raw-hidden", hidden);
-        if (hidden) ensureHideRule(region.ownerDocument);
-        // Inline fallback for bodies the CSS rule misses (markup drift): the rescan
-        // hides them one debounce late instead of never
+        if (hidden) ensureReactRawHideStyle(region.ownerDocument);
+        // Inline fallback for markup the CSS rule misses
         for (const child of region.children) {
           if (child === headerBlock() || child.hasAttribute("data-prefablens-view")) continue;
           (child as HTMLElement).style.display = hidden ? "none" : "";
         }
       },
-      // Two independent collapse signals: github swaps the chevron octicon per state and
-      // stamps a DiffFileHeader-module__collapsed class on the header row
+      // Chevron octicon swap + DiffFileHeader-module__collapsed class
       collapsed: () =>
         headerBlock().querySelector(".octicon-chevron-right") !== null ||
         headerBlock().querySelector('[class*="DiffFileHeader-module__collapsed"]') !== null,
@@ -157,8 +141,7 @@ function scanReact(root: ParentNode): FileEntry[] {
   return out;
 }
 
-// Both scanners always run: on any given page one matches and the other yields [] harmlessly,
-// so no layout probe is needed (and a mid-rollout A/B flip can't strand us).
+// Always run both: one matches, the other yields []; no layout probe (survives A/B flips)
 export function scanUnityFiles(root: ParentNode): FileEntry[] {
   return [...scanClassic(root), ...scanReact(root)];
 }

@@ -10,7 +10,7 @@ export type ViewState = {
   onDefaultChange(fn: (view: View) => void): void;
 };
 
-/** Default mode (persistent) + per-file overrides while on the page. A global switch always resets the overrides. */
+// Persistent default + per-file overrides; a global switch always clears overrides
 export function createViewState(initial: View, persist: (view: View) => void): ViewState {
   let def = initial;
   const overrides = new Map<string, View>();
@@ -27,14 +27,14 @@ export function createViewState(initial: View, persist: (view: View) => void): V
     clearOverrides: () => overrides.clear(),
     setDefault: (view) => {
       if (view === def) {
-        // Even a same-value click keeps "pressing global always lines everything up": clear overrides and re-apply, but don't write to storage
+        // Same-value click still realigns: clear overrides and re-apply, but don't persist
         if (overrides.size) change(view);
         return;
       }
       change(view);
       persist(view);
     },
-    // storage.onChanged fires even on the originating set tab, so ignore a same value and don't persist
+    // storage.onChanged also fires on the originating tab; ignore same value, don't persist
     applyExternal: (view) => {
       if (view !== def) change(view);
     },

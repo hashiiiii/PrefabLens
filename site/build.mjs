@@ -203,6 +203,9 @@ function createFragments(repo) {
   // smoke assert
   if (!report.includes("pl-")) throw new Error("CLI report lost its pl- classes");
   if (!heroReport.includes("Rigidbody")) throw new Error("hero report is missing the Robot diff");
+  if (!heroReport.includes("Head") || !heroReport.includes("Sensor")) {
+    throw new Error("hero report is missing the Head → Sensor rename");
+  }
   if (!heroReport.includes("Assets/Scripts/FixtureBehaviour.cs")) throw new Error("hero report lost guid resolution");
   if (tree.includes("unresolved")) throw new Error("tree output has unresolved guid references");
   if (!report.includes("(built-in)")) throw new Error("report lost built-in ref names");

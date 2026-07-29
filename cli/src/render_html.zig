@@ -231,6 +231,8 @@ test "html: nested child GameObject nests inside the parent's pl-kids" {
     try testing.expect(parent_at < kids_at and kids_at < child_at);
     // The renamed child is a modified GameObject card.
     try testing.expect(std.mem.indexOf(u8, html, "<details open class=\"pl-go pl-modified\">") != null);
+    // Rename surfaces as a GameObject Name override row, not only in the summary label.
+    try testing.expect(std.mem.indexOf(u8, html, "<span class=\"pl-path\">Name</span><span class=\"pl-before\">Child</span><span class=\"pl-arrow\">→</span><span class=\"pl-after\">ChildRenamed</span>") != null);
 }
 
 test "html: added and removed fields render only their one side" {

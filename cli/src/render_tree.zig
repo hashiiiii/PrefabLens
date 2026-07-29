@@ -277,6 +277,8 @@ test "render: child object hangs off the parent spine after components" {
     const text = aw.toArrayList().items;
     // The child is the parent's last spine node.
     try testing.expect(std.mem.indexOf(u8, text, "└─ ◆ ~ ChildRenamed") != null);
+    // Name override row shows before → after under the child's components group.
+    try testing.expect(std.mem.indexOf(u8, text, "Name: Child → ChildRenamed") != null);
 }
 
 test "render: component shows editor class name when script is unresolved" {

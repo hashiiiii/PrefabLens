@@ -191,6 +191,25 @@ namespace PrefabLens.Tests
         }
 
         [Test]
+        public void GameObjectOverridesRenderAsChildRows()
+        {
+            const string json =
+                @"{
+                ""unresolvedGuids"":[],
+                ""roots"":[{""kind"":""gameObject"",""fileId"":""1"",""name"":""Plane"",""status"":""modified"",
+                    ""overrides"":[{""group"":"""",""label"":""Name"",""status"":""modified"",""before"":""Old"",""after"":""New""}],
+                    ""components"":[],""children"":[]}],
+                ""loose"":[]
+            }";
+            var children = Build(json)[0].Children;
+            Assert.AreEqual(1, children.Count);
+            AssertSpan(children[0].Row.Spans[1], "Name ", Palette.Muted);
+            AssertSpan(children[0].Row.Spans[2], "Old", Palette.Removed);
+            AssertSpan(children[0].Row.Spans[3], " → ", Palette.Muted);
+            AssertSpan(children[0].Row.Spans[4], "New", Palette.Added);
+        }
+
+        [Test]
         public void NodeChildrenOrderIsOverridesThenComponentsThenChildNodes()
         {
             // Mirrors the Inspector's mental model: instance overrides at the top,

@@ -74,6 +74,43 @@ test "diff: prefab instance override keyed by target+propertyPath" {
     try testing.expectEqualStrings("1", d.overrides[0].after.?.scalar);
 }
 
+test "diff: prefab instance name rename emits GameObject override" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const before =
+        \\--- !u!1001 &1001
+        \\PrefabInstance:
+        \\  m_Modification:
+        \\    m_Modifications:
+        \\    - target: {fileID: 7, guid: aaa, type: 3}
+        \\      propertyPath: m_Name
+        \\      value: Head
+        \\      objectReference: {fileID: 0}
+        \\  m_SourcePrefab: {fileID: 100100000, guid: aaa, type: 3}
+    ;
+    const after =
+        \\--- !u!1001 &1001
+        \\PrefabInstance:
+        \\  m_Modification:
+        \\    m_Modifications:
+        \\    - target: {fileID: 7, guid: aaa, type: 3}
+        \\      propertyPath: m_Name
+        \\      value: Sensor
+        \\      objectReference: {fileID: 0}
+        \\  m_SourcePrefab: {fileID: 100100000, guid: aaa, type: 3}
+    ;
+    const fd = try diffmod.compute(arena, before, after);
+    const d = findDoc(fd, 1001).?;
+    try testing.expectEqual(model.Status.modified, d.status);
+    try testing.expectEqual(@as(usize, 1), d.overrides.len);
+    try testing.expectEqualStrings("GameObject", d.overrides[0].group);
+    try testing.expectEqualStrings("Name", d.overrides[0].label);
+    try testing.expectEqual(model.Status.modified, d.overrides[0].status);
+    try testing.expectEqualStrings("Head", d.overrides[0].before.?.scalar);
+    try testing.expectEqualStrings("Sensor", d.overrides[0].after.?.scalar);
+}
+
 test "diff: modified instance overrides are sorted group-contiguous, Transform first" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
@@ -171,14 +208,17 @@ test "diff: added prefab instance emits placement summary rows" {
     const d = findDoc(fd, 1001).?;
     try testing.expectEqual(model.Status.added, d.status);
     // Recorded placement is emitted as a single synthesized row even at default values (identity Rotation).
-    // EulerAnglesHint (hidden in Inspector) and m_Name (absorbed into the node name) are not emitted.
-    try testing.expectEqual(@as(usize, 2), d.overrides.len);
+    // EulerAnglesHint (hidden in Inspector) is not emitted; m_Name appears as a GameObject row.
+    try testing.expectEqual(@as(usize, 3), d.overrides.len);
     try testing.expectEqualStrings("Transform", d.overrides[0].group);
     try testing.expectEqualStrings("Position", d.overrides[0].label);
     try testing.expectEqualStrings("(2.03, 3.63, 1.11797)", d.overrides[0].after.?.scalar);
     try testing.expectEqualStrings("Transform", d.overrides[1].group);
     try testing.expectEqualStrings("Rotation", d.overrides[1].label);
     try testing.expectEqualStrings("(0, 0, 0, 1)", d.overrides[1].after.?.scalar);
+    try testing.expectEqualStrings("GameObject", d.overrides[2].group);
+    try testing.expectEqualStrings("Name", d.overrides[2].label);
+    try testing.expectEqualStrings("Cylinder Variant", d.overrides[2].after.?.scalar);
 }
 
 test "diff: added prefab instance keeps partial scale override" {
@@ -347,8 +387,10 @@ pub fn diffOverrides(arena: std.mem.Allocator, before_doc: ?*const model.Documen
         if (before_map.get(key)) |bm| {
             const bv: ?*const Node = modValue(bm);
             if (nodeEqlOpt(bv, av)) continue;
+            if (std.mem.eql(u8, am.path, "m_Name") and !inspector.shouldEmitNameOverride(.modified, bv, av)) continue;
             try out.append(arena, try makeOverride(arena, am.path, .modified, bv, av));
         } else {
+            if (std.mem.eql(u8, am.path, "m_Name") and !inspector.shouldEmitNameOverride(.added, null, av)) continue;
             try out.append(arena, try makeOverride(arena, am.path, .added, null, av));
         }
     }
@@ -356,7 +398,9 @@ pub fn diffOverrides(arena: std.mem.Allocator, before_doc: ?*const model.Documen
     for (before_mods) |bm| {
         if (seen.contains(try modKey(arena, bm))) continue;
         if (inspector.isHidden(bm.path)) continue;
-        try out.append(arena, try makeOverride(arena, bm.path, .removed, modValue(bm), null));
+        const bv = modValue(bm);
+        if (std.mem.eql(u8, bm.path, "m_Name") and !inspector.shouldEmitNameOverride(.removed, bv, null)) continue;
+        try out.append(arena, try makeOverride(arena, bm.path, .removed, bv, null));
     }
     try appendStructuralSummaries(arena, &out, before_doc, after_doc);
     sortByGroup(out.items);
@@ -469,7 +513,12 @@ fn soleOverridesFromMods(arena: std.mem.Allocator, doc: *const model.Document, m
 
     for (mods) |m| {
         if (inspector.isHidden(m.path)) continue;
-        if (std.mem.eql(u8, m.path, "m_Name")) continue; // absorbed into the node name
+        const v = modValue(m);
+        if (std.mem.eql(u8, m.path, "m_Name") and !inspector.shouldEmitNameOverride(
+            status,
+            if (status == .removed) v else null,
+            if (status == .added) v else null,
+        )) continue;
         const in_consumed = blk: {
             for (placements, 0..) |p, pi| {
                 if (consumed[pi] and std.mem.startsWith(u8, m.path, p.prefix) and
@@ -478,7 +527,6 @@ fn soleOverridesFromMods(arena: std.mem.Allocator, doc: *const model.Document, m
             break :blk false;
         };
         if (in_consumed) continue;
-        const v = modValue(m);
         try out.append(arena, try makeOverride(
             arena,
             m.path,

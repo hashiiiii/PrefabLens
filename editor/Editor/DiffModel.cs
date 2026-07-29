@@ -58,6 +58,7 @@ namespace PrefabLens
         public string FileId;
         public string Name;
         public DiffStatus Status;
+        public List<OverrideDiff> Overrides = new();
         public List<ComponentDiff> Components = new();
         public List<NodeDiff> Children = new();
     }
@@ -67,7 +68,6 @@ namespace PrefabLens
     public sealed class PrefabInstanceDiff : NodeDiff
     {
         public string SourceGuid;
-        public List<OverrideDiff> Overrides = new();
     }
 
     /// Reader-side model for prefablens.diff.v2 (the output of core/src/json.zig).
@@ -137,6 +137,9 @@ namespace PrefabLens
             n.FileId = Str(o, "fileId") ?? "";
             n.Name = Str(o, "name") ?? "";
             n.Status = ParseStatus(Str(o, "status"));
+            foreach (var ov in Items(o, "overrides"))
+                if (ov is Dictionary<string, object> ovo)
+                    n.Overrides.Add(ParseOverride(ovo));
             foreach (var c in Items(o, "components"))
                 if (c is Dictionary<string, object> co)
                     n.Components.Add(ParseComponent(co));
@@ -146,23 +149,18 @@ namespace PrefabLens
             return n;
         }
 
-        static PrefabInstanceDiff ParsePrefabInstance(Dictionary<string, object> o)
-        {
-            var pi = new PrefabInstanceDiff { SourceGuid = Str(o, "sourceGuid") };
-            foreach (var ov in Items(o, "overrides"))
-                if (ov is Dictionary<string, object> ovo)
-                    pi.Overrides.Add(
-                        new OverrideDiff
-                        {
-                            Group = Str(ovo, "group") ?? "",
-                            Label = Str(ovo, "label") ?? "",
-                            Status = ParseStatus(Str(ovo, "status")),
-                            Before = ParseValue(Val(ovo, "before")),
-                            After = ParseValue(Val(ovo, "after")),
-                        }
-                    );
-            return pi;
-        }
+        static PrefabInstanceDiff ParsePrefabInstance(Dictionary<string, object> o) =>
+            new() { SourceGuid = Str(o, "sourceGuid") };
+
+        static OverrideDiff ParseOverride(Dictionary<string, object> ovo) =>
+            new()
+            {
+                Group = Str(ovo, "group") ?? "",
+                Label = Str(ovo, "label") ?? "",
+                Status = ParseStatus(Str(ovo, "status")),
+                Before = ParseValue(Val(ovo, "before")),
+                After = ParseValue(Val(ovo, "after")),
+            };
 
         static ComponentDiff ParseComponent(Dictionary<string, object> o)
         {

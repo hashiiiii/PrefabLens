@@ -32,12 +32,15 @@ test "fixture: Plane.prefab shows both cylinder instances under Plane" {
     const variant = childByName(plane, "Cylinder Variant").?;
     try testing.expectEqual(model.ObjectKind.prefab_instance, variant.kind);
     try testing.expectEqual(model.Status.added, variant.status);
-    try testing.expectEqual(@as(usize, 2), variant.overrides.len);
+    try testing.expectEqual(@as(usize, 3), variant.overrides.len);
     try testing.expectEqualStrings("Transform", variant.overrides[0].group);
     try testing.expectEqualStrings("Position", variant.overrides[0].label);
     try testing.expectEqualStrings("(2.03, 3.63, 1.11797)", variant.overrides[0].after.?.scalar);
     try testing.expectEqualStrings("Rotation", variant.overrides[1].label);
     try testing.expectEqualStrings("(0, 0, 0, 1)", variant.overrides[1].after.?.scalar);
+    try testing.expectEqualStrings("GameObject", variant.overrides[2].group);
+    try testing.expectEqualStrings("Name", variant.overrides[2].label);
+    try testing.expectEqualStrings("Cylinder Variant", variant.overrides[2].after.?.scalar);
 
     // Modified Cylinder: only the single Position.x override.
     const cylinder = childByName(plane, "Cylinder").?;
@@ -91,21 +94,24 @@ test "fixture: new Cylinder Variant.prefab shows all recorded placement values" 
     try testing.expectEqualStrings("Cylinder Variant", inst.name);
     try testing.expectEqual(model.Status.added, inst.status);
     // Placement recorded in the file is all emitted, even at defaults.
-    // The only omissions are EulerAnglesHint (hidden) and m_Name (absorbed into the node name).
-    try testing.expectEqual(@as(usize, 3), inst.overrides.len);
+    // The only omission is EulerAnglesHint (hidden); m_Name appears as a GameObject row.
+    try testing.expectEqual(@as(usize, 4), inst.overrides.len);
     try testing.expectEqualStrings("Position", inst.overrides[0].label);
     try testing.expectEqualStrings("(0, 0, 0)", inst.overrides[0].after.?.scalar);
     try testing.expectEqualStrings("Rotation", inst.overrides[1].label);
     try testing.expectEqualStrings("(0, 0, 0, 1)", inst.overrides[1].after.?.scalar);
     try testing.expectEqualStrings("Scale.y", inst.overrides[2].label);
     try testing.expectEqualStrings("2", inst.overrides[2].after.?.scalar);
+    try testing.expectEqualStrings("GameObject", inst.overrides[3].group);
+    try testing.expectEqualStrings("Name", inst.overrides[3].label);
+    try testing.expectEqualStrings("Cylinder Variant", inst.overrides[3].after.?.scalar);
 }
 
 test "fixture: deleted Cylinder Variant.prefab mirrors the added enumeration" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
-    // Mirror of added (the previous test): the same 3 rows appear with before values and removed.
+    // Mirror of added (the previous test) minus the Name row: removed omits Name via shouldEmitNameOverride.
     const res = try root.diffBytes(arena, cylinder_variant_after, "");
     try testing.expectEqual(@as(usize, 1), res.roots.len);
     const inst = res.roots[0];

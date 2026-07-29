@@ -9,7 +9,7 @@ export type FilePanel = {
   diff(json: DiffV2, resolving: number): void;
   incomplete(json: DiffV2, onRetry: () => void): void;
   tooLarge(bytes: number, onForce: () => void): void;
-  authError(error: "pat-missing" | "auth-failed"): void;
+  authError(error: "access-token-missing" | "auth-failed"): void;
   error(error: BackgroundError): void;
 };
 
@@ -83,7 +83,7 @@ export function createFileView(deps: FileViewDeps): FileView {
         return;
       }
       if (res.error === "too-large") panel.tooLarge(res.bytes, () => request(true));
-      else if (res.error === "pat-missing" || res.error === "auth-failed") {
+      else if (res.error === "access-token-missing" || res.error === "auth-failed") {
         deps.onAuthRetry(() => {
           // First retry sets requested; duplicate registrations no-op
           if (!requested && deps.effectiveView() === "semantic") request();

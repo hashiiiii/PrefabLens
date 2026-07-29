@@ -23,7 +23,7 @@ function makeDeps(overrides?: {
   diff?: Differ["diff"];
   diffWithAssets?: Differ["diffWithAssets"];
   isUnityYaml?: Differ["isUnityYaml"];
-  pat?: string | undefined;
+  accessToken?: string | undefined;
   search?: Record<string, string | null>; // guid → asset path (null = no hit)
   cached?: Record<string, string>; // initial contents of guidCache
 }) {
@@ -96,7 +96,7 @@ function makeDeps(overrides?: {
   };
   const deps: Deps = {
     getSettings: async () => ({
-      pat: Object.hasOwn(overrides ?? {}, "pat") ? overrides?.pat : "tok",
+      accessToken: Object.hasOwn(overrides ?? {}, "accessToken") ? overrides?.accessToken : "tok",
     }),
     makeClient: (_base: string, _token: string, _lane: "user" | "prefetch") => client,
     getDiffer: async () => differ,
@@ -134,10 +134,10 @@ async function resolveFully(
 }
 
 describe("createHandler", () => {
-  it("returns pat-missing without touching the network", async () => {
-    const { deps, client } = makeDeps({ pat: undefined });
+  it("returns access-token-missing without touching the network", async () => {
+    const { deps, client } = makeDeps({ accessToken: undefined });
     const res = await resolveFully(createHandler(deps), REQ);
-    expect(res).toEqual({ ok: false, error: "pat-missing" });
+    expect(res).toEqual({ ok: false, error: "access-token-missing" });
     expect(client.getPrRefs).not.toHaveBeenCalled();
   });
 
@@ -740,8 +740,8 @@ describe("prefetch", () => {
     ).resolves.toBeUndefined();
   });
 
-  it("returns without network when the pat is missing", async () => {
-    const { deps, client } = makeDeps({ pat: undefined });
+  it("returns without network when the access token is missing", async () => {
+    const { deps, client } = makeDeps({ accessToken: undefined });
     await createHandler(deps).prefetch({ type: "prefetch", owner: "o", repo: "r", prNumber: 1 });
     expect(client.getPrRefs).not.toHaveBeenCalled();
   });

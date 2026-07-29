@@ -101,7 +101,7 @@ export type PrefetchRequest = { type: "prefetch"; owner: string; repo: string; p
 export type BackgroundRequest = SemanticDiffRequest | PrefetchRequest;
 
 export type BackgroundError =
-  | "pat-missing"
+  | "access-token-missing"
   | "auth-failed"
   | "rate-limited"
   | "fetch-failed"

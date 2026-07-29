@@ -29,7 +29,10 @@ await build({
   target: "chrome120",
   minify: true,
   outdir: "dist",
-  define: { __API_BASE__: JSON.stringify(e2e ? "http://127.0.0.1:8471" : "https://api.github.com") },
+  define: {
+    __API_BASE__: JSON.stringify(e2e ? "http://127.0.0.1:8471" : "https://api.github.com"),
+    __GITHUB_ORIGIN__: JSON.stringify(e2e ? "http://127.0.0.1:8471" : "https://github.com"),
+  },
 });
 
 const manifest = JSON.parse(readFileSync("manifest.json", "utf8"));

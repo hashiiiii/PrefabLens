@@ -18,7 +18,7 @@ type DeviceCodeResponse =
 type TokenResponse = { access_token: string } | { error: string; interval?: number };
 
 export async function requestDeviceCode(fetchFn: typeof fetch): Promise<DeviceCode> {
-  const res = await fetchFn("https://github.com/login/device/code", {
+  const res = await fetchFn(`${__GITHUB_ORIGIN__}/login/device/code`, {
     method: "POST",
     headers: { accept: "application/json" },
     body: new URLSearchParams({ client_id: CLIENT_ID, scope: "repo" }),
@@ -45,7 +45,7 @@ export async function pollForToken(
   let interval = code.interval;
   for (;;) {
     await sleep(interval * 1000);
-    const res = await fetchFn("https://github.com/login/oauth/access_token", {
+    const res = await fetchFn(`${__GITHUB_ORIGIN__}/login/oauth/access_token`, {
       method: "POST",
       headers: { accept: "application/json" },
       body: new URLSearchParams({

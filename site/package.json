@@ -8,6 +8,7 @@
     "build": "node build.mjs && eleventy"
   },
   "devDependencies": {
-    "@11ty/eleventy": "^3.1.6"
+    "@11ty/eleventy": "^3.1.6",
+    "wrangler": "^4.114.0"
   }
 }

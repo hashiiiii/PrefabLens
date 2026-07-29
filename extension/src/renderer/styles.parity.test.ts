@@ -27,8 +27,7 @@ it("standalone page opts into dark color-scheme for native chrome", () => {
   const cssPath = fileURLToPath(new URL("../../../cli/src/semantic_view.css", import.meta.url));
   const standalone = readFileSync(cssPath, "utf8").split("Delta 3: standalone-page")[1] ?? "";
   // Root (not body): viewport scrollbars in an iframe follow the root used color-scheme.
-  expect(standalone).toMatch(/(?:html|:root)\s*\{[^}]*color-scheme:\s*light/);
-  expect(standalone).toMatch(
-    /@media\s*\(prefers-color-scheme:\s*dark\)\s*\{[^]*(?:html|:root)\s*\{[^}]*color-scheme:\s*dark/,
-  );
+  expect(standalone).toContain(":root { color-scheme: light; }");
+  const darkBlock = standalone.split("@media (prefers-color-scheme: dark)")[1] ?? "";
+  expect(darkBlock).toContain(":root { color-scheme: dark; }");
 });

@@ -4,8 +4,7 @@ export type Toggle = { element: HTMLElement; set(view: View): void };
 
 const FONT = `-apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif`;
 
-/** Page-level styles for the toggle and global bar. Colors read GitHub's Primer
- *  variables (always defined on github.com); fallbacks cover the e2e fixture. */
+// Primer variables on github.com; fallbacks cover the e2e fixture
 const PAGE_STYLES = `
   [data-prefablens-global] { display: flex; align-items: center; gap: 8px; margin: 0 0 8px; }
   [data-prefablens-global] .prefablens-seg { margin-left: 0; }
@@ -33,7 +32,7 @@ const PAGE_STYLES = `
   }
 `;
 
-/** Injects the page stylesheet once. The toggle lives in GitHub's DOM (not a shadow root). */
+// Toggle lives in GitHub's DOM (not a shadow root)
 export function injectPageStyles(doc: Document = document): void {
   if (doc.head.querySelector("style[data-prefablens-style]")) return;
   const style = doc.createElement("style");
@@ -49,8 +48,7 @@ export function createToggle(onSelect: (view: View) => void, initial: View = "ra
   wrap.className = "prefablens-seg";
 
   const buttons: HTMLButtonElement[] = [];
-  // set updates only the display: to avoid pulling in onSelect (the re-fetch side) during a global apply.
-  // The selected look is keyed entirely off aria-pressed in the injected CSS.
+  // set updates display only — avoids onSelect (re-fetch) during a global apply
   const select = (view: View): void => {
     for (const b of buttons) b.setAttribute("aria-pressed", String(b.dataset.view === view));
   };

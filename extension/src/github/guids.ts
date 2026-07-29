@@ -1,6 +1,6 @@
 import { type ChangedFile, RateLimitError } from "./client";
 
-/** Same rule as parseGuid in cli/src/resolve.zig: picks up "guid:" at the start of a line (after trim). */
+// Same rule as parseGuid in cli/src/resolve.zig: "guid:" at line start after trim
 export function parseGuidFromMeta(meta: string): string | undefined {
   for (const line of meta.split("\n")) {
     const t = line.trim();
@@ -11,8 +11,8 @@ export function parseGuidFromMeta(meta: string): string | undefined {
 
 export type MetaFetcher = (path: string, side: "base" | "head") => Promise<string | null>;
 
-/** Persistent cache of guid→asset path resolved via Code Search (repo key is `<API_BASE>/<owner>/<repo>`).
- *  guid→path is stable, so no TTL. save merges. */
+// Persistent guid→asset path via Code Search (repo key `<API_BASE>/<owner>/<repo>`).
+// Stable mapping → no TTL; save merges.
 export type GuidCache = {
   load(repo: string): Promise<Record<string, string>>;
   save(repo: string, entries: Record<string, string>): Promise<void>;
@@ -20,8 +20,8 @@ export type GuidCache = {
 
 const MAX_CONCURRENT_META_FETCHES = 8;
 
-/** Builds a guid → asset path index only from .meta files changed in the PR. removed ones are read from the base side.
- *  Caps concurrent fetches at 8 (avoids GitHub secondary rate limits on large .meta changes). */
+// guid→path from .meta files changed in the PR (removed → base side).
+// Cap 8 concurrent fetches to avoid GitHub secondary rate limits.
 export async function buildGuidIndex(files: ChangedFile[], fetchMeta: MetaFetcher): Promise<Map<string, string>> {
   const index = new Map<string, string>();
   const metas = files.filter((f) => f.path.endsWith(".meta"));

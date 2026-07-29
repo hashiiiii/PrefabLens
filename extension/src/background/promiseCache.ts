@@ -1,7 +1,6 @@
 import { must } from "../util/must";
 
 export type PromiseCache<V> = {
-  /** Returns the cached promise for the key, computing (and caching) it on a miss. */
   get(key: string, compute: () => Promise<V>): Promise<V>;
 };
 
@@ -14,9 +13,7 @@ export type PromiseCacheOptions<V> = {
   retain?: (value: V) => boolean;
 };
 
-/** Keyed memoization of async computations for the background handler's caches.
- *  Storing the Promise itself folds concurrent requests for the same key into one
- *  computation; rejections are always dropped so the next get can retry. */
+// Keyed async memoization: storing the Promise folds concurrent gets; rejections always drop for retry.
 export function createPromiseCache<V>(options: PromiseCacheOptions<V> = {}): PromiseCache<V> {
   const { ttlMs, max, retain } = options;
   const entries = new Map<string, { at: number; promise: Promise<V> }>();

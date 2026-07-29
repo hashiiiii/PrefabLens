@@ -1,13 +1,7 @@
-// Live demo for the site's extension.html: the mock PR page runs the
-// extension's real renderer, toggle, and WASM diff engine, wired the same way
-// as the content script minus the GitHub API and auth layers (never import
-// anything that pulls github/client.ts — its module init needs the build-time
-// __API_BASE__ define, absent from the demo build). Living in the extension
-// toolchain keeps the demo type-checked against the modules it uses;
-// `node build.mjs --demo` bundles it as dist/demo.js for site/build.mjs.
-// Diff inputs are fixture files served next to the page; site/build.mjs marks
-// each Unity file header with data-before/data-after URLs (empty on the
-// added/removed side, matching the CLI's empty-side semantics).
+// Live demo for site/extension.html: real renderer + toggle + WASM, wired like
+// the content script minus github/client (needs __API_BASE__, absent here).
+// Bundled as dist/demo.js via `node build.mjs --demo`; fixtures via
+// data-before/data-after URLs (empty side = CLI empty-side semantics).
 import { createToggle, injectPageStyles, type View } from "./content/toggle";
 import { createViewState } from "./content/viewstate";
 import { applyResolved } from "./github/resolved";
@@ -23,10 +17,8 @@ async function fetchBytes(url: string | undefined): Promise<Uint8Array<ArrayBuff
   return new Uint8Array(await res.arrayBuffer());
 }
 
-/** Diff with guid resolution, mirroring the extension's background handler:
- *  applyResolved attaches paths from the index, and the mergeSources loop
- *  fetches the source prefab of added/removed instances by resolved path and
- *  re-diffs with assets — here from fixture URLs instead of the GitHub API. */
+// Guid resolution like the background handler: applyResolved + mergeSources loop,
+// but source prefabs come from fixture URLs instead of the GitHub API.
 async function diffResolved(
   differ: Differ,
   index: Map<string, string>,

@@ -1,9 +1,6 @@
-/** Shadow-DOM stylesheet. Colors read Primer CSS variables (custom properties
- *  inherit through the shadow boundary on github.com, so every GitHub theme is
- *  followed automatically) and fall back to a built-in light/dark palette.
- *  The host declares display: block because all: initial resets display to its
- *  spec initial value (inline), which would break the card frame the react
- *  layout draws on the host. */
+// Shadow-DOM stylesheet. Primer CSS vars inherit through the shadow boundary on
+// github.com (every theme followed automatically); fall back to built-in light/dark.
+// :host needs display:block — all:initial resets display to inline and breaks the card frame.
 export const STYLES = `
   :host { all: initial; display: block; }
   .pl-root {

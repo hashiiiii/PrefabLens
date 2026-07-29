@@ -79,7 +79,7 @@ export function renderLoading(root: ShadowRoot): void {
   mount(root).append(box);
 }
 
-/** Over-25MB guard: doesn't auto-render, waits for an explicit click. */
+// Over-25MB guard: no auto-render; waits for an explicit click.
 export function renderTooLarge(root: ShadowRoot, bytes: number, onRender: () => void): void {
   const container = mount(root);
   const button = document.createElement("button");
@@ -90,7 +90,7 @@ export function renderTooLarge(root: ShadowRoot, bytes: number, onRender: () => 
   container.append(note("pl-empty", `Large file (${Math.round(bytes / (1024 * 1024))} MB).`, ALERT), button);
 }
 
-/** Auth-error panel: the message plus a button that starts the GitHub device flow in place. */
+// Auth-error panel: message + in-place device-flow button.
 export function renderSignIn(root: ShadowRoot, message: string, onSignIn: () => void): void {
   const container = mount(root);
   const button = document.createElement("button");
@@ -101,7 +101,7 @@ export function renderSignIn(root: ShadowRoot, message: string, onSignIn: () => 
   container.append(note("pl-error", message, ALERT), button);
 }
 
-/** Device-flow pending state: keeps the user code visible while the user authorizes on GitHub. */
+// Device-flow pending: keep the user code visible while authorizing on GitHub.
 export function renderSignInPending(
   root: ShadowRoot,
   userCode: string,
@@ -182,7 +182,7 @@ function summaryRow(status: Status, icon: string, iconClass: string, name: strin
   return summary;
 }
 
-/** Appends kids into the details, or marks the summary as a leaf when there are none. */
+// Append kids, or mark the summary as a leaf when empty.
 function finish(details: HTMLDetailsElement, summary: HTMLElement, kids: HTMLElement): HTMLDetailsElement {
   details.append(summary);
   if (kids.childElementCount) details.append(kids);
@@ -237,8 +237,8 @@ function renderNode(node: NodeDiff, diff: DiffV2): HTMLElement {
   return finish(details, summary, kids);
 }
 
-/** Components fold as their own group one level below the object row, so cube rows
- *  alone form the hierarchy spine (Unity puts components in the Inspector, not the tree). */
+// Components nest under their own group so cube rows alone form the hierarchy spine
+// (Unity puts components in the Inspector, not the Hierarchy tree).
 function componentsSection(cards: HTMLElement[]): HTMLElement {
   const details = document.createElement("details");
   details.open = true;
@@ -263,11 +263,11 @@ function renderOverrideGroups(overrides: OverrideDiff[], diff: DiffV2): HTMLElem
     else groups.push({ name: ov.group, rows: [ov] });
   }
   return groups.map(({ name, rows }) => {
-    // The heading status: that status if uniform within the group, otherwise modified.
+    // The heading status: that status if uniform within the group, else modified.
     const [first] = rows;
     const status = first && rows.every((r) => r.status === first.status) ? first.status : "modified";
     const el = openDetails("pl-comp", status);
-    el.open = true; // override cards are always open (spec: light, just a collapsed summary)
+    el.open = true; // override cards stay expanded (summary is just a light grouping)
     const kids = kidsBox();
     for (const r of rows) kids.append(fieldRow(r.label, r.status, r.before, r.after, diff));
     return finish(el, summaryRow(status, GEAR, "pl-icon", name), kids);

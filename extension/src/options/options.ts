@@ -23,8 +23,7 @@ type ClipboardLike = {
   writeText(text: string): Promise<void>;
 };
 
-// Injectable bundle for the device flow: real implementations (fetch/sleep/navigator.clipboard) are
-// bound once at the chrome bootstrap below, so initOptions itself never touches real I/O.
+// Injectable device-flow deps: chrome bootstrap binds real I/O; initOptions stays pure for tests.
 export type SignInFlow = {
   requestDeviceCode(): Promise<DeviceCode>;
   pollForToken(code: DeviceCode): Promise<PollResult>;
@@ -49,7 +48,7 @@ export async function initOptions(doc: Document, storage: StorageLike, flow: Sig
 
   signinButton.addEventListener("click", () => {
     void (async () => {
-      // The poll can run for minutes; disabling the button while in flight makes concurrent flows impossible
+      // Poll can run for minutes — disable to block concurrent flows
       signinButton.disabled = true;
       status.textContent = "";
       try {
@@ -70,7 +69,7 @@ export async function initOptions(doc: Document, storage: StorageLike, flow: Sig
       } catch {
         status.textContent = "Sign-in failed";
       } finally {
-        // The code is consumed once the poll ends, whatever the outcome: hide it and allow a retry
+        // Code is one-shot: hide it and allow a retry whatever the outcome
         flowArea.hidden = true;
         signinButton.disabled = false;
       }

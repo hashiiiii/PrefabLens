@@ -1,6 +1,6 @@
 export class AuthError extends Error {}
 export class RateLimitError extends Error {
-  /** Backoff advice from response headers; undefined when GitHub gave none. */
+  // Backoff from headers; undefined when GitHub gave none
   constructor(
     message: string,
     readonly retryAfterMs?: number,
@@ -9,8 +9,8 @@ export class RateLimitError extends Error {
   }
 }
 
-/** retry-after (seconds) wins; else x-ratelimit-reset (epoch seconds) relative to now.
- *  Number(null) is 0 and Number("") is NaN, so absent headers fail the > 0 guards. */
+// retry-after (seconds) wins; else x-ratelimit-reset (epoch seconds) relative to now.
+// Number(null) is 0 and Number("") is NaN, so absent headers fail the > 0 guards.
 function adviceMs(headers: Headers): number | undefined {
   const retryAfter = Number(headers.get("retry-after"));
   if (retryAfter > 0) return retryAfter * 1000;
@@ -37,10 +37,9 @@ const toChangedFile = (f: DiffEntry): ChangedFile => ({
   sha: f.sha,
 });
 
-// The REST base is fixed at build time (see build.mjs's esbuild define).
+// Fixed at build time (see build.mjs's esbuild define).
 export const API_BASE = __API_BASE__;
 
-/** Derives the GraphQL endpoint from the REST base. */
 export function graphqlUrl(restBase: string): string {
   return `${restBase}/graphql`;
 }
@@ -57,8 +56,7 @@ export class GithubClient {
   private async rawRequest(url: string, init: RequestInit): Promise<Response> {
     const res = await this.fetchFn(url, init);
     if (res.status === 403 || res.status === 429) {
-      // primary is 403 + x-ratelimit-remaining: 0, secondary is 403 + retry-after or
-      // no header (only the body message), newer API is 429. The body is used only for classification, not retained.
+      // 403 + remaining 0 / retry-after, or 429; body classifies only (not retained)
       const body = await res.text().catch(() => "");
       const rateLimited =
         res.status === 429 ||
@@ -88,7 +86,7 @@ export class GithubClient {
     return res.json() as Promise<T>;
   }
 
-  // The before side is the merge-base: GitHub's PR diff compares against the merge-base, not the base branch tip.
+  // before = merge-base (GitHub's PR diff), not the base branch tip
   async getPrRefs(owner: string, repo: string, prNumber: number): Promise<RefPair> {
     const pr = await this.json<{ base: { sha: string }; head: { sha: string } }>(
       `/repos/${owner}/${repo}/pulls/${prNumber}`,
@@ -108,9 +106,8 @@ export class GithubClient {
     }
   }
 
-  /** Commit metadata + changed files vs the first parent (what GitHub's commit page shows).
-   *  Files paginate 300 per page up to GitHub's 3,000-file cap; sha in the response is
-   *  full-length even when the request ref is abbreviated. */
+  // Commit vs first parent (GitHub's commit page). Files: 300/page, 3,000-file cap;
+  // response sha is full-length even when the request ref is abbreviated.
   async getCommit(
     owner: string,
     repo: string,
@@ -119,8 +116,7 @@ export class GithubClient {
     const files: ChangedFile[] = [];
     let sha = "";
     let parentSha: string | null = null;
-    // GitHub documents a 3,000-file cap for this endpoint: 10 pages of 300 bounds the loop
-    // even if the API ever stops honoring the paging params.
+    // 10×300 bounds the loop even if paging params stop being honored
     for (let page = 1; page <= 10; page++) {
       const body = await this.json<{ sha: string; parents: Array<{ sha: string }>; files?: DiffEntry[] }>(
         `/repos/${owner}/${repo}/commits/${encodeURIComponent(ref)}?per_page=300&page=${page}`,
@@ -136,10 +132,8 @@ export class GithubClient {
     return { sha, parentSha, files };
   }
 
-  /** Three-dot comparison (what GitHub's compare page shows): merge base + changed files.
-   *  GitHub returns compare files only on the first page, capped at 300 for the whole
-   *  comparison — like the PR 3,000-file cap, unlisted files degrade to the handler's
-   *  treat-as-modified / 404→EMPTY path. */
+  // Three-dot compare (GitHub's compare page): merge base + files.
+  // Files only on first page, capped at 300 — unlisted degrade to treat-as-modified / 404→EMPTY.
   async compareRefs(
     owner: string,
     repo: string,
@@ -153,7 +147,7 @@ export class GithubClient {
     return { mergeBaseSha: body.merge_base_commit.sha, files: (body.files ?? []).map(toChangedFile) };
   }
 
-  /** Resolves a ref (branch, tag, abbreviated sha) to the full commit sha via the sha media type. */
+  // branch / tag / abbreviated sha → full commit sha (sha media type)
   async resolveRefSha(owner: string, repo: string, ref: string): Promise<string> {
     const res = await this.request(
       `/repos/${owner}/${repo}/commits/${encodeURIComponent(ref)}`,
@@ -163,8 +157,8 @@ export class GithubClient {
     return (await res.text()).trim();
   }
 
-  /** Looks up guid → asset path (with .meta stripped) via Code Search. No hit / not indexed (422) → null.
-   *  The index covers only the default branch, authenticated 10 req/min. */
+  // guid → asset path via Code Search (.meta stripped). No hit / not indexed (422) → null.
+  // Default branch only; authenticated 10 req/min.
   async searchMetaByGuid(owner: string, repo: string, guid: string): Promise<string | null> {
     const q = encodeURIComponent(`"${guid}" repo:${owner}/${repo} extension:meta`);
     const res = await this.request(`/search/code?q=${q}&per_page=1`, "application/vnd.github+json");
@@ -174,9 +168,7 @@ export class GithubClient {
     return path?.endsWith(".meta") ? path.slice(0, -".meta".length) : null;
   }
 
-  /** Raw bytes at ref. null if the file is absent on that side.
-   *  Path resolution at an arbitrary ref has erratic multi-second TTFB on GitHub's side (#110):
-   *  prefer getBlobRaw whenever the blob SHA is known. */
+  // Raw bytes at ref; null if absent. Prefer getBlobRaw when sha known (#110 TTFB).
   async getFileAtRef(owner: string, repo: string, path: string, ref: string): Promise<Uint8Array | null> {
     const encoded = path.split("/").map(encodeURIComponent).join("/");
     const res = await this.request(
@@ -188,8 +180,8 @@ export class GithubClient {
     return new Uint8Array(await res.arrayBuffer());
   }
 
-  /** Raw blob bytes by SHA — content-addressed, so latency stays flat where contents-by-path stalls.
-   *  null on 404 (the SHA can vanish after a force push + gc). */
+  // Content-addressed blob bytes; latency stays flat where contents-by-path stalls.
+  // null on 404 (sha can vanish after force push + gc).
   async getBlobRaw(owner: string, repo: string, sha: string): Promise<Uint8Array | null> {
     const res = await this.request(`/repos/${owner}/${repo}/git/blobs/${sha}`, "application/vnd.github.raw+json");
     if (res.status === 404) return null;
@@ -205,7 +197,7 @@ export class GithubClient {
     return this.json(`/repos/${owner}/${repo}/git/trees/${ref}?recursive=1`);
   }
 
-  /** path + blob SHA of every .meta at ref (a commit SHA is allowed). truncated means the listing was cut off past 100k entries. */
+  // Every .meta path + blob sha at ref. truncated → listing cut past 100k entries.
   async listMetaTree(
     owner: string,
     repo: string,
@@ -218,7 +210,7 @@ export class GithubClient {
     return { truncated: body.truncated, metas };
   }
 
-  /** path → blob SHA of every blob at ref. Feeds base-side getBlobRaw lookups; same truncation rule as listMetaTree. */
+  // path → blob sha for every blob at ref (feeds base-side getBlobRaw). Same truncation as listMetaTree.
   async listBlobShas(
     owner: string,
     repo: string,
@@ -230,7 +222,7 @@ export class GithubClient {
     return { truncated: body.truncated, byPath };
   }
 
-  /** Batch-fetches blob text via GraphQL (chunking is the caller's job). GraphQL has an independent 5,000 pt/h budget. */
+  // GraphQL blob text batch (caller chunks). Independent 5,000 pt/h budget.
   async batchBlobTexts(owner: string, repo: string, oids: string[]): Promise<Record<string, string | null>> {
     const aliases = oids
       .map((oid, i) => `b${i}: object(oid: ${JSON.stringify(oid)}) { ... on Blob { text } }`)
@@ -250,7 +242,7 @@ export class GithubClient {
       data?: { repository?: Record<string, { text?: string | null } | null> } | null;
       errors?: Array<{ type?: string }>;
     };
-    // GraphQL returns errors while still HTTP 200: RATE_LIMITED is caught here
+    // GraphQL can be HTTP 200 with RATE_LIMITED in errors[]
     if (body.errors?.some((e) => e.type === "RATE_LIMITED"))
       throw new RateLimitError("GitHub rate limit exceeded", adviceMs(res.headers));
     const blobs = body.data?.repository;

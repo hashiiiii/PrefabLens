@@ -22,8 +22,7 @@ export async function requestDeviceCode(fetchFn: typeof fetch): Promise<DeviceCo
     method: "POST",
     headers: { accept: "application/json" },
     body: new URLSearchParams({ client_id: CLIENT_ID, scope: "repo" }),
-    // OAuth device endpoints need no cookies: staying cookie-less keeps the same-origin
-    // call from the github.com content script free of session state.
+    // Cookie-less: same-origin content-script call must not attach session state
     credentials: "omit",
   });
   if (!res.ok) throw new Error(`device code request failed (HTTP ${res.status})`);
@@ -63,7 +62,7 @@ export async function pollForToken(
       case "authorization_pending":
         continue;
       case "slow_down":
-        // GitHub's own interval already accounts for the requested backoff; fall back to +5s otherwise.
+        // Prefer GitHub's interval; else +5s
         interval = body.interval ?? interval + 5;
         continue;
       case "expired_token":

@@ -63,10 +63,8 @@ export type DiffV2 = {
 
 export type DiffErrorV1 = { schema: "prefablens.error.v1"; error: string };
 
-/** Guids still lacking a name after resolution so far — the single definition of
- *  "unresolved" shared by handler, resolution, and the content indicator. Object.hasOwn
- *  is a prototype-pollution guard: guids are arbitrary strings, so "constructor" and
- *  friends must not falsely hit Object.prototype and count as resolved. */
+// Guids still lacking a name — shared by handler, resolution, and the content indicator.
+// Object.hasOwn: guids are arbitrary strings ("constructor" must not hit Object.prototype).
 export function unresolvedRemaining(json: Pick<DiffV2, "unresolvedGuids" | "resolved">): string[] {
   return json.unresolvedGuids.filter((g) => !Object.hasOwn(json.resolved ?? {}, g));
 }
@@ -78,7 +76,7 @@ export type DiffTarget =
   | { kind: "commit"; sha: string }
   | { kind: "compare"; base: string; head: string };
 
-/** Stable identity of a target within a repo — context caches and view keys derive from it. */
+// Stable identity within a repo — context caches and view keys derive from it.
 export function targetKey(owner: string, repo: string, target: DiffTarget): string {
   const suffix =
     target.kind === "pull"
@@ -115,11 +113,10 @@ export type SemanticDiffResponse =
   | { ok: false; error: BackgroundError }
   | { ok: false; error: "too-large"; bytes: number };
 
-// Outcome of the background resolution pipeline. Anything but "complete" means the run
-// gave up early (rate limit or error) and a manual retry may resolve more references.
+// Background resolution outcome. Anything but "complete" means a manual retry may help.
 export type ResolutionStatus = "complete" | "rateLimited" | "failed";
 
-// Async push from background → content (the second stage of the two-stage response).
+// Async push background → content (stage 2 of the two-stage response).
 export type GuidResolvedPush = {
   type: "guidResolved";
   owner: string;
@@ -127,7 +124,7 @@ export type GuidResolvedPush = {
   target: DiffTarget;
   path: string;
   resolved: Record<string, string>;
-  json?: DiffV2; // carried on the final push when mergeSources updated the structure (content replaces the view)
-  done: boolean; // when true, resolution is finished (sent even with empty resolved = the cue to turn off the indicator)
-  status?: ResolutionStatus; // rides on every done push: the content script keeps the indicator up unless "complete"
+  json?: DiffV2; // final push may carry a restructured diff after mergeSources
+  done: boolean; // resolution finished (even with empty resolved — turns off the indicator)
+  status?: ResolutionStatus; // on every done push; keep indicator unless "complete"
 };

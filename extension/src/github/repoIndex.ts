@@ -13,8 +13,8 @@ export type RepoIndexStore = {
 const INDEX_MAX_METAS = 50_000; // above this, give up on the index to protect the storage quota
 const GRAPHQL_BATCH = 100;
 
-/** Whole-repo guid → asset path index. Not indexable (truncated / over the cap) → null, deferring to Code Search.
- *  blobSha → guid is content-derived, so it can be cached forever; after a push, only changed .meta are fetched. */
+// Whole-repo guid→asset path. Truncated / over cap → null (defer to Code Search).
+// blobSha→guid is content-derived (cache forever); after a push only changed .meta are fetched.
 export async function syncRepoIndex(
   client: ClientLike,
   store: RepoIndexStore,

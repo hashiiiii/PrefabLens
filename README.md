@@ -6,7 +6,7 @@
 
 **Human-readable diffs for UnityYAML assets.** Instead of raw text diffs, PrefabLens shows changes at the GameObject, component, and field level.
 
-Try the [live demo](https://hashiiiii.github.io/PrefabLens/).
+Try the [live demo](https://prefablens.hashiiiii.workers.dev/).
 
 ## Chrome extension (Chrome Web Store)
 

@@ -11,5 +11,6 @@ extension/test-results/
 site/dist/
 site/node_modules/
 site/generated/
+site/.wrangler/
 editor/**/bin/
 editor/**/obj/

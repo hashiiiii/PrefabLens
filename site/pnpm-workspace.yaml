@@ -1,4 +1,4 @@
 allowBuilds:
-  esbuild: true
+  esbuild: false
   workerd: false
 minimumReleaseAge: 4320

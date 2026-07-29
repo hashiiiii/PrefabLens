@@ -45,7 +45,15 @@ const DIFF: DiffV2 = {
         },
       ],
       children: [
-        { kind: "gameObject", fileId: "3", name: "Weapon", status: "added", overrides: [], components: [], children: [] },
+        {
+          kind: "gameObject",
+          fileId: "3",
+          name: "Weapon",
+          status: "added",
+          overrides: [],
+          components: [],
+          children: [],
+        },
       ],
     },
   ],
@@ -259,9 +267,7 @@ describe("render", () => {
           fileId: "1",
           name: "Sensor",
           status: "modified",
-          overrides: [
-            { group: "GameObject", label: "Name", status: "modified", before: "Head", after: "Sensor" },
-          ],
+          overrides: [{ group: "GameObject", label: "Name", status: "modified", before: "Head", after: "Sensor" }],
           components: [],
           children: [],
         },

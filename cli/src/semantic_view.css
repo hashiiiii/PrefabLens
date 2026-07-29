@@ -130,6 +130,9 @@ details.pl-modified > summary > .pl-badge { color: var(--pl-modified); backgroun
   .pl-skel-icon, .pl-skel-bar, .pl-spinner { animation: none; }
 }
 /* --- Delta 3: standalone-page additions (not in styles.ts) --- */
+/* color-scheme on :root (not body) — iframe viewport scrollbars follow the
+ * root used color-scheme; body alone still leaves a light track. */
+:root { color-scheme: light; }
 body { margin: 0; background: #ffffff; }
 main { max-width: 960px; margin: 0 auto; padding: 16px; }
 .file { margin-bottom: 8px; }
@@ -141,6 +144,7 @@ main { max-width: 960px; margin: 0 auto; padding: 16px; }
 details.file:not([open]) > summary::before { content: "\25B8  "; }
 details.file[open] > summary::before { content: "\25BE  "; }
 @media (prefers-color-scheme: dark) {
+  :root { color-scheme: dark; }
   body { background: #0d1117; color: #f0f6fc; }
   .file > summary { border-color: #3d444d; }
 }

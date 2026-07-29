@@ -83,7 +83,7 @@ Without the [openupm-cli](https://github.com/openupm/openupm-cli), add the scope
 
 ### Chrome extension
 
-Shows semantic diffs for UnityYAML files on the GitHub pull request Files changed tab. Sign in with GitHub from the first diff panel (or the extension options page); authorization uses the GitHub device flow, so no token setup is needed.
+Shows semantic diffs for UnityYAML files on the GitHub pull request Files changed tab. Sign in with GitHub from the first diff panel; authorization uses the GitHub device flow, so no token setup is needed.
 
 > [!NOTE]
 > The extension is currently available on github.com only.

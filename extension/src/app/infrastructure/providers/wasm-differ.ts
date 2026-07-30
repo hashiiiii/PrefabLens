@@ -1,5 +1,5 @@
 import type { DifferPort } from "../../application/port/differ";
-import type { DiffErrorV1, DiffV2 } from "../../../types";
+import type { DiffErrorV1, DiffV2 } from "../../domain/diff/types";
 
 export class DiffError extends Error {}
 

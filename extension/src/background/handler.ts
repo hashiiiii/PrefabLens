@@ -21,8 +21,8 @@ import {
   type SemanticDiffResponse,
   targetKey,
   unresolvedRemaining,
-} from "../types";
-import { isUnityPath } from "../unity";
+} from "../app/domain/diff/types";
+import { isUnityPath } from "../app/domain/unity";
 import { createPromiseCache } from "./promiseCache";
 import { createResolution, type DiffContext } from "./resolution";
 

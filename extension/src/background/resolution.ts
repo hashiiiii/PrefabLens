@@ -10,7 +10,7 @@ import {
   type ResolutionStatus,
   type SemanticDiffRequest,
   unresolvedRemaining,
-} from "../types";
+} from "../app/domain/diff/types";
 import { createPromiseCache } from "./promiseCache";
 
 // Pipeline's GitHub surface; callers thread a richer client through C so injected fetchers keep their view

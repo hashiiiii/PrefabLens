@@ -5,7 +5,7 @@ import { GithubClient } from "../app/infrastructure/providers/github-client";
 import { createDiffer } from "../app/infrastructure/providers/wasm-differ";
 import { createMergeStore } from "../app/infrastructure/repositories/merge-store";
 import { createSessionDiffStore } from "../app/infrastructure/repositories/session-diff-store";
-import type { BackgroundRequest, GuidResolvedPush } from "../types";
+import type { BackgroundRequest, GuidResolvedPush } from "../app/domain/diff/types";
 import { createHandler } from "./handler";
 
 let differ: Promise<DifferPort> | undefined;

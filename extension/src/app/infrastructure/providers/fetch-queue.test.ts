@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { RateLimitError } from "./github-client";
-import { must } from "../../../util/must";
+import { must } from "../../presentation/util/must";
 import { createQueue } from "./fetch-queue";
 
 // Line up manually-resolvable deferreds to observe execution order and concurrency

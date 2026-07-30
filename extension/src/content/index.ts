@@ -16,8 +16,8 @@ import {
   type SemanticDiffResponse,
   targetKey,
   unresolvedRemaining,
-} from "../types";
-import { must } from "../util/must";
+} from "../app/domain/diff/types";
+import { must } from "../app/presentation/util/must";
 import { createAuthRetries } from "./authRetries";
 import { type DiffPage, type FileEntry, parseDiffUrl, parsePrPage, scanUnityFiles } from "./detect";
 import { fillDeviceCode } from "./devicePage";

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
-import type { DiffV2 } from "../types";
+import type { DiffV2 } from "../app/domain/diff/types";
 import { createViewRegistry } from "./views";
 
 const DIFF: DiffV2 = { schema: "prefablens.diff.v2", unresolvedGuids: [], roots: [], loose: [] };

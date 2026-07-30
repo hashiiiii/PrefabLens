@@ -1,5 +1,5 @@
 import type { DiffCachePort } from "../../application/port/diff-cache";
-import type { DiffV2 } from "../../../types";
+import type { DiffV2 } from "../../domain/diff/types";
 
 const PREFIX = "diff:";
 const MAX_BYTES = 512 * 1024; // storage.session is 10MB: leave large ones to memory cache only

@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { expect, it } from "vitest";
-import { must } from "./util/must";
+import { must } from "../presentation/util/must";
 
 // The UnityYAML extension prefilter is hand-copied in two places: the CLI's
 // git-side gate (unity_path.zig) and the extension's path check (unity.ts).
@@ -24,7 +24,7 @@ function tsExtensions(): string[] {
 }
 
 function zigExtensions(): string[] {
-  const src = read("../../cli/src/unity_path.zig");
+  const src = read("../../../../cli/src/unity_path.zig");
   const start = src.indexOf("const extensions = [_][]const u8{");
   expect(start, "extensions array not found in unity_path.zig").toBeGreaterThan(0);
   const body = src.slice(start, src.indexOf("};", start));

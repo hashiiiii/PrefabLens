@@ -4,10 +4,10 @@
 // data-before/data-after URLs (empty side = CLI empty-side semantics).
 import { createToggle, injectPageStyles, type View } from "./content/toggle";
 import { createViewState } from "./content/viewstate";
-import { applyResolved } from "./app/infrastructure/github/resolved";
+import { applyResolved } from "./app/domain/diff/resolved";
 import { render, renderError, renderLoading } from "./renderer/render";
-import type { DiffV2 } from "./types";
-import { must } from "./util/must";
+import type { DiffV2 } from "./app/domain/diff/types";
+import { must } from "./app/presentation/util/must";
 import type { DifferPort } from "./app/application/port/differ";
 import { createDiffer } from "./app/infrastructure/providers/wasm-differ";
 

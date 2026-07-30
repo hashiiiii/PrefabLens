@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { must } from "../../../util/must";
+import { must } from "../../presentation/util/must";
 import { ApiError, AuthError, GithubClient, graphqlUrl, RateLimitError } from "./github-client";
 
 // fetch fake that returns a fixed path→response table. It also records calls.

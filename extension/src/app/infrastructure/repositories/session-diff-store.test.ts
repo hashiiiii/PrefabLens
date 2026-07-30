@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { DiffV2 } from "../../../types";
+import type { DiffV2 } from "../../domain/diff/types";
 import { createSessionDiffStore } from "./session-diff-store";
 
 const DIFF: DiffV2 = { schema: "prefablens.diff.v2", unresolvedGuids: [], roots: [], loose: [] };

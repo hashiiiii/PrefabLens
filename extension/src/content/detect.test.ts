@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
-import { must } from "../util/must";
+import { must } from "../app/presentation/util/must";
 import { parseDiffUrl, parsePrPage, scanUnityFiles } from "./detect";
 
 const FIXTURE = `

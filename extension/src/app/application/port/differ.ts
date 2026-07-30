@@ -1,4 +1,4 @@
-import type { DiffV2 } from "../../../types";
+import type { DiffV2 } from "../../domain/diff/types";
 
 export type DifferPort = {
   diff(before: Uint8Array, after: Uint8Array): DiffV2;

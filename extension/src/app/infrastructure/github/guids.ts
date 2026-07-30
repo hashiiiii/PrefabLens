@@ -44,4 +44,4 @@ export async function buildGuidIndex(files: ChangedFile[], fetchMeta: MetaFetche
   return index;
 }
 
-export { applyResolved } from "./resolved";
+export { applyResolved } from "../../domain/diff/resolved";

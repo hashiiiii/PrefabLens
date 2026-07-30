@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { DiffV2 } from "../../../types";
+import type { DiffV2 } from "../../domain/diff/types";
 import { RateLimitError } from "../providers/github-client";
 import { applyResolved, buildGuidIndex, parseGuidFromMeta } from "./guids";
 

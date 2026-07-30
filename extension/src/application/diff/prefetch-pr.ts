@@ -1,16 +1,18 @@
 import type { PrefetchRequest } from "../../domain/diff/types";
 import { isUnityPath } from "../../domain/unity";
 import { RateLimitError } from "../port/github";
-import type { DiffEngine } from "./semantic-diff";
+import type { DiffSession } from "./_diff-session";
 
 const PREFETCH_MAX = 100; // bounds API usage per PR
 const PREFETCH_CONCURRENCY = 4;
 
-// Raw diff only — leave Code Search / mergeSources to serve time (10 req/min)
-export function createPrefetch(engine: DiffEngine): (req: PrefetchRequest) => Promise<void> {
-  const { deps, apiBase, resolution, loadContext, getDiff } = engine;
+export type PrefetchPr = (req: PrefetchRequest) => Promise<void>;
 
-  return async function prefetch(req: PrefetchRequest): Promise<void> {
+// Raw diff only — leave Code Search / mergeSources to serve time (10 req/min)
+export function createPrefetchPr(session: DiffSession): PrefetchPr {
+  const { deps, apiBase, resolution, loadContext, getDiff } = session;
+
+  return async function prefetchPr(req: PrefetchRequest): Promise<void> {
     try {
       const settings = await deps.getSettings();
       if (!settings.accessToken) return;

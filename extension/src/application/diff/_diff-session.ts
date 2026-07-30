@@ -1,21 +1,16 @@
-import { applyResolved } from "../../domain/diff/resolved";
-import {
-  type DiffTarget,
-  type DiffV2,
-  type GuidResolvedPush,
-  type SemanticDiffRequest,
-  type SemanticDiffResponse,
-  targetKey,
-  unresolvedRemaining,
-} from "../../domain/diff/types";
+// Shared stateful core for the background diff pipeline: per-target context /
+// blob / diff promise caches plus the resolution instance. compute-semantic-diff
+// and prefetch-pr both close over one session so their in-flight work folds.
+
+import { type DiffTarget, type DiffV2, targetKey } from "../../domain/diff/types";
 import type { DiffCachePort } from "../port/diff-cache";
-import { DiffError, type DifferPort } from "../port/differ";
-import { AuthError, type ChangedFile, type GithubPort, RateLimitError, type RefPair } from "../port/github";
+import type { DifferPort } from "../port/differ";
+import { type ChangedFile, type GithubPort, RateLimitError, type RefPair } from "../port/github";
 import type { GuidCachePort } from "../port/guid-cache";
 import type { RepoIndexPort } from "../port/repo-index";
+import { createPromiseCache } from "./_promise-cache";
+import { createResolution, type DiffContext, type Resolution } from "./_resolution";
 import { buildGuidIndex } from "./build-guid-index";
-import { createPromiseCache } from "./promise-cache";
-import { createResolution, type DiffContext, type Resolution } from "./resolution";
 
 export type DiffDeps = {
   getSettings(): Promise<{ accessToken?: string }>;
@@ -58,12 +53,12 @@ const CONTEXT_TTL_MS = 60_000; // push moves headSha
 const BLOB_CACHE_MAX = 32;
 const TOO_LARGE_BYTES = 25 * 1024 * 1024; // over 25MB renders on click
 
-type DiffOutcome =
+export type DiffOutcome =
   | { ok: true; json: DiffV2 }
   | { ok: false; error: "too-large"; bytes: number }
   | { ok: false; error: "not-unity-yaml" };
 
-export type DiffEngine = {
+export type DiffSession = {
   deps: DiffDeps;
   apiBase: string;
   resolution: Resolution<GithubPort>;
@@ -76,10 +71,9 @@ export type DiffEngine = {
     path: string,
     force: boolean,
   ): Promise<DiffOutcome>;
-  semanticDiff(req: SemanticDiffRequest, push: (msg: GuidResolvedPush) => void): Promise<SemanticDiffResponse>;
 };
 
-export function createDiffEngine(deps: DiffDeps): DiffEngine {
+export function createDiffSession(deps: DiffDeps): DiffSession {
   // Per-PR context; SW kill → re-fetch
   const contexts = createPromiseCache<DiffContext>({ ttlMs: CONTEXT_TTL_MS });
   // sha+path → bytes; promise fold shares prefetch + toggle fetches
@@ -206,31 +200,5 @@ export function createDiffEngine(deps: DiffDeps): DiffEngine {
     });
   }
 
-  async function semanticDiff(
-    req: SemanticDiffRequest,
-    push: (msg: GuidResolvedPush) => void,
-  ): Promise<SemanticDiffResponse> {
-    try {
-      const settings = await deps.getSettings();
-      if (!settings.accessToken) return { ok: false, error: "access-token-missing" };
-      const client = deps.makeClient(apiBase, settings.accessToken, "user");
-      const ctx = await loadContext(client, req.owner, req.repo, req.target);
-      const outcome = await getDiff(client, ctx, req.owner, req.repo, req.path, req.force === true);
-      if (!outcome.ok) return outcome;
-      const withPr = applyResolved(outcome.json, ctx.guidIndex);
-
-      // Return immediately; resolution + source merge continue via push
-      const remaining = unresolvedRemaining(withPr);
-      if (!remaining.length && !withPr.neededSources?.length) return { ok: true, json: withPr };
-      void resolution.resolveRemaining(withPr, remaining, client, req, apiBase, ctx, push);
-      return { ok: true, json: withPr, pending: true };
-    } catch (err) {
-      if (err instanceof RateLimitError) return { ok: false, error: "rate-limited" };
-      if (err instanceof AuthError) return { ok: false, error: "auth-failed" };
-      if (err instanceof DiffError) return { ok: false, error: "diff-failed" };
-      return { ok: false, error: "fetch-failed" }; // don't put raw errors in the response
-    }
-  }
-
-  return { deps, apiBase, resolution, loadContext, getDiff, semanticDiff };
+  return { deps, apiBase, resolution, loadContext, getDiff };
 }

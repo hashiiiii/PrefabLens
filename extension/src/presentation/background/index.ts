@@ -1,7 +1,7 @@
 import type { BackgroundRequest, GuidResolvedPush } from "../../domain/diff/types";
 import { createBackgroundApp } from "../../infrastructure/container";
 
-const { handler } = createBackgroundApp();
+const app = createBackgroundApp();
 
 chrome.runtime.onMessage.addListener((msg: BackgroundRequest, sender, sendResponse) => {
   if (msg?.type === "semanticDiff") {
@@ -18,9 +18,9 @@ chrome.runtime.onMessage.addListener((msg: BackgroundRequest, sender, sendRespon
       };
       attempt(2);
     };
-    void handler.semanticDiff(msg, push).then(sendResponse);
+    void app.computeSemanticDiff(msg, push).then(sendResponse);
     return true; // async response
   }
-  if (msg?.type === "prefetch") void handler.prefetch(msg);
+  if (msg?.type === "prefetch") void app.prefetchPr(msg);
   return undefined; // prefetch is fire-and-forget
 });

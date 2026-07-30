@@ -1,6 +1,8 @@
 import { createGetPendingSignIn, type GetPendingSignIn } from "../application/auth/get-pending-sign-in";
 import { createSignIn, type SignInUi } from "../application/auth/sign-in";
-import { createHandler, type Handler } from "../application/diff/handler";
+import { createDiffSession } from "../application/diff/_diff-session";
+import { type ComputeSemanticDiff, createComputeSemanticDiff } from "../application/diff/compute-semantic-diff";
+import { createPrefetchPr, type PrefetchPr } from "../application/diff/prefetch-pr";
 import { createRequestPrefetch, type RequestPrefetch } from "../application/diff/request-prefetch";
 import { createRequestSemanticDiff, type RequestSemanticDiff } from "../application/diff/request-semantic-diff";
 import type { DifferPort } from "../application/port/differ";
@@ -14,7 +16,8 @@ import { createMergeStore } from "./repositories/merge-store";
 import { createSessionDiffStore } from "./repositories/session-diff-store";
 
 export type BackgroundApp = {
-  handler: Handler;
+  computeSemanticDiff: ComputeSemanticDiff;
+  prefetchPr: PrefetchPr;
 };
 
 export type ContentApp = {
@@ -40,7 +43,7 @@ export function createBackgroundApp(): BackgroundApp {
   // Whole-repo .meta guid records for repoIndexStore.loadGuids/saveGuids
   const metaGuids = createMergeStore(chrome.storage.local, "metaGuids");
 
-  const handler = createHandler({
+  const session = createDiffSession({
     getSettings: async () => ({ accessToken: await tokenStore.readAccessToken() }),
     makeClient: (base, token, lane) => new GithubClient(base, token, queuedFetch(lane === "user")),
     getDiffer() {
@@ -67,7 +70,10 @@ export function createBackgroundApp(): BackgroundApp {
     },
   });
 
-  return { handler };
+  return {
+    computeSemanticDiff: createComputeSemanticDiff(session),
+    prefetchPr: createPrefetchPr(session),
+  };
 }
 
 // Wires the content script's use cases. DOM listeners stay in presentation.

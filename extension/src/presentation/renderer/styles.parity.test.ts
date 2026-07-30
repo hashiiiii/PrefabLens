@@ -16,7 +16,7 @@ function plClasses(css: string): Set<string> {
 }
 
 it("CLI stylesheet keeps the same pl-* class set as the extension renderer", () => {
-  const cssPath = fileURLToPath(new URL("../../../../../cli/src/semantic_view.css", import.meta.url));
+  const cssPath = fileURLToPath(new URL("../../../../cli/src/semantic_view.css", import.meta.url));
   const cliCss = readFileSync(cssPath, "utf8");
   expect(plClasses(cliCss)).toEqual(plClasses(STYLES));
 });
@@ -24,7 +24,7 @@ it("CLI stylesheet keeps the same pl-* class set as the extension renderer", () 
 // Without color-scheme: dark, Chromium keeps a light scrollbar track even when
 // body uses the dark background — visible in the site's hero-report iframe.
 it("standalone page opts into dark color-scheme for native chrome", () => {
-  const cssPath = fileURLToPath(new URL("../../../../../cli/src/semantic_view.css", import.meta.url));
+  const cssPath = fileURLToPath(new URL("../../../../cli/src/semantic_view.css", import.meta.url));
   const standalone = readFileSync(cssPath, "utf8").split("Delta 3: standalone-page")[1] ?? "";
   // Root (not body): viewport scrollbars in an iframe follow the root used color-scheme.
   expect(standalone).toContain(":root { color-scheme: light; }");

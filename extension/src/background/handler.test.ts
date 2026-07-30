@@ -2,7 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 import { AuthError, type ChangedFile, RateLimitError } from "../github/client";
 import type { DiffV2, GuidResolvedPush, SemanticDiffRequest } from "../types";
 import { must } from "../util/must";
-import { DiffError, type Differ } from "../wasm/differ";
+import type { DifferPort } from "../app/application/port/differ";
+import { DiffError } from "../app/infrastructure/providers/wasm-differ";
 import { createHandler, type Deps, type Handler } from "./handler";
 
 const REQ: SemanticDiffRequest = {
@@ -20,9 +21,9 @@ function makeDeps(overrides?: {
   contents?: Record<string, string>; // `${path}@${ref}` → text
   blobs?: Record<string, string>; // blob sha → text (getBlobRaw; absent sha = 404 → null)
   baseShas?: Record<string, string>; // path → blob sha at the merge base (listBlobShas)
-  diff?: Differ["diff"];
-  diffWithAssets?: Differ["diffWithAssets"];
-  isUnityYaml?: Differ["isUnityYaml"];
+  diff?: DifferPort["diff"];
+  diffWithAssets?: DifferPort["diffWithAssets"];
+  isUnityYaml?: DifferPort["isUnityYaml"];
   accessToken?: string | undefined;
   search?: Record<string, string | null>; // guid → asset path (null = no hit)
   cached?: Record<string, string>; // initial contents of guidCache
@@ -58,7 +59,7 @@ function makeDeps(overrides?: {
     ),
     batchBlobTexts: vi.fn(async (): Promise<Record<string, string | null>> => ({})),
   };
-  const differ: Differ = {
+  const differ: DifferPort = {
     diff: overrides?.diff ?? vi.fn(() => DIFF),
     diffWithAssets: overrides?.diffWithAssets ?? vi.fn(() => DIFF),
     // Fixture contents are shorthand strings, not real UnityYAML: accept by default.
@@ -187,7 +188,7 @@ describe("createHandler", () => {
   });
 
   it("uses an empty before for added files without fetching the base side", async () => {
-    const diff = vi.fn<Differ["diff"]>(() => DIFF);
+    const diff = vi.fn<DifferPort["diff"]>(() => DIFF);
     const { deps, client } = makeDeps({ files: [{ path: "Assets/Foo.prefab", status: "added" }], diff });
     await resolveFully(createHandler(deps), REQ);
     const baseFetches = client.getFileAtRef.mock.calls.filter(
@@ -198,7 +199,7 @@ describe("createHandler", () => {
   });
 
   it("uses an empty after for removed files without fetching the head side", async () => {
-    const diff = vi.fn<Differ["diff"]>(() => DIFF);
+    const diff = vi.fn<DifferPort["diff"]>(() => DIFF);
     const { deps, client } = makeDeps({ files: [{ path: "Assets/Foo.prefab", status: "removed" }], diff });
     await resolveFully(createHandler(deps), REQ);
     const headFetches = client.getFileAtRef.mock.calls.filter(
@@ -211,7 +212,7 @@ describe("createHandler", () => {
   it("rejects a file whose content is not UnityYAML on either side", async () => {
     // Real sniff behavior lives in differ.test.ts; here the fake reproduces its
     // contract so the outcome plumbing (computeDiff -> response) is what's tested.
-    const diff = vi.fn<Differ["diff"]>(() => DIFF);
+    const diff = vi.fn<DifferPort["diff"]>(() => DIFF);
     const { deps } = makeDeps({
       contents: { "Assets/Foo.prefab@base-sha": "\x00binary", "Assets/Foo.prefab@head-sha": "\x00binary2" },
       diff,
@@ -227,7 +228,7 @@ describe("createHandler", () => {
     // Unlike too-large there is no force escape hatch: the verdict is
     // deterministic for a given blob pair, so a second toggle must serve the
     // cached outcome instead of re-fetching and re-sniffing.
-    const isUnityYaml = vi.fn<Differ["isUnityYaml"]>(() => false);
+    const isUnityYaml = vi.fn<DifferPort["isUnityYaml"]>(() => false);
     const { deps } = makeDeps({ isUnityYaml });
     const handler = createHandler(deps);
     expect(await handler.semanticDiff(REQ, () => {})).toEqual({ ok: false, error: "not-unity-yaml" });
@@ -489,7 +490,7 @@ describe("createHandler", () => {
     });
 
     it("uses the files-api sha for the base side of removed files", async () => {
-      const diff = vi.fn<Differ["diff"]>(() => DIFF);
+      const diff = vi.fn<DifferPort["diff"]>(() => DIFF);
       const { deps, client } = makeDeps({
         files: [{ path: "Assets/Foo.prefab", status: "removed", sha: "foo-base" }],
         blobs: { "foo-base": "b" },
@@ -585,7 +586,7 @@ describe("createHandler", () => {
     const MERGED: DiffV2 = { schema: "prefablens.diff.v2", unresolvedGuids: ["src1"], roots: [], loose: [] };
 
     it("fetches the resolved source at head and re-diffs with assets", async () => {
-      const diffWithAssets = vi.fn<Differ["diffWithAssets"]>(() => MERGED);
+      const diffWithAssets = vi.fn<DifferPort["diffWithAssets"]>(() => MERGED);
       const { deps, client } = makeDeps({
         diff: () => NEEDS,
         diffWithAssets,
@@ -606,7 +607,7 @@ describe("createHandler", () => {
     });
 
     it("fetches removed-instance sources from the base side", async () => {
-      const diffWithAssets = vi.fn<Differ["diffWithAssets"]>(() => MERGED);
+      const diffWithAssets = vi.fn<DifferPort["diffWithAssets"]>(() => MERGED);
       const { deps, client } = makeDeps({
         diff: () => ({ ...NEEDS, neededSources: [{ guid: "src1", side: "before" }] }),
         diffWithAssets,
@@ -622,7 +623,7 @@ describe("createHandler", () => {
     });
 
     it("keeps the first-pass diff when the source path cannot be resolved", async () => {
-      const diffWithAssets = vi.fn<Differ["diffWithAssets"]>(() => MERGED);
+      const diffWithAssets = vi.fn<DifferPort["diffWithAssets"]>(() => MERGED);
       const { deps } = makeDeps({ diff: () => NEEDS, diffWithAssets }); // search misses
       const res = await resolveFully(createHandler(deps), REQ);
       // An unknown-path source is given up on, returning the degraded view (the first-pass json) as-is.
@@ -632,7 +633,7 @@ describe("createHandler", () => {
 
     it("does not loop when the merged output still needs the same source", async () => {
       // If supplying still leaves it degraded (a broken source, etc.), don't loop forever on the same guid.
-      const diffWithAssets = vi.fn<Differ["diffWithAssets"]>(() => NEEDS);
+      const diffWithAssets = vi.fn<DifferPort["diffWithAssets"]>(() => NEEDS);
       const { deps } = makeDeps({
         diff: () => NEEDS,
         diffWithAssets,

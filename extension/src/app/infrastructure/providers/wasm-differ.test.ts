@@ -1,8 +1,9 @@
 /// <reference types="node" />
 import { readFileSync } from "node:fs";
 import { beforeAll, describe, expect, it } from "vitest";
-import { must } from "../util/must";
-import { createDiffer, DiffError, type Differ } from "./differ";
+import type { DifferPort } from "../../application/port/differ";
+import { must } from "../../../util/must";
+import { createDiffer, DiffError } from "./wasm-differ";
 
 const enc = new TextEncoder();
 const BEFORE = enc.encode(`--- !u!114 &11400000
@@ -14,9 +15,9 @@ MonoBehaviour:
   m_Script: {fileID: 0, guid: def, type: 3}
   volume: 0.8`);
 
-let differ: Differ;
+let differ: DifferPort;
 beforeAll(async () => {
-  const bytes = readFileSync(new URL("../../../zig-out/bin/prefablens.wasm", import.meta.url));
+  const bytes = readFileSync(new URL("../../../../../zig-out/bin/prefablens.wasm", import.meta.url));
   differ = await createDiffer(bytes);
 });
 

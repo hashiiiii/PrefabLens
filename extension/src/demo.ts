@@ -8,7 +8,8 @@ import { applyResolved } from "./github/resolved";
 import { render, renderError, renderLoading } from "./renderer/render";
 import type { DiffV2 } from "./types";
 import { must } from "./util/must";
-import { createDiffer, type Differ } from "./wasm/differ";
+import type { DifferPort } from "./app/application/port/differ";
+import { createDiffer } from "./app/infrastructure/providers/wasm-differ";
 
 async function fetchBytes(url: string | undefined): Promise<Uint8Array<ArrayBuffer>> {
   if (!url) return new Uint8Array();
@@ -20,7 +21,7 @@ async function fetchBytes(url: string | undefined): Promise<Uint8Array<ArrayBuff
 // Guid resolution like the background handler: applyResolved + mergeSources loop,
 // but source prefabs come from fixture URLs instead of the GitHub API.
 async function diffResolved(
-  differ: Differ,
+  differ: DifferPort,
   index: Map<string, string>,
   before: Uint8Array,
   after: Uint8Array,
@@ -48,7 +49,7 @@ async function diffResolved(
 
 function attachFile(
   header: HTMLElement,
-  differ: Differ,
+  differ: DifferPort,
   index: Map<string, string>,
   initial: View,
 ): (view: View) => void {

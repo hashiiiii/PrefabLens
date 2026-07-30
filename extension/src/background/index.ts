@@ -1,13 +1,14 @@
 import { GithubClient } from "../github/client";
 import type { BackgroundRequest, GuidResolvedPush } from "../types";
-import { createDiffer, type Differ } from "../wasm/differ";
+import type { DifferPort } from "../app/application/port/differ";
+import { createDiffer } from "../app/infrastructure/providers/wasm-differ";
 import { createSessionDiffStore } from "./diffStore";
 import { createHandler } from "./handler";
 import { createMergeStore } from "./mergeStore";
 import { createQueue } from "./queue";
 import { readAccessToken } from "./settings";
 
-let differ: Promise<Differ> | undefined;
+let differ: Promise<DifferPort> | undefined;
 
 // Six concurrent across REST/GraphQL (GraphQL shares fetchFn). User-action jumps via front.
 const queue = createQueue(6);

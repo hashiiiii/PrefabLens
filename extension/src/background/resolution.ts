@@ -8,7 +8,7 @@ import {
   type SemanticDiffRequest,
   unresolvedRemaining,
 } from "../types";
-import type { Differ } from "../wasm/differ";
+import type { DifferPort } from "../app/application/port/differ";
 import { createPromiseCache } from "./promiseCache";
 
 // Pipeline's GitHub surface; callers thread a richer client through C so injected fetchers keep their view
@@ -28,7 +28,7 @@ const MAX_SOURCE_ROUNDS = 3; // re-diff cap for nested sources (independent of c
 export type ResolutionDeps<C extends SearchClient> = {
   guidCache: GuidCache;
   repoIndexStore: RepoIndexStore;
-  getDiffer(): Promise<Differ>;
+  getDiffer(): Promise<DifferPort>;
   // Handler's cached blob fetcher (sha+path keyed, blob-sha fast path)
   fetchBlob(
     client: C,
@@ -59,7 +59,7 @@ export type Resolution<C extends SearchClient> = {
   ): Promise<Record<string, string> | null>;
   mergeSources(
     first: DiffV2,
-    differ: Differ,
+    differ: DifferPort,
     before: Uint8Array,
     after: Uint8Array,
     ctx: DiffContext,
@@ -166,7 +166,7 @@ export function createResolution<C extends SearchClient>(deps: ResolutionDeps<C>
   // Fetch neededSources via resolved path and re-diff with assets; failure degrades (doesn't drop)
   async function mergeSources(
     first: DiffV2,
-    differ: Differ,
+    differ: DifferPort,
     before: Uint8Array,
     after: Uint8Array,
     ctx: DiffContext,

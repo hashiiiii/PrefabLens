@@ -1,12 +1,9 @@
-import type { DiffErrorV1, DiffV2 } from "../types";
+import type { DifferPort } from "../../application/port/differ";
+import type { DiffErrorV1, DiffV2 } from "../../../types";
 
 export class DiffError extends Error {}
 
-export type Differ = {
-  diff(before: Uint8Array, after: Uint8Array): DiffV2;
-  diffWithAssets(before: Uint8Array, after: Uint8Array, assets: Map<string, Uint8Array>): DiffV2;
-  isUnityYaml(bytes: Uint8Array): boolean;
-};
+export type Differ = DifferPort;
 
 type Exports = {
   memory: WebAssembly.Memory;
@@ -40,7 +37,7 @@ export function encodeAssets(assets: Map<string, Uint8Array>): Uint8Array {
   return out;
 }
 
-export async function createDiffer(wasmBytes: BufferSource): Promise<Differ> {
+export async function createDiffer(wasmBytes: BufferSource): Promise<DifferPort> {
   const { instance } = await WebAssembly.instantiate(wasmBytes);
   const exp = instance.exports as unknown as Exports;
 

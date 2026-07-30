@@ -19,7 +19,8 @@ import {
   unresolvedRemaining,
 } from "../types";
 import { isUnityPath } from "../unity";
-import { DiffError, type Differ } from "../wasm/differ";
+import type { DifferPort } from "../app/application/port/differ";
+import { DiffError } from "../app/infrastructure/providers/wasm-differ";
 import { createPromiseCache } from "./promiseCache";
 import { createResolution, type DiffContext } from "./resolution";
 
@@ -41,7 +42,7 @@ type ClientLike = Pick<
 export type Deps = {
   getSettings(): Promise<{ accessToken?: string }>;
   makeClient(base: string, token: string, lane: "user" | "prefetch"): ClientLike;
-  getDiffer(): Promise<Differ>;
+  getDiffer(): Promise<DifferPort>;
   guidCache: GuidCache;
   diffStore: { load(key: string): Promise<DiffV2 | undefined>; save(key: string, json: DiffV2): Promise<void> };
   repoIndexStore: RepoIndexStore;

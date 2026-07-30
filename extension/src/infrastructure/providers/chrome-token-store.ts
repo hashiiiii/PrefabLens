@@ -21,6 +21,10 @@ export function createChromeTokenStore(storage: SettingsStorage): TokenStorePort
     readAccessToken: () => readAccessToken(storage),
     saveAccessToken: (token) => storage.set({ accessToken: token }),
     savePendingSignIn: (pending) => storage.set({ signin: pending }),
+    readPendingSignIn: async () => {
+      const stored = await storage.get(["signin"]);
+      return stored.signin as { userCode: string; expiresAt: number } | undefined;
+    },
     clearPendingSignIn: () => storage.remove("signin"),
   };
 }

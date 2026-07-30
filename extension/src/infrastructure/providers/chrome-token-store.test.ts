@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { readAccessToken, type SettingsStorage } from "./chrome-token-store";
+import { createChromeTokenStore, readAccessToken, type SettingsStorage } from "./chrome-token-store";
 
 function mem(initial: Record<string, unknown> = {}): SettingsStorage & { data: Record<string, unknown> } {
   const data = { ...initial };
@@ -34,4 +34,21 @@ describe("readAccessToken", () => {
     expect(await readAccessToken(s)).toBe("new");
     expect(s.data.pat).toBe("old");
   });
+});
+
+it("round-trips the pending sign-in", async () => {
+  // In-memory SettingsStorage fake, same shape as the other tests in this file
+  const data: Record<string, unknown> = {};
+  const store = createChromeTokenStore({
+    get: async (keys) => Object.fromEntries(keys.filter((k) => k in data).map((k) => [k, data[k]])),
+    set: async (items) => void Object.assign(data, items),
+    remove: async (keys) => {
+      for (const k of Array.isArray(keys) ? keys : [keys]) delete data[k];
+    },
+  });
+  expect(await store.readPendingSignIn()).toBeUndefined();
+  await store.savePendingSignIn({ userCode: "ABCD-1234", expiresAt: 99 });
+  expect(await store.readPendingSignIn()).toEqual({ userCode: "ABCD-1234", expiresAt: 99 });
+  await store.clearPendingSignIn();
+  expect(await store.readPendingSignIn()).toBeUndefined();
 });

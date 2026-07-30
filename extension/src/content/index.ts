@@ -1,3 +1,4 @@
+import { createSignIn, type PendingSignIn } from "../app/application/auth/sign-in";
 import { createChromeTokenStore } from "../app/infrastructure/providers/chrome-token-store";
 import { pollForToken, requestDeviceCode } from "../app/infrastructure/providers/github-device-flow";
 import {
@@ -22,7 +23,6 @@ import { createAuthRetries } from "./authRetries";
 import { type DiffPage, type FileEntry, parseDiffUrl, parsePrPage, scanUnityFiles } from "./detect";
 import { fillDeviceCode } from "./devicePage";
 import { createFileView } from "./fileView";
-import { createSignIn, type PendingSignIn } from "./signin";
 import { createToggle, type Toggle, type View } from "./toggle";
 import { createViewRegistry, type ViewEntry } from "./views";
 import { createViewState, type ViewState } from "./viewstate";
@@ -63,12 +63,10 @@ const authRetries = createAuthRetries();
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 const tokenStore = createChromeTokenStore(chrome.storage.local);
 const signIn = createSignIn({
-  // Same-origin on github.com: no background relay or extra permissions.
-  requestDeviceCode: () => requestDeviceCode(fetch),
-  pollForToken: (code) => pollForToken(fetch, sleep, code),
-  savePending: (pending) => tokenStore.savePendingSignIn(pending),
-  clearPending: () => tokenStore.clearPendingSignIn(),
-  saveToken: (token) => tokenStore.saveAccessToken(token),
+  auth: { requestDeviceCode, pollForToken },
+  tokenStore,
+  fetchFn: fetch,
+  sleep,
   openTab: (url) => void window.open(url, "_blank", "noopener"),
   now: () => Date.now(),
 });

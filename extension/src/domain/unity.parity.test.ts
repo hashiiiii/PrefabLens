@@ -24,7 +24,7 @@ function tsExtensions(): string[] {
 }
 
 function zigExtensions(): string[] {
-  const src = read("../../../../cli/src/unity_path.zig");
+  const src = read("../../../cli/src/unity_path.zig");
   const start = src.indexOf("const extensions = [_][]const u8{");
   expect(start, "extensions array not found in unity_path.zig").toBeGreaterThan(0);
   const body = src.slice(start, src.indexOf("};", start));

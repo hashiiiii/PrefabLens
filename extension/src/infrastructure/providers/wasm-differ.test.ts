@@ -17,7 +17,7 @@ MonoBehaviour:
 
 let differ: DifferPort;
 beforeAll(async () => {
-  const bytes = readFileSync(new URL("../../../../../zig-out/bin/prefablens.wasm", import.meta.url));
+  const bytes = readFileSync(new URL("../../../../zig-out/bin/prefablens.wasm", import.meta.url));
   differ = await createDiffer(bytes);
 });
 

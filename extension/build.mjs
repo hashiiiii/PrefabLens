@@ -9,7 +9,7 @@ const e2e = process.argv.includes("--e2e");
 // default build so the extension's shipped dist stays lean.
 if (process.argv.includes("--demo")) {
   await build({
-    entryPoints: { demo: "src/app/presentation/demo/index.ts" },
+    entryPoints: { demo: "src/presentation/demo/index.ts" },
     bundle: true,
     format: "iife",
     target: "chrome120",
@@ -21,8 +21,8 @@ if (process.argv.includes("--demo")) {
 
 await build({
   entryPoints: {
-    content: "src/app/presentation/content/index.ts",
-    background: "src/app/presentation/background/index.ts",
+    content: "src/presentation/content/index.ts",
+    background: "src/presentation/background/index.ts",
   },
   bundle: true,
   format: "iife",

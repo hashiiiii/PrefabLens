@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { DeviceCode, PollResult } from "../github/deviceFlow";
+import type { DeviceCode, PollResult } from "../app/application/port/github-auth";
 import { createSignIn, FAILURE_TEXT, type PendingSignIn, type SignInIo, type SignInUi } from "./signin";
 
 const CODE: DeviceCode = {

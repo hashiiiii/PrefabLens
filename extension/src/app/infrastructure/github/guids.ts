@@ -1,4 +1,5 @@
-import { type ChangedFile, RateLimitError } from "./client";
+import type { GuidCachePort } from "../../application/port/guid-cache";
+import { type ChangedFile, RateLimitError } from "../providers/github-client";
 
 // Same rule as parseGuid in cli/src/resolve.zig: "guid:" at line start after trim
 export function parseGuidFromMeta(meta: string): string | undefined {
@@ -13,10 +14,7 @@ export type MetaFetcher = (path: string, side: "base" | "head") => Promise<strin
 
 // Persistent guid→asset path via Code Search (repo key `<API_BASE>/<owner>/<repo>`).
 // Stable mapping → no TTL; save merges.
-export type GuidCache = {
-  load(repo: string): Promise<Record<string, string>>;
-  save(repo: string, entries: Record<string, string>): Promise<void>;
-};
+export type GuidCache = GuidCachePort;
 
 const MAX_CONCURRENT_META_FETCHES = 8;
 

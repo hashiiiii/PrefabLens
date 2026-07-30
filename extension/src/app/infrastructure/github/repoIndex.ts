@@ -1,14 +1,10 @@
-import type { GithubClient } from "./client";
+import type { RepoIndexPort } from "../../application/port/repo-index";
+import type { GithubClient } from "../providers/github-client";
 import { parseGuidFromMeta } from "./guids";
 
 type ClientLike = Pick<GithubClient, "listMetaTree" | "batchBlobTexts">;
 
-export type RepoIndexStore = {
-  loadGuids(repo: string): Promise<Record<string, string>>;
-  saveGuids(repo: string, entries: Record<string, string>): Promise<void>;
-  loadIndex(repo: string): Promise<{ treeSha: string; guids: Record<string, string> } | undefined>;
-  saveIndex(repo: string, index: { treeSha: string; guids: Record<string, string> }): Promise<void>;
-};
+export type RepoIndexStore = RepoIndexPort;
 
 const INDEX_MAX_METAS = 50_000; // above this, give up on the index to protect the storage quota
 const GRAPHQL_BATCH = 100;

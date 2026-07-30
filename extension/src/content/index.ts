@@ -1,4 +1,5 @@
-import { pollForToken, requestDeviceCode } from "../github/deviceFlow";
+import { createChromeTokenStore } from "../app/infrastructure/providers/chrome-token-store";
+import { pollForToken, requestDeviceCode } from "../app/infrastructure/providers/github-device-flow";
 import {
   render,
   renderError,
@@ -60,13 +61,14 @@ let prefetchedPr = ""; // prefetch once per PR across conversation + files tabs
 const authRetries = createAuthRetries();
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+const tokenStore = createChromeTokenStore(chrome.storage.local);
 const signIn = createSignIn({
   // Same-origin on github.com: no background relay or extra permissions.
   requestDeviceCode: () => requestDeviceCode(fetch),
   pollForToken: (code) => pollForToken(fetch, sleep, code),
-  savePending: (pending) => chrome.storage.local.set({ signin: pending }),
-  clearPending: () => chrome.storage.local.remove("signin"),
-  saveToken: (token) => chrome.storage.local.set({ accessToken: token }),
+  savePending: (pending) => tokenStore.savePendingSignIn(pending),
+  clearPending: () => tokenStore.clearPendingSignIn(),
+  saveToken: (token) => tokenStore.saveAccessToken(token),
   openTab: (url) => void window.open(url, "_blank", "noopener"),
   now: () => Date.now(),
 });

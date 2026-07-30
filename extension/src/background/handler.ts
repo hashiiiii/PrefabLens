@@ -1,13 +1,17 @@
+import type { DifferPort } from "../app/application/port/differ";
+import type { DiffCachePort } from "../app/application/port/diff-cache";
+import type { GithubPort } from "../app/application/port/github";
+import type { GuidCachePort } from "../app/application/port/guid-cache";
+import type { RepoIndexPort } from "../app/application/port/repo-index";
+import { applyResolved, buildGuidIndex } from "../app/infrastructure/github/guids";
 import {
   API_BASE,
   AuthError,
   type ChangedFile,
-  type GithubClient,
   RateLimitError,
   type RefPair,
-} from "../github/client";
-import { applyResolved, buildGuidIndex, type GuidCache } from "../github/guids";
-import type { RepoIndexStore } from "../github/repoIndex";
+} from "../app/infrastructure/providers/github-client";
+import { DiffError } from "../app/infrastructure/providers/wasm-differ";
 import {
   type DiffTarget,
   type DiffV2,
@@ -19,33 +23,16 @@ import {
   unresolvedRemaining,
 } from "../types";
 import { isUnityPath } from "../unity";
-import type { DifferPort } from "../app/application/port/differ";
-import { DiffError } from "../app/infrastructure/providers/wasm-differ";
 import { createPromiseCache } from "./promiseCache";
 import { createResolution, type DiffContext } from "./resolution";
 
-type ClientLike = Pick<
-  GithubClient,
-  | "getPrRefs"
-  | "listPrFiles"
-  | "getCommit"
-  | "compareRefs"
-  | "resolveRefSha"
-  | "getFileAtRef"
-  | "getBlobRaw"
-  | "listBlobShas"
-  | "searchMetaByGuid"
-  | "listMetaTree"
-  | "batchBlobTexts"
->;
-
 export type Deps = {
   getSettings(): Promise<{ accessToken?: string }>;
-  makeClient(base: string, token: string, lane: "user" | "prefetch"): ClientLike;
+  makeClient(base: string, token: string, lane: "user" | "prefetch"): GithubPort;
   getDiffer(): Promise<DifferPort>;
-  guidCache: GuidCache;
-  diffStore: { load(key: string): Promise<DiffV2 | undefined>; save(key: string, json: DiffV2): Promise<void> };
-  repoIndexStore: RepoIndexStore;
+  guidCache: GuidCachePort;
+  diffStore: DiffCachePort;
+  repoIndexStore: RepoIndexPort;
 };
 
 export type Handler = {
@@ -55,7 +42,7 @@ export type Handler = {
 
 // Per-kind: refs + changed-file discovery; everything downstream is target-agnostic
 async function loadRefsAndFiles(
-  client: ClientLike,
+  client: GithubPort,
   owner: string,
   repo: string,
   target: DiffTarget,
@@ -102,7 +89,7 @@ export function createHandler(deps: Deps): Handler {
 
   // Prefer blob-sha when known (#110); 404 (force push) falls back to path+ref
   function fetchBlob(
-    client: ClientLike,
+    client: GithubPort,
     owner: string,
     repo: string,
     path: string,
@@ -119,7 +106,7 @@ export function createHandler(deps: Deps): Handler {
 
   // Before/after blobs; status/previousPath follow the files API
   async function fetchPair(
-    client: ClientLike,
+    client: GithubPort,
     ctx: DiffContext,
     owner: string,
     repo: string,
@@ -147,7 +134,7 @@ export function createHandler(deps: Deps): Handler {
     fetchPair,
   });
 
-  function loadContext(client: ClientLike, owner: string, repo: string, target: DiffTarget): Promise<DiffContext> {
+  function loadContext(client: GithubPort, owner: string, repo: string, target: DiffTarget): Promise<DiffContext> {
     return contexts.get(targetKey(owner, repo, target), async () => {
       const { refs, files } = await loadRefsAndFiles(client, owner, repo, target);
       const bySha = new Map(files.map((f) => [f.path, f.sha]));
@@ -179,7 +166,7 @@ export function createHandler(deps: Deps): Handler {
 
   // Raw sha-keyed diff only; resolution/mergeSources stay out (Code Search improves later)
   async function computeDiff(
-    client: ClientLike,
+    client: GithubPort,
     ctx: DiffContext,
     owner: string,
     repo: string,
@@ -201,7 +188,7 @@ export function createHandler(deps: Deps): Handler {
 
   // Sha-keyed: a push produces a new key (no invalidation)
   function getDiff(
-    client: ClientLike,
+    client: GithubPort,
     ctx: DiffContext,
     owner: string,
     repo: string,

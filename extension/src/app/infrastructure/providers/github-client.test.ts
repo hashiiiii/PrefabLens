@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { must } from "../util/must";
-import { ApiError, AuthError, GithubClient, graphqlUrl, RateLimitError } from "./client";
+import { must } from "../../../util/must";
+import { ApiError, AuthError, GithubClient, graphqlUrl, RateLimitError } from "./github-client";
 
 // fetch fake that returns a fixed path→response table. It also records calls.
 // Matching is url.includes(key), so keys must be unique substrings

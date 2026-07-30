@@ -1,6 +1,9 @@
-import { type ChangedFile, type GithubClient, RateLimitError, type RefPair } from "../github/client";
-import { applyResolved, type GuidCache } from "../github/guids";
-import { type RepoIndexStore, syncRepoIndex } from "../github/repoIndex";
+import type { DifferPort } from "../app/application/port/differ";
+import type { GuidCachePort } from "../app/application/port/guid-cache";
+import type { RepoIndexPort } from "../app/application/port/repo-index";
+import { applyResolved } from "../app/infrastructure/github/guids";
+import { syncRepoIndex } from "../app/infrastructure/github/repoIndex";
+import { type ChangedFile, type GithubClient, RateLimitError, type RefPair } from "../app/infrastructure/providers/github-client";
 import {
   type DiffV2,
   type GuidResolvedPush,
@@ -8,7 +11,6 @@ import {
   type SemanticDiffRequest,
   unresolvedRemaining,
 } from "../types";
-import type { DifferPort } from "../app/application/port/differ";
 import { createPromiseCache } from "./promiseCache";
 
 // Pipeline's GitHub surface; callers thread a richer client through C so injected fetchers keep their view
@@ -26,8 +28,8 @@ const MAX_SEARCHES = 10; // Code Search is authenticated 10 req/min — don't bu
 const MAX_SOURCE_ROUNDS = 3; // re-diff cap for nested sources (independent of core's depth cap of 8)
 
 export type ResolutionDeps<C extends SearchClient> = {
-  guidCache: GuidCache;
-  repoIndexStore: RepoIndexStore;
+  guidCache: GuidCachePort;
+  repoIndexStore: RepoIndexPort;
   getDiffer(): Promise<DifferPort>;
   // Handler's cached blob fetcher (sha+path keyed, blob-sha fast path)
   fetchBlob(

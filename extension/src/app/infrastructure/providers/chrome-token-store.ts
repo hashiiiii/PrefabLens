@@ -1,3 +1,5 @@
+import type { TokenStorePort } from "../../application/port/token-store";
+
 export type SettingsStorage = {
   get(keys: string[]): Promise<Record<string, unknown>>;
   set(items: Record<string, unknown>): Promise<void>;
@@ -12,4 +14,13 @@ export async function readAccessToken(storage: SettingsStorage): Promise<string 
   await storage.set({ accessToken: stored.pat });
   await storage.remove("pat");
   return stored.pat;
+}
+
+export function createChromeTokenStore(storage: SettingsStorage): TokenStorePort {
+  return {
+    readAccessToken: () => readAccessToken(storage),
+    saveAccessToken: (token) => storage.set({ accessToken: token }),
+    savePendingSignIn: (pending) => storage.set({ signin: pending }),
+    clearPendingSignIn: () => storage.remove("signin"),
+  };
 }

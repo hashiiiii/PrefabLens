@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { RateLimitError } from "../github/client";
+import { RateLimitError } from "../app/infrastructure/providers/github-client";
 import type { DiffV2, GuidResolvedPush, SemanticDiffRequest } from "../types";
 import { must } from "../util/must";
 import type { DifferPort } from "../app/application/port/differ";

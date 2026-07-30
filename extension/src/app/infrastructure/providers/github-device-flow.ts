@@ -1,15 +1,9 @@
+import type { DeviceCode, PollResult } from "../../application/port/github-auth";
+
+export type { DeviceCode, PollResult };
+
 // Public client id of the GitHub OAuth App (device flow enabled).
 export const CLIENT_ID = "Ov23liYYM6t34p7Hxkc1";
-
-export type DeviceCode = {
-  deviceCode: string;
-  userCode: string;
-  verificationUri: string;
-  interval: number;
-  expiresIn: number;
-};
-
-export type PollResult = { status: "ok"; token: string } | { status: "denied" } | { status: "expired" };
 
 type DeviceCodeResponse =
   | { device_code: string; user_code: string; verification_uri: string; interval: number; expires_in: number }

@@ -1,4 +1,4 @@
-import type { DeviceCode, PollResult } from "../github/deviceFlow";
+import type { DeviceCode, PollResult } from "../app/application/port/github-auth";
 
 // Written before the verification tab opens; /login/device reads it to pre-fill
 export type PendingSignIn = { userCode: string; expiresAt: number };

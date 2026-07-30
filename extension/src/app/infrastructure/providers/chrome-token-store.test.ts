@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { readAccessToken, type SettingsStorage } from "./settings";
+import { readAccessToken, type SettingsStorage } from "./chrome-token-store";
 
 function mem(initial: Record<string, unknown> = {}): SettingsStorage & { data: Record<string, unknown> } {
   const data = { ...initial };

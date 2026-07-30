@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createMergeStore } from "./mergeStore";
+import { createMergeStore } from "./merge-store";
 
 /** Real in-memory stand-in for chrome.storage.local: get/set operate on a plain record. */
 function makeArea() {

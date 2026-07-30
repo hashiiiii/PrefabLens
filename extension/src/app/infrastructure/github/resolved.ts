@@ -1,4 +1,4 @@
-import type { DiffV2 } from "../types";
+import type { DiffV2 } from "../../../types";
 
 // Host-side "resolved" attach (same scoping as core). Separate from guids.ts so
 // the site demo (src/demo.ts) can import without pulling GithubClient / __API_BASE__.

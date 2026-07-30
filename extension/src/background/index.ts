@@ -1,12 +1,12 @@
-import { GithubClient } from "../github/client";
-import type { BackgroundRequest, GuidResolvedPush } from "../types";
 import type { DifferPort } from "../app/application/port/differ";
+import { createChromeTokenStore } from "../app/infrastructure/providers/chrome-token-store";
+import { createQueue } from "../app/infrastructure/providers/fetch-queue";
+import { GithubClient } from "../app/infrastructure/providers/github-client";
 import { createDiffer } from "../app/infrastructure/providers/wasm-differ";
-import { createSessionDiffStore } from "./diffStore";
+import { createMergeStore } from "../app/infrastructure/repositories/merge-store";
+import { createSessionDiffStore } from "../app/infrastructure/repositories/session-diff-store";
+import type { BackgroundRequest, GuidResolvedPush } from "../types";
 import { createHandler } from "./handler";
-import { createMergeStore } from "./mergeStore";
-import { createQueue } from "./queue";
-import { readAccessToken } from "./settings";
 
 let differ: Promise<DifferPort> | undefined;
 
@@ -17,11 +17,13 @@ const queuedFetch =
   (input, init) =>
     queue(() => fetch(input, init), { front });
 
+const tokenStore = createChromeTokenStore(chrome.storage.local);
+
 // Whole-repo .meta guid records for repoIndexStore.loadGuids/saveGuids
 const metaGuids = createMergeStore(chrome.storage.local, "metaGuids");
 
 const handler = createHandler({
-  getSettings: async () => ({ accessToken: await readAccessToken(chrome.storage.local) }),
+  getSettings: async () => ({ accessToken: await tokenStore.readAccessToken() }),
   makeClient: (base, token, lane) => new GithubClient(base, token, queuedFetch(lane === "user")),
   getDiffer() {
     // Lazy singleton; SW restart → re-fetch

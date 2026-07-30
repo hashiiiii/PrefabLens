@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { CLIENT_ID, type DeviceCode, pollForToken, requestDeviceCode } from "./deviceFlow";
+import { CLIENT_ID, type DeviceCode, pollForToken, requestDeviceCode } from "./github-device-flow";
 
 // Queue-based fetch fake: each call shifts the next canned Response and records the request.
 function fakeFetch(responses: Response[]) {

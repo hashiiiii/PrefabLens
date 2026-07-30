@@ -1,4 +1,5 @@
-import type { DiffV2 } from "../types";
+import type { DiffCachePort } from "../../application/port/diff-cache";
+import type { DiffV2 } from "../../../types";
 
 const PREFIX = "diff:";
 const MAX_BYTES = 512 * 1024; // storage.session is 10MB: leave large ones to memory cache only
@@ -10,14 +11,11 @@ type Area = {
   remove(keys: string | string[]): Promise<void>;
 };
 
-export type DiffStore = {
-  load(key: string): Promise<DiffV2 | undefined>;
-  save(key: string, json: DiffV2): Promise<void>;
-};
+export type DiffStore = DiffCachePort;
 
 // Raw diffs in storage.session under a sha key across SW restarts.
 // Quota overflow → wipe diffs and rewrite once; without this every SW restart recomputes forever.
-export function createSessionDiffStore(area: Area): DiffStore {
+export function createSessionDiffStore(area: Area): DiffCachePort {
   return {
     async load(key) {
       const stored = await area.get(PREFIX + key);

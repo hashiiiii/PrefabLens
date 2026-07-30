@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { expect, it } from "vitest";
-import { must } from "../app/presentation/util/must";
+import { must } from "../util/must";
 import { BUILTIN_EXTRA_GUID, BUILTIN_REFS, DEFAULT_RESOURCES_GUID } from "./builtin_refs";
 
 // All three tables are generated from the same Unity dump (issue #104). This
@@ -16,7 +16,7 @@ function zigEntries(section: string): Record<string, string> {
 }
 
 it("Zig table keeps the same (guid, fileID) → name entries as the TS table", () => {
-  const zigPath = fileURLToPath(new URL("../../../cli/src/builtin_refs.zig", import.meta.url));
+  const zigPath = fileURLToPath(new URL("../../../../../cli/src/builtin_refs.zig", import.meta.url));
   const zig = readFileSync(zigPath, "utf8");
   // The file declares the default_resources array first, builtin_extra second.
   const extraStart = zig.indexOf("const builtin_extra = [_]Entry{");
@@ -26,7 +26,7 @@ it("Zig table keeps the same (guid, fileID) → name entries as the TS table", (
 });
 
 it("guid constants match between the Zig and TS tables", () => {
-  const zigPath = fileURLToPath(new URL("../../../cli/src/builtin_refs.zig", import.meta.url));
+  const zigPath = fileURLToPath(new URL("../../../../../cli/src/builtin_refs.zig", import.meta.url));
   const zig = readFileSync(zigPath, "utf8");
   expect(zig).toContain(`pub const default_resources_guid = "${DEFAULT_RESOURCES_GUID}";`);
   expect(zig).toContain(`pub const builtin_extra_guid = "${BUILTIN_EXTRA_GUID}";`);
@@ -41,7 +41,7 @@ function csEntries(section: string): Record<string, string> {
 }
 
 it("C# table keeps the same (guid, fileID) → name entries as the TS table", () => {
-  const csPath = fileURLToPath(new URL("../../../editor/Editor/BuiltinRefs.cs", import.meta.url));
+  const csPath = fileURLToPath(new URL("../../../../../editor/Editor/BuiltinRefs.cs", import.meta.url));
   const cs = readFileSync(csPath, "utf8");
   // The file declares the DefaultResources dictionary first, BuiltinExtra second.
   const extraStart = cs.indexOf("BuiltinExtra = new()");
@@ -51,7 +51,7 @@ it("C# table keeps the same (guid, fileID) → name entries as the TS table", ()
 });
 
 it("guid constants match between the C# and TS tables", () => {
-  const csPath = fileURLToPath(new URL("../../../editor/Editor/BuiltinRefs.cs", import.meta.url));
+  const csPath = fileURLToPath(new URL("../../../../../editor/Editor/BuiltinRefs.cs", import.meta.url));
   const cs = readFileSync(csPath, "utf8");
   expect(cs).toContain(`public const string DefaultResourcesGuid = "${DEFAULT_RESOURCES_GUID}";`);
   expect(cs).toContain(`public const string BuiltinExtraGuid = "${BUILTIN_EXTRA_GUID}";`);

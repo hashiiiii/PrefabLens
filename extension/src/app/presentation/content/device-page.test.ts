@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
-import { must } from "../app/presentation/util/must";
-import { fillDeviceCode } from "./devicePage";
+import { must } from "../util/must";
+import { fillDeviceCode } from "./device-page";
 
 const PENDING = { userCode: "ABCD-1234", expiresAt: 10_000 };
 

@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { expect, it } from "vitest";
-import { must } from "../app/presentation/util/must";
+import { must } from "../util/must";
 
 // The diff.v2 value display rules are hand-copied across languages: the
 // extension's formatValue (render.ts), the Unity editor's ValueFormat.cs, and
@@ -64,7 +64,7 @@ function tsRules(): Rules {
 }
 
 function csRules(): Rules {
-  const src = read("../../../editor/Editor/ValueFormat.cs");
+  const src = read("../../../../../editor/Editor/ValueFormat.cs");
   expectResolveOrder(src, "m.Resolved.TryGetValue", "BuiltinRefs.Name", '"guid:"');
   return {
     missing: extract(src, /IsNull\)\s*return "([^"]*)"/, "null branch"),
@@ -76,7 +76,7 @@ function csRules(): Rules {
 }
 
 function zigTreeRules(): Rules {
-  const fn = fnSlice(read("../../../cli/src/render_tree.zig"), "fn writeValueText");
+  const fn = fnSlice(read("../../../../../cli/src/render_tree.zig"), "fn writeValueText");
   // The renderer must decorate the shared ladder, not re-fork it; the ladder
   // order itself is checked once against display.zig below.
   expect(fn, "writeValueText goes through display.refDisplay").toContain("display.refDisplay(");
@@ -90,7 +90,7 @@ function zigTreeRules(): Rules {
 }
 
 function zigHtmlRules(): Rules {
-  const fn = fnSlice(read("../../../cli/src/render_html.zig"), "fn writeValue(");
+  const fn = fnSlice(read("../../../../../cli/src/render_html.zig"), "fn writeValue(");
   // Same pin as zigTreeRules: escaping and decoration only, no forked ladder.
   expect(fn, "writeValue goes through display.refDisplay").toContain("display.refDisplay(");
   return {
@@ -116,7 +116,7 @@ it("CLI render_html.zig formats values like the extension's formatValue", () => 
 
 it("CLI display.zig resolves guid refs in the extension's order", () => {
   // The single Zig source of truth for the ladder both renderers switch on.
-  const fn = fnSlice(read("../../../cli/src/display.zig"), "pub fn refDisplay");
+  const fn = fnSlice(read("../../../../../cli/src/display.zig"), "pub fn refDisplay");
   expectResolveOrder(fn, "rr.get(g)", "builtin_refs.name(", ".guid = g");
 });
 
@@ -124,8 +124,8 @@ it("both CLI renderers collapse composite nodes the same way", () => {
   // diff.v2 flattens vectors and the like into scalars before they reach the
   // extension or the editor, so map/seq fallbacks exist only in the two CLI
   // renderers that walk the model tree directly.
-  const tree = fnSlice(read("../../../cli/src/render_tree.zig"), "fn writeValueText");
-  const html = fnSlice(read("../../../cli/src/render_html.zig"), "fn writeValue(");
+  const tree = fnSlice(read("../../../../../cli/src/render_tree.zig"), "fn writeValueText");
+  const html = fnSlice(read("../../../../../cli/src/render_html.zig"), "fn writeValue(");
   const collapse = (src: string) => ({
     map: extract(src, /\.map => try w\.writeAll\("([^"]*)"\)/, "map branch"),
     seq: extract(src, /\.seq => try w\.writeAll\("([^"]*)"\)/, "seq branch"),

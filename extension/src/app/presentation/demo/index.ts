@@ -2,15 +2,15 @@
 // the content script minus github-client (needs __API_BASE__, absent here).
 // Bundled as dist/demo.js via `node build.mjs --demo`; fixtures via
 // data-before/data-after URLs (empty side = CLI empty-side semantics).
-import { createViewState } from "./app/application/overlay/view-state";
-import type { View } from "./app/application/overlay/view-mode";
-import { createToggle, injectPageStyles } from "./content/toggle";
-import { applyResolved } from "./app/domain/diff/resolved";
-import { render, renderError, renderLoading } from "./renderer/render";
-import type { DiffV2 } from "./app/domain/diff/types";
-import { must } from "./app/presentation/util/must";
-import type { DifferPort } from "./app/application/port/differ";
-import { createDiffer } from "./app/infrastructure/providers/wasm-differ";
+import { createViewState } from "../../application/overlay/view-state";
+import type { View } from "../../application/overlay/view-mode";
+import { createToggle, injectPageStyles } from "../content/toggle";
+import { applyResolved } from "../../domain/diff/resolved";
+import { render, renderError, renderLoading } from "../renderer/render";
+import type { DiffV2 } from "../../domain/diff/types";
+import { must } from "../util/must";
+import type { DifferPort } from "../../application/port/differ";
+import { createDiffer } from "../../infrastructure/providers/wasm-differ";
 
 async function fetchBytes(url: string | undefined): Promise<Uint8Array<ArrayBuffer>> {
   if (!url) return new Uint8Array();

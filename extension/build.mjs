@@ -5,11 +5,11 @@ mkdirSync("dist", { recursive: true });
 
 const e2e = process.argv.includes("--e2e");
 
-// --demo: build only the site demo bundle (see src/demo.ts). Kept out of the
+// --demo: build only the site demo bundle (see presentation/demo). Kept out of the
 // default build so the extension's shipped dist stays lean.
 if (process.argv.includes("--demo")) {
   await build({
-    entryPoints: { demo: "src/demo.ts" },
+    entryPoints: { demo: "src/app/presentation/demo/index.ts" },
     bundle: true,
     format: "iife",
     target: "chrome120",
@@ -21,8 +21,8 @@ if (process.argv.includes("--demo")) {
 
 await build({
   entryPoints: {
-    content: "src/content/index.ts",
-    background: "src/background/index.ts",
+    content: "src/app/presentation/content/index.ts",
+    background: "src/app/presentation/background/index.ts",
   },
   bundle: true,
   format: "iife",

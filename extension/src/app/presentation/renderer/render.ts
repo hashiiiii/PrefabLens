@@ -1,4 +1,4 @@
-import type { ComponentDiff, DiffV2, FieldValue, NodeDiff, OverrideDiff, Status } from "../app/domain/diff/types";
+import type { ComponentDiff, DiffV2, FieldValue, NodeDiff, OverrideDiff, Status } from "../../domain/diff/types";
 import { builtinName } from "./builtin_refs";
 import { ALERT, CHECK, CHEVRON, CUBE, GEAR } from "./icons";
 import { STYLES } from "./styles";

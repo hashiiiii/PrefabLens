@@ -1,4 +1,4 @@
-import type { View } from "../app/application/overlay/view-mode";
+import type { View } from "../../application/overlay/view-mode";
 
 export type { View };
 export type Toggle = { element: HTMLElement; set(view: View): void };

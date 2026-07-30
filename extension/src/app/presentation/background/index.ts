@@ -1,5 +1,5 @@
-import type { BackgroundRequest, GuidResolvedPush } from "../app/domain/diff/types";
-import { createBackgroundApp } from "../app/infrastructure/container";
+import type { BackgroundRequest, GuidResolvedPush } from "../../domain/diff/types";
+import { createBackgroundApp } from "../../infrastructure/container";
 
 const { handler } = createBackgroundApp();
 

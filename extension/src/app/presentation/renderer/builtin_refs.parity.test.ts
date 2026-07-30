@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { expect, it } from "vitest";
-import { must } from "../util/must";
+import { must } from "../../domain/must";
 import { BUILTIN_EXTRA_GUID, BUILTIN_REFS, DEFAULT_RESOURCES_GUID } from "./builtin_refs";
 
 // All three tables are generated from the same Unity dump (issue #104). This

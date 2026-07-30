@@ -1,6 +1,6 @@
 import type { DiffTarget } from "../../domain/diff/types";
+import { must } from "../../domain/must";
 import { isUnityPath } from "../../domain/unity";
-import { must } from "../util/must";
 
 export type FileEntry = {
   path: string;

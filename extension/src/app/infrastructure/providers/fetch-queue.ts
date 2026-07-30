@@ -1,4 +1,4 @@
-import { must } from "../../presentation/util/must";
+import { must } from "../../domain/must";
 import { RateLimitError } from "./github-client";
 
 type Job = {

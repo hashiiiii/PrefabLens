@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { DiffV2, GuidResolvedPush, SemanticDiffRequest } from "../../domain/diff/types";
-import { must } from "../../presentation/util/must";
+import { must } from "../../domain/must";
 import { DiffError, type DifferPort } from "../port/differ";
 import { AuthError, type ChangedFile, RateLimitError } from "../port/github";
 import { createHandler, type Deps, type Handler } from "./handler";

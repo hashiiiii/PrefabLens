@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { DiffV2, GuidResolvedPush, SemanticDiffRequest } from "../../domain/diff/types";
-import { must } from "../../presentation/util/must";
+import { must } from "../../domain/must";
 import type { DifferPort } from "../port/differ";
 import { RateLimitError } from "../port/github";
 import { createResolution, type DiffContext, type SearchClient } from "./resolution";

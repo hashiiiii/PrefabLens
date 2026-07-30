@@ -2,15 +2,16 @@
 // the content script minus github-client (needs __API_BASE__, absent here).
 // Bundled as dist/demo.js via `node build.mjs --demo`; fixtures via
 // data-before/data-after URLs (empty side = CLI empty-side semantics).
-import { createViewState } from "../../application/overlay/view-state";
+
 import type { View } from "../../application/overlay/view-mode";
-import { createToggle, injectPageStyles } from "../content/toggle";
-import { applyResolved } from "../../domain/diff/resolved";
-import { render, renderError, renderLoading } from "../renderer/render";
-import type { DiffV2 } from "../../domain/diff/types";
-import { must } from "../util/must";
+import { createViewState } from "../../application/overlay/view-state";
 import type { DifferPort } from "../../application/port/differ";
+import { applyResolved } from "../../domain/diff/resolved";
+import type { DiffV2 } from "../../domain/diff/types";
+import { must } from "../../domain/must";
 import { createDiffer } from "../../infrastructure/providers/wasm-differ";
+import { createToggle, injectPageStyles } from "../content/toggle";
+import { render, renderError, renderLoading } from "../renderer/render";
 
 async function fetchBytes(url: string | undefined): Promise<Uint8Array<ArrayBuffer>> {
   if (!url) return new Uint8Array();

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { DiffV2 } from "../../domain/diff/types";
-import { must } from "../util/must";
+import { must } from "../../domain/must";
 import {
   detectTheme,
   render,

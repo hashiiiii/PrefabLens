@@ -1,4 +1,19 @@
 import { createSignIn, type PendingSignIn } from "../../application/auth/sign-in";
+import { createAuthRetries } from "../../application/overlay/auth-retries";
+import { createFileView } from "../../application/overlay/file-view";
+import type { View } from "../../application/overlay/view-mode";
+import { createViewState, type ViewState } from "../../application/overlay/view-state";
+import { createViewRegistry, type ViewEntry } from "../../application/overlay/views";
+import {
+  type BackgroundError,
+  type GuidResolvedPush,
+  type PrefetchRequest,
+  type SemanticDiffRequest,
+  type SemanticDiffResponse,
+  targetKey,
+  unresolvedRemaining,
+} from "../../domain/diff/types";
+import { must } from "../../domain/must";
 import { createChromeTokenStore } from "../../infrastructure/providers/chrome-token-store";
 import { pollForToken, requestDeviceCode } from "../../infrastructure/providers/github-device-flow";
 import {
@@ -9,21 +24,6 @@ import {
   renderSignInPending,
   renderTooLarge,
 } from "../renderer/render";
-import {
-  type BackgroundError,
-  type GuidResolvedPush,
-  type PrefetchRequest,
-  type SemanticDiffRequest,
-  type SemanticDiffResponse,
-  targetKey,
-  unresolvedRemaining,
-} from "../../domain/diff/types";
-import { must } from "../util/must";
-import { createAuthRetries } from "../../application/overlay/auth-retries";
-import { createFileView } from "../../application/overlay/file-view";
-import { createViewRegistry, type ViewEntry } from "../../application/overlay/views";
-import { createViewState, type ViewState } from "../../application/overlay/view-state";
-import type { View } from "../../application/overlay/view-mode";
 import { type DiffPage, type FileEntry, parseDiffUrl, parsePrPage, scanUnityFiles } from "./detect";
 import { fillDeviceCode } from "./device-page";
 import { createToggle, type Toggle } from "./toggle";

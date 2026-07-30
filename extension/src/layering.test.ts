@@ -39,7 +39,9 @@ it("keeps imports pointing inward across layers", () => {
   for (const file of walk(SRC)) {
     const from = layerOf(file);
     if (from === null) continue;
-    for (const match of readFileSync(file, "utf8").matchAll(/from\s+"(\.[^"]+)"/g)) {
+    // Matches `from "<spec>"` (import/export-from, incl. multiline), bare
+    // `import "<spec>";` side effects, and dynamic `import("<spec>")`.
+    for (const match of readFileSync(file, "utf8").matchAll(/(?:from\s*|import\s*\(?\s*)"(\.[^"]+)"/g)) {
       const spec = match[1];
       if (spec === undefined) continue;
       const target = `${resolve(dirname(file), spec)}.ts`;
@@ -59,7 +61,9 @@ it("keeps presentation off application ports and non-container infra off use cas
   for (const file of walk(SRC)) {
     const from = layerOf(file);
     if (from === null) continue;
-    for (const match of readFileSync(file, "utf8").matchAll(/from\s+"(\.[^"]+)"/g)) {
+    // Matches `from "<spec>"` (import/export-from, incl. multiline), bare
+    // `import "<spec>";` side effects, and dynamic `import("<spec>")`.
+    for (const match of readFileSync(file, "utf8").matchAll(/(?:from\s*|import\s*\(?\s*)"(\.[^"]+)"/g)) {
       const spec = match[1];
       if (spec === undefined) continue;
       const target = `${resolve(dirname(file), spec)}.ts`;

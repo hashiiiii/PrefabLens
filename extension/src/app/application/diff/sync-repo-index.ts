@@ -1,10 +1,8 @@
-import type { GithubPort } from "../../application/port/github";
-import type { RepoIndexPort } from "../../application/port/repo-index";
-import { parseGuidFromMeta } from "./guids";
+import { parseGuidFromMeta } from "../../domain/diff/meta-guid";
+import type { GithubPort } from "../port/github";
+import type { RepoIndexPort } from "../port/repo-index";
 
 type ClientLike = Pick<GithubPort, "listMetaTree" | "batchBlobTexts">;
-
-export type RepoIndexStore = RepoIndexPort;
 
 const INDEX_MAX_METAS = 50_000; // above this, give up on the index to protect the storage quota
 const GRAPHQL_BATCH = 100;
@@ -13,7 +11,7 @@ const GRAPHQL_BATCH = 100;
 // blobSha→guid is content-derived (cache forever); after a push only changed .meta are fetched.
 export async function syncRepoIndex(
   client: ClientLike,
-  store: RepoIndexStore,
+  store: RepoIndexPort,
   owner: string,
   repo: string,
   repoKey: string,

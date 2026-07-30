@@ -8,12 +8,12 @@ import {
   targetKey,
   unresolvedRemaining,
 } from "../../domain/diff/types";
-import { buildGuidIndex } from "../../infrastructure/github/guids";
 import type { DiffCachePort } from "../port/diff-cache";
 import { DiffError, type DifferPort } from "../port/differ";
 import { AuthError, type ChangedFile, type GithubPort, RateLimitError, type RefPair } from "../port/github";
 import type { GuidCachePort } from "../port/guid-cache";
 import type { RepoIndexPort } from "../port/repo-index";
+import { buildGuidIndex } from "./build-guid-index";
 import { createPromiseCache } from "./promise-cache";
 import { createResolution, type DiffContext, type Resolution } from "./resolution";
 

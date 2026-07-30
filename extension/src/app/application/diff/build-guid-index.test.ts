@@ -1,21 +1,11 @@
 import { describe, expect, it } from "vitest";
-import type { DiffV2 } from "../../domain/diff/types";
-import { RateLimitError } from "../../application/port/github";
-import { applyResolved, buildGuidIndex, parseGuidFromMeta } from "./guids";
+import { RateLimitError } from "../port/github";
+import { buildGuidIndex } from "./build-guid-index";
 
 const META = `fileFormatVersion: 2
 guid: 1234567890abcdef1234567890abcdef
 MonoImporter:
   serializedVersion: 2`;
-
-describe("parseGuidFromMeta", () => {
-  it("extracts the guid line", () => {
-    expect(parseGuidFromMeta(META)).toBe("1234567890abcdef1234567890abcdef");
-  });
-  it("returns undefined when absent", () => {
-    expect(parseGuidFromMeta("fileFormatVersion: 2\n")).toBeUndefined();
-  });
-});
 
 describe("buildGuidIndex", () => {
   const files = [
@@ -72,25 +62,5 @@ describe("buildGuidIndex", () => {
     });
     expect(maxInFlight).toBeLessThanOrEqual(8);
     expect(index.size).toBe(20);
-  });
-});
-
-describe("applyResolved", () => {
-  const diff: DiffV2 = {
-    schema: "prefablens.diff.v2",
-    unresolvedGuids: ["aaa", "bbb"],
-    roots: [],
-    loose: [],
-  };
-
-  it("attaches only referenced-and-resolvable guids (scoped like core)", () => {
-    const index = new Map([
-      ["aaa", "Assets/A.cs"],
-      ["zzz", "Assets/Z.cs"],
-    ]);
-    const out = applyResolved(diff, index);
-    expect(out.resolved).toEqual({ aaa: "Assets/A.cs" }); // bbb unresolved, zzz not referenced
-    expect(out).not.toBe(diff); // does not mutate the input
-    expect(diff.resolved).toBeUndefined();
   });
 });

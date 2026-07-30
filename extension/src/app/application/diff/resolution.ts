@@ -6,12 +6,12 @@ import {
   type SemanticDiffRequest,
   unresolvedRemaining,
 } from "../../domain/diff/types";
-import { syncRepoIndex } from "../../infrastructure/github/repoIndex";
 import type { DifferPort } from "../port/differ";
 import { type ChangedFile, type GithubPort, RateLimitError, type RefPair } from "../port/github";
 import type { GuidCachePort } from "../port/guid-cache";
 import type { RepoIndexPort } from "../port/repo-index";
 import { createPromiseCache } from "./promise-cache";
+import { syncRepoIndex } from "./sync-repo-index";
 
 // Pipeline's GitHub surface; callers thread a richer client through C so injected fetchers keep their view
 export type SearchClient = Pick<GithubPort, "searchMetaByGuid" | "listMetaTree" | "batchBlobTexts">;

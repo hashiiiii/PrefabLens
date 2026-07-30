@@ -1,20 +1,7 @@
-import { type ChangedFile, RateLimitError } from "../../application/port/github";
-import type { GuidCachePort } from "../../application/port/guid-cache";
-
-// Same rule as parseGuid in cli/src/resolve.zig: "guid:" at line start after trim
-export function parseGuidFromMeta(meta: string): string | undefined {
-  for (const line of meta.split("\n")) {
-    const t = line.trim();
-    if (t.startsWith("guid:")) return t.slice("guid:".length).trim();
-  }
-  return undefined;
-}
+import { parseGuidFromMeta } from "../../domain/diff/meta-guid";
+import { type ChangedFile, RateLimitError } from "../port/github";
 
 export type MetaFetcher = (path: string, side: "base" | "head") => Promise<string | null>;
-
-// Persistent guid→asset path via Code Search (repo key `<API_BASE>/<owner>/<repo>`).
-// Stable mapping → no TTL; save merges.
-export type GuidCache = GuidCachePort;
 
 const MAX_CONCURRENT_META_FETCHES = 8;
 
@@ -43,5 +30,3 @@ export async function buildGuidIndex(files: ChangedFile[], fetchMeta: MetaFetche
 
   return index;
 }
-
-export { applyResolved } from "../../domain/diff/resolved";

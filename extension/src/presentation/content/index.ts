@@ -1,9 +1,4 @@
 import { createSignIn, type PendingSignIn } from "../../application/auth/sign-in";
-import { createAuthRetries } from "../../application/overlay/auth-retries";
-import { createFileView } from "../../application/overlay/file-view";
-import type { View } from "../../application/overlay/view-mode";
-import { createViewState, type ViewState } from "../../application/overlay/view-state";
-import { createViewRegistry, type ViewEntry } from "../../application/overlay/views";
 import {
   type BackgroundError,
   type GuidResolvedPush,
@@ -26,6 +21,11 @@ import {
 } from "../renderer/render";
 import { type DiffPage, type FileEntry, parseDiffUrl, parsePrPage, scanUnityFiles } from "./detect";
 import { fillDeviceCode } from "./device-page";
+import { createAuthRetries } from "./overlay/auth-retries";
+import { createFileView } from "./overlay/file-view";
+import type { View } from "./overlay/view-mode";
+import { createViewState, type ViewState } from "./overlay/view-state";
+import { createViewRegistry, type ViewEntry } from "./overlay/views";
 import { createToggle, type Toggle } from "./toggle";
 
 const ERROR_TEXT: Record<BackgroundError, string> = {

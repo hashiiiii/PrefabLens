@@ -3,13 +3,13 @@
 // Bundled as dist/demo.js via `node build.mjs --demo`; fixtures via
 // data-before/data-after URLs (empty side = CLI empty-side semantics).
 
-import type { View } from "../../application/overlay/view-mode";
-import { createViewState } from "../../application/overlay/view-state";
 import type { DifferPort } from "../../application/port/differ";
 import { applyResolved } from "../../domain/diff/resolved";
 import type { DiffV2 } from "../../domain/diff/types";
 import { must } from "../../domain/must";
 import { createDiffer } from "../../infrastructure/providers/wasm-differ";
+import type { View } from "../content/overlay/view-mode";
+import { createViewState } from "../content/overlay/view-state";
 import { createToggle, injectPageStyles } from "../content/toggle";
 import { render, renderError, renderLoading } from "../renderer/render";
 

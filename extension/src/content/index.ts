@@ -19,13 +19,14 @@ import {
   unresolvedRemaining,
 } from "../app/domain/diff/types";
 import { must } from "../app/presentation/util/must";
-import { createAuthRetries } from "./authRetries";
+import { createAuthRetries } from "../app/application/overlay/auth-retries";
+import { createFileView } from "../app/application/overlay/file-view";
+import { createViewRegistry, type ViewEntry } from "../app/application/overlay/views";
+import { createViewState, type ViewState } from "../app/application/overlay/view-state";
+import type { View } from "../app/application/overlay/view-mode";
 import { type DiffPage, type FileEntry, parseDiffUrl, parsePrPage, scanUnityFiles } from "./detect";
 import { fillDeviceCode } from "./devicePage";
-import { createFileView } from "./fileView";
-import { createToggle, type Toggle, type View } from "./toggle";
-import { createViewRegistry, type ViewEntry } from "./views";
-import { createViewState, type ViewState } from "./viewstate";
+import { createToggle, type Toggle } from "./toggle";
 
 const ERROR_TEXT: Record<BackgroundError, string> = {
   "access-token-missing": "Sign in with GitHub to view semantic diffs.",

@@ -1,4 +1,4 @@
-import type { DiffV2 } from "../app/domain/diff/types";
+import type { DiffV2 } from "../../domain/diff/types";
 
 // json is mutated in place by the push listener (merge resolved / replace on final push)
 export type ViewEntry = {

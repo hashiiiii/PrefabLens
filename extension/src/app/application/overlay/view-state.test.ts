@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { createViewState } from "./viewstate";
+import { createViewState } from "./view-state";
 
 describe("createViewState", () => {
   it("resolves effective view as override-or-default", () => {

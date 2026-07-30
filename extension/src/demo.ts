@@ -2,8 +2,9 @@
 // the content script minus github-client (needs __API_BASE__, absent here).
 // Bundled as dist/demo.js via `node build.mjs --demo`; fixtures via
 // data-before/data-after URLs (empty side = CLI empty-side semantics).
-import { createToggle, injectPageStyles, type View } from "./content/toggle";
-import { createViewState } from "./content/viewstate";
+import { createViewState } from "./app/application/overlay/view-state";
+import type { View } from "./app/application/overlay/view-mode";
+import { createToggle, injectPageStyles } from "./content/toggle";
 import { applyResolved } from "./app/domain/diff/resolved";
 import { render, renderError, renderLoading } from "./renderer/render";
 import type { DiffV2 } from "./app/domain/diff/types";

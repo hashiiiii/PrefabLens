@@ -1,6 +1,6 @@
-import { type BackgroundError, type DiffV2, type SemanticDiffResponse, unresolvedRemaining } from "../app/domain/diff/types";
-import { must } from "../app/presentation/util/must";
-import type { View } from "./toggle";
+import { type BackgroundError, type DiffV2, type SemanticDiffResponse, unresolvedRemaining } from "../../domain/diff/types";
+import { must } from "../../presentation/util/must";
+import type { View } from "./view-mode";
 
 // Per-file raw/semantic state machine (host + fetch latch); unit-testable without a browser.
 

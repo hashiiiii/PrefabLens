@@ -1,5 +1,6 @@
-export type View = "raw" | "semantic";
+import type { View } from "../app/application/overlay/view-mode";
 
+export type { View };
 export type Toggle = { element: HTMLElement; set(view: View): void };
 
 const FONT = `-apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif`;

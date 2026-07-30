@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { createAuthRetries } from "./authRetries";
+import { createAuthRetries } from "./auth-retries";
 
 describe("createAuthRetries", () => {
   it("runs every registered retry once on flush and empties the queue", () => {

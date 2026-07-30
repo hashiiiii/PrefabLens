@@ -1,5 +1,3 @@
-import { must } from "../app/presentation/util/must";
-
 export type PromiseCache<V> = {
   get(key: string, compute: () => Promise<V>): Promise<V>;
 };
@@ -29,7 +27,10 @@ export function createPromiseCache<V>(options: PromiseCacheOptions<V> = {}): Pro
         () => entries.delete(key), // never cache failures
       );
       entries.set(key, { at: Date.now(), promise });
-      if (max !== undefined && entries.size > max) entries.delete(must(entries.keys().next().value));
+      if (max !== undefined && entries.size > max) {
+        const oldest = entries.keys().next().value;
+        if (oldest !== undefined) entries.delete(oldest);
+      }
       return promise;
     },
   };

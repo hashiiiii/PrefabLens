@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { createPromiseCache } from "./promiseCache";
+import { createPromiseCache } from "./promise-cache";
 
 describe("createPromiseCache", () => {
   it("computes once per key and serves the cached promise afterwards", async () => {

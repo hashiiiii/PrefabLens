@@ -1,5 +1,5 @@
+import { type ChangedFile, RateLimitError } from "../../application/port/github";
 import type { GuidCachePort } from "../../application/port/guid-cache";
-import { type ChangedFile, RateLimitError } from "../providers/github-client";
 
 // Same rule as parseGuid in cli/src/resolve.zig: "guid:" at line start after trim
 export function parseGuidFromMeta(meta: string): string | undefined {

@@ -1,43 +1,29 @@
-import type { DifferPort } from "../app/application/port/differ";
-import type { DiffCachePort } from "../app/application/port/diff-cache";
-import type { GithubPort } from "../app/application/port/github";
-import type { GuidCachePort } from "../app/application/port/guid-cache";
-import type { RepoIndexPort } from "../app/application/port/repo-index";
-import { applyResolved, buildGuidIndex } from "../app/infrastructure/github/guids";
-import {
-  API_BASE,
-  AuthError,
-  type ChangedFile,
-  RateLimitError,
-  type RefPair,
-} from "../app/infrastructure/providers/github-client";
-import { DiffError } from "../app/infrastructure/providers/wasm-differ";
+import { applyResolved } from "../../domain/diff/resolved";
 import {
   type DiffTarget,
   type DiffV2,
   type GuidResolvedPush,
-  type PrefetchRequest,
   type SemanticDiffRequest,
   type SemanticDiffResponse,
   targetKey,
   unresolvedRemaining,
-} from "../app/domain/diff/types";
-import { isUnityPath } from "../app/domain/unity";
-import { createPromiseCache } from "./promiseCache";
-import { createResolution, type DiffContext } from "./resolution";
+} from "../../domain/diff/types";
+import { buildGuidIndex } from "../../infrastructure/github/guids";
+import type { DiffCachePort } from "../port/diff-cache";
+import { DiffError, type DifferPort } from "../port/differ";
+import { AuthError, type ChangedFile, type GithubPort, RateLimitError, type RefPair } from "../port/github";
+import type { GuidCachePort } from "../port/guid-cache";
+import type { RepoIndexPort } from "../port/repo-index";
+import { createPromiseCache } from "./promise-cache";
+import { createResolution, type DiffContext, type Resolution } from "./resolution";
 
-export type Deps = {
+export type DiffDeps = {
   getSettings(): Promise<{ accessToken?: string }>;
   makeClient(base: string, token: string, lane: "user" | "prefetch"): GithubPort;
   getDiffer(): Promise<DifferPort>;
   guidCache: GuidCachePort;
   diffStore: DiffCachePort;
   repoIndexStore: RepoIndexPort;
-};
-
-export type Handler = {
-  semanticDiff(req: SemanticDiffRequest, push: (msg: GuidResolvedPush) => void): Promise<SemanticDiffResponse>;
-  prefetch(req: PrefetchRequest): Promise<void>;
 };
 
 // Per-kind: refs + changed-file discovery; everything downstream is target-agnostic
@@ -71,21 +57,36 @@ const EMPTY = new Uint8Array(0);
 const CONTEXT_TTL_MS = 60_000; // push moves headSha
 const BLOB_CACHE_MAX = 32;
 const TOO_LARGE_BYTES = 25 * 1024 * 1024; // over 25MB renders on click
-const PREFETCH_MAX = 100; // bounds API usage per PR
-const PREFETCH_CONCURRENCY = 4;
 
 type DiffOutcome =
   | { ok: true; json: DiffV2 }
   | { ok: false; error: "too-large"; bytes: number }
   | { ok: false; error: "not-unity-yaml" };
 
-export function createHandler(deps: Deps): Handler {
+export type DiffEngine = {
+  deps: DiffDeps;
+  apiBase: string;
+  resolution: Resolution<GithubPort>;
+  loadContext(client: GithubPort, owner: string, repo: string, target: DiffTarget): Promise<DiffContext>;
+  getDiff(
+    client: GithubPort,
+    ctx: DiffContext,
+    owner: string,
+    repo: string,
+    path: string,
+    force: boolean,
+  ): Promise<DiffOutcome>;
+  semanticDiff(req: SemanticDiffRequest, push: (msg: GuidResolvedPush) => void): Promise<SemanticDiffResponse>;
+};
+
+export function createDiffEngine(deps: DiffDeps): DiffEngine {
   // Per-PR context; SW kill → re-fetch
   const contexts = createPromiseCache<DiffContext>({ ttlMs: CONTEXT_TTL_MS });
   // sha+path → bytes; promise fold shares prefetch + toggle fetches
   const blobs = createPromiseCache<Uint8Array | null>({ max: BLOB_CACHE_MAX });
   // too-large dropped so force can recompute; not-unity-yaml stays cached
   const diffs = createPromiseCache<DiffOutcome>({ retain: (o) => o.ok || o.error !== "too-large" });
+  const apiBase = __API_BASE__;
 
   // Prefer blob-sha when known (#110); 404 (force push) falls back to path+ref
   function fetchBlob(
@@ -212,8 +213,7 @@ export function createHandler(deps: Deps): Handler {
     try {
       const settings = await deps.getSettings();
       if (!settings.accessToken) return { ok: false, error: "access-token-missing" };
-      const base = API_BASE;
-      const client = deps.makeClient(base, settings.accessToken, "user");
+      const client = deps.makeClient(apiBase, settings.accessToken, "user");
       const ctx = await loadContext(client, req.owner, req.repo, req.target);
       const outcome = await getDiff(client, ctx, req.owner, req.repo, req.path, req.force === true);
       if (!outcome.ok) return outcome;
@@ -222,7 +222,7 @@ export function createHandler(deps: Deps): Handler {
       // Return immediately; resolution + source merge continue via push
       const remaining = unresolvedRemaining(withPr);
       if (!remaining.length && !withPr.neededSources?.length) return { ok: true, json: withPr };
-      void resolution.resolveRemaining(withPr, remaining, client, req, base, ctx, push);
+      void resolution.resolveRemaining(withPr, remaining, client, req, apiBase, ctx, push);
       return { ok: true, json: withPr, pending: true };
     } catch (err) {
       if (err instanceof RateLimitError) return { ok: false, error: "rate-limited" };
@@ -232,33 +232,5 @@ export function createHandler(deps: Deps): Handler {
     }
   }
 
-  // Raw diff only — leave Code Search / mergeSources to serve time (10 req/min)
-  async function prefetch(req: PrefetchRequest): Promise<void> {
-    try {
-      const settings = await deps.getSettings();
-      if (!settings.accessToken) return;
-      const base = API_BASE;
-      const client = deps.makeClient(base, settings.accessToken, "prefetch");
-      const ctx = await loadContext(client, req.owner, req.repo, { kind: "pull", prNumber: req.prNumber });
-      // Index sync independent of raw-diff prefetch (speeds 3-stage resolution at serve time)
-      void resolution.getRepoIndex(client, req.owner, req.repo, `${base}/${req.owner}/${req.repo}`, ctx.refs.headSha);
-      const unity = ctx.files.filter((f) => isUnityPath(f.path)).slice(0, PREFETCH_MAX);
-      for (let i = 0; i < unity.length; i += PREFETCH_CONCURRENCY) {
-        const chunk = unity.slice(i, i + PREFETCH_CONCURRENCY);
-        await Promise.all(
-          chunk.map((f) =>
-            getDiff(client, ctx, req.owner, req.repo, f.path, false).catch((err) => {
-              if (err instanceof RateLimitError) throw err; // only rate limit stops the whole thing
-              // Swallow per-file failures: shown again on manual toggle
-            }),
-          ),
-        );
-      }
-    } catch (err) {
-      // Prefetch gives up quietly; only the user-action path surfaces error UI
-      console.debug("prefablens: prefetch aborted", err);
-    }
-  }
-
-  return { semanticDiff, prefetch };
+  return { deps, apiBase, resolution, loadContext, getDiff, semanticDiff };
 }

@@ -1,20 +1,20 @@
-import type { DifferPort } from "../app/application/port/differ";
-import type { GuidCachePort } from "../app/application/port/guid-cache";
-import type { RepoIndexPort } from "../app/application/port/repo-index";
-import { applyResolved } from "../app/infrastructure/github/guids";
-import { syncRepoIndex } from "../app/infrastructure/github/repoIndex";
-import { type ChangedFile, type GithubClient, RateLimitError, type RefPair } from "../app/infrastructure/providers/github-client";
+import { applyResolved } from "../../domain/diff/resolved";
 import {
   type DiffV2,
   type GuidResolvedPush,
   type ResolutionStatus,
   type SemanticDiffRequest,
   unresolvedRemaining,
-} from "../app/domain/diff/types";
-import { createPromiseCache } from "./promiseCache";
+} from "../../domain/diff/types";
+import { syncRepoIndex } from "../../infrastructure/github/repoIndex";
+import type { DifferPort } from "../port/differ";
+import { type ChangedFile, type GithubPort, RateLimitError, type RefPair } from "../port/github";
+import type { GuidCachePort } from "../port/guid-cache";
+import type { RepoIndexPort } from "../port/repo-index";
+import { createPromiseCache } from "./promise-cache";
 
 // Pipeline's GitHub surface; callers thread a richer client through C so injected fetchers keep their view
-export type SearchClient = Pick<GithubClient, "searchMetaByGuid" | "listMetaTree" | "batchBlobTexts">;
+export type SearchClient = Pick<GithubPort, "searchMetaByGuid" | "listMetaTree" | "batchBlobTexts">;
 
 // baseShas: path → blob sha at base. null = tree unavailable → contents-api fallback
 export type DiffContext = {

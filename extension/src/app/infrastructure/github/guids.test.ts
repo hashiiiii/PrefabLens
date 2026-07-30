@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { DiffV2 } from "../../domain/diff/types";
-import { RateLimitError } from "../providers/github-client";
+import { RateLimitError } from "../../application/port/github";
 import { applyResolved, buildGuidIndex, parseGuidFromMeta } from "./guids";
 
 const META = `fileFormatVersion: 2

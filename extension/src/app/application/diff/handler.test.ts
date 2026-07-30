@@ -1,9 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import { AuthError, type ChangedFile, RateLimitError } from "../app/infrastructure/providers/github-client";
-import type { DiffV2, GuidResolvedPush, SemanticDiffRequest } from "../app/domain/diff/types";
-import { must } from "../app/presentation/util/must";
-import type { DifferPort } from "../app/application/port/differ";
-import { DiffError } from "../app/infrastructure/providers/wasm-differ";
+import type { DiffV2, GuidResolvedPush, SemanticDiffRequest } from "../../domain/diff/types";
+import { must } from "../../presentation/util/must";
+import { DiffError, type DifferPort } from "../port/differ";
+import { AuthError, type ChangedFile, RateLimitError } from "../port/github";
 import { createHandler, type Deps, type Handler } from "./handler";
 
 const REQ: SemanticDiffRequest = {

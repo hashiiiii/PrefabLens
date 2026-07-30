@@ -1,8 +1,8 @@
+import type { GithubPort } from "../../application/port/github";
 import type { RepoIndexPort } from "../../application/port/repo-index";
-import type { GithubClient } from "../providers/github-client";
 import { parseGuidFromMeta } from "./guids";
 
-type ClientLike = Pick<GithubClient, "listMetaTree" | "batchBlobTexts">;
+type ClientLike = Pick<GithubPort, "listMetaTree" | "batchBlobTexts">;
 
 export type RepoIndexStore = RepoIndexPort;
 

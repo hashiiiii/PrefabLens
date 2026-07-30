@@ -1,13 +1,6 @@
-export class AuthError extends Error {}
-export class RateLimitError extends Error {
-  // Backoff from headers; undefined when GitHub gave none
-  constructor(
-    message: string,
-    readonly retryAfterMs?: number,
-  ) {
-    super(message);
-  }
-}
+import { AuthError, type ChangedFile, RateLimitError, type RefPair } from "../../application/port/github";
+
+export { AuthError, type ChangedFile, RateLimitError, type RefPair };
 
 // retry-after (seconds) wins; else x-ratelimit-reset (epoch seconds) relative to now.
 // Number(null) is 0 and Number("") is NaN, so absent headers fail the > 0 guards.
@@ -23,10 +16,6 @@ export class ApiError extends Error {
     super(`GitHub API error (HTTP ${status})`); // does not carry the raw body (leak prevention)
   }
 }
-
-// sha is the blob at head (at base for removed files) — the files API provides it for every status.
-export type ChangedFile = { path: string; status: string; previousPath?: string; sha?: string };
-export type RefPair = { baseSha: string; headSha: string };
 
 // GitHub's shared "diff entry" schema: PR files, commit files, and compare files all use it.
 type DiffEntry = { filename: string; status: string; previous_filename?: string; sha?: string };

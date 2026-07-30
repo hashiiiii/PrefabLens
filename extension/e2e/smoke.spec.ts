@@ -152,7 +152,7 @@ test("attaches toggles to files added after the initial scan (SPA lazy loading)"
 
 test("recovers after an error response", async ({ page }) => {
   await page.route("**/pull/1/files", (route) => route.fulfill({ body: fixture, contentType: "text/html" }));
-  // First call returns a pat-missing error, later calls return a normal response (verifies errors are not cached and are re-fetched)
+  // First call returns an access-token-missing error, later calls return a normal response (verifies errors are not cached and are re-fetched)
   // Use a dedicated stub for the counter, but keep storage/onMessage the same shape as stubChrome so init does not throw
   await page.addInitScript((res) => {
     (window as unknown as Record<string, unknown>).__prefablensCalls = 0;
@@ -165,7 +165,7 @@ test("recovers after an error response", async ({ page }) => {
           const w = window as unknown as Record<string, number>;
           const call = w.__prefablensCalls ?? 0;
           w.__prefablensCalls = call + 1;
-          return Promise.resolve(call === 0 ? { ok: false, error: "pat-missing" } : res);
+          return Promise.resolve(call === 0 ? { ok: false, error: "access-token-missing" } : res);
         },
         onMessage: { addListener: () => {} },
       },
@@ -277,7 +277,7 @@ test("signs in with the device flow from the PR page and auto-recovers", async (
       body: JSON.stringify(authorized ? { access_token: "tok123" } : { error: "authorization_pending" }),
     }),
   );
-  // Stateful chrome stub: pat-gated responses like the real background, and set() fires onChanged
+  // Stateful chrome stub: accessToken-gated responses like the real background, and set() fires onChanged
   // listeners so the auto-retry path is exercised end to end.
   await page.addInitScript((res) => {
     const data: Record<string, unknown> = {};
@@ -292,7 +292,7 @@ test("signs in with the device flow from the PR page and auto-recovers", async (
       runtime: {
         sendMessage: (msg: { type?: string }) => {
           if (msg?.type !== "semanticDiff") return Promise.resolve();
-          return Promise.resolve(data.pat ? res : { ok: false, error: "pat-missing" });
+          return Promise.resolve(data.accessToken ? res : { ok: false, error: "access-token-missing" });
         },
         onMessage: { addListener: () => {} },
       },

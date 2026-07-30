@@ -4,7 +4,7 @@ import { createAuthRetries } from "./authRetries";
 describe("createAuthRetries", () => {
   it("runs every registered retry once on flush and empties the queue", () => {
     // Several files can sit on auth-error panels at once; one token landing retries them all,
-    // and a second storage event (echo or unrelated pat rewrite) must not retry again.
+    // and a second storage event (echo or unrelated accessToken rewrite) must not retry again.
     const retries = createAuthRetries();
     const a = vi.fn();
     const b = vi.fn();

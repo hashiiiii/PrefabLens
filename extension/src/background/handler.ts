@@ -39,7 +39,7 @@ type ClientLike = Pick<
 >;
 
 export type Deps = {
-  getSettings(): Promise<{ pat?: string }>;
+  getSettings(): Promise<{ accessToken?: string }>;
   makeClient(base: string, token: string, lane: "user" | "prefetch"): ClientLike;
   getDiffer(): Promise<Differ>;
   guidCache: GuidCache;
@@ -223,9 +223,9 @@ export function createHandler(deps: Deps): Handler {
   ): Promise<SemanticDiffResponse> {
     try {
       const settings = await deps.getSettings();
-      if (!settings.pat) return { ok: false, error: "pat-missing" };
+      if (!settings.accessToken) return { ok: false, error: "access-token-missing" };
       const base = API_BASE;
-      const client = deps.makeClient(base, settings.pat, "user");
+      const client = deps.makeClient(base, settings.accessToken, "user");
       const ctx = await loadContext(client, req.owner, req.repo, req.target);
       const outcome = await getDiff(client, ctx, req.owner, req.repo, req.path, req.force === true);
       if (!outcome.ok) return outcome;
@@ -248,9 +248,9 @@ export function createHandler(deps: Deps): Handler {
   async function prefetch(req: PrefetchRequest): Promise<void> {
     try {
       const settings = await deps.getSettings();
-      if (!settings.pat) return;
+      if (!settings.accessToken) return;
       const base = API_BASE;
-      const client = deps.makeClient(base, settings.pat, "prefetch");
+      const client = deps.makeClient(base, settings.accessToken, "prefetch");
       const ctx = await loadContext(client, req.owner, req.repo, { kind: "pull", prNumber: req.prNumber });
       // Index sync independent of raw-diff prefetch (speeds 3-stage resolution at serve time)
       void resolution.getRepoIndex(client, req.owner, req.repo, `${base}/${req.owner}/${req.repo}`, ctx.refs.headSha);

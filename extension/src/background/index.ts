@@ -5,6 +5,7 @@ import { createSessionDiffStore } from "./diffStore";
 import { createHandler } from "./handler";
 import { createMergeStore } from "./mergeStore";
 import { createQueue } from "./queue";
+import { readAccessToken } from "./settings";
 
 let differ: Promise<Differ> | undefined;
 
@@ -19,10 +20,7 @@ const queuedFetch =
 const metaGuids = createMergeStore(chrome.storage.local, "metaGuids");
 
 const handler = createHandler({
-  async getSettings() {
-    const stored = await chrome.storage.local.get(["pat"]);
-    return { pat: stored.pat as string | undefined };
-  },
+  getSettings: async () => ({ accessToken: await readAccessToken(chrome.storage.local) }),
   makeClient: (base, token, lane) => new GithubClient(base, token, queuedFetch(lane === "user")),
   getDiffer() {
     // Lazy singleton; SW restart → re-fetch

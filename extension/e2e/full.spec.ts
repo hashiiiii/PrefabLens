@@ -1,7 +1,8 @@
 /// <reference types="node" />
 // Runs detection → real background → real WASM → render end-to-end with the actual extension (--load-extension).
-// Uses a local HTTP server as "GitHub": the --e2e build bakes __API_BASE__ to this fixed port and
-// statically registers the content script for it (see build.mjs), so no dynamic permission grant is needed.
+// Uses a local HTTP server as "GitHub": the --e2e build bakes __API_BASE__ and __GITHUB_ORIGIN__ to this
+// fixed port and statically registers the content script for it (see build.mjs), so no dynamic
+// permission grant is needed. Auth is the PR-panel device flow against the local OAuth routes.
 
 import { readFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
@@ -82,6 +83,19 @@ function startServer(): Promise<Server> {
         return json({ items: [{ path: "Assets/Scripts/Sound.cs.meta" }] });
       case "/graphql":
         return json({ data: { repository: {} } });
+      case "/login/device/code":
+        return json({
+          device_code: "dc-e2e",
+          user_code: "ABCD-1234",
+          verification_uri: `http://127.0.0.1:${PORT}/login/device`,
+          interval: 0,
+          expires_in: 900,
+        });
+      case "/login/oauth/access_token":
+        // First poll succeeds: no human Authorize step; extension still runs full poll loop.
+        return json({ access_token: "e2e-token" });
+      case "/login/device":
+        return send("<!doctype html><title>device</title>", "text/html");
       default:
         res.writeHead(404);
         res.end();
@@ -90,6 +104,22 @@ function startServer(): Promise<Server> {
   return new Promise((resolve) => {
     server.listen(PORT, "127.0.0.1", () => resolve(server));
   });
+}
+
+async function signInFromPrPanel(ctx: BrowserContext): Promise<void> {
+  const page = await ctx.newPage();
+  await page.goto(`http://127.0.0.1:${PORT}/o/r/pull/1/files`);
+  const header = page.locator('.file-header[data-path="Assets/Foo.prefab"]');
+  await header.getByRole("button", { name: "Semantic" }).click();
+  const view = page.locator("[data-prefablens-view]");
+  await view.getByRole("button", { name: "Sign in with GitHub" }).click();
+  // Device flow completes when the auth panel is replaced by diff content (or Signed-in recovery).
+  await expect(view).toContainText("Sound", { timeout: 15_000 });
+  // Close any verification tab the flow opened
+  for (const p of ctx.pages()) {
+    if (p !== page && p.url().includes("/login/device")) await p.close();
+  }
+  await page.close();
 }
 
 let context: BrowserContext;
@@ -101,15 +131,9 @@ test.beforeAll(async () => {
     channel: "chromium", // the chromium channel is required to use extensions headlessly
     args: [`--disable-extensions-except=${DIST}`, `--load-extension=${DIST}`],
   });
-  let sw = context.serviceWorkers()[0];
-  sw ??= await context.waitForEvent("serviceworker");
-  const extensionId = new URL(sw.url()).host;
+  if (!context.serviceWorkers()[0]) await context.waitForEvent("serviceworker");
 
-  // Seed the token directly in storage (sign-in is the only UI path; the fake server ignores its value)
-  const options = await context.newPage();
-  await options.goto(`chrome-extension://${extensionId}/options.html`);
-  await options.evaluate(() => chrome.storage.local.set({ pat: "tok" }));
-  await options.close();
+  await signInFromPrPanel(context);
 });
 
 test.afterAll(async () => {

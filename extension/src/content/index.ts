@@ -27,7 +27,7 @@ import { createViewRegistry, type ViewEntry } from "./views";
 import { createViewState, type ViewState } from "./viewstate";
 
 const ERROR_TEXT: Record<BackgroundError, string> = {
-  "pat-missing": "Sign in with GitHub to view semantic diffs.",
+  "access-token-missing": "Sign in with GitHub to view semantic diffs.",
   "auth-failed": "GitHub authentication failed. Sign in again.",
   "rate-limited": "GitHub rate limit exceeded. Wait a while and toggle again.",
   "fetch-failed": "Could not fetch file contents from GitHub.",
@@ -66,7 +66,7 @@ const signIn = createSignIn({
   pollForToken: (code) => pollForToken(fetch, sleep, code),
   savePending: (pending) => chrome.storage.local.set({ signin: pending }),
   clearPending: () => chrome.storage.local.remove("signin"),
-  saveToken: (token) => chrome.storage.local.set({ pat: token }),
+  saveToken: (token) => chrome.storage.local.set({ accessToken: token }),
   openTab: (url) => void window.open(url, "_blank", "noopener"),
   now: () => Date.now(),
 });
@@ -233,7 +233,7 @@ async function init(): Promise<void> {
     if (area !== "local") return;
     const next = changes.viewMode?.newValue;
     if (next === "raw" || next === "semantic") viewState.applyExternal(next);
-    if (typeof changes.pat?.newValue === "string" && changes.pat.newValue) {
+    if (typeof changes.accessToken?.newValue === "string" && changes.accessToken.newValue) {
       // Token landed (this tab or elsewhere): retry every auth-blocked panel
       authRetries.flush();
     }

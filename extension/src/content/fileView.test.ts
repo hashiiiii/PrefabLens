@@ -291,11 +291,11 @@ describe("createFileView request", () => {
 
   it("an auth error registers a retry that fires only while the file still shows semantic", async () => {
     const h = makeHarness();
-    h.responses.push({ ok: false, error: "pat-missing" });
+    h.responses.push({ ok: false, error: "access-token-missing" });
     h.view.show("semantic");
     await flush();
     // Transition: auth failure → sign-in panel plus a retry parked until a token lands.
-    expect(h.screen()).toEqual({ kind: "authError", error: "pat-missing" });
+    expect(h.screen()).toEqual({ kind: "authError", error: "access-token-missing" });
     expect(h.authRetries).toHaveLength(1);
 
     // The user flipped this file to raw before signing in: the token retry must not fetch

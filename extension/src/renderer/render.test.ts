@@ -253,8 +253,8 @@ describe("render", () => {
 
   it("renderError shows a clean one-line message", () => {
     const root = freshRoot();
-    renderError(root, "Set a GitHub token in the PrefabLens options page.");
-    expect(root.textContent).toContain("Set a GitHub token");
+    renderError(root, "Sign in with GitHub to view semantic diffs.");
+    expect(root.textContent).toContain("Sign in with GitHub");
   });
 
   it("renders game object overrides in the components section", () => {

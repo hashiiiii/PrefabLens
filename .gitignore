@@ -2,6 +2,7 @@
 *.swp
 .superpowers/
 .playwright-mcp/
+.worktrees/
 .zig-cache/
 zig-out/
 docs/superpowers/

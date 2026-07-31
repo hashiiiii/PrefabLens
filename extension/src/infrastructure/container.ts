@@ -1,5 +1,4 @@
 import { createDiffSession, type DiffSession } from "../application/diff/_diff-session";
-import type { ComputeLocalDiffDeps } from "../application/diff/compute-local-diff";
 import type { DiffCachePort } from "../application/port/diff-cache";
 import type { DifferPort } from "../application/port/differ";
 import type { GithubPort } from "../application/port/github";
@@ -16,6 +15,14 @@ import { pollForToken, requestDeviceCode } from "./providers/github-device-flow"
 import { createDiffer } from "./providers/wasm-differ";
 import { createMergeStore } from "./repositories/merge-store";
 import { createSessionDiffStore } from "./repositories/session-diff-store";
+
+// Temporary bag until Task 6 rewrites createDemoDeps to individual createX().
+type DemoDeps = {
+  differ: DifferPort;
+  index: Map<string, string>;
+  fetchBytes(url: string): Promise<Uint8Array<ArrayBuffer>>;
+  fetchSource(side: "before" | "after", path: string): Promise<Uint8Array>;
+};
 
 // Temporary bag until Task 6 rewrites createBackgroundDeps to individual createX().
 type BackgroundDeps = {
@@ -90,7 +97,7 @@ export function createContentDeps(): {
 }
 
 // Wires the site demo (site/extension.html): WASM differ + fixture-backed index.
-export async function createDemoDeps(): Promise<ComputeLocalDiffDeps> {
+export async function createDemoDeps(): Promise<DemoDeps> {
   const fetchBytes = async (url: string): Promise<Uint8Array<ArrayBuffer>> => {
     const res = await fetch(url);
     if (!res.ok) throw new Error(`${url}: HTTP ${res.status}`);

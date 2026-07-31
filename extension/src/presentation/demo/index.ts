@@ -3,7 +3,7 @@
 // Bundled as dist/demo.js via `node build.mjs --demo`; fixtures via
 // data-before/data-after URLs (empty side = CLI empty-side semantics).
 
-import { type ComputeLocalDiffDeps, computeLocalDiff } from "../../application/diff/compute-local-diff";
+import { computeLocalDiff } from "../../application/diff/compute-local-diff";
 import { must } from "../../domain/must";
 import { createDemoDeps } from "../../infrastructure/container";
 import type { View } from "../content/overlay/view-mode";
@@ -18,7 +18,11 @@ import {
 import { injectPageStyles, mountToggle } from "../content/toggle";
 import { render, renderError, renderLoading } from "../renderer/render";
 
-function attachFile(header: HTMLElement, deps: ComputeLocalDiffDeps, initial: View): (view: View) => void {
+function attachFile(
+  header: HTMLElement,
+  locals: Awaited<ReturnType<typeof createDemoDeps>>,
+  initial: View,
+): (view: View) => void {
   // Non-null: site/build.mjs always nests the header in a .file with a .js-file-content sibling.
   const content = must(header.parentElement?.querySelector<HTMLElement>(".js-file-content"));
   let host: HTMLDivElement | undefined;
@@ -46,7 +50,8 @@ function attachFile(header: HTMLElement, deps: ComputeLocalDiffDeps, initial: Vi
     rendered = true;
     const target = root;
     renderLoading(target);
-    computeLocalDiff(deps, header.dataset.before, header.dataset.after)
+    const { differ, index, fetchBytes, fetchSource } = locals;
+    computeLocalDiff(differ, index, fetchBytes, fetchSource, header.dataset.before, header.dataset.after)
       .then((diff) => render(target, diff))
       .catch((err) => renderError(target, String(err)));
   };

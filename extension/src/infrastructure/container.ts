@@ -1,9 +1,8 @@
 import { createGetPendingSignIn, type GetPendingSignIn } from "../application/auth/get-pending-sign-in";
 import { createSignIn, type SignInUi } from "../application/auth/sign-in";
-import { createDiffSession } from "../application/diff/_diff-session";
+import { createDiffSession, type DiffSession } from "../application/diff/_diff-session";
 import { type ComputeLocalDiff, createComputeLocalDiff } from "../application/diff/compute-local-diff";
-import { type ComputeSemanticDiff, createComputeSemanticDiff } from "../application/diff/compute-semantic-diff";
-import { createPrefetchPr, type PrefetchPr } from "../application/diff/prefetch-pr";
+import type { DiffDeps } from "../application/diff/compute-semantic-diff";
 import { createRequestPrefetch, type RequestPrefetch } from "../application/diff/request-prefetch";
 import { createRequestSemanticDiff, type RequestSemanticDiff } from "../application/diff/request-semantic-diff";
 import type { DifferPort } from "../application/port/differ";
@@ -16,11 +15,6 @@ import { createDiffer } from "./providers/wasm-differ";
 import { createMergeStore } from "./repositories/merge-store";
 import { createSessionDiffStore } from "./repositories/session-diff-store";
 
-export type BackgroundApp = {
-  computeSemanticDiff: ComputeSemanticDiff;
-  prefetchPr: PrefetchPr;
-};
-
 export type ContentApp = {
   signIn(ui: SignInUi): Promise<void>;
   requestSemanticDiff: RequestSemanticDiff;
@@ -31,7 +25,7 @@ export type ContentApp = {
 export type DemoApp = { computeLocalDiff: ComputeLocalDiff };
 
 // Wires providers/repositories for the service worker. Message listening stays in presentation.
-export function createBackgroundApp(): BackgroundApp {
+export function createBackgroundDeps(): { deps: DiffDeps; session: DiffSession } {
   let differ: Promise<DifferPort> | undefined;
 
   // Six concurrent across REST/GraphQL (GraphQL shares fetchFn). User-action jumps via front.
@@ -46,7 +40,8 @@ export function createBackgroundApp(): BackgroundApp {
   // Whole-repo .meta guid records for repoIndexStore.loadGuids/saveGuids
   const metaGuids = createMergeStore(chrome.storage.local, "metaGuids");
 
-  const session = createDiffSession({
+  const session = createDiffSession();
+  const deps: DiffDeps = {
     getSettings: async () => ({ accessToken: await tokenStore.readAccessToken() }),
     makeClient: (base, token, lane) => new GithubClient(base, token, queuedFetch(lane === "user")),
     getDiffer() {
@@ -71,12 +66,9 @@ export function createBackgroundApp(): BackgroundApp {
         await chrome.storage.local.set({ [`guidIndex:${repo}`]: index }).catch(() => {});
       },
     },
-  });
-
-  return {
-    computeSemanticDiff: createComputeSemanticDiff(session),
-    prefetchPr: createPrefetchPr(session),
   };
+
+  return { deps, session };
 }
 
 // Wires the content script's use cases. DOM listeners stay in presentation.

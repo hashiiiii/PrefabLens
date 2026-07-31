@@ -1,11 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
-import type { DiffV2, GuidResolvedPush, SemanticDiffRequest } from "../../domain/diff/types";
+import type { DiffV2, GuidResolvedPush, SemanticDiffRequest, SemanticDiffResponse } from "../../domain/diff/types";
 import { must } from "../../domain/must";
 import { DiffError, type DifferPort } from "../port/differ";
 import { AuthError, type ChangedFile, RateLimitError } from "../port/github";
-import { createDiffSession, type DiffDeps } from "./_diff-session";
-import { type ComputeSemanticDiff, createComputeSemanticDiff } from "./compute-semantic-diff";
-import { createPrefetchPr, type PrefetchPr } from "./prefetch-pr";
+import { createDiffSession, type DiffSession } from "./_diff-session";
+import { computeSemanticDiff, type DiffDeps } from "./compute-semantic-diff";
+import { prefetchPr } from "./prefetch-pr";
 
 const REQ: SemanticDiffRequest = {
   type: "semanticDiff",
@@ -111,11 +111,12 @@ function makeDeps(overrides?: {
 
 /** Cleanup for a pending response: wait until the done push arrives before asserting. */
 async function serveAndResolve(
-  handler: App,
+  deps: DiffDeps,
+  session: DiffSession,
   req: SemanticDiffRequest,
-): Promise<{ res: Awaited<ReturnType<App["semanticDiff"]>>; pushes: GuidResolvedPush[] }> {
+): Promise<{ res: SemanticDiffResponse; pushes: GuidResolvedPush[] }> {
   const pushes: GuidResolvedPush[] = [];
-  const res = await handler.semanticDiff(req, (m) => pushes.push(m));
+  const res = await computeSemanticDiff(deps, session, req, (m) => pushes.push(m));
   if (res.ok && res.pending) await vi.waitFor(() => expect(pushes.at(-1)?.done).toBe(true));
   return { res, pushes };
 }
@@ -123,27 +124,23 @@ async function serveAndResolve(
 /** Drives semanticDiff to completion — the immediate response plus every push — and returns the
  *  fully-resolved response. Errors and fully-in-PR-resolved diffs pass through unchanged; a pending
  *  diff resolves to the final push's json, i.e. what the pipeline ultimately produces. */
-async function resolveFully(handler: App, req: SemanticDiffRequest): Promise<Awaited<ReturnType<App["semanticDiff"]>>> {
+async function resolveFully(
+  deps: DiffDeps,
+  session: DiffSession,
+  req: SemanticDiffRequest,
+): Promise<SemanticDiffResponse> {
   const pushes: GuidResolvedPush[] = [];
-  const res = await handler.semanticDiff(req, (m) => pushes.push(m));
+  const res = await computeSemanticDiff(deps, session, req, (m) => pushes.push(m));
   if (!res.ok || !res.pending) return res;
   await vi.waitFor(() => expect(pushes.at(-1)?.done).toBe(true));
   const final = pushes.at(-1);
   return final?.json ? { ok: true, json: final.json } : res;
 }
 
-// The old handler facade, reassembled locally: one session shared by both use
-// cases, exactly how container.ts composes them
-type App = { semanticDiff: ComputeSemanticDiff; prefetch: PrefetchPr };
-function makeApp(deps: DiffDeps): App {
-  const session = createDiffSession(deps);
-  return { semanticDiff: createComputeSemanticDiff(session), prefetch: createPrefetchPr(session) };
-}
-
-describe("computeSemanticDiff", () => {
+describe("semanticDiff", () => {
   it("returns access-token-missing without touching the network", async () => {
     const { deps, client } = makeDeps({ accessToken: undefined });
-    const res = await resolveFully(makeApp(deps), REQ);
+    const res = await resolveFully(deps, createDiffSession(), REQ);
     expect(res).toEqual({ ok: false, error: "access-token-missing" });
     expect(client.getPrRefs).not.toHaveBeenCalled();
   });
@@ -160,13 +157,13 @@ describe("computeSemanticDiff", () => {
         "Assets/S.cs.meta@head-sha": "guid: g1\n",
       },
     });
-    const res = await resolveFully(makeApp(deps), REQ);
+    const res = await resolveFully(deps, createDiffSession(), REQ);
     expect(res).toEqual({ ok: true, json: { ...DIFF, resolved: { g1: "Assets/S.cs" } } });
   });
 
   it("serves a commit target from the commit API with the first parent as base", async () => {
     const { deps, client } = makeDeps();
-    const res = await resolveFully(makeApp(deps), { ...REQ, target: { kind: "commit", sha: "head-sha" } });
+    const res = await resolveFully(deps, createDiffSession(), { ...REQ, target: { kind: "commit", sha: "head-sha" } });
     expect(res).toEqual({ ok: true, json: { ...DIFF, resolved: {} } });
     expect(client.getCommit).toHaveBeenCalledWith("o", "r", "head-sha");
     expect(client.getPrRefs).not.toHaveBeenCalled(); // commit pages never touch the PR API
@@ -176,14 +173,14 @@ describe("computeSemanticDiff", () => {
     const files = [{ path: "Assets/Foo.prefab", status: "added", sha: "blob-head" }];
     const { deps, client } = makeDeps({ files, blobs: { "blob-head": "a" } });
     client.getCommit.mockResolvedValue({ sha: "head-sha", parentSha: null, files });
-    const res = await resolveFully(makeApp(deps), { ...REQ, target: { kind: "commit", sha: "head-sha" } });
+    const res = await resolveFully(deps, createDiffSession(), { ...REQ, target: { kind: "commit", sha: "head-sha" } });
     // The before side is never fetched for added files, so a missing parent is harmless
     expect(res).toEqual({ ok: true, json: { ...DIFF, resolved: {} } });
   });
 
   it("serves a compare target from the merge base and resolves the head ref", async () => {
     const { deps, client } = makeDeps();
-    const res = await resolveFully(makeApp(deps), {
+    const res = await resolveFully(deps, createDiffSession(), {
       ...REQ,
       target: { kind: "compare", base: "main", head: "feature" },
     });
@@ -196,7 +193,7 @@ describe("computeSemanticDiff", () => {
   it("uses an empty before for added files without fetching the base side", async () => {
     const diff = vi.fn<DifferPort["diff"]>(() => DIFF);
     const { deps, client } = makeDeps({ files: [{ path: "Assets/Foo.prefab", status: "added" }], diff });
-    await resolveFully(makeApp(deps), REQ);
+    await resolveFully(deps, createDiffSession(), REQ);
     const baseFetches = client.getFileAtRef.mock.calls.filter(
       (c) => c[2] === "Assets/Foo.prefab" && c[3] === "base-sha",
     );
@@ -207,7 +204,7 @@ describe("computeSemanticDiff", () => {
   it("uses an empty after for removed files without fetching the head side", async () => {
     const diff = vi.fn<DifferPort["diff"]>(() => DIFF);
     const { deps, client } = makeDeps({ files: [{ path: "Assets/Foo.prefab", status: "removed" }], diff });
-    await resolveFully(makeApp(deps), REQ);
+    await resolveFully(deps, createDiffSession(), REQ);
     const headFetches = client.getFileAtRef.mock.calls.filter(
       (c) => c[2] === "Assets/Foo.prefab" && c[3] === "head-sha",
     );
@@ -224,7 +221,7 @@ describe("computeSemanticDiff", () => {
       diff,
       isUnityYaml: () => false,
     });
-    const res = await resolveFully(makeApp(deps), REQ);
+    const res = await resolveFully(deps, createDiffSession(), REQ);
     expect(res).toEqual({ ok: false, error: "not-unity-yaml" });
     // The differ must not even run on rejected content.
     expect(diff).not.toHaveBeenCalled();
@@ -236,17 +233,17 @@ describe("computeSemanticDiff", () => {
     // cached outcome instead of re-fetching and re-sniffing.
     const isUnityYaml = vi.fn<DifferPort["isUnityYaml"]>(() => false);
     const { deps } = makeDeps({ isUnityYaml });
-    const handler = makeApp(deps);
-    expect(await handler.semanticDiff(REQ, () => {})).toEqual({ ok: false, error: "not-unity-yaml" });
+    const session = createDiffSession();
+    expect(await computeSemanticDiff(deps, session, REQ, () => {})).toEqual({ ok: false, error: "not-unity-yaml" });
     const sniffs = isUnityYaml.mock.calls.length;
-    expect(await handler.semanticDiff(REQ, () => {})).toEqual({ ok: false, error: "not-unity-yaml" });
+    expect(await computeSemanticDiff(deps, session, REQ, () => {})).toEqual({ ok: false, error: "not-unity-yaml" });
     expect(isUnityYaml.mock.calls.length).toBe(sniffs);
   });
 
   it("diffs a file missing from the PR list as modified (files API caps at 3000)", async () => {
     // In a PR with over 3000 files, the listing API is truncated, so a file present in the UI may be absent from the listing
     const { deps, client } = makeDeps({ files: [{ path: "Assets/Other.prefab", status: "modified" }] });
-    const res = await resolveFully(makeApp(deps), REQ);
+    const res = await resolveFully(deps, createDiffSession(), REQ);
     expect(res.ok).toBe(true);
     expect(client.getFileAtRef).toHaveBeenCalledWith("o", "r", "Assets/Foo.prefab", "base-sha");
     expect(client.getFileAtRef).toHaveBeenCalledWith("o", "r", "Assets/Foo.prefab", "head-sha");
@@ -264,7 +261,7 @@ describe("computeSemanticDiff", () => {
       inFlight--;
       return new TextEncoder().encode("x");
     });
-    await resolveFully(makeApp(deps), REQ);
+    await resolveFully(deps, createDiffSession(), REQ);
     expect(maxInFlight).toBe(2);
   });
 
@@ -273,16 +270,16 @@ describe("computeSemanticDiff", () => {
       files: [{ path: "Assets/Foo.prefab", status: "renamed", previousPath: "Assets/Old.prefab" }],
       contents: { "Assets/Old.prefab@base-sha": "b", "Assets/Foo.prefab@head-sha": "a" },
     });
-    const res = await resolveFully(makeApp(deps), REQ);
+    const res = await resolveFully(deps, createDiffSession(), REQ);
     expect(res.ok).toBe(true);
     expect(client.getFileAtRef).toHaveBeenCalledWith("o", "r", "Assets/Old.prefab", "base-sha");
   });
 
   it("caches PR context across calls (refs/files/guid index fetched once)", async () => {
     const { deps, client } = makeDeps();
-    const handle = makeApp(deps);
-    await resolveFully(handle, REQ);
-    await resolveFully(handle, { ...REQ, path: "Assets/Foo.prefab" });
+    const session = createDiffSession();
+    await resolveFully(deps, session, REQ);
+    await resolveFully(deps, session, { ...REQ, path: "Assets/Foo.prefab" });
     expect(client.getPrRefs).toHaveBeenCalledTimes(1);
     expect(client.listPrFiles).toHaveBeenCalledTimes(1);
   });
@@ -291,14 +288,14 @@ describe("computeSemanticDiff", () => {
     vi.useFakeTimers();
     try {
       const { deps, client } = makeDeps();
-      const handle = makeApp(deps);
+      const session = createDiffSession();
       // Fake timers make resolveFully's vi.waitFor hang; this test only needs the immediate response.
-      await handle.semanticDiff(REQ, () => {});
+      await computeSemanticDiff(deps, session, REQ, () => {});
       vi.setSystemTime(Date.now() + 59_000);
-      await handle.semanticDiff(REQ, () => {});
+      await computeSemanticDiff(deps, session, REQ, () => {});
       expect(client.getPrRefs).toHaveBeenCalledTimes(1);
       vi.setSystemTime(Date.now() + 2_000); // 61 seconds total
-      await handle.semanticDiff(REQ, () => {});
+      await computeSemanticDiff(deps, session, REQ, () => {});
       expect(client.getPrRefs).toHaveBeenCalledTimes(2);
     } finally {
       vi.useRealTimers();
@@ -309,23 +306,23 @@ describe("computeSemanticDiff", () => {
     // If a transient network failure lands in the 60s cache, re-toggling would no longer fix it
     const { deps, client } = makeDeps();
     client.listPrFiles.mockRejectedValueOnce(new Error("socket"));
-    const handle = makeApp(deps);
-    expect(await resolveFully(handle, REQ)).toEqual({ ok: false, error: "fetch-failed" });
-    expect((await resolveFully(handle, REQ)).ok).toBe(true);
+    const session = createDiffSession();
+    expect(await resolveFully(deps, session, REQ)).toEqual({ ok: false, error: "fetch-failed" });
+    expect((await resolveFully(deps, session, REQ)).ok).toBe(true);
   });
 
   it("fetches each sha+path blob only once (immutable content)", async () => {
     const { deps, client } = makeDeps();
-    const handle = makeApp(deps);
-    await resolveFully(handle, REQ);
-    await resolveFully(handle, REQ);
+    const session = createDiffSession();
+    await resolveFully(deps, session, REQ);
+    await resolveFully(deps, session, REQ);
     const fooFetches = client.getFileAtRef.mock.calls.filter((c) => c[2] === "Assets/Foo.prefab");
     expect(fooFetches).toHaveLength(2); // only twice, base + head (the second handle doesn't re-fetch)
   });
 
   it("resolves remaining guids via code search and persists them", async () => {
     const { deps, guidCache } = makeDeps({ search: { g1: "Assets/Scripts/S.cs" } });
-    const res = await resolveFully(makeApp(deps), REQ);
+    const res = await resolveFully(deps, createDiffSession(), REQ);
     expect(res).toEqual({ ok: true, json: { ...DIFF, resolved: { g1: "Assets/Scripts/S.cs" } } });
     expect(guidCache.save).toHaveBeenCalledWith("https://api.github.com/o/r", { g1: "Assets/Scripts/S.cs" });
   });
@@ -343,23 +340,23 @@ describe("computeSemanticDiff", () => {
       },
       search: { g1: "Assets/Elsewhere.cs" },
     });
-    const res = await resolveFully(makeApp(deps), REQ);
+    const res = await resolveFully(deps, createDiffSession(), REQ);
     expect(res).toEqual({ ok: true, json: { ...DIFF, resolved: { g1: "Assets/S.cs" } } });
     expect(client.searchMetaByGuid).not.toHaveBeenCalled();
   });
 
   it("serves cached guids without searching", async () => {
     const { deps, client } = makeDeps({ cached: { g1: "Assets/Cached.cs" } });
-    const res = await resolveFully(makeApp(deps), REQ);
+    const res = await resolveFully(deps, createDiffSession(), REQ);
     expect(res).toEqual({ ok: true, json: { ...DIFF, resolved: { g1: "Assets/Cached.cs" } } });
     expect(client.searchMetaByGuid).not.toHaveBeenCalled();
   });
 
   it("does not re-search a missed guid within the worker lifetime", async () => {
     const { deps, client } = makeDeps(); // search misses
-    const handle = makeApp(deps);
-    await resolveFully(handle, REQ);
-    await resolveFully(handle, REQ);
+    const session = createDiffSession();
+    await resolveFully(deps, session, REQ);
+    await resolveFully(deps, session, REQ);
     expect(client.searchMetaByGuid).toHaveBeenCalledTimes(1);
   });
 
@@ -367,11 +364,11 @@ describe("computeSemanticDiff", () => {
     // Since index resolutions now land in guidCache, a guid recorded as a miss can genuinely appear in the cache.
     // misses is the gatekeeper for "don't re-search", not for "don't emit the name"
     const { deps, client, guidCache } = makeDeps(); // search misses → g1 goes into misses
-    const handler = makeApp(deps);
-    await resolveFully(handler, REQ);
+    const session = createDiffSession();
+    await resolveFully(deps, session, REQ);
     expect(client.searchMetaByGuid).toHaveBeenCalledTimes(1);
     guidCache.data["https://api.github.com/o/r"] = { g1: "Assets/Later.cs" }; // as if an index resolution wrote it later
-    const res = await resolveFully(handler, REQ);
+    const res = await resolveFully(deps, session, REQ);
     expect(res).toEqual({ ok: true, json: { ...DIFF, resolved: { g1: "Assets/Later.cs" } } });
     expect(client.searchMetaByGuid).toHaveBeenCalledTimes(1); // no re-search
   });
@@ -386,8 +383,8 @@ describe("computeSemanticDiff", () => {
           release = r;
         }),
     );
-    const handler = makeApp(deps);
-    const [a, b] = [resolveFully(handler, REQ), resolveFully(handler, REQ)];
+    const session = createDiffSession();
+    const [a, b] = [resolveFully(deps, session, REQ), resolveFully(deps, session, REQ)];
     await vi.waitFor(() => expect(client.searchMetaByGuid).toHaveBeenCalled());
     release("Assets/S.cs");
     const [ra, rb] = await Promise.all([a, b]);
@@ -400,14 +397,14 @@ describe("computeSemanticDiff", () => {
     const twoGuids: DiffV2 = { ...DIFF, unresolvedGuids: ["g1", "g2"] };
     const { deps, client } = makeDeps({ diff: () => twoGuids });
     client.searchMetaByGuid.mockResolvedValueOnce("Assets/First.cs").mockRejectedValueOnce(new RateLimitError("x"));
-    const res = await resolveFully(makeApp(deps), REQ);
+    const res = await resolveFully(deps, createDiffSession(), REQ);
     expect(res).toEqual({ ok: true, json: { ...twoGuids, resolved: { g1: "Assets/First.cs" } } });
   });
 
   it("does not treat Object.prototype members as cache hits (hostile guid)", async () => {
     const proto: DiffV2 = { ...DIFF, unresolvedGuids: ["constructor"] };
     const { deps, client } = makeDeps({ diff: () => proto, cached: { g9: "Assets/X.cs" } });
-    const res = await resolveFully(makeApp(deps), REQ);
+    const res = await resolveFully(deps, createDiffSession(), REQ);
     // 'constructor' goes to search rather than a cache hit, and stays unresolved after missing
     expect(client.searchMetaByGuid).toHaveBeenCalledWith("o", "r", "constructor");
     expect(res).toEqual({ ok: true, json: { ...proto, resolved: {} } });
@@ -416,7 +413,7 @@ describe("computeSemanticDiff", () => {
   it("caps code searches at 10 per request", async () => {
     const many: DiffV2 = { ...DIFF, unresolvedGuids: Array.from({ length: 12 }, (_, i) => `g${i}`) };
     const { deps, client } = makeDeps({ diff: () => many });
-    await resolveFully(makeApp(deps), REQ);
+    await resolveFully(deps, createDiffSession(), REQ);
     expect(client.searchMetaByGuid).toHaveBeenCalledTimes(10);
   });
 
@@ -424,7 +421,7 @@ describe("computeSemanticDiff", () => {
     // If 2 of 12 guids are cached, the search budget of 10 can be spent entirely on the 10 unknown guids
     const many: DiffV2 = { ...DIFF, unresolvedGuids: Array.from({ length: 12 }, (_, i) => `g${i}`) };
     const { deps, client } = makeDeps({ diff: () => many, cached: { g0: "Assets/A.cs", g1: "Assets/B.cs" } });
-    const res = await resolveFully(makeApp(deps), REQ);
+    const res = await resolveFully(deps, createDiffSession(), REQ);
     expect(client.searchMetaByGuid).toHaveBeenCalledTimes(10);
     expect(res).toEqual({ ok: true, json: { ...many, resolved: { g0: "Assets/A.cs", g1: "Assets/B.cs" } } });
   });
@@ -432,18 +429,18 @@ describe("computeSemanticDiff", () => {
   it("maps AuthError / DiffError / other failures to stable error codes", async () => {
     const auth = makeDeps();
     auth.client.getPrRefs.mockRejectedValue(new AuthError("x"));
-    expect(await resolveFully(makeApp(auth.deps), REQ)).toEqual({ ok: false, error: "auth-failed" });
+    expect(await resolveFully(auth.deps, createDiffSession(), REQ)).toEqual({ ok: false, error: "auth-failed" });
 
     const bad = makeDeps({
       diff: () => {
         throw new DiffError("NestingTooDeep");
       },
     });
-    expect(await resolveFully(makeApp(bad.deps), REQ)).toEqual({ ok: false, error: "diff-failed" });
+    expect(await resolveFully(bad.deps, createDiffSession(), REQ)).toEqual({ ok: false, error: "diff-failed" });
 
     const net = makeDeps();
     net.client.listPrFiles.mockRejectedValue(new Error("socket"));
-    expect(await resolveFully(makeApp(net.deps), REQ)).toEqual({ ok: false, error: "fetch-failed" });
+    expect(await resolveFully(net.deps, createDiffSession(), REQ)).toEqual({ ok: false, error: "fetch-failed" });
   });
 
   it("returns too-large above 25MB unless forced", async () => {
@@ -451,12 +448,12 @@ describe("computeSemanticDiff", () => {
     const diff = vi.fn(() => DIFF);
     const { deps, client } = makeDeps({ diff });
     client.getFileAtRef.mockResolvedValue(big);
-    const handle = makeApp(deps);
-    expect(await resolveFully(handle, REQ)).toEqual({ ok: false, error: "too-large", bytes: big.length * 2 });
+    const session = createDiffSession();
+    expect(await resolveFully(deps, session, REQ)).toEqual({ ok: false, error: "too-large", bytes: big.length * 2 });
     expect(diff).not.toHaveBeenCalled();
     // force proceeds to render. The blob is in the sha cache, so no re-fetch either
     const fetches = client.getFileAtRef.mock.calls.length;
-    expect((await resolveFully(handle, { ...REQ, force: true })).ok).toBe(true);
+    expect((await resolveFully(deps, session, { ...REQ, force: true })).ok).toBe(true);
     expect(diff).toHaveBeenCalledTimes(1);
     expect(client.getFileAtRef.mock.calls.length).toBe(fetches);
   });
@@ -465,13 +462,13 @@ describe("computeSemanticDiff", () => {
     const half = new Uint8Array((25 * 1024 * 1024) / 2);
     const { deps, client } = makeDeps();
     client.getFileAtRef.mockResolvedValue(half);
-    expect((await resolveFully(makeApp(deps), REQ)).ok).toBe(true);
+    expect((await resolveFully(deps, createDiffSession(), REQ)).ok).toBe(true);
   });
 
   it("maps RateLimitError to rate-limited", async () => {
     const limited = makeDeps();
     limited.client.getPrRefs.mockRejectedValue(new RateLimitError("x"));
-    expect(await resolveFully(makeApp(limited.deps), REQ)).toEqual({ ok: false, error: "rate-limited" });
+    expect(await resolveFully(limited.deps, createDiffSession(), REQ)).toEqual({ ok: false, error: "rate-limited" });
   });
 
   describe("blob-sha fetching", () => {
@@ -487,7 +484,7 @@ describe("computeSemanticDiff", () => {
         baseShas: { "Assets/Foo.prefab": "foo-base" },
         contents: {},
       });
-      const res = await resolveFully(makeApp(deps), REQ);
+      const res = await resolveFully(deps, createDiffSession(), REQ);
       // the guid index also reads the changed .meta by its files-api sha
       expect(res).toEqual({ ok: true, json: { ...DIFF, resolved: { g1: "Assets/S.cs" } } });
       expect(client.getBlobRaw).toHaveBeenCalledWith("o", "r", "foo-base");
@@ -503,7 +500,7 @@ describe("computeSemanticDiff", () => {
         contents: {},
         diff,
       });
-      const res = await resolveFully(makeApp(deps), REQ);
+      const res = await resolveFully(deps, createDiffSession(), REQ);
       expect(res.ok).toBe(true);
       expect(client.getBlobRaw).toHaveBeenCalledWith("o", "r", "foo-base");
       expect(client.getFileAtRef).not.toHaveBeenCalled();
@@ -517,7 +514,7 @@ describe("computeSemanticDiff", () => {
         baseShas: { "Assets/Old.prefab": "old-base" },
         contents: {},
       });
-      const res = await resolveFully(makeApp(deps), REQ);
+      const res = await resolveFully(deps, createDiffSession(), REQ);
       expect(res.ok).toBe(true);
       expect(client.getBlobRaw).toHaveBeenCalledWith("o", "r", "old-base");
       expect(client.getFileAtRef).not.toHaveBeenCalled();
@@ -530,7 +527,7 @@ describe("computeSemanticDiff", () => {
         contents: { "Assets/Foo.prefab@base-sha": "b" },
       });
       client.listBlobShas.mockResolvedValue({ truncated: true, byPath: new Map() });
-      const res = await resolveFully(makeApp(deps), REQ);
+      const res = await resolveFully(deps, createDiffSession(), REQ);
       expect(res.ok).toBe(true);
       expect(client.getBlobRaw).toHaveBeenCalledWith("o", "r", "foo-head");
       expect(client.getFileAtRef).toHaveBeenCalledWith("o", "r", "Assets/Foo.prefab", "base-sha");
@@ -543,7 +540,7 @@ describe("computeSemanticDiff", () => {
         blobs: {}, // getBlobRaw misses → null
         contents: { "Assets/Foo.prefab@base-sha": "b", "Assets/Foo.prefab@head-sha": "a" },
       });
-      const res = await resolveFully(makeApp(deps), REQ);
+      const res = await resolveFully(deps, createDiffSession(), REQ);
       expect(res.ok).toBe(true);
       expect(client.getFileAtRef).toHaveBeenCalledWith("o", "r", "Assets/Foo.prefab", "head-sha");
     });
@@ -555,7 +552,7 @@ describe("computeSemanticDiff", () => {
         contents: { "Assets/Foo.prefab@base-sha": "b" },
       });
       client.listBlobShas.mockRejectedValue(new Error("socket"));
-      const res = await resolveFully(makeApp(deps), REQ);
+      const res = await resolveFully(deps, createDiffSession(), REQ);
       expect(res.ok).toBe(true);
       expect(client.getFileAtRef).toHaveBeenCalledWith("o", "r", "Assets/Foo.prefab", "base-sha");
     });
@@ -563,7 +560,7 @@ describe("computeSemanticDiff", () => {
     it("propagates a rate-limited base tree fetch like the guid index does", async () => {
       const { deps, client } = makeDeps();
       client.listBlobShas.mockRejectedValue(new RateLimitError("x"));
-      expect(await resolveFully(makeApp(deps), REQ)).toEqual({ ok: false, error: "rate-limited" });
+      expect(await resolveFully(deps, createDiffSession(), REQ)).toEqual({ ok: false, error: "rate-limited" });
     });
 
     it("reads removed .meta files via their files-api sha (base-side blob)", async () => {
@@ -576,7 +573,7 @@ describe("computeSemanticDiff", () => {
         baseShas: { "Assets/Foo.prefab": "foo-base" },
         contents: {},
       });
-      const res = await resolveFully(makeApp(deps), REQ);
+      const res = await resolveFully(deps, createDiffSession(), REQ);
       expect(res).toEqual({ ok: true, json: { ...DIFF, resolved: { g1: "Assets/S.cs" } } });
       expect(client.getFileAtRef).not.toHaveBeenCalled();
     });
@@ -603,7 +600,7 @@ describe("computeSemanticDiff", () => {
           "Assets/Cyl.prefab@head-sha": "SRC",
         },
       });
-      const res = await resolveFully(makeApp(deps), REQ);
+      const res = await resolveFully(deps, createDiffSession(), REQ);
       // side=after, so the source is fetched from head and its bytes land in assets.
       expect(client.getFileAtRef).toHaveBeenCalledWith("o", "r", "Assets/Cyl.prefab", "head-sha");
       const assets = must(diffWithAssets.mock.calls[0]?.[2]);
@@ -624,14 +621,14 @@ describe("computeSemanticDiff", () => {
           "Assets/Cyl.prefab@base-sha": "OLD",
         },
       });
-      await resolveFully(makeApp(deps), REQ);
+      await resolveFully(deps, createDiffSession(), REQ);
       expect(client.getFileAtRef).toHaveBeenCalledWith("o", "r", "Assets/Cyl.prefab", "base-sha");
     });
 
     it("keeps the first-pass diff when the source path cannot be resolved", async () => {
       const diffWithAssets = vi.fn<DifferPort["diffWithAssets"]>(() => MERGED);
       const { deps } = makeDeps({ diff: () => NEEDS, diffWithAssets }); // search misses
-      const res = await resolveFully(makeApp(deps), REQ);
+      const res = await resolveFully(deps, createDiffSession(), REQ);
       // An unknown-path source is given up on, returning the degraded view (the first-pass json) as-is.
       expect(diffWithAssets).not.toHaveBeenCalled();
       expect(res).toEqual({ ok: true, json: { ...NEEDS, resolved: {} } });
@@ -650,7 +647,7 @@ describe("computeSemanticDiff", () => {
           "Assets/Cyl.prefab@head-sha": "SRC",
         },
       });
-      const res = await resolveFully(makeApp(deps), REQ);
+      const res = await resolveFully(deps, createDiffSession(), REQ);
       expect(diffWithAssets).toHaveBeenCalledTimes(1);
       expect(res.ok).toBe(true);
     });
@@ -678,89 +675,23 @@ describe("computeSemanticDiff", () => {
         diff: () => withSource,
         diffWithAssets,
       });
-      const handler = makeApp(deps);
-      await handler.prefetch({ type: "prefetch", owner: "o", repo: "r", prNumber: 1 });
+      const session = createDiffSession();
+      await prefetchPr(deps, session, { type: "prefetch", owner: "o", repo: "r", prNumber: 1 });
       expect(diffWithAssets).not.toHaveBeenCalled(); // prefetch stops at raw
-      const res = await resolveFully(handler, REQ);
+      const res = await resolveFully(deps, session, REQ);
       expect(res.ok).toBe(true);
       expect(diffWithAssets).toHaveBeenCalledTimes(1); // merging runs at serve time
     });
   });
 });
 
-describe("prefetch", () => {
-  it("precomputes diffs so a later toggle serves without new blob fetches", async () => {
-    const { deps, client } = makeDeps();
-    const handler = makeApp(deps);
-    await handler.prefetch({ type: "prefetch", owner: "o", repo: "r", prNumber: 1 });
-    expect(client.searchMetaByGuid).not.toHaveBeenCalled(); // prefetch doesn't touch the 10 req/min Code Search
-    const fetchesAfterPrefetch = client.getFileAtRef.mock.calls.length;
-    const res = await resolveFully(handler, REQ);
-    expect(res.ok).toBe(true);
-    expect(client.getFileAtRef.mock.calls.length).toBe(fetchesAfterPrefetch); // no blob re-fetch
-  });
-
-  it("persists prefetched diffs to the diff store (sw restart survival)", async () => {
-    const { deps } = makeDeps();
-    await makeApp(deps).prefetch({ type: "prefetch", owner: "o", repo: "r", prNumber: 1 });
-    expect(deps.diffStore.save).toHaveBeenCalledWith("base-sha:head-sha:Assets/Foo.prefab", DIFF);
-  });
-
-  it("serves a diff persisted by a previous worker from the store", async () => {
-    // The SW dies after 30 seconds: a result prefetched in a prior life must be recoverable via storage.session
-    const { deps, client, diffStore } = makeDeps();
-    diffStore.data["base-sha:head-sha:Assets/Foo.prefab"] = DIFF; // seeded as if saved by a prior SW life
-    const res = await resolveFully(makeApp(deps), REQ);
-    expect(res.ok).toBe(true);
-    expect(client.getFileAtRef).not.toHaveBeenCalledWith("o", "r", "Assets/Foo.prefab", "base-sha");
-  });
-
-  it("prefetches only unity files and caps at 100", async () => {
-    const files: ChangedFile[] = Array.from({ length: 120 }, (_, i) => ({
-      path: `Assets/F${i}.prefab`,
-      status: "modified",
-    }));
-    files.push({ path: "README.md", status: "modified" });
-    const { deps, client } = makeDeps({ files });
-    await makeApp(deps).prefetch({ type: "prefetch", owner: "o", repo: "r", prNumber: 1 });
-    const paths = new Set(client.getFileAtRef.mock.calls.map((c) => c[2]));
-    expect(paths.has("README.md")).toBe(false);
-    expect(paths.size).toBe(100); // cut off at the cap
-  });
-
-  it("skips oversized files without caching them", async () => {
-    const big = new Uint8Array(13 * 1024 * 1024);
-    const { deps, client } = makeDeps();
-    client.getFileAtRef.mockResolvedValue(big);
-    const handler = makeApp(deps);
-    await handler.prefetch({ type: "prefetch", owner: "o", repo: "r", prNumber: 1 });
-    expect(deps.diffStore.save).not.toHaveBeenCalled();
-    // A later manual toggle still shows the too-large gate as before
-    expect(await resolveFully(handler, REQ)).toEqual({ ok: false, error: "too-large", bytes: big.length * 2 });
-  });
-
-  it("aborts silently on rate limit instead of surfacing an error", async () => {
-    const { deps, client } = makeDeps();
-    client.getFileAtRef.mockRejectedValue(new RateLimitError("x"));
-    await expect(
-      makeApp(deps).prefetch({ type: "prefetch", owner: "o", repo: "r", prNumber: 1 }),
-    ).resolves.toBeUndefined();
-  });
-
-  it("returns without network when the access token is missing", async () => {
-    const { deps, client } = makeDeps({ accessToken: undefined });
-    await makeApp(deps).prefetch({ type: "prefetch", owner: "o", repo: "r", prNumber: 1 });
-    expect(client.getPrRefs).not.toHaveBeenCalled();
-  });
-});
-
 it("dedupes a concurrent user toggle against an in-flight prefetch compute", async () => {
   // Even if the user clicks during prefetch, diff computation and blob fetches don't double up
   const { deps, client } = makeDeps();
-  const handler = makeApp(deps);
+  const session = createDiffSession();
   const [, res] = await Promise.all([
-    handler.prefetch({ type: "prefetch", owner: "o", repo: "r", prNumber: 1 }),
-    resolveFully(handler, REQ),
+    prefetchPr(deps, session, { type: "prefetch", owner: "o", repo: "r", prNumber: 1 }),
+    resolveFully(deps, session, REQ),
   ]);
   expect(res.ok).toBe(true);
   const fooFetches = client.getFileAtRef.mock.calls.filter((c) => c[2] === "Assets/Foo.prefab");
@@ -770,7 +701,7 @@ it("dedupes a concurrent user toggle against an in-flight prefetch compute", asy
 describe("semanticDiff with push (two-stage)", () => {
   it("responds immediately with pending and pushes code-search results in the final json", async () => {
     const { deps, guidCache } = makeDeps({ search: { g1: "Assets/Scripts/S.cs" } });
-    const { res, pushes } = await serveAndResolve(makeApp(deps), REQ);
+    const { res, pushes } = await serveAndResolve(deps, createDiffSession(), REQ);
     // The response returns immediately with empty resolved + pending. Names arrive via push (the crux of B4)
     expect(res).toEqual({ ok: true, json: { ...DIFF, resolved: {} }, pending: true });
     const last = must(pushes.at(-1));
@@ -791,7 +722,7 @@ describe("semanticDiff with push (two-stage)", () => {
         "Assets/S.cs.meta@head-sha": "guid: g1\n",
       },
     });
-    const { res, pushes } = await serveAndResolve(makeApp(deps), REQ);
+    const { res, pushes } = await serveAndResolve(deps, createDiffSession(), REQ);
     expect(res).toEqual({ ok: true, json: { ...DIFF, resolved: { g1: "Assets/S.cs" } } });
     expect(pushes).toEqual([]); // if everything is resolved and no source merge is needed, there's no push
   });
@@ -803,7 +734,7 @@ describe("semanticDiff with push (two-stage)", () => {
     });
     client.listMetaTree.mockResolvedValue({ truncated: false, metas: [{ path: "Assets/S.cs.meta", sha: "sha1" }] });
     client.batchBlobTexts.mockResolvedValue({ sha1: "guid: g1\n" });
-    const { pushes } = await serveAndResolve(makeApp(deps), REQ);
+    const { pushes } = await serveAndResolve(deps, createDiffSession(), REQ);
     // g1 arrives first from the index (intermediate push), and only g2, absent from the index, goes to Code Search (3-stage resolution)
     expect(pushes[0]).toMatchObject({ resolved: { g1: "Assets/S.cs" }, done: false });
     expect(pushes.at(-1)?.json?.resolved).toEqual({ g1: "Assets/S.cs", g2: "Assets/Other.cs" });
@@ -814,16 +745,16 @@ describe("semanticDiff with push (two-stage)", () => {
   it("falls back to code search when the tree is truncated", async () => {
     const { deps, client } = makeDeps({ search: { g1: "Assets/S.cs" } });
     client.listMetaTree.mockResolvedValue({ truncated: true, metas: [] });
-    const { pushes } = await serveAndResolve(makeApp(deps), REQ);
+    const { pushes } = await serveAndResolve(deps, createDiffSession(), REQ);
     expect(pushes.at(-1)?.json?.resolved).toEqual({ g1: "Assets/S.cs" });
   });
 
   it("stops retrying the index for the session after an index rate limit", async () => {
     const { deps, client } = makeDeps();
     client.listMetaTree.mockRejectedValue(new RateLimitError("x"));
-    const handler = makeApp(deps);
-    await serveAndResolve(handler, REQ);
-    await serveAndResolve(handler, REQ);
+    const session = createDiffSession();
+    await serveAndResolve(deps, session, REQ);
+    await serveAndResolve(deps, session, REQ);
     expect(client.listMetaTree).toHaveBeenCalledTimes(1); // pinned to fallback for the SW lifetime
   });
 
@@ -851,7 +782,7 @@ describe("semanticDiff with push (two-stage)", () => {
     // (done:true is only emitted after mergeSources completes). Asserting "not yet called" must be done
     // right after the immediate response (before waiting for the push to finish), so this one is assembled manually.
     const pushes: GuidResolvedPush[] = [];
-    const res = await makeApp(deps).semanticDiff(REQ, (m) => pushes.push(m));
+    const res = await computeSemanticDiff(deps, createDiffSession(), REQ, (m) => pushes.push(m));
     expect(res.ok && res.pending).toBe(true);
     expect(diffWithAssets).not.toHaveBeenCalled(); // the immediate response doesn't merge (it takes priority)
     await vi.waitFor(() => expect(diffWithAssets).toHaveBeenCalledTimes(1));
@@ -861,7 +792,7 @@ describe("semanticDiff with push (two-stage)", () => {
 
   it("kicks the repo index sync from prefetch", async () => {
     const { deps, client } = makeDeps();
-    await makeApp(deps).prefetch({ type: "prefetch", owner: "o", repo: "r", prNumber: 1 });
+    await prefetchPr(deps, createDiffSession(), { type: "prefetch", owner: "o", repo: "r", prNumber: 1 });
     await vi.waitFor(() => expect(client.listMetaTree).toHaveBeenCalledWith("o", "r", "head-sha"));
   });
 });

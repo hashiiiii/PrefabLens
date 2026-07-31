@@ -1,204 +1,43 @@
-// Shared stateful core for the background diff pipeline: per-target context /
-// blob / diff promise caches plus the resolution instance. compute-semantic-diff
-// and prefetch-pr both close over one session so their in-flight work folds.
+import type { ChangedFile, RefPair } from "../port/github";
+import { createPromiseCache, type PromiseCache } from "./_promise-cache";
 
-import { type DiffTarget, type DiffV2, targetKey } from "../../domain/diff/types";
-import type { DiffCachePort } from "../port/diff-cache";
-import type { DifferPort } from "../port/differ";
-import { type ChangedFile, type GithubPort, RateLimitError, type RefPair } from "../port/github";
-import type { GuidCachePort } from "../port/guid-cache";
-import type { RepoIndexPort } from "../port/repo-index";
-import { createPromiseCache } from "./_promise-cache";
-import { createResolution, type DiffContext, type Resolution } from "./_resolution";
-import { buildGuidIndex } from "./build-guid-index";
+const CONTEXT_TTL_MS = 60_000;
+const BLOB_CACHE_MAX = 32;
 
-export type DiffDeps = {
-  getSettings(): Promise<{ accessToken?: string }>;
-  makeClient(base: string, token: string, lane: "user" | "prefetch"): GithubPort;
-  getDiffer(): Promise<DifferPort>;
-  guidCache: GuidCachePort;
-  diffStore: DiffCachePort;
-  repoIndexStore: RepoIndexPort;
+// baseShas: path → blob sha at base. null = tree unavailable → contents-api fallback
+export type DiffContext = {
+  refs: RefPair;
+  files: ChangedFile[];
+  guidIndex: Map<string, string>;
+  baseShas: Map<string, string> | null;
 };
 
-// Per-kind: refs + changed-file discovery; everything downstream is target-agnostic
-async function loadRefsAndFiles(
-  client: GithubPort,
-  owner: string,
-  repo: string,
-  target: DiffTarget,
-): Promise<{ refs: RefPair; files: ChangedFile[] }> {
-  if (target.kind === "pull") {
-    const [refs, files] = await Promise.all([
-      client.getPrRefs(owner, repo, target.prNumber),
-      client.listPrFiles(owner, repo, target.prNumber),
-    ]);
-    return { refs, files };
-  }
-  if (target.kind === "commit") {
-    const commit = await client.getCommit(owner, repo, target.sha);
-    // Root commit: before side is never fetched; own sha as baseSha keeps tree lookups harmless
-    return { refs: { baseSha: commit.parentSha ?? commit.sha, headSha: commit.sha }, files: commit.files };
-  }
-  const [cmp, headSha] = await Promise.all([
-    client.compareRefs(owner, repo, target.base, target.head),
-    // Cache keys need an immutable sha; compare commits truncate at 250 so last ≠ always head
-    client.resolveRefSha(owner, repo, target.head),
-  ]);
-  return { refs: { baseSha: cmp.mergeBaseSha, headSha }, files: cmp.files };
-}
-
-const EMPTY = new Uint8Array(0);
-const CONTEXT_TTL_MS = 60_000; // push moves headSha
-const BLOB_CACHE_MAX = 32;
-const TOO_LARGE_BYTES = 25 * 1024 * 1024; // over 25MB renders on click
-
 export type DiffOutcome =
-  | { ok: true; json: DiffV2 }
+  | { ok: true; json: import("../../domain/diff/types").DiffV2 }
   | { ok: false; error: "too-large"; bytes: number }
   | { ok: false; error: "not-unity-yaml" };
 
 export type DiffSession = {
-  deps: DiffDeps;
-  apiBase: string;
-  resolution: Resolution<GithubPort>;
-  loadContext(client: GithubPort, owner: string, repo: string, target: DiffTarget): Promise<DiffContext>;
-  getDiff(
-    client: GithubPort,
-    ctx: DiffContext,
-    owner: string,
-    repo: string,
-    path: string,
-    force: boolean,
-  ): Promise<DiffOutcome>;
+  contexts: PromiseCache<DiffContext>;
+  blobs: PromiseCache<Uint8Array | null>;
+  diffs: PromiseCache<DiffOutcome>;
+  // resolution
+  misses: Set<string>;
+  searches: PromiseCache<string | null>;
+  indexes: PromiseCache<Record<string, string> | null>;
+  indexFallback: Set<string>;
 };
 
-export function createDiffSession(deps: DiffDeps): DiffSession {
-  // Per-PR context; SW kill → re-fetch
-  const contexts = createPromiseCache<DiffContext>({ ttlMs: CONTEXT_TTL_MS });
-  // sha+path → bytes; promise fold shares prefetch + toggle fetches
-  const blobs = createPromiseCache<Uint8Array | null>({ max: BLOB_CACHE_MAX });
-  // too-large dropped so force can recompute; not-unity-yaml stays cached
-  const diffs = createPromiseCache<DiffOutcome>({ retain: (o) => o.ok || o.error !== "too-large" });
-  const apiBase = __API_BASE__;
-
-  // Prefer blob-sha when known (#110); 404 (force push) falls back to path+ref
-  function fetchBlob(
-    client: GithubPort,
-    owner: string,
-    repo: string,
-    path: string,
-    sha: string,
-    blobSha?: string,
-  ): Promise<Uint8Array | null> {
-    // blob sha never collides with `${sha}:${path}`
-    return blobs.get(blobSha ?? `${sha}:${path}`, () =>
-      blobSha
-        ? client.getBlobRaw(owner, repo, blobSha).then((bytes) => bytes ?? client.getFileAtRef(owner, repo, path, sha))
-        : client.getFileAtRef(owner, repo, path, sha),
-    );
-  }
-
-  // Before/after blobs; status/previousPath follow the files API
-  async function fetchPair(
-    client: GithubPort,
-    ctx: DiffContext,
-    owner: string,
-    repo: string,
-    path: string,
-  ): Promise<[Uint8Array, Uint8Array]> {
-    const file = ctx.files.find((f) => f.path === path);
-    const status = file?.status ?? "modified";
-    const beforePath = file?.previousPath ?? path;
-    // files API sha is head blob, except removed where it is the base blob
-    const beforeBlob = status === "removed" ? file?.sha : ctx.baseShas?.get(beforePath);
-    const afterBlob = status === "removed" ? undefined : file?.sha;
-    const fetchSide = (p: string, sha: string, blobSha?: string): Promise<Uint8Array> =>
-      fetchBlob(client, owner, repo, p, sha, blobSha).then((bytes) => bytes ?? EMPTY);
-    return Promise.all([
-      status === "added" ? Promise.resolve(EMPTY) : fetchSide(beforePath, ctx.refs.baseSha, beforeBlob),
-      status === "removed" ? Promise.resolve(EMPTY) : fetchSide(path, ctx.refs.headSha, afterBlob),
-    ]);
-  }
-
-  const resolution = createResolution({
-    guidCache: deps.guidCache,
-    repoIndexStore: deps.repoIndexStore,
-    getDiffer: () => deps.getDiffer(),
-    fetchBlob,
-    fetchPair,
-  });
-
-  function loadContext(client: GithubPort, owner: string, repo: string, target: DiffTarget): Promise<DiffContext> {
-    return contexts.get(targetKey(owner, repo, target), async () => {
-      const { refs, files } = await loadRefsAndFiles(client, owner, repo, target);
-      const bySha = new Map(files.map((f) => [f.path, f.sha]));
-      const [guidIndex, baseShas] = await Promise.all([
-        buildGuidIndex(files, async (path, side) => {
-          // files API sha matches the side buildGuidIndex reads (head, or base for removed metas)
-          const bytes = await fetchBlob(
-            client,
-            owner,
-            repo,
-            path,
-            side === "base" ? refs.baseSha : refs.headSha,
-            bySha.get(path),
-          );
-          return bytes ? new TextDecoder().decode(bytes) : null;
-        }),
-        // Only rate limits propagate; anything else → null → contents-api fallback
-        client.listBlobShas(owner, repo, refs.baseSha).then(
-          (tree) => (tree.truncated ? null : tree.byPath),
-          (err: unknown) => {
-            if (err instanceof RateLimitError) throw err;
-            return null;
-          },
-        ),
-      ]);
-      return { refs, files, guidIndex, baseShas };
-    });
-  }
-
-  // Raw sha-keyed diff only; resolution/mergeSources stay out (Code Search improves later)
-  async function computeDiff(
-    client: GithubPort,
-    ctx: DiffContext,
-    owner: string,
-    repo: string,
-    path: string,
-    force: boolean,
-  ): Promise<DiffOutcome> {
-    // Missing from listing (files API caps at 3000) → treat as modified; 404 side → EMPTY
-    const [before, after] = await fetchPair(client, ctx, owner, repo, path);
-    if (!force && before.length + after.length > TOO_LARGE_BYTES) {
-      return { ok: false, error: "too-large", bytes: before.length + after.length };
-    }
-    const differ = await deps.getDiffer();
-    // Prefilter passed, but some .asset files are binary regardless of ForceText
-    if (!differ.isUnityYaml(before) && !differ.isUnityYaml(after)) {
-      return { ok: false, error: "not-unity-yaml" };
-    }
-    return { ok: true, json: differ.diff(before, after) };
-  }
-
-  // Sha-keyed: a push produces a new key (no invalidation)
-  function getDiff(
-    client: GithubPort,
-    ctx: DiffContext,
-    owner: string,
-    repo: string,
-    path: string,
-    force: boolean,
-  ): Promise<DiffOutcome> {
-    const key = `${ctx.refs.baseSha}:${ctx.refs.headSha}:${path}`;
-    return diffs.get(key, async (): Promise<DiffOutcome> => {
-      const stored = await deps.diffStore.load(key); // prior SW life
-      if (stored) return { ok: true, json: stored };
-      const outcome = await computeDiff(client, ctx, owner, repo, path, force);
-      if (outcome.ok) void deps.diffStore.save(key, outcome.json);
-      return outcome;
-    });
-  }
-
-  return { deps, apiBase, resolution, loadContext, getDiff };
+export function createDiffSession(): DiffSession {
+  return {
+    contexts: createPromiseCache<DiffContext>({ ttlMs: CONTEXT_TTL_MS }),
+    blobs: createPromiseCache<Uint8Array | null>({ max: BLOB_CACHE_MAX }),
+    diffs: createPromiseCache<DiffOutcome>({
+      retain: (o) => o.ok || o.error !== "too-large",
+    }),
+    misses: new Set(),
+    searches: createPromiseCache<string | null>({ retain: () => false }),
+    indexes: createPromiseCache<Record<string, string> | null>(),
+    indexFallback: new Set(),
+  };
 }

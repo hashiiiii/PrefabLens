@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import type { DiffV2, GuidResolvedPush, SemanticDiffRequest, SemanticDiffResponse } from "../../domain/diff/types";
+import { ok } from "../_result";
 import type { DifferPort } from "../port/differ";
-import { type ChangedFile, RateLimitError } from "../port/github";
+import type { ChangedFile } from "../port/github";
 import { createDiffSession, type DiffSession } from "./_diff-session";
 import { computeSemanticDiff, type DiffDeps } from "./compute-semantic-diff";
 import { prefetchPr } from "./prefetch-pr";
@@ -60,8 +61,8 @@ function makeDeps(overrides?: {
     batchBlobTexts: vi.fn(async (): Promise<Record<string, string | null>> => ({})),
   };
   const differ: DifferPort = {
-    diff: overrides?.diff ?? vi.fn(() => DIFF),
-    diffWithAssets: overrides?.diffWithAssets ?? vi.fn(() => DIFF),
+    diff: overrides?.diff ?? vi.fn(() => ok(DIFF)),
+    diffWithAssets: overrides?.diffWithAssets ?? vi.fn(() => ok(DIFF)),
     // Fixture contents are shorthand strings, not real UnityYAML: accept by default.
     isUnityYaml: overrides?.isUnityYaml ?? (() => true),
   };
@@ -177,7 +178,7 @@ describe("prefetch", () => {
 
   it("aborts silently on rate limit instead of surfacing an error", async () => {
     const { deps, client } = makeDeps();
-    client.getFileAtRef.mockRejectedValue(new RateLimitError("x"));
+    client.getFileAtRef.mockRejectedValue({ kind: "rate-limited" });
     await expect(
       prefetchPr(deps, createDiffSession(), { type: "prefetch", owner: "o", repo: "r", prNumber: 1 }),
     ).resolves.toBeUndefined();

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { must } from "../../domain/must";
 import { createQueue } from "./fetch-queue";
-import { RateLimitError } from "./github-client";
+import { isRateLimited } from "./github-client";
 
 // Line up manually-resolvable deferreds to observe execution order and concurrency
 function deferred(): { promise: Promise<void>; resolve: () => void } {
@@ -115,7 +115,7 @@ describe("createQueue rate limit backoff", () => {
     let attempts = 0;
     const task = queue(async () => {
       attempts++;
-      if (attempts === 1) throw new RateLimitError("limited", 5_000);
+      if (attempts === 1) throw { kind: "rate-limited", retryAfterMs: 5_000 };
       return "ok";
     });
     await flush();
@@ -131,9 +131,9 @@ describe("createQueue rate limit backoff", () => {
     const queue = createQueue(1, sleep);
     // A 10-minute primary-limit advice is capped: better to fail into the manual message than hang until the reset
     const capped = queue(async () => {
-      throw new RateLimitError("limited", 600_000);
+      throw { kind: "rate-limited", retryAfterMs: 600_000 };
     });
-    const cappedRejects = expect(capped).rejects.toBeInstanceOf(RateLimitError);
+    const cappedRejects = expect(capped).rejects.toSatisfy(isRateLimited);
     await flush();
     must(waits[0]).resolve();
     await flush();
@@ -141,9 +141,9 @@ describe("createQueue rate limit backoff", () => {
     await cappedRejects;
     // A secondary limit without headers gets the fallback wait
     const noAdvice = queue(async () => {
-      throw new RateLimitError("limited");
+      throw { kind: "rate-limited" };
     });
-    const noAdviceRejects = expect(noAdvice).rejects.toBeInstanceOf(RateLimitError);
+    const noAdviceRejects = expect(noAdvice).rejects.toSatisfy(isRateLimited);
     await flush();
     must(waits[2]).resolve();
     await flush();
@@ -158,9 +158,9 @@ describe("createQueue rate limit backoff", () => {
     let attempts = 0;
     const task = queue(async () => {
       attempts++;
-      throw new RateLimitError("limited", 1_000);
+      throw { kind: "rate-limited", retryAfterMs: 1_000 };
     });
-    const taskRejects = expect(task).rejects.toBeInstanceOf(RateLimitError);
+    const taskRejects = expect(task).rejects.toSatisfy(isRateLimited);
     await flush();
     must(waits[0]).resolve(); // resume → retry 1 fails
     await flush();
@@ -176,7 +176,7 @@ describe("createQueue rate limit backoff", () => {
     let attempts = 0;
     const limited = queue(async () => {
       attempts++;
-      if (attempts === 1) throw new RateLimitError("limited", 1_000);
+      if (attempts === 1) throw { kind: "rate-limited", retryAfterMs: 1_000 };
       return "retried";
     });
     await flush();
@@ -199,7 +199,7 @@ describe("createQueue rate limit backoff", () => {
     let attempts = 0;
     const prefetchTask = queue(async () => {
       attempts++;
-      if (attempts === 1) throw new RateLimitError("limited", 1_000);
+      if (attempts === 1) throw { kind: "rate-limited", retryAfterMs: 1_000 };
       order.push("prefetch-retry");
     });
     await flush();

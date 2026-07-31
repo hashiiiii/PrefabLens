@@ -1,5 +1,5 @@
 import { parseGuidFromMeta } from "../../domain/diff/meta-guid";
-import { type ChangedFile, RateLimitError } from "../port/github";
+import { type ChangedFile, isRateLimited } from "../port/github";
 
 export type MetaFetcher = (path: string, side: "base" | "head") => Promise<string | null>;
 
@@ -15,7 +15,7 @@ export async function buildGuidIndex(files: ChangedFile[], fetchMeta: MetaFetche
     const side = f.status === "removed" ? "base" : "head";
     // Only rate limits propagate: swallowing them would cache a degraded index for the SW's lifetime
     const text = await fetchMeta(f.path, side).catch((err) => {
-      if (err instanceof RateLimitError) throw err;
+      if (isRateLimited(err)) throw err;
       return null;
     });
     if (!text) return;

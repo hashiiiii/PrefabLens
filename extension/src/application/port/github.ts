@@ -1,12 +1,20 @@
-export class AuthError extends Error {}
-export class RateLimitError extends Error {
-  // Backoff from headers; undefined when GitHub gave none
-  constructor(
-    message: string,
-    readonly retryAfterMs?: number,
-  ) {
-    super(message);
-  }
+export type GithubFailure =
+  | { kind: "auth-failed" }
+  | { kind: "rate-limited"; retryAfterMs?: number }
+  | { kind: "fetch-failed" };
+
+export function isRateLimited(e: unknown): e is Extract<GithubFailure, { kind: "rate-limited" }> {
+  return typeof e === "object" && e !== null && (e as { kind?: string }).kind === "rate-limited";
+}
+export function isAuthFailed(e: unknown): e is Extract<GithubFailure, { kind: "auth-failed" }> {
+  return typeof e === "object" && e !== null && (e as { kind?: string }).kind === "auth-failed";
+}
+export function isGithubFailure(e: unknown): e is GithubFailure {
+  return (
+    isRateLimited(e) ||
+    isAuthFailed(e) ||
+    (typeof e === "object" && e !== null && (e as { kind?: string }).kind === "fetch-failed")
+  );
 }
 
 // sha is the blob at head (at base for removed files) — the files API provides it for every status.

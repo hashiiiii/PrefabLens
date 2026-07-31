@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import type { DiffV2, GuidResolvedPush, SemanticDiffRequest } from "../../domain/diff/types";
 import { must } from "../../domain/must";
+import { ok } from "../_result";
 import type { DifferPort } from "../port/differ";
-import { RateLimitError } from "../port/github";
 import { createDiffSession, type DiffContext } from "./_diff-session";
 import { getRepoIndex, mergeSources, type ResolutionDeps, resolveRemaining, searchGuids } from "./_resolution";
 
@@ -73,8 +73,8 @@ function makeResolution(overrides?: {
     }),
   };
   const differ: DifferPort = {
-    diff: vi.fn(() => DIFF),
-    diffWithAssets: overrides?.diffWithAssets ?? vi.fn(() => DIFF),
+    diff: vi.fn(() => ok(DIFF)),
+    diffWithAssets: overrides?.diffWithAssets ?? vi.fn(() => ok(DIFF)),
     // Fixture contents are shorthand strings, not real UnityYAML: accept by default.
     isUnityYaml: overrides?.isUnityYaml ?? (() => true),
   };
@@ -120,7 +120,7 @@ describe("searchGuids", () => {
 
   it("returns partial results and reports the rate limit that interrupted the search loop", async () => {
     const { deps, session, client } = makeResolution();
-    client.searchMetaByGuid.mockResolvedValueOnce("Assets/First.cs").mockRejectedValueOnce(new RateLimitError("x"));
+    client.searchMetaByGuid.mockResolvedValueOnce("Assets/First.cs").mockRejectedValueOnce({ kind: "rate-limited" });
     const result = await searchGuids(deps, session, ["g1", "g2", "g3"], client, "o", "r", REPO_KEY);
     // g1 survives, g2 aborts the loop, g3 is never attempted (the budget is already gone).
     expect(result).toEqual({ resolved: { g1: "Assets/First.cs" }, rateLimited: true });
@@ -173,7 +173,7 @@ describe("getRepoIndex", () => {
 
   it("pins the repo to fallback for the session after a rate limit", async () => {
     const { deps, session, client } = makeResolution();
-    client.listMetaTree.mockRejectedValue(new RateLimitError("x"));
+    client.listMetaTree.mockRejectedValue({ kind: "rate-limited" });
     expect(await getRepoIndex(deps, session, client, "o", "r", REPO_KEY, "head-sha")).toBeNull();
     expect(await getRepoIndex(deps, session, client, "o", "r", REPO_KEY, "head-sha")).toBeNull();
     expect(client.listMetaTree).toHaveBeenCalledTimes(1); // fallback: Code Search only from here on
@@ -201,12 +201,12 @@ describe("mergeSources", () => {
   const MERGED: DiffV2 = { schema: "prefablens.diff.v2", unresolvedGuids: [], roots: [], loose: [] };
 
   it("fetches an after-side source at head and re-diffs with assets", async () => {
-    const diffWithAssets = vi.fn<DifferPort["diffWithAssets"]>(() => MERGED);
+    const diffWithAssets = vi.fn<DifferPort["diffWithAssets"]>(() => ok(MERGED));
     const { deps, session, client } = makeResolution({
       diffWithAssets,
       blobs: { "Assets/Cyl.prefab@head-sha": "SRC" },
     });
-    const differ = { diff: vi.fn(() => DIFF), diffWithAssets, isUnityYaml: () => true };
+    const differ = { diff: vi.fn(() => ok(DIFF)), diffWithAssets, isUnityYaml: () => true };
     const result = await mergeSources(deps, session, NEEDS, differ, ...BYTES, CTX, client, "o", "r", REPO_KEY);
     expect(client.getFileAtRef).toHaveBeenCalledWith("o", "r", "Assets/Cyl.prefab", "head-sha");
     const assets = must(diffWithAssets.mock.calls[0]?.[2]);
@@ -216,12 +216,12 @@ describe("mergeSources", () => {
   });
 
   it("fetches a before-side source at base, riding the base-tree blob sha", async () => {
-    const diffWithAssets = vi.fn<DifferPort["diffWithAssets"]>(() => MERGED);
+    const diffWithAssets = vi.fn<DifferPort["diffWithAssets"]>(() => ok(MERGED));
     const { deps, session, client } = makeResolution({
       diffWithAssets,
       blobs: { "Assets/Cyl.prefab@base-sha": "OLD" },
     });
-    const differ = { diff: vi.fn(() => DIFF), diffWithAssets, isUnityYaml: () => true };
+    const differ = { diff: vi.fn(() => ok(DIFF)), diffWithAssets, isUnityYaml: () => true };
     const ctx: DiffContext = { ...CTX, baseShas: new Map([["Assets/Cyl.prefab", "cyl-base"]]) };
     const before: DiffV2 = { ...NEEDS, neededSources: [{ guid: "src1", side: "before" }] };
     await mergeSources(deps, session, before, differ, ...BYTES, ctx, client, "o", "r", REPO_KEY);
@@ -231,9 +231,9 @@ describe("mergeSources", () => {
   });
 
   it("returns the first-pass diff when the source path is unresolved", async () => {
-    const diffWithAssets = vi.fn<DifferPort["diffWithAssets"]>(() => MERGED);
+    const diffWithAssets = vi.fn<DifferPort["diffWithAssets"]>(() => ok(MERGED));
     const { deps, session, client } = makeResolution({ diffWithAssets });
-    const differ = { diff: vi.fn(() => DIFF), diffWithAssets, isUnityYaml: () => true };
+    const differ = { diff: vi.fn(() => ok(DIFF)), diffWithAssets, isUnityYaml: () => true };
     const unresolved: DiffV2 = { ...NEEDS, resolved: {} };
     const result = await mergeSources(deps, session, unresolved, differ, ...BYTES, CTX, client, "o", "r", REPO_KEY);
     expect(diffWithAssets).not.toHaveBeenCalled();
@@ -241,13 +241,13 @@ describe("mergeSources", () => {
   });
 
   it("skips binary-serialized sources without counting them as progress", async () => {
-    const diffWithAssets = vi.fn<DifferPort["diffWithAssets"]>(() => MERGED);
+    const diffWithAssets = vi.fn<DifferPort["diffWithAssets"]>(() => ok(MERGED));
     const { deps, session, client } = makeResolution({
       diffWithAssets,
       isUnityYaml: () => false,
       blobs: { "Assets/Cyl.prefab@head-sha": "\x00binary" },
     });
-    const differ = { diff: vi.fn(() => DIFF), diffWithAssets, isUnityYaml: () => false };
+    const differ = { diff: vi.fn(() => ok(DIFF)), diffWithAssets, isUnityYaml: () => false };
     const result = await mergeSources(deps, session, NEEDS, differ, ...BYTES, CTX, client, "o", "r", REPO_KEY);
     // Merging a binary source would be a no-op re-diff: give up and keep the first pass.
     expect(diffWithAssets).not.toHaveBeenCalled();
@@ -255,19 +255,19 @@ describe("mergeSources", () => {
   });
 
   it("degrades to the current diff and reports rateLimited when the source fetch hits the limit", async () => {
-    const diffWithAssets = vi.fn<DifferPort["diffWithAssets"]>(() => MERGED);
+    const diffWithAssets = vi.fn<DifferPort["diffWithAssets"]>(() => ok(MERGED));
     const { deps, session, client } = makeResolution({ diffWithAssets });
-    client.getFileAtRef.mockRejectedValue(new RateLimitError("x"));
-    const differ = { diff: vi.fn(() => DIFF), diffWithAssets, isUnityYaml: () => true };
+    client.getFileAtRef.mockRejectedValue({ kind: "rate-limited" });
+    const differ = { diff: vi.fn(() => ok(DIFF)), diffWithAssets, isUnityYaml: () => true };
     const result = await mergeSources(deps, session, NEEDS, differ, ...BYTES, CTX, client, "o", "r", REPO_KEY);
     expect(result).toEqual({ json: NEEDS, status: "rateLimited" });
   });
 
   it("degrades to the current diff and reports failed on a non-rate-limit fetch error", async () => {
-    const diffWithAssets = vi.fn<DifferPort["diffWithAssets"]>(() => MERGED);
+    const diffWithAssets = vi.fn<DifferPort["diffWithAssets"]>(() => ok(MERGED));
     const { deps, session, client } = makeResolution({ diffWithAssets });
     client.getFileAtRef.mockRejectedValue(new Error("socket"));
-    const differ = { diff: vi.fn(() => DIFF), diffWithAssets, isUnityYaml: () => true };
+    const differ = { diff: vi.fn(() => ok(DIFF)), diffWithAssets, isUnityYaml: () => true };
     const result = await mergeSources(deps, session, NEEDS, differ, ...BYTES, CTX, client, "o", "r", REPO_KEY);
     expect(result).toEqual({ json: NEEDS, status: "failed" });
   });
@@ -276,9 +276,13 @@ describe("mergeSources", () => {
     // Each merge output requests the next source, which always resolves: without the cap
     // a deep source chain would keep re-diffing forever.
     let round = 0;
-    const diffWithAssets = vi.fn<DifferPort["diffWithAssets"]>((): DiffV2 => {
+    const diffWithAssets = vi.fn<DifferPort["diffWithAssets"]>(() => {
       round += 1;
-      return { ...DIFF, unresolvedGuids: [`s${round}`], neededSources: [{ guid: `s${round}`, side: "after" }] };
+      return ok({
+        ...DIFF,
+        unresolvedGuids: [`s${round}`],
+        neededSources: [{ guid: `s${round}`, side: "after" }],
+      });
     });
     const { deps, session, client } = makeResolution({
       diffWithAssets,
@@ -289,7 +293,7 @@ describe("mergeSources", () => {
         "Assets/S2.prefab@head-sha": "S2",
       },
     });
-    const differ = { diff: vi.fn(() => DIFF), diffWithAssets, isUnityYaml: () => true };
+    const differ = { diff: vi.fn(() => ok(DIFF)), diffWithAssets, isUnityYaml: () => true };
     const first: DiffV2 = {
       ...DIFF,
       unresolvedGuids: [],
@@ -339,7 +343,7 @@ describe("resolveRemaining", () => {
   it("skips the index when only a source re-merge is pending", async () => {
     // The first index build can take tens of seconds and cannot help: no guid names are missing.
     const merged: DiffV2 = { ...DIFF, unresolvedGuids: [] };
-    const diffWithAssets = vi.fn<DifferPort["diffWithAssets"]>(() => merged);
+    const diffWithAssets = vi.fn<DifferPort["diffWithAssets"]>(() => ok(merged));
     const { deps, session, client } = makeResolution({
       diffWithAssets,
       cached: { src1: "Assets/Src.prefab" },
@@ -365,7 +369,7 @@ describe("resolveRemaining", () => {
   it("marks the final push rateLimited when Code Search hits the limit", async () => {
     // Rate-limited runs must be distinguishable from completed ones (issue #194).
     const { deps, session, client } = makeResolution();
-    client.searchMetaByGuid.mockRejectedValue(new RateLimitError("x"));
+    client.searchMetaByGuid.mockRejectedValue({ kind: "rate-limited" });
     const first: DiffV2 = { ...DIFF, unresolvedGuids: ["g1"] };
     const pushes = await run(deps, session, client, first, ["g1"]);
     expect(must(pushes.at(-1))).toMatchObject({ done: true, status: "rateLimited" });

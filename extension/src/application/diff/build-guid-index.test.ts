@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { RateLimitError } from "../port/github";
+import { isRateLimited } from "../port/github";
 import { buildGuidIndex } from "./build-guid-index";
 
 const META = `fileFormatVersion: 2
@@ -40,9 +40,9 @@ describe("buildGuidIndex", () => {
     // Swallowing would cache a degraded index for the SW's lifetime, and re-toggling would not fix it
     await expect(
       buildGuidIndex(files, async () => {
-        throw new RateLimitError("limited");
+        throw { kind: "rate-limited" };
       }),
-    ).rejects.toBeInstanceOf(RateLimitError);
+    ).rejects.toSatisfy(isRateLimited);
   });
 
   it("bounds concurrent fetches to 8 even with many changed metas", async () => {

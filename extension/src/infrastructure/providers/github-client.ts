@@ -1,6 +1,12 @@
-import { AuthError, type ChangedFile, RateLimitError, type RefPair } from "../../application/port/github";
+import {
+  type ChangedFile,
+  isAuthFailed,
+  isGithubFailure,
+  isRateLimited,
+  type RefPair,
+} from "../../application/port/github";
 
-export { AuthError, type ChangedFile, RateLimitError, type RefPair };
+export { type ChangedFile, isAuthFailed, isGithubFailure, isRateLimited, type RefPair };
 
 // retry-after (seconds) wins; else x-ratelimit-reset (epoch seconds) relative to now.
 // Number(null) is 0 and Number("") is NaN, so absent headers fail the > 0 guards.
@@ -10,11 +16,6 @@ function adviceMs(headers: Headers): number | undefined {
   const reset = Number(headers.get("x-ratelimit-reset"));
   if (reset > 0) return Math.max(0, reset * 1000 - Date.now());
   return undefined;
-}
-export class ApiError extends Error {
-  constructor(readonly status: number) {
-    super(`GitHub API error (HTTP ${status})`); // does not carry the raw body (leak prevention)
-  }
 }
 
 // GitHub's shared "diff entry" schema: PR files, commit files, and compare files all use it.
@@ -52,10 +53,10 @@ export class GithubClient {
         res.headers.has("retry-after") ||
         res.headers.get("x-ratelimit-remaining") === "0" ||
         /rate limit|abuse/i.test(body);
-      if (rateLimited) throw new RateLimitError("GitHub rate limit exceeded", adviceMs(res.headers));
-      throw new AuthError("GitHub authentication failed");
+      if (rateLimited) throw { kind: "rate-limited" as const, retryAfterMs: adviceMs(res.headers) };
+      throw { kind: "auth-failed" as const };
     }
-    if (res.status === 401) throw new AuthError("GitHub authentication failed");
+    if (res.status === 401) throw { kind: "auth-failed" as const };
     return res;
   }
 
@@ -71,7 +72,7 @@ export class GithubClient {
 
   private async json<T>(path: string): Promise<T> {
     const res = await this.request(path, "application/vnd.github+json");
-    if (!res.ok) throw new ApiError(res.status);
+    if (!res.ok) throw { kind: "fetch-failed" as const };
     return res.json() as Promise<T>;
   }
 
@@ -142,7 +143,7 @@ export class GithubClient {
       `/repos/${owner}/${repo}/commits/${encodeURIComponent(ref)}`,
       "application/vnd.github.sha",
     );
-    if (!res.ok) throw new ApiError(res.status);
+    if (!res.ok) throw { kind: "fetch-failed" as const };
     return (await res.text()).trim();
   }
 
@@ -165,7 +166,7 @@ export class GithubClient {
       "application/vnd.github.raw+json",
     );
     if (res.status === 404) return null;
-    if (!res.ok) throw new ApiError(res.status);
+    if (!res.ok) throw { kind: "fetch-failed" as const };
     return new Uint8Array(await res.arrayBuffer());
   }
 
@@ -174,7 +175,7 @@ export class GithubClient {
   async getBlobRaw(owner: string, repo: string, sha: string): Promise<Uint8Array | null> {
     const res = await this.request(`/repos/${owner}/${repo}/git/blobs/${sha}`, "application/vnd.github.raw+json");
     if (res.status === 404) return null;
-    if (!res.ok) throw new ApiError(res.status);
+    if (!res.ok) throw { kind: "fetch-failed" as const };
     return new Uint8Array(await res.arrayBuffer());
   }
 
@@ -226,16 +227,16 @@ export class GithubClient {
       },
       body: JSON.stringify({ query }),
     });
-    if (!res.ok) throw new ApiError(res.status);
+    if (!res.ok) throw { kind: "fetch-failed" as const };
     const body = (await res.json()) as {
       data?: { repository?: Record<string, { text?: string | null } | null> } | null;
       errors?: Array<{ type?: string }>;
     };
     // GraphQL can be HTTP 200 with RATE_LIMITED in errors[]
     if (body.errors?.some((e) => e.type === "RATE_LIMITED"))
-      throw new RateLimitError("GitHub rate limit exceeded", adviceMs(res.headers));
+      throw { kind: "rate-limited" as const, retryAfterMs: adviceMs(res.headers) };
     const blobs = body.data?.repository;
-    if (!blobs) throw new ApiError(res.status);
+    if (!blobs) throw { kind: "fetch-failed" as const };
     return Object.fromEntries(oids.map((oid, i) => [oid, blobs[`b${i}`]?.text ?? null]));
   }
 }

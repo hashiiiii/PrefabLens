@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { must } from "../../domain/must";
-import { ApiError, AuthError, GithubClient, graphqlUrl, RateLimitError } from "./github-client";
+import { GithubClient, graphqlUrl, isAuthFailed, isRateLimited } from "./github-client";
 
 // fetch fake that returns a fixed path→response table. It also records calls.
 // Matching is url.includes(key), so keys must be unique substrings
@@ -103,11 +103,11 @@ describe("GithubClient", () => {
     expect(await client.getFileAtRef("o", "r", "gone.prefab", "sha1")).toBeNull();
   });
 
-  it("maps 401/403 to AuthError and other failures to ApiError", async () => {
+  it("maps 401/403 to auth-failed and other failures to fetch-failed", async () => {
     const auth = new GithubClient("https://api.github.com", "bad", fakeFetch({ "/pulls/1": () => json({}, 401) }).fn);
-    await expect(auth.getPrRefs("o", "r", 1)).rejects.toBeInstanceOf(AuthError);
+    await expect(auth.getPrRefs("o", "r", 1)).rejects.toSatisfy(isAuthFailed);
     const boom = new GithubClient("https://api.github.com", "tok", fakeFetch({ "/pulls/1": () => json({}, 500) }).fn);
-    await expect(boom.getPrRefs("o", "r", 1)).rejects.toBeInstanceOf(ApiError);
+    await expect(boom.getPrRefs("o", "r", 1)).rejects.toEqual({ kind: "fetch-failed" });
   });
 
   it("searchMetaByGuid queries code search and strips .meta from the hit", async () => {
@@ -134,7 +134,7 @@ describe("GithubClient", () => {
       fakeFetch({ "/search/code": () => json({ items: [{ path: "README.md" }] }) }).fn,
     );
     expect(await odd.searchMetaByGuid("o", "r", "g")).toBeNull();
-    // 422: repository not indexed, etc. Treated as "unresolved" rather than an ApiError
+    // 422: repository not indexed, etc. Treated as "unresolved" rather than a fetch-failed
     const unindexed = new GithubClient(
       "https://api.github.com",
       "tok",
@@ -149,10 +149,10 @@ describe("GithubClient", () => {
       "tok",
       fakeFetch({ "/search/code": () => new Response("", { status: 403, headers: { "retry-after": "60" } }) }).fn,
     );
-    await expect(limited.searchMetaByGuid("o", "r", "g")).rejects.toBeInstanceOf(RateLimitError);
+    await expect(limited.searchMetaByGuid("o", "r", "g")).rejects.toSatisfy(isRateLimited);
   });
 
-  it("maps rate-limit responses to RateLimitError, not AuthError", async () => {
+  it("maps rate-limit responses to rate-limited, not auth-failed", async () => {
     // GitHub rate limits: primary is 403 + x-ratelimit-remaining: 0,
     // secondary is 403 + retry-after, and newer APIs use 429.
     // secondary sometimes has no header (only the body message) — octokit also decides by the message.
@@ -162,26 +162,24 @@ describe("GithubClient", () => {
         "tok",
         fakeFetch({ "/pulls/1": () => new Response(body, { status, headers }) }).fn,
       );
-    await expect(at(403, { "x-ratelimit-remaining": "0" }).getPrRefs("o", "r", 1)).rejects.toBeInstanceOf(
-      RateLimitError,
-    );
-    await expect(at(403, { "retry-after": "60" }).getPrRefs("o", "r", 1)).rejects.toBeInstanceOf(RateLimitError);
-    await expect(at(429, {}).getPrRefs("o", "r", 1)).rejects.toBeInstanceOf(RateLimitError);
+    await expect(at(403, { "x-ratelimit-remaining": "0" }).getPrRefs("o", "r", 1)).rejects.toSatisfy(isRateLimited);
+    await expect(at(403, { "retry-after": "60" }).getPrRefs("o", "r", 1)).rejects.toSatisfy(isRateLimited);
+    await expect(at(429, {}).getPrRefs("o", "r", 1)).rejects.toSatisfy(isRateLimited);
     await expect(
       at(403, { "x-ratelimit-remaining": "4999" }, '{"message":"You have exceeded a secondary rate limit."}').getPrRefs(
         "o",
         "r",
         1,
       ),
-    ).rejects.toBeInstanceOf(RateLimitError);
-    // Permission-related 403 (not a rate limit) is still AuthError
+    ).rejects.toSatisfy(isRateLimited);
+    // Permission-related 403 (not a rate limit) is still auth-failed
     await expect(
       at(
         403,
         { "x-ratelimit-remaining": "4999" },
         '{"message":"Resource not accessible by personal access token"}',
       ).getPrRefs("o", "r", 1),
-    ).rejects.toBeInstanceOf(AuthError);
+    ).rejects.toSatisfy(isAuthFailed);
   });
 
   it("getCommit returns the first parent as base and maps files", async () => {
@@ -247,9 +245,9 @@ describe("GithubClient", () => {
     });
     const client = new GithubClient("https://api.github.com", "tok", fn);
     const err = await client.getPrRefs("o", "r", 7).catch((e: unknown) => e);
-    expect(err).toBeInstanceOf(RateLimitError);
+    expect(isRateLimited(err)).toBe(true);
     // retry-after is seconds; the queue consumes milliseconds
-    expect((err as RateLimitError).retryAfterMs).toBe(12_000);
+    expect(isRateLimited(err) && err.retryAfterMs).toBe(12_000);
   });
 
   it("derives advice from x-ratelimit-reset when retry-after is absent", async () => {
@@ -262,7 +260,9 @@ describe("GithubClient", () => {
         }),
     });
     const client = new GithubClient("https://api.github.com", "tok", fn);
-    const err = (await client.getPrRefs("o", "r", 7).catch((e: unknown) => e)) as RateLimitError;
+    const err = await client.getPrRefs("o", "r", 7).catch((e: unknown) => e);
+    expect(isRateLimited(err)).toBe(true);
+    if (!isRateLimited(err)) return;
     // reset is an absolute epoch: allow scheduling slack around the 30s target
     expect(err.retryAfterMs).toBeGreaterThan(25_000);
     expect(err.retryAfterMs).toBeLessThanOrEqual(30_000);
@@ -273,8 +273,9 @@ describe("GithubClient", () => {
       "/pulls/7": () => new Response('{"message":"You have exceeded a secondary rate limit."}', { status: 403 }),
     });
     const client = new GithubClient("https://api.github.com", "tok", fn);
-    const err = (await client.getPrRefs("o", "r", 7).catch((e: unknown) => e)) as RateLimitError;
-    expect(err).toBeInstanceOf(RateLimitError);
+    const err = await client.getPrRefs("o", "r", 7).catch((e: unknown) => e);
+    expect(isRateLimited(err)).toBe(true);
+    if (!isRateLimited(err)) return;
     expect(err.retryAfterMs).toBeUndefined();
   });
 
@@ -288,8 +289,9 @@ describe("GithubClient", () => {
         }),
     });
     const client = new GithubClient("https://api.github.com", "tok", fn);
-    const err = (await client.batchBlobTexts("o", "r", ["oid1"]).catch((e: unknown) => e)) as RateLimitError;
-    expect(err).toBeInstanceOf(RateLimitError);
+    const err = await client.batchBlobTexts("o", "r", ["oid1"]).catch((e: unknown) => e);
+    expect(isRateLimited(err)).toBe(true);
+    if (!isRateLimited(err)) return;
     expect(err.retryAfterMs).toBeGreaterThan(0);
   });
 });
@@ -375,18 +377,18 @@ describe("batchBlobTexts", () => {
     expect(res).toEqual({ sha1: "guid: g1\n", sha2: null }); // an unfetchable blob is null
   });
 
-  it("maps graphql RATE_LIMITED errors to RateLimitError", async () => {
+  it("maps graphql RATE_LIMITED errors to rate-limited", async () => {
     // GraphQL can return an errors array with HTTP 200: missing this silently empties the index
     const fetchFn = vi.fn(
       async () => new Response(JSON.stringify({ errors: [{ type: "RATE_LIMITED" }] }), { status: 200 }),
     );
     const client = new GithubClient("https://api.github.com", "tok", fetchFn);
-    await expect(client.batchBlobTexts("o", "r", ["sha1"])).rejects.toBeInstanceOf(RateLimitError);
+    await expect(client.batchBlobTexts("o", "r", ["sha1"])).rejects.toSatisfy(isRateLimited);
   });
 
-  it("maps http 403 with retry-after to RateLimitError (shared classification)", async () => {
+  it("maps http 403 with retry-after to rate-limited (shared classification)", async () => {
     const fetchFn = vi.fn(async () => new Response("slow down", { status: 403, headers: { "retry-after": "60" } }));
     const client = new GithubClient("https://api.github.com", "tok", fetchFn);
-    await expect(client.batchBlobTexts("o", "r", ["sha1"])).rejects.toBeInstanceOf(RateLimitError);
+    await expect(client.batchBlobTexts("o", "r", ["sha1"])).rejects.toSatisfy(isRateLimited);
   });
 });

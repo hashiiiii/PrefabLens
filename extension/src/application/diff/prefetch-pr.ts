@@ -1,6 +1,6 @@
 import type { PrefetchRequest } from "../../domain/diff/types";
 import { isUnityPath } from "../../domain/unity";
-import { RateLimitError } from "../port/github";
+import { isRateLimited } from "../port/github";
 import type { DiffSession } from "./_diff-session";
 import { getDiff } from "./_get-diff";
 import { loadContext } from "./_load-context";
@@ -34,7 +34,7 @@ export async function prefetchPr(deps: DiffDeps, session: DiffSession, req: Pref
       await Promise.all(
         chunk.map((f) =>
           getDiff(deps, session, client, ctx, req.owner, req.repo, f.path, false).catch((err) => {
-            if (err instanceof RateLimitError) throw err; // only rate limit stops the whole thing
+            if (isRateLimited(err)) throw err; // only rate limit stops the whole thing
             // Swallow per-file failures: shown again on manual toggle
           }),
         ),

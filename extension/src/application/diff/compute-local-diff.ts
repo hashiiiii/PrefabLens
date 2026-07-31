@@ -23,7 +23,9 @@ export async function computeLocalDiff(
   const side = (url: string | undefined): Promise<Uint8Array> =>
     url ? deps.fetchBytes(url) : Promise.resolve(new Uint8Array());
   const [before, after] = await Promise.all([side(beforeUrl), side(afterUrl)]);
-  let diff = applyResolved(differ.diff(before, after), index);
+  const first = differ.diff(before, after);
+  if (!first.ok) throw new Error(first.error.message);
+  let diff = applyResolved(first.value, index);
   const assets = new Map<string, Uint8Array>();
   for (let round = 0; round < MAX_SOURCE_ROUNDS; round++) {
     const needed = (diff.neededSources ?? []).filter((s) => !assets.has(s.guid));
@@ -39,7 +41,9 @@ export async function computeLocalDiff(
       progressed = true;
     }
     if (!progressed) break;
-    diff = applyResolved(differ.diffWithAssets(before, after, assets), index);
+    const merged = differ.diffWithAssets(before, after, assets);
+    if (!merged.ok) throw new Error(merged.error.message);
+    diff = applyResolved(merged.value, index);
   }
   return diff;
 }

@@ -7,7 +7,7 @@ import {
   unresolvedRemaining,
 } from "../../domain/diff/types";
 import type { DifferPort } from "../port/differ";
-import { type GithubPort, RateLimitError } from "../port/github";
+import { type GithubPort, isRateLimited } from "../port/github";
 import type { GuidCachePort } from "../port/guid-cache";
 import type { RepoIndexPort } from "../port/repo-index";
 import type { DiffContext, DiffSession } from "./_diff-session";
@@ -60,7 +60,7 @@ export async function searchGuids(
       else session.misses.add(key);
     } catch (err) {
       // Rate limit truncates the run: report it instead of degrading silently (#194)
-      if (err instanceof RateLimitError) {
+      if (isRateLimited(err)) {
         rateLimited = true;
         break;
       }
@@ -102,7 +102,7 @@ export function getRepoIndex(
     .get(`${repoKey}@${ref}`, () => syncRepoIndex(client, deps.repoIndexStore, owner, repo, repoKey, ref))
     .catch((err: unknown) => {
       // Cache already dropped the failure, so the next visit retries
-      if (err instanceof RateLimitError) session.indexFallback.add(repoKey);
+      if (isRateLimited(err)) session.indexFallback.add(repoKey);
       return null;
     });
 }
@@ -139,7 +139,7 @@ export async function mergeSources(
         bytes = await fetchBlob(session, client, owner, repo, path, sha, blobSha);
       } catch (err) {
         // Degrade to first-pass diff, but tell the caller why (#194)
-        return { json: current, status: err instanceof RateLimitError ? "rateLimited" : "failed" };
+        return { json: current, status: isRateLimited(err) ? "rateLimited" : "failed" };
       }
       if (!bytes) continue;
       // Binary-serialized sources are a no-op re-diff — don't count as progress
@@ -148,12 +148,9 @@ export async function mergeSources(
       progressed = true;
     }
     if (!progressed) break;
-    let merged: DiffV2;
-    try {
-      merged = differ.diffWithAssets(before, after, assets);
-    } catch {
-      return { json: current, status: "failed" }; // merge failure degrades to current result
-    }
+    const mergedResult = differ.diffWithAssets(before, after, assets);
+    if (!mergedResult.ok) return { json: current, status: "failed" }; // merge failure degrades to current result
+    const merged = mergedResult.value;
     // Merging surfaces new external refs inside the source, so resolve again
     const next = await searchUnresolved(
       deps,
@@ -245,7 +242,7 @@ export async function resolveRemaining(
       ...at,
       resolved: {},
       done: true,
-      status: err instanceof RateLimitError ? "rateLimited" : "failed",
+      status: isRateLimited(err) ? "rateLimited" : "failed",
     });
   }
 }

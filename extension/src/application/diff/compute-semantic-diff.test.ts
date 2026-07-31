@@ -1,8 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import type { DiffV2, GuidResolvedPush, SemanticDiffRequest, SemanticDiffResponse } from "../../domain/diff/types";
 import { must } from "../../domain/must";
-import { DiffError, type DifferPort } from "../port/differ";
-import { AuthError, type ChangedFile, RateLimitError } from "../port/github";
+import { err, ok } from "../_result";
+import type { DifferPort } from "../port/differ";
+import type { ChangedFile } from "../port/github";
 import { createDiffSession, type DiffSession } from "./_diff-session";
 import { computeSemanticDiff, type DiffDeps } from "./compute-semantic-diff";
 import { prefetchPr } from "./prefetch-pr";
@@ -61,8 +62,8 @@ function makeDeps(overrides?: {
     batchBlobTexts: vi.fn(async (): Promise<Record<string, string | null>> => ({})),
   };
   const differ: DifferPort = {
-    diff: overrides?.diff ?? vi.fn(() => DIFF),
-    diffWithAssets: overrides?.diffWithAssets ?? vi.fn(() => DIFF),
+    diff: overrides?.diff ?? vi.fn(() => ok(DIFF)),
+    diffWithAssets: overrides?.diffWithAssets ?? vi.fn(() => ok(DIFF)),
     // Fixture contents are shorthand strings, not real UnityYAML: accept by default.
     isUnityYaml: overrides?.isUnityYaml ?? (() => true),
   };
@@ -191,7 +192,7 @@ describe("semanticDiff", () => {
   });
 
   it("uses an empty before for added files without fetching the base side", async () => {
-    const diff = vi.fn<DifferPort["diff"]>(() => DIFF);
+    const diff = vi.fn<DifferPort["diff"]>(() => ok(DIFF));
     const { deps, client } = makeDeps({ files: [{ path: "Assets/Foo.prefab", status: "added" }], diff });
     await resolveFully(deps, createDiffSession(), REQ);
     const baseFetches = client.getFileAtRef.mock.calls.filter(
@@ -202,7 +203,7 @@ describe("semanticDiff", () => {
   });
 
   it("uses an empty after for removed files without fetching the head side", async () => {
-    const diff = vi.fn<DifferPort["diff"]>(() => DIFF);
+    const diff = vi.fn<DifferPort["diff"]>(() => ok(DIFF));
     const { deps, client } = makeDeps({ files: [{ path: "Assets/Foo.prefab", status: "removed" }], diff });
     await resolveFully(deps, createDiffSession(), REQ);
     const headFetches = client.getFileAtRef.mock.calls.filter(
@@ -215,7 +216,7 @@ describe("semanticDiff", () => {
   it("rejects a file whose content is not UnityYAML on either side", async () => {
     // Real sniff behavior lives in differ.test.ts; here the fake reproduces its
     // contract so the outcome plumbing (computeDiff -> response) is what's tested.
-    const diff = vi.fn<DifferPort["diff"]>(() => DIFF);
+    const diff = vi.fn<DifferPort["diff"]>(() => ok(DIFF));
     const { deps } = makeDeps({
       contents: { "Assets/Foo.prefab@base-sha": "\x00binary", "Assets/Foo.prefab@head-sha": "\x00binary2" },
       diff,
@@ -395,15 +396,15 @@ describe("semanticDiff", () => {
 
   it("keeps the diff usable when code search hits the rate limit", async () => {
     const twoGuids: DiffV2 = { ...DIFF, unresolvedGuids: ["g1", "g2"] };
-    const { deps, client } = makeDeps({ diff: () => twoGuids });
-    client.searchMetaByGuid.mockResolvedValueOnce("Assets/First.cs").mockRejectedValueOnce(new RateLimitError("x"));
+    const { deps, client } = makeDeps({ diff: () => ok(twoGuids) });
+    client.searchMetaByGuid.mockResolvedValueOnce("Assets/First.cs").mockRejectedValueOnce({ kind: "rate-limited" });
     const res = await resolveFully(deps, createDiffSession(), REQ);
     expect(res).toEqual({ ok: true, json: { ...twoGuids, resolved: { g1: "Assets/First.cs" } } });
   });
 
   it("does not treat Object.prototype members as cache hits (hostile guid)", async () => {
     const proto: DiffV2 = { ...DIFF, unresolvedGuids: ["constructor"] };
-    const { deps, client } = makeDeps({ diff: () => proto, cached: { g9: "Assets/X.cs" } });
+    const { deps, client } = makeDeps({ diff: () => ok(proto), cached: { g9: "Assets/X.cs" } });
     const res = await resolveFully(deps, createDiffSession(), REQ);
     // 'constructor' goes to search rather than a cache hit, and stays unresolved after missing
     expect(client.searchMetaByGuid).toHaveBeenCalledWith("o", "r", "constructor");
@@ -412,7 +413,7 @@ describe("semanticDiff", () => {
 
   it("caps code searches at 10 per request", async () => {
     const many: DiffV2 = { ...DIFF, unresolvedGuids: Array.from({ length: 12 }, (_, i) => `g${i}`) };
-    const { deps, client } = makeDeps({ diff: () => many });
+    const { deps, client } = makeDeps({ diff: () => ok(many) });
     await resolveFully(deps, createDiffSession(), REQ);
     expect(client.searchMetaByGuid).toHaveBeenCalledTimes(10);
   });
@@ -420,21 +421,19 @@ describe("semanticDiff", () => {
   it("does not count cached guids against the search cap", async () => {
     // If 2 of 12 guids are cached, the search budget of 10 can be spent entirely on the 10 unknown guids
     const many: DiffV2 = { ...DIFF, unresolvedGuids: Array.from({ length: 12 }, (_, i) => `g${i}`) };
-    const { deps, client } = makeDeps({ diff: () => many, cached: { g0: "Assets/A.cs", g1: "Assets/B.cs" } });
+    const { deps, client } = makeDeps({ diff: () => ok(many), cached: { g0: "Assets/A.cs", g1: "Assets/B.cs" } });
     const res = await resolveFully(deps, createDiffSession(), REQ);
     expect(client.searchMetaByGuid).toHaveBeenCalledTimes(10);
     expect(res).toEqual({ ok: true, json: { ...many, resolved: { g0: "Assets/A.cs", g1: "Assets/B.cs" } } });
   });
 
-  it("maps AuthError / DiffError / other failures to stable error codes", async () => {
+  it("maps auth-failed / diff-failed / other failures to stable error codes", async () => {
     const auth = makeDeps();
-    auth.client.getPrRefs.mockRejectedValue(new AuthError("x"));
+    auth.client.getPrRefs.mockRejectedValue({ kind: "auth-failed" });
     expect(await resolveFully(auth.deps, createDiffSession(), REQ)).toEqual({ ok: false, error: "auth-failed" });
 
     const bad = makeDeps({
-      diff: () => {
-        throw new DiffError("NestingTooDeep");
-      },
+      diff: () => err({ kind: "diff-failed", message: "NestingTooDeep" }),
     });
     expect(await resolveFully(bad.deps, createDiffSession(), REQ)).toEqual({ ok: false, error: "diff-failed" });
 
@@ -445,7 +444,7 @@ describe("semanticDiff", () => {
 
   it("returns too-large above 25MB unless forced", async () => {
     const big = new Uint8Array(13 * 1024 * 1024); // 26MB across base+head
-    const diff = vi.fn(() => DIFF);
+    const diff = vi.fn(() => ok(DIFF));
     const { deps, client } = makeDeps({ diff });
     client.getFileAtRef.mockResolvedValue(big);
     const session = createDiffSession();
@@ -465,9 +464,9 @@ describe("semanticDiff", () => {
     expect((await resolveFully(deps, createDiffSession(), REQ)).ok).toBe(true);
   });
 
-  it("maps RateLimitError to rate-limited", async () => {
+  it("maps rate-limited failure to rate-limited", async () => {
     const limited = makeDeps();
-    limited.client.getPrRefs.mockRejectedValue(new RateLimitError("x"));
+    limited.client.getPrRefs.mockRejectedValue({ kind: "rate-limited" });
     expect(await resolveFully(limited.deps, createDiffSession(), REQ)).toEqual({ ok: false, error: "rate-limited" });
   });
 
@@ -493,7 +492,7 @@ describe("semanticDiff", () => {
     });
 
     it("uses the files-api sha for the base side of removed files", async () => {
-      const diff = vi.fn<DifferPort["diff"]>(() => DIFF);
+      const diff = vi.fn<DifferPort["diff"]>(() => ok(DIFF));
       const { deps, client } = makeDeps({
         files: [{ path: "Assets/Foo.prefab", status: "removed", sha: "foo-base" }],
         blobs: { "foo-base": "b" },
@@ -559,7 +558,7 @@ describe("semanticDiff", () => {
 
     it("propagates a rate-limited base tree fetch like the guid index does", async () => {
       const { deps, client } = makeDeps();
-      client.listBlobShas.mockRejectedValue(new RateLimitError("x"));
+      client.listBlobShas.mockRejectedValue({ kind: "rate-limited" });
       expect(await resolveFully(deps, createDiffSession(), REQ)).toEqual({ ok: false, error: "rate-limited" });
     });
 
@@ -589,9 +588,9 @@ describe("semanticDiff", () => {
     const MERGED: DiffV2 = { schema: "prefablens.diff.v2", unresolvedGuids: ["src1"], roots: [], loose: [] };
 
     it("fetches the resolved source at head and re-diffs with assets", async () => {
-      const diffWithAssets = vi.fn<DifferPort["diffWithAssets"]>(() => MERGED);
+      const diffWithAssets = vi.fn<DifferPort["diffWithAssets"]>(() => ok(MERGED));
       const { deps, client } = makeDeps({
-        diff: () => NEEDS,
+        diff: () => ok(NEEDS),
         diffWithAssets,
         search: { src1: "Assets/Cyl.prefab" },
         contents: {
@@ -610,9 +609,9 @@ describe("semanticDiff", () => {
     });
 
     it("fetches removed-instance sources from the base side", async () => {
-      const diffWithAssets = vi.fn<DifferPort["diffWithAssets"]>(() => MERGED);
+      const diffWithAssets = vi.fn<DifferPort["diffWithAssets"]>(() => ok(MERGED));
       const { deps, client } = makeDeps({
-        diff: () => ({ ...NEEDS, neededSources: [{ guid: "src1", side: "before" }] }),
+        diff: () => ok({ ...NEEDS, neededSources: [{ guid: "src1", side: "before" }] }),
         diffWithAssets,
         search: { src1: "Assets/Cyl.prefab" },
         contents: {
@@ -626,8 +625,8 @@ describe("semanticDiff", () => {
     });
 
     it("keeps the first-pass diff when the source path cannot be resolved", async () => {
-      const diffWithAssets = vi.fn<DifferPort["diffWithAssets"]>(() => MERGED);
-      const { deps } = makeDeps({ diff: () => NEEDS, diffWithAssets }); // search misses
+      const diffWithAssets = vi.fn<DifferPort["diffWithAssets"]>(() => ok(MERGED));
+      const { deps } = makeDeps({ diff: () => ok(NEEDS), diffWithAssets }); // search misses
       const res = await resolveFully(deps, createDiffSession(), REQ);
       // An unknown-path source is given up on, returning the degraded view (the first-pass json) as-is.
       expect(diffWithAssets).not.toHaveBeenCalled();
@@ -636,9 +635,9 @@ describe("semanticDiff", () => {
 
     it("does not loop when the merged output still needs the same source", async () => {
       // If supplying still leaves it degraded (a broken source, etc.), don't loop forever on the same guid.
-      const diffWithAssets = vi.fn<DifferPort["diffWithAssets"]>(() => NEEDS);
+      const diffWithAssets = vi.fn<DifferPort["diffWithAssets"]>(() => ok(NEEDS));
       const { deps } = makeDeps({
-        diff: () => NEEDS,
+        diff: () => ok(NEEDS),
         diffWithAssets,
         search: { src1: "Assets/Cyl.prefab" },
         contents: {
@@ -660,7 +659,7 @@ describe("semanticDiff", () => {
         neededSources: [{ guid: "src1", side: "after" }],
       };
       const merged: DiffV2 = { ...DIFF, unresolvedGuids: ["src1"] };
-      const diffWithAssets = vi.fn(() => merged);
+      const diffWithAssets = vi.fn(() => ok(merged));
       const { deps } = makeDeps({
         files: [
           { path: "Assets/Foo.prefab", status: "modified" },
@@ -672,7 +671,7 @@ describe("semanticDiff", () => {
           "Assets/Src.prefab.meta@head-sha": "guid: src1\n",
           "Assets/Src.prefab@head-sha": "source prefab",
         },
-        diff: () => withSource,
+        diff: () => ok(withSource),
         diffWithAssets,
       });
       const session = createDiffSession();
@@ -729,7 +728,7 @@ describe("semanticDiff with push (two-stage)", () => {
 
   it("resolves via the repo index and only searches the leftover", async () => {
     const { deps, client } = makeDeps({
-      diff: () => ({ ...DIFF, unresolvedGuids: ["g1", "g2"] }),
+      diff: () => ok({ ...DIFF, unresolvedGuids: ["g1", "g2"] }),
       search: { g2: "Assets/Other.cs" },
     });
     client.listMetaTree.mockResolvedValue({ truncated: false, metas: [{ path: "Assets/S.cs.meta", sha: "sha1" }] });
@@ -751,7 +750,7 @@ describe("semanticDiff with push (two-stage)", () => {
 
   it("stops retrying the index for the session after an index rate limit", async () => {
     const { deps, client } = makeDeps();
-    client.listMetaTree.mockRejectedValue(new RateLimitError("x"));
+    client.listMetaTree.mockRejectedValue({ kind: "rate-limited" });
     const session = createDiffSession();
     await serveAndResolve(deps, session, REQ);
     await serveAndResolve(deps, session, REQ);
@@ -763,14 +762,14 @@ describe("semanticDiff with push (two-stage)", () => {
     // and once the repo index resolves the source guid, the re-merged json arrives in the final push
     const withSource: DiffV2 = { ...DIFF, unresolvedGuids: ["src1"], neededSources: [{ guid: "src1", side: "after" }] };
     const merged: DiffV2 = { ...DIFF, unresolvedGuids: ["src1"], resolved: { src1: "Assets/Src.prefab" } };
-    const diffWithAssets = vi.fn(() => merged);
+    const diffWithAssets = vi.fn(() => ok(merged));
     const { deps, client } = makeDeps({
       contents: {
         "Assets/Foo.prefab@base-sha": "b",
         "Assets/Foo.prefab@head-sha": "a",
         "Assets/Src.prefab@head-sha": "source prefab",
       },
-      diff: () => withSource,
+      diff: () => ok(withSource),
       diffWithAssets,
     });
     client.listMetaTree.mockResolvedValue({

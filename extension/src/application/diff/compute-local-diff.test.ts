@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import type { DiffV2 } from "../../domain/diff/types";
+import { ok } from "../_result";
 import type { DifferPort } from "../port/differ";
 import { type ComputeLocalDiffDeps, computeLocalDiff } from "./compute-local-diff";
 
@@ -14,8 +15,8 @@ function makeDeps(overrides?: {
 }): ComputeLocalDiffDeps {
   return {
     differ: {
-      diff: overrides?.diff ?? (() => DIFF),
-      diffWithAssets: overrides?.diffWithAssets ?? (() => DIFF),
+      diff: overrides?.diff ?? (() => ok(DIFF)),
+      diffWithAssets: overrides?.diffWithAssets ?? (() => ok(DIFF)),
       isUnityYaml: () => true,
     },
     index: new Map([["g1", "Assets/S.cs"]]),
@@ -43,7 +44,7 @@ it("treats a missing url as the empty side (added/removed fixtures)", async () =
     files: { "a.prefab": "a" },
     diff: (before, after) => {
       seen.push([before.length, after.length]);
-      return DIFF;
+      return ok(DIFF);
     },
   });
   await computeLocalDiff(deps, undefined, "a.prefab");
@@ -56,10 +57,10 @@ it("re-diffs with fetched source assets until sources are satisfied", async () =
   const deps = makeDeps({
     files: { "b.prefab": "b", "a.prefab": "a" },
     sources: { "after/Assets/S.cs": "SRC" },
-    diff: () => NEEDS,
+    diff: () => ok(NEEDS),
     diffWithAssets: (_b, _a, assets) => {
       for (const bytes of assets.values()) assetsSeen.push(new TextDecoder().decode(bytes));
-      return DIFF;
+      return ok(DIFF);
     },
   });
   const diff = await computeLocalDiff(deps, "b.prefab", "a.prefab");
@@ -73,7 +74,7 @@ it("keeps the first-pass diff when a source path is unresolved or missing", asyn
     unresolvedGuids: ["gX"],
     neededSources: [{ guid: "gX", side: "after" }],
   };
-  const deps = makeDeps({ files: { "b.prefab": "b", "a.prefab": "a" }, diff: () => NEEDS });
+  const deps = makeDeps({ files: { "b.prefab": "b", "a.prefab": "a" }, diff: () => ok(NEEDS) });
   const diff = await computeLocalDiff(deps, "b.prefab", "a.prefab");
   // gX is not in the index and fixtures have no source: degrade, don't throw
   expect(diff.neededSources).toEqual(NEEDS.neededSources);

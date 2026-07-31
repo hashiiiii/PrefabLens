@@ -1,6 +1,6 @@
 import type { DiffTarget } from "../../domain/diff/types";
 import { targetKey } from "../../domain/diff/types";
-import { type ChangedFile, type GithubPort, RateLimitError, type RefPair } from "../port/github";
+import { type ChangedFile, type GithubPort, isRateLimited, type RefPair } from "../port/github";
 import type { DiffContext, DiffSession } from "./_diff-session";
 import { fetchBlob } from "./_fetch-blobs";
 import { buildGuidIndex } from "./build-guid-index";
@@ -60,7 +60,7 @@ export function loadContext(
       client.listBlobShas(owner, repo, refs.baseSha).then(
         (tree) => (tree.truncated ? null : tree.byPath),
         (err: unknown) => {
-          if (err instanceof RateLimitError) throw err;
+          if (isRateLimited(err)) throw err;
           return null;
         },
       ),

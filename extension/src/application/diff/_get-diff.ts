@@ -32,7 +32,9 @@ async function computeDiff(
   if (!differ.isUnityYaml(before) && !differ.isUnityYaml(after)) {
     return { ok: false, error: "not-unity-yaml" };
   }
-  return { ok: true, json: differ.diff(before, after) };
+  const result = differ.diff(before, after);
+  if (!result.ok) return { ok: false, error: "diff-failed" };
+  return { ok: true, json: result.value };
 }
 
 // Sha-keyed: a push produces a new key (no invalidation)

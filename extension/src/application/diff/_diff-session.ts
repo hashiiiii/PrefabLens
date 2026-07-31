@@ -15,7 +15,8 @@ export type DiffContext = {
 export type DiffOutcome =
   | { ok: true; json: import("../../domain/diff/types").DiffV2 }
   | { ok: false; error: "too-large"; bytes: number }
-  | { ok: false; error: "not-unity-yaml" };
+  | { ok: false; error: "not-unity-yaml" }
+  | { ok: false; error: "diff-failed" };
 
 export type DiffSession = {
   contexts: PromiseCache<DiffContext>;

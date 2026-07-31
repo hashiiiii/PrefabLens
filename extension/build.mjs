@@ -5,8 +5,8 @@ mkdirSync("dist", { recursive: true });
 
 const e2e = process.argv.includes("--e2e");
 
-// --demo: build only the site demo bundle (see presentation/demo). Kept out of the
-// default build so the extension's shipped dist stays lean.
+// --demo build only the site demo bundle
+// Kept out of the default build so the extension's shipped dist stays lean
 if (process.argv.includes("--demo")) {
   await build({
     entryPoints: { demo: "src/presentation/demo/index.ts" },
@@ -37,7 +37,6 @@ await build({
 
 const manifest = JSON.parse(readFileSync("manifest.json", "utf8"));
 if (e2e) {
-  // --e2e: grant and target the fixed port the fake-GitHub server in full.spec.ts listens on
   manifest.host_permissions.push("http://127.0.0.1/*");
   manifest.content_scripts.push({ matches: ["http://127.0.0.1/*"], js: ["content.js"], run_at: "document_idle" });
 }

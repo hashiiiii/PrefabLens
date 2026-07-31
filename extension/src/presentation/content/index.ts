@@ -1,21 +1,6 @@
-import { createSignIn, type PendingSignIn } from "../../application/auth/sign-in";
-import { createAuthRetries } from "../../application/overlay/auth-retries";
-import { createFileView } from "../../application/overlay/file-view";
-import type { View } from "../../application/overlay/view-mode";
-import { createViewState, type ViewState } from "../../application/overlay/view-state";
-import { createViewRegistry, type ViewEntry } from "../../application/overlay/views";
-import {
-  type BackgroundError,
-  type GuidResolvedPush,
-  type PrefetchRequest,
-  type SemanticDiffRequest,
-  type SemanticDiffResponse,
-  targetKey,
-  unresolvedRemaining,
-} from "../../domain/diff/types";
+import { type BackgroundError, type GuidResolvedPush, targetKey, unresolvedRemaining } from "../../domain/diff/types";
 import { must } from "../../domain/must";
-import { createChromeTokenStore } from "../../infrastructure/providers/chrome-token-store";
-import { pollForToken, requestDeviceCode } from "../../infrastructure/providers/github-device-flow";
+import { createContentApp } from "../../infrastructure/container";
 import {
   render,
   renderError,
@@ -26,6 +11,11 @@ import {
 } from "../renderer/render";
 import { type DiffPage, type FileEntry, parseDiffUrl, parsePrPage, scanUnityFiles } from "./detect";
 import { fillDeviceCode } from "./device-page";
+import { createAuthRetries } from "./overlay/auth-retries";
+import { createFileView } from "./overlay/file-view";
+import type { View } from "./overlay/view-mode";
+import { createViewState, type ViewState } from "./overlay/view-state";
+import { createViewRegistry, type ViewEntry } from "./overlay/views";
 import { createToggle, type Toggle } from "./toggle";
 
 const ERROR_TEXT: Record<BackgroundError, string> = {
@@ -61,21 +51,12 @@ let prefetchedPr = ""; // prefetch once per PR across conversation + files tabs
 // Auth-blocked panels: retry all when a token lands
 const authRetries = createAuthRetries();
 
-const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
-const tokenStore = createChromeTokenStore(chrome.storage.local);
-const signIn = createSignIn({
-  auth: { requestDeviceCode, pollForToken },
-  tokenStore,
-  fetchFn: fetch,
-  sleep,
-  openTab: (url) => void window.open(url, "_blank", "noopener"),
-  now: () => Date.now(),
-});
+const app = createContentApp();
 
 // Auth-error panel: device flow; failures land back here for retry
 function signInPanel(root: ShadowRoot, message: string): void {
   renderSignIn(root, message, () => {
-    void signIn({
+    void app.signIn({
       showPending: (userCode, verificationUri) =>
         renderSignInPending(root, userCode, verificationUri, () => void navigator.clipboard.writeText(userCode)),
       showFailure: (text) => signInPanel(root, text),
@@ -90,9 +71,7 @@ function attach(viewState: ViewState): void {
     if (prKey !== prefetchedPr) {
       prefetchedPr = prKey;
       // Fire-and-forget; manual toggle stays available if prefetch fails
-      void (
-        chrome.runtime.sendMessage({ type: "prefetch", ...prPage } satisfies PrefetchRequest) as Promise<unknown>
-      ).catch(() => {});
+      void app.requestPrefetch({ type: "prefetch", ...prPage });
     }
   }
   const page = parseDiffUrl(location.pathname);
@@ -162,7 +141,7 @@ function attachToggle(viewState: ViewState, page: DiffPage, entry: FileEntry): v
       };
     },
     requestDiff: (force) =>
-      requestDiff({
+      app.requestSemanticDiff({
         type: "semanticDiff",
         owner: page.owner,
         repo: page.repo,
@@ -197,18 +176,10 @@ function attachToggle(viewState: ViewState, page: DiffPage, entry: FileEntry): v
   if (viewState.effective(entry.path) === "semantic") fileView.show("semantic");
 }
 
-function requestDiff(req: SemanticDiffRequest): Promise<SemanticDiffResponse> {
-  return (chrome.runtime.sendMessage(req) as Promise<SemanticDiffResponse>).catch(() => ({
-    ok: false as const,
-    error: "fetch-failed" as const,
-  }));
-}
-
 async function init(): Promise<void> {
   // Device page: only pre-fill the code the PR page issued
   if (location.pathname === "/login/device") {
-    const stored = await chrome.storage.local.get(["signin"]).catch(() => ({}) as Record<string, unknown>);
-    const pending = stored.signin as PendingSignIn | undefined;
+    const pending = await app.getPendingSignIn();
     if (pending) fillDeviceCode(document, pending, Date.now());
     return;
   }

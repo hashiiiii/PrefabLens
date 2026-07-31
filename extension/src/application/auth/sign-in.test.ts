@@ -35,6 +35,9 @@ function fakeDeps(poll: () => Promise<PollResult>) {
         calls.push("savePending");
         pendings.push(pending);
       },
+      async readPendingSignIn() {
+        return undefined;
+      },
       async clearPendingSignIn() {
         calls.push("clearPending");
       },

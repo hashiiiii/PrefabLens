@@ -3,7 +3,7 @@ import type { DiffV2, GuidResolvedPush, SemanticDiffRequest } from "../../domain
 import { must } from "../../domain/must";
 import type { DifferPort } from "../port/differ";
 import { RateLimitError } from "../port/github";
-import { createResolution, type DiffContext, type SearchClient } from "./resolution";
+import { createResolution, type DiffContext, type SearchClient } from "./_resolution";
 
 const REPO_KEY = "https://api.github.com/o/r";
 

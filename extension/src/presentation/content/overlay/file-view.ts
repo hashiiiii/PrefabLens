@@ -3,8 +3,8 @@ import {
   type DiffV2,
   type SemanticDiffResponse,
   unresolvedRemaining,
-} from "../../domain/diff/types";
-import { must } from "../../domain/must";
+} from "../../../domain/diff/types";
+import { must } from "../../../domain/must";
 import type { View } from "./view-mode";
 
 // Per-file raw/semantic state machine (host + fetch latch); unit-testable without a browser.

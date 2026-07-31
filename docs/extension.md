@@ -11,13 +11,13 @@ Dependencies always point inward (toward `domain/`):
     Presentation -> Application -> Domain <- Infrastructure
 
 The extension has three JS contexts, each with its own entry point and
-container factory:
+container wiring:
 
 | Context | Entry point | Factory |
 |---|---|---|
-| Service worker | `presentation/background/index.ts` | `createBackgroundDeps()` |
-| Content script | `presentation/content/index.ts` | `createContentDeps()` |
-| Site demo | `presentation/demo/index.ts` | `createDemoDeps()` |
+| Service worker | `presentation/background/index.ts` | individual `createX()` from `container.ts` |
+| Content script | `presentation/content/index.ts` | individual `createX()` from `container.ts` |
+| Site demo | `presentation/demo/index.ts` | individual `createX()` from `container.ts` |
 
 ## Layers
 
@@ -35,19 +35,19 @@ Pure types and pure functions. Imports nothing outside `domain/`.
 Use cases composed from domain logic and ports.
 
 - **Use case**: one per file, named `<verb>-<noun>.ts`, exporting a plain
-  verb function `<verb>(deps, [state,] input)`. Long-lived state (in-flight
+  verb function `<verb>(ports…, [state,] input)`. Long-lived state (in-flight
   caches, latches, view state) lives in plain state records created by
-  `create<X>()` / `empty<X>()` constructors; the container (or presentation,
-  for UI state) creates them once and callers pass them explicitly. No
-  `create<UseCase>(deps)` factories, no method-bag objects.
+  `create<X>()` / `empty<X>()` constructors; callers pass state explicitly.
+  No `create<UseCase>(deps)` factories, no method-bag objects, no `XxxDeps`
+  bags.
 - **Port** (`application/port/<name>.ts`): `XxxPort` types abstracting
   infrastructure capabilities.
 - **Shared internals**: files used by several use cases in a feature folder
   get an underscore prefix (`_diff-session.ts`, `_resolution.ts`,
   `_promise-cache.ts`) to distinguish them from verb-noun use cases.
-- **Inline deps**: a single-function dependency may live inline in a use
-  case's `Deps` type (e.g. `getSettings`, `fetchBytes`); multi-method
-  contracts go in `port/`.
+- **Function params**: single-function dependencies (e.g. `fetchBytes`,
+  `makeClient`, `getDiffer`) are plain parameters; multi-method contracts
+  live in `application/port/`.
 
 ### Infrastructure (`src/infrastructure/`)
 
@@ -55,11 +55,11 @@ Use cases composed from domain logic and ports.
   other outside-world adapters (GitHub client, WASM differ, chrome.storage,
   chrome.runtime messaging).
 - **`repositories/`**: chrome.storage-backed stores.
-- **`container.ts`**: the only DI file. Exports one `create<Context>Deps()`
-  factory per JS context returning the deps (and state) bundles presentation
-  passes to use-case functions. Only container.ts may import application use
-  cases; all other infrastructure files import `application/port` and domain
-  at most.
+- **`container.ts`**: the only DI file. Exports individual `createX()`
+  factories that return ports (and lifetime-managed loaders). Does not import
+  application use cases or session constructors. Entry points
+  (`presentation/*/index.ts`) call factories, `createDiffSession` where
+  needed, and use-case verbs.
 
 ### Presentation (`src/presentation/`)
 
@@ -69,8 +69,9 @@ Receives outside input and decides which use case to call.
   pure functions, other presentation files.
 - Must not import: `application/port`, any infrastructure file — except the
   entry point (`presentation/*/index.ts`), which imports `container.ts` to
-  build its deps bundle. Presentation holds deps bundles but never invokes port
-  methods itself — it only passes them to use cases.
+  construct ports. Presentation holds port values and passes them to use
+  cases; it never invokes port methods itself (except where already
+  documented for UI prefs / token change observation).
 - **Inbound vs outbound**: inbound transport events
   (`chrome.runtime.onMessage`, `chrome.storage.onChanged`, DOM events) are
   presentation's job, like HTTP routes. Outbound calls (requests to the
@@ -85,4 +86,4 @@ Receives outside input and decides which use case to call.
 
 Every entry point follows:
 
-    create<Context>Deps() -> register listeners -> call use-case functions
+    createX()… → createDiffSession() (if needed) → register listeners → call use-case functions

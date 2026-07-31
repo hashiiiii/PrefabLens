@@ -1,12 +1,10 @@
-import { createGetPendingSignIn, type GetPendingSignIn } from "../application/auth/get-pending-sign-in";
-import { createSignIn, type SignInUi } from "../application/auth/sign-in";
-import { createDiffSession } from "../application/diff/_diff-session";
-import { type ComputeLocalDiff, createComputeLocalDiff } from "../application/diff/compute-local-diff";
-import { type ComputeSemanticDiff, createComputeSemanticDiff } from "../application/diff/compute-semantic-diff";
-import { createPrefetchPr, type PrefetchPr } from "../application/diff/prefetch-pr";
-import { createRequestPrefetch, type RequestPrefetch } from "../application/diff/request-prefetch";
-import { createRequestSemanticDiff, type RequestSemanticDiff } from "../application/diff/request-semantic-diff";
+import type { SignInDeps } from "../application/auth/sign-in";
+import { createDiffSession, type DiffSession } from "../application/diff/_diff-session";
+import type { ComputeLocalDiffDeps } from "../application/diff/compute-local-diff";
+import type { DiffDeps } from "../application/diff/compute-semantic-diff";
 import type { DifferPort } from "../application/port/differ";
+import type { MessengerPort } from "../application/port/messenger";
+import type { TokenStorePort } from "../application/port/token-store";
 import { createChromeMessenger } from "./providers/chrome-messenger";
 import { createChromeTokenStore } from "./providers/chrome-token-store";
 import { createQueue } from "./providers/fetch-queue";
@@ -16,22 +14,8 @@ import { createDiffer } from "./providers/wasm-differ";
 import { createMergeStore } from "./repositories/merge-store";
 import { createSessionDiffStore } from "./repositories/session-diff-store";
 
-export type BackgroundApp = {
-  computeSemanticDiff: ComputeSemanticDiff;
-  prefetchPr: PrefetchPr;
-};
-
-export type ContentApp = {
-  signIn(ui: SignInUi): Promise<void>;
-  requestSemanticDiff: RequestSemanticDiff;
-  requestPrefetch: RequestPrefetch;
-  getPendingSignIn: GetPendingSignIn;
-};
-
-export type DemoApp = { computeLocalDiff: ComputeLocalDiff };
-
 // Wires providers/repositories for the service worker. Message listening stays in presentation.
-export function createBackgroundApp(): BackgroundApp {
+export function createBackgroundDeps(): { deps: DiffDeps; session: DiffSession } {
   let differ: Promise<DifferPort> | undefined;
 
   // Six concurrent across REST/GraphQL (GraphQL shares fetchFn). User-action jumps via front.
@@ -46,7 +30,8 @@ export function createBackgroundApp(): BackgroundApp {
   // Whole-repo .meta guid records for repoIndexStore.loadGuids/saveGuids
   const metaGuids = createMergeStore(chrome.storage.local, "metaGuids");
 
-  const session = createDiffSession({
+  const session = createDiffSession();
+  const deps: DiffDeps = {
     getSettings: async () => ({ accessToken: await tokenStore.readAccessToken() }),
     makeClient: (base, token, lane) => new GithubClient(base, token, queuedFetch(lane === "user")),
     getDiffer() {
@@ -71,35 +56,35 @@ export function createBackgroundApp(): BackgroundApp {
         await chrome.storage.local.set({ [`guidIndex:${repo}`]: index }).catch(() => {});
       },
     },
-  });
-
-  return {
-    computeSemanticDiff: createComputeSemanticDiff(session),
-    prefetchPr: createPrefetchPr(session),
   };
+
+  return { deps, session };
 }
 
-// Wires the content script's use cases. DOM listeners stay in presentation.
-export function createContentApp(): ContentApp {
+// Bundles the content script's ports and sign-in wiring. Presentation passes
+// these to plain use-case functions; it never calls port methods itself.
+export function createContentDeps(): {
+  messenger: MessengerPort;
+  tokenStore: TokenStorePort;
+  signInDeps: SignInDeps;
+} {
   const tokenStore = createChromeTokenStore(chrome.storage.local);
-  const messenger = createChromeMessenger();
   return {
-    signIn: createSignIn({
+    messenger: createChromeMessenger(),
+    tokenStore,
+    signInDeps: {
       auth: { requestDeviceCode, pollForToken },
       tokenStore,
       fetchFn: fetch,
       sleep: (ms) => new Promise<void>((resolve) => setTimeout(resolve, ms)),
       openTab: (url) => void window.open(url, "_blank", "noopener"),
       now: () => Date.now(),
-    }),
-    requestSemanticDiff: createRequestSemanticDiff({ messenger }),
-    requestPrefetch: createRequestPrefetch({ messenger }),
-    getPendingSignIn: createGetPendingSignIn({ tokenStore }),
+    },
   };
 }
 
 // Wires the site demo (site/extension.html): WASM differ + fixture-backed index.
-export async function createDemoApp(): Promise<DemoApp> {
+export async function createDemoDeps(): Promise<ComputeLocalDiffDeps> {
   const fetchBytes = async (url: string): Promise<Uint8Array<ArrayBuffer>> => {
     const res = await fetch(url);
     if (!res.ok) throw new Error(`${url}: HTTP ${res.status}`);
@@ -109,11 +94,9 @@ export async function createDemoApp(): Promise<DemoApp> {
   // guid → asset path, generated by build.mjs from the fixture .meta files
   const index = new Map<string, string>(Object.entries(await (await fetch("fixtures/guids.json")).json()));
   return {
-    computeLocalDiff: createComputeLocalDiff({
-      differ,
-      index,
-      fetchBytes,
-      fetchSource: (side, path) => fetchBytes(`fixtures/${side}/${path}`).catch(() => new Uint8Array()),
-    }),
+    differ,
+    index,
+    fetchBytes,
+    fetchSource: (side, path) => fetchBytes(`fixtures/${side}/${path}`).catch(() => new Uint8Array()),
   };
 }

@@ -1,5 +1,5 @@
+import { isRateLimited } from "../../application/port/github";
 import { must } from "../../domain/must";
-import { RateLimitError } from "./github-client";
 
 type Job = {
   run: () => Promise<unknown>;
@@ -16,7 +16,7 @@ const BACKOFF_CAP_MS = 60_000; // primary-limit reset can be an hour: fail into 
 const BACKOFF_FALLBACK_MS = 30_000; // secondary limits sometimes advise nothing; clear within a minute
 
 // Throttles REST concurrency. front jumps the prefetch queue for user actions.
-// RateLimitError pauses the whole queue and re-enqueues by lane so prefetch never starves front.
+// rate-limited pauses the whole queue and re-enqueues by lane so prefetch never starves front.
 export function createQueue(
   limit: number,
   sleep: (ms: number) => Promise<void> = (ms) => new Promise((r) => setTimeout(r, ms)),
@@ -49,7 +49,7 @@ export function createQueue(
           },
           (e: unknown) => {
             active--;
-            if (e instanceof RateLimitError && job.retries < MAX_RATE_LIMIT_RETRIES) {
+            if (isRateLimited(e) && job.retries < MAX_RATE_LIMIT_RETRIES) {
               job.retries++;
               if (job.front) pending.unshift(job);
               else pending.push(job);

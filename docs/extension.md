@@ -16,9 +16,9 @@ container factory:
 
 | Context | Entry point | Factory |
 |---|---|---|
-| Service worker | `presentation/background/index.ts` | `createBackgroundApp()` |
-| Content script | `presentation/content/index.ts` | `createContentApp()` |
-| Site demo | `presentation/demo/index.ts` | `createDemoApp()` |
+| Service worker | `presentation/background/index.ts` | `createBackgroundDeps()` |
+| Content script | `presentation/content/index.ts` | `createContentDeps()` |
+| Site demo | `presentation/demo/index.ts` | `createDemoDeps()` |
 
 ## Layers
 
@@ -30,11 +30,18 @@ Pure types and pure functions. Imports nothing outside `domain/`.
 
 Use cases composed from domain logic and ports.
 
-- **Use case**: one per file, named `<verb>-<noun>.ts`. Exports a
-  `create<UseCase>(deps)` factory returning the callable. Unlike reknotes'
-  stateless per-request functions, factories close over long-lived state
-  (in-flight caches, latches) because SW / content-script contexts outlive
-  any single request. Use cases may call other use cases.
+- **Use case**: one per file, named `<verb>-<noun>.ts`, exporting a plain
+  verb function `<verb>(deps, [state,] input)`. Long-lived state (in-flight
+  caches, latches, view state) lives in plain state records created by
+  `create<X>()` / `empty<X>()` constructors; the container (or presentation,
+  for UI state) creates them once and callers pass them explicitly. No
+  `create<UseCase>(deps)` factories, no method-bag objects.
+- **Result**: expected failures travel as tagged unions via
+  `Result<T, E>` from `application/_result.ts` — no `Error` subclasses,
+  no `throw` for expected failures. `_result.ts` is the one non-port
+  application file that infrastructure may import (pure primitives shared
+  by ports and their implementations); `src/layering.test.ts` encodes that
+  exception.
 - **Port** (`application/port/<name>.ts`): `XxxPort` types abstracting
   infrastructure capabilities. (reknotes uses `I*Provider`; this codebase
   keeps its established `*Port` naming.)
@@ -51,8 +58,9 @@ Use cases composed from domain logic and ports.
   other outside-world adapters (GitHub client, WASM differ, chrome.storage,
   chrome.runtime messaging).
 - **`repositories/`**: chrome.storage-backed stores.
-- **`container.ts`**: the only DI file. Exports one `create<Context>App()`
-  factory per JS context. Only container.ts may import application use
+- **`container.ts`**: the only DI file. Exports one `create<Context>Deps()`
+  factory per JS context returning the deps (and state) bundles presentation
+  passes to use-case functions. Only container.ts may import application use
   cases; all other infrastructure files import `application/port` at most.
 
 ### Presentation (`src/presentation/`)
@@ -63,7 +71,8 @@ Receives outside input and decides which use case to call.
   pure functions, other presentation files.
 - Must not import: `application/port`, any infrastructure file — except the
   entry point (`presentation/*/index.ts`), which imports `container.ts` to
-  build its app.
+  build its deps bundle. Presentation holds deps bundles but never invokes port
+  methods itself — it only passes them to use cases.
 - **Inbound vs outbound**: inbound transport events
   (`chrome.runtime.onMessage`, `chrome.storage.onChanged`, DOM events) are
   presentation's job, like HTTP routes. Outbound calls (requests to the
@@ -78,4 +87,4 @@ Receives outside input and decides which use case to call.
 
 Every entry point follows:
 
-    create<Context>App() -> register listeners -> call app.<useCase>()
+    create<Context>Deps() -> register listeners -> call use-case functions

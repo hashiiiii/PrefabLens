@@ -1,7 +1,8 @@
 import { expect, it } from "vitest";
 import type { DiffV2 } from "../../domain/diff/types";
+import { ok } from "../_result";
 import type { DifferPort } from "../port/differ";
-import { type ComputeLocalDiffDeps, createComputeLocalDiff } from "./compute-local-diff";
+import { type ComputeLocalDiffDeps, computeLocalDiff } from "./compute-local-diff";
 
 const DIFF: DiffV2 = { schema: "prefablens.diff.v2", unresolvedGuids: ["g1"], roots: [], loose: [] };
 const enc = (s: string) => new TextEncoder().encode(s) as Uint8Array<ArrayBuffer>;
@@ -14,8 +15,8 @@ function makeDeps(overrides?: {
 }): ComputeLocalDiffDeps {
   return {
     differ: {
-      diff: overrides?.diff ?? (() => DIFF),
-      diffWithAssets: overrides?.diffWithAssets ?? (() => DIFF),
+      diff: overrides?.diff ?? (() => ok(DIFF)),
+      diffWithAssets: overrides?.diffWithAssets ?? (() => ok(DIFF)),
       isUnityYaml: () => true,
     },
     index: new Map([["g1", "Assets/S.cs"]]),
@@ -33,7 +34,7 @@ function makeDeps(overrides?: {
 
 it("diffs both sides and applies names from the fixture index", async () => {
   const deps = makeDeps({ files: { "b.prefab": "b", "a.prefab": "a" } });
-  const diff = await createComputeLocalDiff(deps)("b.prefab", "a.prefab");
+  const diff = await computeLocalDiff(deps, "b.prefab", "a.prefab");
   expect(diff).toEqual({ ...DIFF, resolved: { g1: "Assets/S.cs" } });
 });
 
@@ -43,10 +44,10 @@ it("treats a missing url as the empty side (added/removed fixtures)", async () =
     files: { "a.prefab": "a" },
     diff: (before, after) => {
       seen.push([before.length, after.length]);
-      return DIFF;
+      return ok(DIFF);
     },
   });
-  await createComputeLocalDiff(deps)(undefined, "a.prefab");
+  await computeLocalDiff(deps, undefined, "a.prefab");
   expect(seen).toEqual([[0, 1]]);
 });
 
@@ -56,13 +57,13 @@ it("re-diffs with fetched source assets until sources are satisfied", async () =
   const deps = makeDeps({
     files: { "b.prefab": "b", "a.prefab": "a" },
     sources: { "after/Assets/S.cs": "SRC" },
-    diff: () => NEEDS,
+    diff: () => ok(NEEDS),
     diffWithAssets: (_b, _a, assets) => {
       for (const bytes of assets.values()) assetsSeen.push(new TextDecoder().decode(bytes));
-      return DIFF;
+      return ok(DIFF);
     },
   });
-  const diff = await createComputeLocalDiff(deps)("b.prefab", "a.prefab");
+  const diff = await computeLocalDiff(deps, "b.prefab", "a.prefab");
   expect(assetsSeen).toEqual(["SRC"]);
   expect(diff).toEqual({ ...DIFF, resolved: { g1: "Assets/S.cs" } });
 });
@@ -73,8 +74,8 @@ it("keeps the first-pass diff when a source path is unresolved or missing", asyn
     unresolvedGuids: ["gX"],
     neededSources: [{ guid: "gX", side: "after" }],
   };
-  const deps = makeDeps({ files: { "b.prefab": "b", "a.prefab": "a" }, diff: () => NEEDS });
-  const diff = await createComputeLocalDiff(deps)("b.prefab", "a.prefab");
+  const deps = makeDeps({ files: { "b.prefab": "b", "a.prefab": "a" }, diff: () => ok(NEEDS) });
+  const diff = await computeLocalDiff(deps, "b.prefab", "a.prefab");
   // gX is not in the index and fixtures have no source: degrade, don't throw
   expect(diff.neededSources).toEqual(NEEDS.neededSources);
 });

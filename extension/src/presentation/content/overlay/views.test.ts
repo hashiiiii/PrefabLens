@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
 import type { DiffV2 } from "../../../domain/diff/types";
-import { createViewRegistry } from "./views";
+import { emptyViewRegistry, getView, pruneDisconnectedViews, setView } from "./views";
 
 const DIFF: DiffV2 = { schema: "prefablens.diff.v2", unresolvedGuids: [], roots: [], loose: [] };
 
@@ -12,38 +12,38 @@ function makeRoot(connected: boolean): ShadowRoot {
   return host.attachShadow({ mode: "open" });
 }
 
-describe("createViewRegistry", () => {
+describe("view registry", () => {
   it("returns stored entries by key and misses unknown keys", () => {
-    const views = createViewRegistry();
+    const views = emptyViewRegistry();
     const entry = { root: makeRoot(true), json: DIFF, retry: () => {} };
-    views.set("o/r#1:Assets/Foo.prefab", entry);
-    expect(views.get("o/r#1:Assets/Foo.prefab")).toBe(entry);
-    expect(views.get("o/r#2:Assets/Foo.prefab")).toBeUndefined();
+    setView(views, "o/r#1:Assets/Foo.prefab", entry);
+    expect(getView(views, "o/r#1:Assets/Foo.prefab")).toBe(entry);
+    expect(getView(views, "o/r#2:Assets/Foo.prefab")).toBeUndefined();
   });
 
   it("prunes views whose host left the DOM and keeps live ones", () => {
     // An SPA navigation swaps the diff DOM out from under us: pruning both ignores
     // late pushes aimed at the dead view and cuts the reference so it can be collected.
-    const views = createViewRegistry();
+    const views = emptyViewRegistry();
     const liveHost = document.createElement("div");
     document.body.append(liveHost);
     const live = { root: liveHost.attachShadow({ mode: "open" }), json: DIFF, retry: () => {} };
     const dead = { root: makeRoot(false), json: DIFF, retry: () => {} };
-    views.set("live", live);
-    views.set("dead", dead);
-    views.pruneDisconnected();
-    expect(views.get("live")).toBe(live);
-    expect(views.get("dead")).toBeUndefined();
+    setView(views, "live", live);
+    setView(views, "dead", dead);
+    pruneDisconnectedViews(views);
+    expect(getView(views, "live")).toBe(live);
+    expect(getView(views, "dead")).toBeUndefined();
   });
 
   it("prunes a view that was connected at render time but removed since", () => {
     // The realistic sequence: render while attached, github replaces the container, then prune runs.
-    const views = createViewRegistry();
+    const views = emptyViewRegistry();
     const host = document.createElement("div");
     document.body.append(host);
-    views.set("k", { root: host.attachShadow({ mode: "open" }), json: DIFF, retry: () => {} });
+    setView(views, "k", { root: host.attachShadow({ mode: "open" }), json: DIFF, retry: () => {} });
     host.remove();
-    views.pruneDisconnected();
-    expect(views.get("k")).toBeUndefined();
+    pruneDisconnectedViews(views);
+    expect(getView(views, "k")).toBeUndefined();
   });
 });

@@ -1,7 +1,6 @@
-import { DiffError, type DifferPort } from "../../application/port/differ";
+import { err, ok, type Result } from "../../application/_result";
+import type { DifferPort, DiffFailure } from "../../application/port/differ";
 import type { DiffErrorV1, DiffV2 } from "../../domain/diff/types";
-
-export { DiffError };
 
 type Exports = {
   memory: WebAssembly.Memory;
@@ -39,7 +38,7 @@ export async function createDiffer(wasmBytes: BufferSource): Promise<DifferPort>
   const { instance } = await WebAssembly.instantiate(wasmBytes);
   const exp = instance.exports as unknown as Exports;
 
-  function call(before: Uint8Array, after: Uint8Array, assets?: Uint8Array): DiffV2 {
+  function call(before: Uint8Array, after: Uint8Array, assets?: Uint8Array): Result<DiffV2, DiffFailure> {
     const alloc = (b: Uint8Array): number => (b.length ? exp.alloc(b.length) : 0);
     const bp = alloc(before);
     const ap = alloc(after);
@@ -56,13 +55,15 @@ export async function createDiffer(wasmBytes: BufferSource): Promise<DifferPort>
         ? exp.diff(bp, before.length, ap, after.length)
         : exp.diff_with_assets(bp, before.length, ap, after.length, tp, assets.length);
     try {
-      if (rp === 0) throw new DiffError("OutOfMemory");
+      if (rp === 0) return err({ kind: "diff-failed", message: "OutOfMemory" });
       const len = new DataView(exp.memory.buffer).getUint32(rp, true);
       const text = new TextDecoder().decode(new Uint8Array(exp.memory.buffer, rp + 4, len));
       exp.free(rp, 4 + len);
       const parsed = JSON.parse(text) as DiffV2 | DiffErrorV1;
-      if (parsed.schema !== "prefablens.diff.v2") throw new DiffError((parsed as DiffErrorV1).error);
-      return parsed;
+      if (parsed.schema !== "prefablens.diff.v2") {
+        return err({ kind: "diff-failed", message: (parsed as DiffErrorV1).error });
+      }
+      return ok(parsed);
     } finally {
       if (before.length) exp.free(bp, before.length);
       if (after.length) exp.free(ap, after.length);

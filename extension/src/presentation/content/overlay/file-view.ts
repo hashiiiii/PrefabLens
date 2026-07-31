@@ -37,80 +37,76 @@ export type FileViewDeps = {
   effectiveView(): View;
 };
 
-export type FileView = {
-  show(view: View): void; // may create host + fetch
-  sync(view: View): void; // display-only; never fetches
+export type FileViewState = {
+  host: FileHost | undefined;
+  requested: boolean;
 };
 
-export function createFileView(deps: FileViewDeps): FileView {
-  let host: FileHost | undefined;
-  // Success stays latched (re-toggle doesn't re-fetch); failures reset
-  let requested = false;
+export function emptyFileView(): FileViewState {
+  return { host: undefined, requested: false };
+}
 
-  // Display-only: safe on every scan, even while a panel sits on an error
-  const sync = (view: View): void => {
-    if (view === "raw") {
-      deps.file.setRawHidden(false);
-      host?.setVisible(false);
+// Display-only: safe on every scan, even while a panel sits on an error
+export function syncFileView(state: FileViewState, deps: FileViewDeps, view: View): void {
+  if (view === "raw") {
+    deps.file.setRawHidden(false);
+    state.host?.setVisible(false);
+    return;
+  }
+  if (!state.host) return; // semantic never rendered here: leave the raw diff alone
+  deps.file.setRawHidden(true);
+  if (!state.host.attached()) state.host.attach(); // react remount can drop the host with the old body
+  // Follow github collapse (react); classic uses Details CSS in attachHost instead
+  state.host.setVisible(!deps.file.collapsed());
+}
+
+function request(state: FileViewState, deps: FileViewDeps, force?: boolean): void {
+  state.requested = true;
+  const panel = must(state.host).panel; // only reachable after show created the host
+  panel.loading();
+  void deps.requestDiff(force).then((res) => {
+    if (res.ok) {
+      deps.results.set({
+        json: res.json,
+        // Retry re-enters background resolution; reset latch or request() no-ops
+        retry: () => {
+          state.requested = false;
+          request(state, deps, force);
+        },
+      });
+      if (res.pending) deps.results.armWatchdog();
+      // Show while pending even if names are resolved (source merging may remain)
+      panel.diff(res.json, res.pending ? Math.max(unresolvedRemaining(res.json).length, 1) : 0);
       return;
     }
-    if (!host) return; // semantic never rendered here: leave the raw diff alone
-    deps.file.setRawHidden(true);
-    if (!host.attached()) host.attach(); // react remount can drop the host with the old body
-    // Follow github collapse (react); classic uses Details CSS in attachHost instead
-    host.setVisible(!deps.file.collapsed());
-  };
-
-  const request = (force?: boolean): void => {
-    requested = true;
-    const panel = must(host).panel; // only reachable after show created the host
-    panel.loading();
-    void deps.requestDiff(force).then((res) => {
-      if (res.ok) {
-        deps.results.set({
-          json: res.json,
-          // Retry re-enters background resolution; reset latch or request() no-ops
-          retry: () => {
-            requested = false;
-            request(force);
-          },
-        });
-        if (res.pending) deps.results.armWatchdog();
-        // Show while pending even if names are resolved (source merging may remain)
-        panel.diff(res.json, res.pending ? Math.max(unresolvedRemaining(res.json).length, 1) : 0);
-        return;
-      }
-      requested = false; // don't cache errors: next toggle re-fetches
-      const prior = deps.results.get();
-      if (prior) {
-        // Failed retry must not wipe the diff the user is reading
-        panel.incomplete(prior.json, prior.retry);
-        return;
-      }
-      if (res.error === "too-large") panel.tooLarge(res.bytes, () => request(true));
-      else if (res.error === "access-token-missing" || res.error === "auth-failed") {
-        deps.onAuthRetry(() => {
-          // First retry sets requested; duplicate registrations no-op
-          if (!requested && deps.effectiveView() === "semantic") request();
-        });
-        panel.authError(res.error);
-      } else panel.error(res.error);
-    });
-  };
-
-  const show = (view: View): void => {
-    if (view === "raw") {
-      sync(view);
+    state.requested = false; // don't cache errors: next toggle re-fetches
+    const prior = deps.results.get();
+    if (prior) {
+      // Failed retry must not wipe the diff the user is reading
+      panel.incomplete(prior.json, prior.retry);
       return;
     }
-    if (!host) {
-      host = deps.createHost();
-      host.attach();
-    }
-    sync(view);
-    if (requested) return; // cache only successful results (re-toggle doesn't re-fetch)
-    request();
-  };
+    if (res.error === "too-large") panel.tooLarge(res.bytes, () => request(state, deps, true));
+    else if (res.error === "access-token-missing" || res.error === "auth-failed") {
+      deps.onAuthRetry(() => {
+        // First retry sets requested; duplicate registrations no-op
+        if (!state.requested && deps.effectiveView() === "semantic") request(state, deps);
+      });
+      panel.authError(res.error);
+    } else panel.error(res.error);
+  });
+}
 
-  return { show, sync };
+export function showFileView(state: FileViewState, deps: FileViewDeps, view: View): void {
+  if (view === "raw") {
+    syncFileView(state, deps, view);
+    return;
+  }
+  if (!state.host) {
+    state.host = deps.createHost();
+    state.host.attach();
+  }
+  syncFileView(state, deps, view);
+  if (state.requested) return; // cache only successful results (re-toggle doesn't re-fetch)
+  request(state, deps);
 }

@@ -1,6 +1,10 @@
+import { getPendingSignIn } from "../../application/auth/get-pending-sign-in";
+import { type SignInState, signIn } from "../../application/auth/sign-in";
+import { requestPrefetch } from "../../application/diff/request-prefetch";
+import { requestSemanticDiff } from "../../application/diff/request-semantic-diff";
 import { type BackgroundError, type GuidResolvedPush, targetKey, unresolvedRemaining } from "../../domain/diff/types";
 import { must } from "../../domain/must";
-import { createContentApp } from "../../infrastructure/container";
+import { createContentDeps } from "../../infrastructure/container";
 import {
   render,
   renderError,
@@ -11,12 +15,22 @@ import {
 } from "../renderer/render";
 import { type DiffPage, type FileEntry, parseDiffUrl, parsePrPage, scanUnityFiles } from "./detect";
 import { fillDeviceCode } from "./device-page";
-import { createAuthRetries } from "./overlay/auth-retries";
-import { createFileView } from "./overlay/file-view";
+import { addAuthRetry, emptyAuthRetries, flushAuthRetries } from "./overlay/auth-retries";
+import { emptyFileView, type FileViewDeps, showFileView, syncFileView } from "./overlay/file-view";
 import type { View } from "./overlay/view-mode";
-import { createViewState, type ViewState } from "./overlay/view-state";
-import { createViewRegistry, type ViewEntry } from "./overlay/views";
-import { createToggle, type Toggle } from "./toggle";
+import {
+  applyExternal,
+  clearOverrides,
+  defaultView,
+  effectiveView,
+  emptyViewState,
+  onDefaultChange,
+  setDefault,
+  setOverride,
+  type ViewStateData,
+} from "./overlay/view-state";
+import { emptyViewRegistry, getView, pruneDisconnectedViews, setView, type ViewEntry } from "./overlay/views";
+import { mountToggle, type Toggle } from "./toggle";
 
 const ERROR_TEXT: Record<BackgroundError, string> = {
   "access-token-missing": "Sign in with GitHub to view semantic diffs.",
@@ -28,7 +42,7 @@ const ERROR_TEXT: Record<BackgroundError, string> = {
 };
 
 // path → render target for guidResolved pushes
-const views = createViewRegistry();
+const views = emptyViewRegistry();
 
 // Lost final push → flip to retryable incomplete instead of spinning forever
 const WATCHDOG_MS = 120_000;
@@ -49,14 +63,19 @@ let currentPage = ""; // drop overrides when leaving this diff page
 let prefetchedPr = ""; // prefetch once per PR across conversation + files tabs
 
 // Auth-blocked panels: retry all when a token lands
-const authRetries = createAuthRetries();
+const authRetries = emptyAuthRetries();
 
-const app = createContentApp();
+const { messenger, tokenStore, signInDeps } = createContentDeps();
+const signInState: SignInState = { inFlight: false };
+
+const persistView = (view: View): void => {
+  void chrome.storage.local.set({ viewMode: view }).catch(() => {});
+};
 
 // Auth-error panel: device flow; failures land back here for retry
 function signInPanel(root: ShadowRoot, message: string): void {
   renderSignIn(root, message, () => {
-    void app.signIn({
+    void signIn(signInDeps, signInState, {
       showPending: (userCode, verificationUri) =>
         renderSignInPending(root, userCode, verificationUri, () => void navigator.clipboard.writeText(userCode)),
       showFailure: (text) => signInPanel(root, text),
@@ -64,14 +83,14 @@ function signInPanel(root: ShadowRoot, message: string): void {
   });
 }
 
-function attach(viewState: ViewState): void {
+function attach(viewState: ViewStateData): void {
   const prPage = parsePrPage(location.pathname);
   if (prPage) {
     const prKey = targetKey(prPage.owner, prPage.repo, { kind: "pull", prNumber: prPage.prNumber });
     if (prKey !== prefetchedPr) {
       prefetchedPr = prKey;
       // Fire-and-forget; manual toggle stays available if prefetch fails
-      void app.requestPrefetch({ type: "prefetch", ...prPage });
+      void requestPrefetch(messenger, { type: "prefetch", ...prPage });
     }
   }
   const page = parseDiffUrl(location.pathname);
@@ -79,8 +98,8 @@ function attach(viewState: ViewState): void {
   const key = targetKey(page.owner, page.repo, page.target);
   if (key !== currentPage) {
     currentPage = key;
-    viewState.clearOverrides();
-    views.pruneDisconnected(); // drop refs so late pushes can't revive dead views
+    clearOverrides(viewState);
+    pruneDisconnectedViews(views); // drop refs so late pushes can't revive dead views
   }
   // React virtualizes and discards off-screen DOM; prune every scan (also plugs classic soft leak)
   for (const a of [...appliers]) if (!a.header.isConnected) appliers.delete(a);
@@ -93,7 +112,7 @@ function attach(viewState: ViewState): void {
 }
 
 // Global bar must sit outside recycled react list items (classic: before .file; react: list root)
-function ensureGlobalToggle(viewState: ViewState, first: FileEntry): void {
+function ensureGlobalToggle(viewState: ViewStateData, first: FileEntry): void {
   if (globalToggle?.element.closest("[data-prefablens-global]")?.isConnected) return;
   const anchor = first.globalAnchor();
   if (!anchor?.parentElement) return;
@@ -102,13 +121,13 @@ function ensureGlobalToggle(viewState: ViewState, first: FileEntry): void {
   const label = document.createElement("span");
   label.className = "prefablens-eyebrow";
   label.textContent = "PrefabLens";
-  const toggle = createToggle((view) => viewState.setDefault(view), viewState.defaultView());
+  const toggle = mountToggle((view) => setDefault(viewState, view, persistView), defaultView(viewState));
   bar.append(label, toggle.element);
   anchor.before(bar);
   globalToggle = toggle;
 }
 
-function attachToggle(viewState: ViewState, page: DiffPage, entry: FileEntry): void {
+function attachToggle(viewState: ViewStateData, page: DiffPage, entry: FileEntry): void {
   if (entry.header.hasAttribute("data-prefablens")) return;
   entry.header.setAttribute("data-prefablens", "");
   const viewKey = `${targetKey(page.owner, page.repo, page.target)}:${entry.path}`;
@@ -116,8 +135,9 @@ function attachToggle(viewState: ViewState, page: DiffPage, entry: FileEntry): v
   // Set by createHost before results.set so the push listener always has a real shadow root
   let shadow: ShadowRoot | undefined;
 
-  // Transitions live in fileView.ts; here we bind them to DOM, runtime, and registries
-  const fileView = createFileView({
+  // Transitions live in file-view.ts; here we bind them to DOM, runtime, and registries
+  const fileState = emptyFileView();
+  const fileDeps: FileViewDeps = {
     file: entry,
     createHost() {
       const host = document.createElement("div");
@@ -141,7 +161,7 @@ function attachToggle(viewState: ViewState, page: DiffPage, entry: FileEntry): v
       };
     },
     requestDiff: (force) =>
-      app.requestSemanticDiff({
+      requestSemanticDiff(messenger, {
         type: "semanticDiff",
         owner: page.owner,
         repo: page.repo,
@@ -150,47 +170,47 @@ function attachToggle(viewState: ViewState, page: DiffPage, entry: FileEntry): v
         force,
       }),
     results: {
-      set: ({ json, retry }) => views.set(viewKey, { root: must(shadow), json, retry }),
-      get: () => views.get(viewKey),
-      armWatchdog: () => armWatchdog(must(views.get(viewKey))),
+      set: ({ json, retry }) => setView(views, viewKey, { root: must(shadow), json, retry }),
+      get: () => getView(views, viewKey),
+      armWatchdog: () => armWatchdog(must(getView(views, viewKey))),
     },
-    onAuthRetry: (retry) => authRetries.add(retry),
-    effectiveView: () => viewState.effective(entry.path),
-  });
+    onAuthRetry: (retry) => addAuthRetry(authRetries, retry),
+    effectiveView: () => effectiveView(viewState, entry.path),
+  };
 
-  const toggle = createToggle((view) => {
-    viewState.setOverride(entry.path, view); // per-file override
-    fileView.show(view);
-  }, viewState.effective(entry.path));
+  const toggle = mountToggle(
+    (view) => {
+      setOverride(viewState, entry.path, view); // per-file override
+      showFileView(fileState, fileDeps, view);
+    },
+    effectiveView(viewState, entry.path),
+  );
   entry.header.append(toggle.element);
   appliers.add({
     header: entry.header,
     apply: (view) => {
       toggle.set(view);
-      fileView.show(view);
+      showFileView(fileState, fileDeps, view);
     },
-    sync: () => fileView.sync(viewState.effective(entry.path)),
+    sync: () => syncFileView(fileState, fileDeps, effectiveView(viewState, entry.path)),
   });
 
   // Start semantic at attach so late-arriving files inherit a semantic global default
-  if (viewState.effective(entry.path) === "semantic") fileView.show("semantic");
+  if (effectiveView(viewState, entry.path) === "semantic") showFileView(fileState, fileDeps, "semantic");
 }
 
 async function init(): Promise<void> {
   // Device page: only pre-fill the code the PR page issued
   if (location.pathname === "/login/device") {
-    const pending = await app.getPendingSignIn();
+    const pending = await getPendingSignIn(tokenStore);
     if (pending) fillDeviceCode(document, pending, Date.now());
     return;
   }
 
   const stored = await chrome.storage.local.get(["viewMode"]).catch(() => ({}) as Record<string, unknown>);
   const initial: View = stored.viewMode === "semantic" ? "semantic" : "raw";
-  const viewState = createViewState(
-    initial,
-    (view) => void chrome.storage.local.set({ viewMode: view }).catch(() => {}),
-  );
-  viewState.onDefaultChange((view) => {
+  const viewState = emptyViewState(initial);
+  onDefaultChange(viewState, (view) => {
     globalToggle?.set(view);
     for (const a of [...appliers]) {
       if (!a.header.isConnected) {
@@ -204,17 +224,17 @@ async function init(): Promise<void> {
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== "local") return;
     const next = changes.viewMode?.newValue;
-    if (next === "raw" || next === "semantic") viewState.applyExternal(next);
+    if (next === "raw" || next === "semantic") applyExternal(viewState, next);
     if (typeof changes.accessToken?.newValue === "string" && changes.accessToken.newValue) {
       // Token landed (this tab or elsewhere): retry every auth-blocked panel
-      authRetries.flush();
+      flushAuthRetries(authRetries);
     }
   });
 
   // guidResolved: second-stage push from background; re-render if this view still exists
   chrome.runtime.onMessage.addListener((msg: GuidResolvedPush) => {
     if (msg?.type !== "guidResolved") return;
-    const view = views.get(`${targetKey(msg.owner, msg.repo, msg.target)}:${msg.path}`);
+    const view = getView(views, `${targetKey(msg.owner, msg.repo, msg.target)}:${msg.path}`);
     if (!view) return; // navigated away: drop silently
     clearTimeout(view.watchdog);
     // Final push replaces json (mergeSources can reshape); intermediate merges resolved

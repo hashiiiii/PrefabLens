@@ -9,37 +9,41 @@ export type ComputeLocalDiffDeps = {
   fetchSource(side: "before" | "after", path: string): Promise<Uint8Array>; // missing → empty
 };
 
-export type ComputeLocalDiff = (beforeUrl: string | undefined, afterUrl: string | undefined) => Promise<DiffV2>;
-
 const MAX_SOURCE_ROUNDS = 3; // same cap as the background pipeline
 
 // Guid resolution like the background pipeline: applyResolved + mergeSources
 // loop, but source prefabs come from fixture URLs instead of the GitHub API.
-export function createComputeLocalDiff(deps: ComputeLocalDiffDeps): ComputeLocalDiff {
+export async function computeLocalDiff(
+  deps: ComputeLocalDiffDeps,
+  beforeUrl: string | undefined,
+  afterUrl: string | undefined,
+): Promise<DiffV2> {
   const { differ, index } = deps;
   // Empty side = CLI empty-side semantics (added/removed fixtures)
   const side = (url: string | undefined): Promise<Uint8Array> =>
     url ? deps.fetchBytes(url) : Promise.resolve(new Uint8Array());
-  return async function computeLocalDiff(beforeUrl, afterUrl) {
-    const [before, after] = await Promise.all([side(beforeUrl), side(afterUrl)]);
-    let diff = applyResolved(differ.diff(before, after), index);
-    const assets = new Map<string, Uint8Array>();
-    for (let round = 0; round < MAX_SOURCE_ROUNDS; round++) {
-      const needed = (diff.neededSources ?? []).filter((s) => !assets.has(s.guid));
-      if (!needed.length) break;
-      let progressed = false;
-      for (const s of needed) {
-        const path = diff.resolved?.[s.guid];
-        if (path === undefined) continue;
-        // A missing source degrades to the diff at this point, like the extension.
-        const bytes = await deps.fetchSource(s.side, path);
-        if (!bytes.length) continue;
-        assets.set(s.guid, bytes);
-        progressed = true;
-      }
-      if (!progressed) break;
-      diff = applyResolved(differ.diffWithAssets(before, after, assets), index);
+  const [before, after] = await Promise.all([side(beforeUrl), side(afterUrl)]);
+  const first = differ.diff(before, after);
+  if (!first.ok) throw new Error(first.error.message);
+  let diff = applyResolved(first.value, index);
+  const assets = new Map<string, Uint8Array>();
+  for (let round = 0; round < MAX_SOURCE_ROUNDS; round++) {
+    const needed = (diff.neededSources ?? []).filter((s) => !assets.has(s.guid));
+    if (!needed.length) break;
+    let progressed = false;
+    for (const s of needed) {
+      const path = diff.resolved?.[s.guid];
+      if (path === undefined) continue;
+      // A missing source degrades to the diff at this point, like the extension.
+      const bytes = await deps.fetchSource(s.side, path);
+      if (!bytes.length) continue;
+      assets.set(s.guid, bytes);
+      progressed = true;
     }
-    return diff;
-  };
+    if (!progressed) break;
+    const merged = differ.diffWithAssets(before, after, assets);
+    if (!merged.ok) throw new Error(merged.error.message);
+    diff = applyResolved(merged.value, index);
+  }
+  return diff;
 }

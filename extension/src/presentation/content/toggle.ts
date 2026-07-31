@@ -42,7 +42,7 @@ export function injectPageStyles(doc: Document = document): void {
   doc.head.append(style);
 }
 
-export function createToggle(onSelect: (view: View) => void, initial: View = "raw"): Toggle {
+export function mountToggle(onSelect: (view: View) => void, initial: View = "raw"): Toggle {
   injectPageStyles();
   const wrap = document.createElement("span");
   wrap.setAttribute("data-prefablens-toggle", "");

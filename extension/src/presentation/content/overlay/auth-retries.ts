@@ -1,18 +1,17 @@
-export type AuthRetries = {
-  add(retry: () => void): void;
-  flush(): void;
-};
+export type AuthRetriesState = { retries: Set<() => void> };
 
 // Auth-blocked panels register a retry; a token landing in storage flushes them all
-export function createAuthRetries(): AuthRetries {
-  const retries = new Set<() => void>();
-  return {
-    add: (retry) => void retries.add(retry),
-    flush() {
-      // Clear first: a retry that fails again re-registers for the next token
-      const pending = [...retries];
-      retries.clear();
-      for (const retry of pending) retry();
-    },
-  };
+export function emptyAuthRetries(): AuthRetriesState {
+  return { retries: new Set() };
+}
+
+export function addAuthRetry(state: AuthRetriesState, retry: () => void): void {
+  state.retries.add(retry);
+}
+
+export function flushAuthRetries(state: AuthRetriesState): void {
+  // Clear first: a retry that fails again re-registers for the next token
+  const pending = [...state.retries];
+  state.retries.clear();
+  for (const retry of pending) retry();
 }

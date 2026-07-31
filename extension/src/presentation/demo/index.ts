@@ -6,8 +6,15 @@
 import { must } from "../../domain/must";
 import { createDemoApp, type DemoApp } from "../../infrastructure/container";
 import type { View } from "../content/overlay/view-mode";
-import { createViewState } from "../content/overlay/view-state";
-import { createToggle, injectPageStyles } from "../content/toggle";
+import {
+  defaultView,
+  effectiveView,
+  emptyViewState,
+  onDefaultChange,
+  setDefault,
+  setOverride,
+} from "../content/overlay/view-state";
+import { injectPageStyles, mountToggle } from "../content/toggle";
 import { render, renderError, renderLoading } from "../renderer/render";
 
 function attachFile(header: HTMLElement, app: DemoApp, initial: View): (view: View) => void {
@@ -65,9 +72,10 @@ async function main(): Promise<void> {
   const app = await createDemoApp();
   // Semantic by default, like the extension once the user has picked it; the
   // demo has no chrome.storage, so persistence is a no-op.
-  const state = createViewState("semantic", () => {});
+  const state = emptyViewState("semantic");
+  const persist = (): void => {};
   const appliers: Array<(view: View) => void> = [];
-  state.onDefaultChange((view) => {
+  onDefaultChange(state, (view) => {
     for (const apply of appliers) apply(view);
   });
 
@@ -78,18 +86,21 @@ async function main(): Promise<void> {
   const label = document.createElement("span");
   label.className = "prefablens-eyebrow";
   label.textContent = "PrefabLens";
-  const globalToggle = createToggle((view) => state.setDefault(view), state.defaultView());
+  const globalToggle = mountToggle((view) => setDefault(state, view, persist), defaultView(state));
   bar.append(label, globalToggle.element);
   firstFile.before(bar);
-  state.onDefaultChange((view) => globalToggle.set(view));
+  onDefaultChange(state, (view) => globalToggle.set(view));
 
   for (const header of headers) {
     const path = header.dataset.path ?? "";
-    const show = attachFile(header, app, state.effective(path));
-    const toggle = createToggle((view) => {
-      state.setOverride(path, view); // a click overrides just this file
-      show(view);
-    }, state.effective(path));
+    const show = attachFile(header, app, effectiveView(state, path));
+    const toggle = mountToggle(
+      (view) => {
+        setOverride(state, path, view); // a click overrides just this file
+        show(view);
+      },
+      effectiveView(state, path),
+    );
     header.append(toggle.element);
     appliers.push((view) => {
       toggle.set(view);

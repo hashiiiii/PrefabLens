@@ -1,6 +1,6 @@
-import { err, ok, type Result } from "../../domain/result";
 import type { DifferPort, DiffFailure } from "../../application/port/differ";
 import type { DiffErrorV1, DiffV2 } from "../../domain/diff/types";
+import { err, ok, type Result } from "../../domain/result";
 
 type Exports = {
   memory: WebAssembly.Memory;

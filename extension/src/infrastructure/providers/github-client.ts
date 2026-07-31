@@ -1,4 +1,3 @@
-import { err, ok, type Result } from "../../domain/result";
 import {
   type ChangedFile,
   type GithubFailure,
@@ -7,6 +6,7 @@ import {
   isRateLimited,
   type RefPair,
 } from "../../application/port/github";
+import { err, ok, type Result } from "../../domain/result";
 
 export { type ChangedFile, isAuthFailed, isGithubFailure, isRateLimited, type RefPair };
 

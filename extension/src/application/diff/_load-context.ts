@@ -1,6 +1,7 @@
 import type { DiffTarget } from "../../domain/diff/types";
 import { targetKey } from "../../domain/diff/types";
-import { type ChangedFile, type GithubPort, isRateLimited, type RefPair } from "../port/github";
+import { ok, type Result } from "../_result";
+import { type ChangedFile, type GithubFailure, type GithubPort, isRateLimited, type RefPair } from "../port/github";
 import type { DiffContext, DiffSession } from "./_diff-session";
 import { fetchBlob } from "./_fetch-blobs";
 import { buildGuidIndex } from "./build-guid-index";
@@ -11,25 +12,33 @@ async function loadRefsAndFiles(
   owner: string,
   repo: string,
   target: DiffTarget,
-): Promise<{ refs: RefPair; files: ChangedFile[] }> {
+): Promise<Result<{ refs: RefPair; files: ChangedFile[] }, GithubFailure>> {
   if (target.kind === "pull") {
     const [refs, files] = await Promise.all([
       client.getPrRefs(owner, repo, target.prNumber),
       client.listPrFiles(owner, repo, target.prNumber),
     ]);
-    return { refs, files };
+    if (!refs.ok) return refs;
+    if (!files.ok) return files;
+    return ok({ refs: refs.value, files: files.value });
   }
   if (target.kind === "commit") {
     const commit = await client.getCommit(owner, repo, target.sha);
+    if (!commit.ok) return commit;
     // Root commit: before side is never fetched; own sha as baseSha keeps tree lookups harmless
-    return { refs: { baseSha: commit.parentSha ?? commit.sha, headSha: commit.sha }, files: commit.files };
+    return ok({
+      refs: { baseSha: commit.value.parentSha ?? commit.value.sha, headSha: commit.value.sha },
+      files: commit.value.files,
+    });
   }
   const [cmp, headSha] = await Promise.all([
     client.compareRefs(owner, repo, target.base, target.head),
     // Cache keys need an immutable sha; compare commits truncate at 250 so last ≠ always head
     client.resolveRefSha(owner, repo, target.head),
   ]);
-  return { refs: { baseSha: cmp.mergeBaseSha, headSha }, files: cmp.files };
+  if (!cmp.ok) return cmp;
+  if (!headSha.ok) return headSha;
+  return ok({ refs: { baseSha: cmp.value.mergeBaseSha, headSha: headSha.value }, files: cmp.value.files });
 }
 
 export function loadContext(
@@ -38,11 +47,13 @@ export function loadContext(
   owner: string,
   repo: string,
   target: DiffTarget,
-): Promise<DiffContext> {
+): Promise<Result<DiffContext, GithubFailure>> {
   return session.contexts.get(targetKey(owner, repo, target), async () => {
-    const { refs, files } = await loadRefsAndFiles(client, owner, repo, target);
+    const loaded = await loadRefsAndFiles(client, owner, repo, target);
+    if (!loaded.ok) return loaded;
+    const { refs, files } = loaded.value;
     const bySha = new Map(files.map((f) => [f.path, f.sha]));
-    const [guidIndex, baseShas] = await Promise.all([
+    const [guidIndex, tree] = await Promise.all([
       buildGuidIndex(files, async (path, side) => {
         // files API sha matches the side buildGuidIndex reads (head, or base for removed metas)
         const bytes = await fetchBlob(
@@ -54,17 +65,19 @@ export function loadContext(
           side === "base" ? refs.baseSha : refs.headSha,
           bySha.get(path),
         );
-        return bytes ? new TextDecoder().decode(bytes) : null;
+        if (!bytes.ok) return bytes;
+        return ok(bytes.value ? new TextDecoder().decode(bytes.value) : null);
       }),
       // Only rate limits propagate; anything else → null → contents-api fallback
-      client.listBlobShas(owner, repo, refs.baseSha).then(
-        (tree) => (tree.truncated ? null : tree.byPath),
-        (err: unknown) => {
-          if (isRateLimited(err)) throw err;
-          return null;
-        },
-      ),
+      client.listBlobShas(owner, repo, refs.baseSha),
     ]);
-    return { refs, files, guidIndex, baseShas };
+    if (!guidIndex.ok) return guidIndex;
+    let baseShas: Map<string, string> | null = null;
+    if (tree.ok) {
+      baseShas = tree.value.truncated ? null : tree.value.byPath;
+    } else if (isRateLimited(tree.error)) {
+      return tree;
+    }
+    return ok({ refs, files, guidIndex: guidIndex.value, baseShas });
   });
 }

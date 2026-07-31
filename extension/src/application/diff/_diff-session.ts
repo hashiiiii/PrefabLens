@@ -1,4 +1,5 @@
-import type { ChangedFile, RefPair } from "../port/github";
+import type { Result } from "../_result";
+import type { ChangedFile, GithubFailure, RefPair } from "../port/github";
 import { createPromiseCache, type PromiseCache } from "./_promise-cache";
 
 const CONTEXT_TTL_MS = 60_000;
@@ -15,30 +16,37 @@ export type DiffContext = {
 export type DiffOutcome =
   | { ok: true; json: import("../../domain/diff/types").DiffV2 }
   | { ok: false; error: "too-large"; bytes: number }
-  | { ok: false; error: "not-unity-yaml" }
-  | { ok: false; error: "diff-failed" };
+  | { ok: false; error: "not-unity-yaml" | "diff-failed" | "auth-failed" | "rate-limited" | "fetch-failed" };
 
 export type DiffSession = {
-  contexts: PromiseCache<DiffContext>;
-  blobs: PromiseCache<Uint8Array | null>;
+  contexts: PromiseCache<Result<DiffContext, GithubFailure>>;
+  blobs: PromiseCache<Result<Uint8Array | null, GithubFailure>>;
   diffs: PromiseCache<DiffOutcome>;
   // resolution
   misses: Set<string>;
-  searches: PromiseCache<string | null>;
-  indexes: PromiseCache<Record<string, string> | null>;
+  searches: PromiseCache<Result<string | null, GithubFailure>>;
+  indexes: PromiseCache<Result<Record<string, string> | null, GithubFailure>>;
   indexFallback: Set<string>;
 };
 
 export function createDiffSession(): DiffSession {
   return {
-    contexts: createPromiseCache<DiffContext>({ ttlMs: CONTEXT_TTL_MS }),
-    blobs: createPromiseCache<Uint8Array | null>({ max: BLOB_CACHE_MAX }),
+    contexts: createPromiseCache<Result<DiffContext, GithubFailure>>({
+      ttlMs: CONTEXT_TTL_MS,
+      retain: (r) => r.ok,
+    }),
+    blobs: createPromiseCache<Result<Uint8Array | null, GithubFailure>>({
+      max: BLOB_CACHE_MAX,
+      retain: (r) => r.ok,
+    }),
     diffs: createPromiseCache<DiffOutcome>({
       retain: (o) => o.ok || o.error !== "too-large",
     }),
     misses: new Set(),
-    searches: createPromiseCache<string | null>({ retain: () => false }),
-    indexes: createPromiseCache<Record<string, string> | null>(),
+    searches: createPromiseCache<Result<string | null, GithubFailure>>({ retain: () => false }),
+    indexes: createPromiseCache<Result<Record<string, string> | null, GithubFailure>>({
+      retain: (r) => r.ok,
+    }),
     indexFallback: new Set(),
   };
 }

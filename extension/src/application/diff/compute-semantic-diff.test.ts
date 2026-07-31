@@ -34,32 +34,34 @@ function makeDeps(overrides?: {
   const contents = overrides?.contents ?? { "Assets/Foo.prefab@base-sha": "b", "Assets/Foo.prefab@head-sha": "a" };
   const getFileAtRef = vi.fn(async (_o: string, _r: string, path: string, ref: string) => {
     const text = contents[`${path}@${ref}`];
-    return text === undefined ? null : new TextEncoder().encode(text);
+    return ok(text === undefined ? null : new TextEncoder().encode(text));
   });
   const client = {
-    getPrRefs: vi.fn(async () => ({ baseSha: "base-sha", headSha: "head-sha" })),
-    listPrFiles: vi.fn(async () => files),
+    getPrRefs: vi.fn(async () => ok({ baseSha: "base-sha", headSha: "head-sha" })),
+    listPrFiles: vi.fn(async () => ok(files)),
     // Commit/compare fakes mirror the PR refs so the same contents table serves every target kind
-    getCommit: vi.fn(async () => ({ sha: "head-sha", parentSha: "base-sha" as string | null, files })),
-    compareRefs: vi.fn(async () => ({ mergeBaseSha: "base-sha", files })),
-    resolveRefSha: vi.fn(async () => "head-sha"),
+    getCommit: vi.fn(async () => ok({ sha: "head-sha", parentSha: "base-sha" as string | null, files })),
+    compareRefs: vi.fn(async () => ok({ mergeBaseSha: "base-sha", files })),
+    resolveRefSha: vi.fn(async () => ok("head-sha")),
     getFileAtRef,
     getBlobRaw: vi.fn(async (_o: string, _r: string, sha: string) => {
       const text = overrides?.blobs?.[sha];
-      return text === undefined ? null : new TextEncoder().encode(text);
+      return ok(text === undefined ? null : new TextEncoder().encode(text));
     }),
-    listBlobShas: vi.fn(async () => ({
-      truncated: false,
-      byPath: new Map(Object.entries(overrides?.baseShas ?? {})),
-    })),
-    searchMetaByGuid: vi.fn(async (_o: string, _r: string, guid: string) => overrides?.search?.[guid] ?? null),
-    listMetaTree: vi.fn(
-      async (): Promise<{ truncated: boolean; metas: Array<{ path: string; sha: string }> }> => ({
+    listBlobShas: vi.fn(async () =>
+      ok({
         truncated: false,
-        metas: [],
+        byPath: new Map(Object.entries(overrides?.baseShas ?? {})),
       }),
     ),
-    batchBlobTexts: vi.fn(async (): Promise<Record<string, string | null>> => ({})),
+    searchMetaByGuid: vi.fn(async (_o: string, _r: string, guid: string) => ok(overrides?.search?.[guid] ?? null)),
+    listMetaTree: vi.fn(async () =>
+      ok({
+        truncated: false,
+        metas: [] as Array<{ path: string; sha: string }>,
+      }),
+    ),
+    batchBlobTexts: vi.fn(async () => ok({})),
   };
   const differ: DifferPort = {
     diff: overrides?.diff ?? vi.fn(() => ok(DIFF)),
@@ -173,7 +175,7 @@ describe("semanticDiff", () => {
   it("serves a root commit (no parent) as an all-added diff", async () => {
     const files = [{ path: "Assets/Foo.prefab", status: "added", sha: "blob-head" }];
     const { deps, client } = makeDeps({ files, blobs: { "blob-head": "a" } });
-    client.getCommit.mockResolvedValue({ sha: "head-sha", parentSha: null, files });
+    client.getCommit.mockResolvedValue(ok({ sha: "head-sha", parentSha: null, files }));
     const res = await resolveFully(deps, createDiffSession(), { ...REQ, target: { kind: "commit", sha: "head-sha" } });
     // The before side is never fetched for added files, so a missing parent is harmless
     expect(res).toEqual({ ok: true, json: { ...DIFF, resolved: {} } });
@@ -260,7 +262,7 @@ describe("semanticDiff", () => {
       maxInFlight = Math.max(maxInFlight, inFlight);
       await new Promise((r) => setTimeout(r, 0));
       inFlight--;
-      return new TextEncoder().encode("x");
+      return ok(new TextEncoder().encode("x"));
     });
     await resolveFully(deps, createDiffSession(), REQ);
     expect(maxInFlight).toBe(2);
@@ -306,7 +308,7 @@ describe("semanticDiff", () => {
   it("retries the PR context after a failed load instead of caching the failure", async () => {
     // If a transient network failure lands in the 60s cache, re-toggling would no longer fix it
     const { deps, client } = makeDeps();
-    client.listPrFiles.mockRejectedValueOnce(new Error("socket"));
+    client.listPrFiles.mockResolvedValueOnce(err({ kind: "fetch-failed" as const }) as never);
     const session = createDiffSession();
     expect(await resolveFully(deps, session, REQ)).toEqual({ ok: false, error: "fetch-failed" });
     expect((await resolveFully(deps, session, REQ)).ok).toBe(true);
@@ -377,7 +379,7 @@ describe("semanticDiff", () => {
   it("dedupes concurrent code searches for the same guid", async () => {
     // With the semantic default, multiple files run resolution concurrently: searches for the same guid fold into one
     const { deps, client } = makeDeps({ search: { g1: "Assets/S.cs" } });
-    let release!: (v: string) => void;
+    let release!: (v: ReturnType<typeof ok<string>>) => void;
     client.searchMetaByGuid.mockImplementation(
       () =>
         new Promise((r) => {
@@ -387,7 +389,7 @@ describe("semanticDiff", () => {
     const session = createDiffSession();
     const [a, b] = [resolveFully(deps, session, REQ), resolveFully(deps, session, REQ)];
     await vi.waitFor(() => expect(client.searchMetaByGuid).toHaveBeenCalled());
-    release("Assets/S.cs");
+    release(ok("Assets/S.cs"));
     const [ra, rb] = await Promise.all([a, b]);
     expect(client.searchMetaByGuid).toHaveBeenCalledTimes(1);
     expect(ra).toEqual({ ok: true, json: { ...DIFF, resolved: { g1: "Assets/S.cs" } } });
@@ -397,7 +399,9 @@ describe("semanticDiff", () => {
   it("keeps the diff usable when code search hits the rate limit", async () => {
     const twoGuids: DiffV2 = { ...DIFF, unresolvedGuids: ["g1", "g2"] };
     const { deps, client } = makeDeps({ diff: () => ok(twoGuids) });
-    client.searchMetaByGuid.mockResolvedValueOnce("Assets/First.cs").mockRejectedValueOnce({ kind: "rate-limited" });
+    client.searchMetaByGuid
+      .mockResolvedValueOnce(ok("Assets/First.cs"))
+      .mockResolvedValueOnce(err({ kind: "rate-limited" as const }) as never);
     const res = await resolveFully(deps, createDiffSession(), REQ);
     expect(res).toEqual({ ok: true, json: { ...twoGuids, resolved: { g1: "Assets/First.cs" } } });
   });
@@ -429,7 +433,7 @@ describe("semanticDiff", () => {
 
   it("maps auth-failed / diff-failed / other failures to stable error codes", async () => {
     const auth = makeDeps();
-    auth.client.getPrRefs.mockRejectedValue({ kind: "auth-failed" });
+    auth.client.getPrRefs.mockResolvedValue(err({ kind: "auth-failed" as const }) as never);
     expect(await resolveFully(auth.deps, createDiffSession(), REQ)).toEqual({ ok: false, error: "auth-failed" });
 
     const bad = makeDeps({
@@ -438,7 +442,7 @@ describe("semanticDiff", () => {
     expect(await resolveFully(bad.deps, createDiffSession(), REQ)).toEqual({ ok: false, error: "diff-failed" });
 
     const net = makeDeps();
-    net.client.listPrFiles.mockRejectedValue(new Error("socket"));
+    net.client.listPrFiles.mockResolvedValue(err({ kind: "fetch-failed" as const }) as never);
     expect(await resolveFully(net.deps, createDiffSession(), REQ)).toEqual({ ok: false, error: "fetch-failed" });
   });
 
@@ -446,7 +450,7 @@ describe("semanticDiff", () => {
     const big = new Uint8Array(13 * 1024 * 1024); // 26MB across base+head
     const diff = vi.fn(() => ok(DIFF));
     const { deps, client } = makeDeps({ diff });
-    client.getFileAtRef.mockResolvedValue(big);
+    client.getFileAtRef.mockResolvedValue(ok(big));
     const session = createDiffSession();
     expect(await resolveFully(deps, session, REQ)).toEqual({ ok: false, error: "too-large", bytes: big.length * 2 });
     expect(diff).not.toHaveBeenCalled();
@@ -460,13 +464,13 @@ describe("semanticDiff", () => {
   it("renders exactly 25MB without the gate", async () => {
     const half = new Uint8Array((25 * 1024 * 1024) / 2);
     const { deps, client } = makeDeps();
-    client.getFileAtRef.mockResolvedValue(half);
+    client.getFileAtRef.mockResolvedValue(ok(half));
     expect((await resolveFully(deps, createDiffSession(), REQ)).ok).toBe(true);
   });
 
   it("maps rate-limited failure to rate-limited", async () => {
     const limited = makeDeps();
-    limited.client.getPrRefs.mockRejectedValue({ kind: "rate-limited" });
+    limited.client.getPrRefs.mockResolvedValue(err({ kind: "rate-limited" as const }) as never);
     expect(await resolveFully(limited.deps, createDiffSession(), REQ)).toEqual({ ok: false, error: "rate-limited" });
   });
 
@@ -525,7 +529,7 @@ describe("semanticDiff", () => {
         blobs: { "foo-head": "a" },
         contents: { "Assets/Foo.prefab@base-sha": "b" },
       });
-      client.listBlobShas.mockResolvedValue({ truncated: true, byPath: new Map() });
+      client.listBlobShas.mockResolvedValue(ok({ truncated: true, byPath: new Map() }));
       const res = await resolveFully(deps, createDiffSession(), REQ);
       expect(res.ok).toBe(true);
       expect(client.getBlobRaw).toHaveBeenCalledWith("o", "r", "foo-head");
@@ -550,7 +554,7 @@ describe("semanticDiff", () => {
         blobs: { "foo-head": "a" },
         contents: { "Assets/Foo.prefab@base-sha": "b" },
       });
-      client.listBlobShas.mockRejectedValue(new Error("socket"));
+      client.listBlobShas.mockResolvedValue(err({ kind: "fetch-failed" as const }) as never);
       const res = await resolveFully(deps, createDiffSession(), REQ);
       expect(res.ok).toBe(true);
       expect(client.getFileAtRef).toHaveBeenCalledWith("o", "r", "Assets/Foo.prefab", "base-sha");
@@ -558,7 +562,7 @@ describe("semanticDiff", () => {
 
     it("propagates a rate-limited base tree fetch like the guid index does", async () => {
       const { deps, client } = makeDeps();
-      client.listBlobShas.mockRejectedValue({ kind: "rate-limited" });
+      client.listBlobShas.mockResolvedValue(err({ kind: "rate-limited" as const }) as never);
       expect(await resolveFully(deps, createDiffSession(), REQ)).toEqual({ ok: false, error: "rate-limited" });
     });
 
@@ -731,8 +735,8 @@ describe("semanticDiff with push (two-stage)", () => {
       diff: () => ok({ ...DIFF, unresolvedGuids: ["g1", "g2"] }),
       search: { g2: "Assets/Other.cs" },
     });
-    client.listMetaTree.mockResolvedValue({ truncated: false, metas: [{ path: "Assets/S.cs.meta", sha: "sha1" }] });
-    client.batchBlobTexts.mockResolvedValue({ sha1: "guid: g1\n" });
+    client.listMetaTree.mockResolvedValue(ok({ truncated: false, metas: [{ path: "Assets/S.cs.meta", sha: "sha1" }] }));
+    client.batchBlobTexts.mockResolvedValue(ok({ sha1: "guid: g1\n" }));
     const { pushes } = await serveAndResolve(deps, createDiffSession(), REQ);
     // g1 arrives first from the index (intermediate push), and only g2, absent from the index, goes to Code Search (3-stage resolution)
     expect(pushes[0]).toMatchObject({ resolved: { g1: "Assets/S.cs" }, done: false });
@@ -743,14 +747,14 @@ describe("semanticDiff with push (two-stage)", () => {
 
   it("falls back to code search when the tree is truncated", async () => {
     const { deps, client } = makeDeps({ search: { g1: "Assets/S.cs" } });
-    client.listMetaTree.mockResolvedValue({ truncated: true, metas: [] });
+    client.listMetaTree.mockResolvedValue(ok({ truncated: true, metas: [] }));
     const { pushes } = await serveAndResolve(deps, createDiffSession(), REQ);
     expect(pushes.at(-1)?.json?.resolved).toEqual({ g1: "Assets/S.cs" });
   });
 
   it("stops retrying the index for the session after an index rate limit", async () => {
     const { deps, client } = makeDeps();
-    client.listMetaTree.mockRejectedValue({ kind: "rate-limited" });
+    client.listMetaTree.mockResolvedValue(err({ kind: "rate-limited" as const }) as never);
     const session = createDiffSession();
     await serveAndResolve(deps, session, REQ);
     await serveAndResolve(deps, session, REQ);
@@ -772,11 +776,13 @@ describe("semanticDiff with push (two-stage)", () => {
       diff: () => ok(withSource),
       diffWithAssets,
     });
-    client.listMetaTree.mockResolvedValue({
-      truncated: false,
-      metas: [{ path: "Assets/Src.prefab.meta", sha: "sha1" }],
-    });
-    client.batchBlobTexts.mockResolvedValue({ sha1: "guid: src1\n" });
+    client.listMetaTree.mockResolvedValue(
+      ok({
+        truncated: false,
+        metas: [{ path: "Assets/Src.prefab.meta", sha: "sha1" }],
+      }),
+    );
+    client.batchBlobTexts.mockResolvedValue(ok({ sha1: "guid: src1\n" }));
     // Note: serveAndResolve waits for the done push, so by that point diffWithAssets has always been called
     // (done:true is only emitted after mergeSources completes). Asserting "not yet called" must be done
     // right after the immediate response (before waiting for the push to finish), so this one is assembled manually.

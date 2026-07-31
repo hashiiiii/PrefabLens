@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { DiffV2, GuidResolvedPush, SemanticDiffRequest } from "../../domain/diff/types";
 import { must } from "../../domain/must";
-import { ok } from "../_result";
+import { err, ok } from "../_result";
 import type { DifferPort } from "../port/differ";
 import { createDiffSession, type DiffContext } from "./_diff-session";
 import { getRepoIndex, mergeSources, type ResolutionDeps, resolveRemaining, searchGuids } from "./_resolution";
@@ -59,17 +59,17 @@ function makeResolution(overrides?: {
   };
   // Inferred Mock types keep .mock* helpers; structural shape satisfies ResolutionClient.
   const client = {
-    searchMetaByGuid: vi.fn(async (_o: string, _r: string, guid: string) => overrides?.search?.[guid] ?? null),
-    listMetaTree: vi.fn(async () => ({ truncated: false, metas: overrides?.metas ?? [] })),
-    batchBlobTexts: vi.fn(async () => overrides?.metaTexts ?? {}),
+    searchMetaByGuid: vi.fn(async (_o: string, _r: string, guid: string) => ok(overrides?.search?.[guid] ?? null)),
+    listMetaTree: vi.fn(async () => ok({ truncated: false, metas: overrides?.metas ?? [] })),
+    batchBlobTexts: vi.fn(async () => ok(overrides?.metaTexts ?? {})),
     // Session-backed blob helpers read through these; fixture keys match path@ref.
     getFileAtRef: vi.fn(async (_o: string, _r: string, path: string, ref: string) => {
       const text = overrides?.blobs?.[`${path}@${ref}`];
-      return text === undefined ? null : new TextEncoder().encode(text);
+      return ok(text === undefined ? null : new TextEncoder().encode(text));
     }),
     getBlobRaw: vi.fn(async (_o: string, _r: string, sha: string) => {
       const text = overrides?.blobRaws?.[sha];
-      return text === undefined ? null : new TextEncoder().encode(text);
+      return ok(text === undefined ? null : new TextEncoder().encode(text));
     }),
   };
   const differ: DifferPort = {
@@ -120,7 +120,9 @@ describe("searchGuids", () => {
 
   it("returns partial results and reports the rate limit that interrupted the search loop", async () => {
     const { deps, session, client } = makeResolution();
-    client.searchMetaByGuid.mockResolvedValueOnce("Assets/First.cs").mockRejectedValueOnce({ kind: "rate-limited" });
+    client.searchMetaByGuid
+      .mockResolvedValueOnce(ok("Assets/First.cs"))
+      .mockResolvedValueOnce(err({ kind: "rate-limited" as const }) as never);
     const result = await searchGuids(deps, session, ["g1", "g2", "g3"], client, "o", "r", REPO_KEY);
     // g1 survives, g2 aborts the loop, g3 is never attempted (the budget is already gone).
     expect(result).toEqual({ resolved: { g1: "Assets/First.cs" }, rateLimited: true });
@@ -129,7 +131,7 @@ describe("searchGuids", () => {
 
   it("folds concurrent searches for the same guid into one request", async () => {
     const { deps, session, client } = makeResolution();
-    let release!: (v: string) => void;
+    let release!: (v: ReturnType<typeof ok<string | null>>) => void;
     client.searchMetaByGuid.mockImplementation(
       () =>
         new Promise((r) => {
@@ -141,7 +143,7 @@ describe("searchGuids", () => {
       searchGuids(deps, session, ["g1"], client, "o", "r", REPO_KEY),
     ];
     await vi.waitFor(() => expect(client.searchMetaByGuid).toHaveBeenCalled());
-    release("Assets/S.cs");
+    release(ok("Assets/S.cs"));
     expect(await Promise.all([a, b])).toEqual([
       { resolved: { g1: "Assets/S.cs" }, rateLimited: false },
       { resolved: { g1: "Assets/S.cs" }, rateLimited: false },
@@ -173,7 +175,7 @@ describe("getRepoIndex", () => {
 
   it("pins the repo to fallback for the session after a rate limit", async () => {
     const { deps, session, client } = makeResolution();
-    client.listMetaTree.mockRejectedValue({ kind: "rate-limited" });
+    client.listMetaTree.mockResolvedValue(err({ kind: "rate-limited" as const }) as never);
     expect(await getRepoIndex(deps, session, client, "o", "r", REPO_KEY, "head-sha")).toBeNull();
     expect(await getRepoIndex(deps, session, client, "o", "r", REPO_KEY, "head-sha")).toBeNull();
     expect(client.listMetaTree).toHaveBeenCalledTimes(1); // fallback: Code Search only from here on
@@ -184,7 +186,7 @@ describe("getRepoIndex", () => {
       metas: [{ path: "Assets/S.cs.meta", sha: "sha1" }],
       metaTexts: { sha1: "guid: g1\n" },
     });
-    client.listMetaTree.mockRejectedValueOnce(new Error("socket"));
+    client.listMetaTree.mockResolvedValueOnce(err({ kind: "fetch-failed" as const }) as never);
     expect(await getRepoIndex(deps, session, client, "o", "r", REPO_KEY, "head-sha")).toBeNull();
     expect(await getRepoIndex(deps, session, client, "o", "r", REPO_KEY, "head-sha")).toEqual({ g1: "Assets/S.cs" });
   });
@@ -257,7 +259,7 @@ describe("mergeSources", () => {
   it("degrades to the current diff and reports rateLimited when the source fetch hits the limit", async () => {
     const diffWithAssets = vi.fn<DifferPort["diffWithAssets"]>(() => ok(MERGED));
     const { deps, session, client } = makeResolution({ diffWithAssets });
-    client.getFileAtRef.mockRejectedValue({ kind: "rate-limited" });
+    client.getFileAtRef.mockResolvedValue(err({ kind: "rate-limited" as const }) as never);
     const differ = { diff: vi.fn(() => ok(DIFF)), diffWithAssets, isUnityYaml: () => true };
     const result = await mergeSources(deps, session, NEEDS, differ, ...BYTES, CTX, client, "o", "r", REPO_KEY);
     expect(result).toEqual({ json: NEEDS, status: "rateLimited" });
@@ -266,7 +268,7 @@ describe("mergeSources", () => {
   it("degrades to the current diff and reports failed on a non-rate-limit fetch error", async () => {
     const diffWithAssets = vi.fn<DifferPort["diffWithAssets"]>(() => ok(MERGED));
     const { deps, session, client } = makeResolution({ diffWithAssets });
-    client.getFileAtRef.mockRejectedValue(new Error("socket"));
+    client.getFileAtRef.mockResolvedValue(err({ kind: "fetch-failed" as const }) as never);
     const differ = { diff: vi.fn(() => ok(DIFF)), diffWithAssets, isUnityYaml: () => true };
     const result = await mergeSources(deps, session, NEEDS, differ, ...BYTES, CTX, client, "o", "r", REPO_KEY);
     expect(result).toEqual({ json: NEEDS, status: "failed" });
@@ -369,7 +371,7 @@ describe("resolveRemaining", () => {
   it("marks the final push rateLimited when Code Search hits the limit", async () => {
     // Rate-limited runs must be distinguishable from completed ones (issue #194).
     const { deps, session, client } = makeResolution();
-    client.searchMetaByGuid.mockRejectedValue({ kind: "rate-limited" });
+    client.searchMetaByGuid.mockResolvedValue(err({ kind: "rate-limited" as const }) as never);
     const first: DiffV2 = { ...DIFF, unresolvedGuids: ["g1"] };
     const pushes = await run(deps, session, client, first, ["g1"]);
     expect(must(pushes.at(-1))).toMatchObject({ done: true, status: "rateLimited" });
@@ -378,7 +380,7 @@ describe("resolveRemaining", () => {
   it("still emits the done push, marked failed, when the pipeline crashes", async () => {
     // Waiters key off done: a crash that swallowed it would leave the indicator spinning forever.
     const { deps, session, client } = makeResolution();
-    client.getFileAtRef.mockRejectedValue(new Error("socket"));
+    client.getFileAtRef.mockResolvedValue(err({ kind: "fetch-failed" as const }) as never);
     const first: DiffV2 = { ...DIFF, unresolvedGuids: [], neededSources: [{ guid: "src1", side: "after" }] };
     const pushes = await run(deps, session, client, first, []);
     expect(pushes).toEqual([

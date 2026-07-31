@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { ok } from "../_result";
 import type { RepoIndexPort } from "../port/repo-index";
 import { syncRepoIndex } from "./sync-repo-index";
 
@@ -10,12 +11,14 @@ function makeFakes(overrides?: {
   storedIndex?: { treeSha: string; guids: Record<string, string> };
 }) {
   const client = {
-    listMetaTree: vi.fn(async () => ({
-      truncated: overrides?.truncated ?? false,
-      metas: overrides?.metas ?? [{ path: "Assets/S.cs.meta", sha: "sha1" }],
-    })),
+    listMetaTree: vi.fn(async () =>
+      ok({
+        truncated: overrides?.truncated ?? false,
+        metas: overrides?.metas ?? [{ path: "Assets/S.cs.meta", sha: "sha1" }],
+      }),
+    ),
     batchBlobTexts: vi.fn(async (_o: string, _r: string, oids: string[]) =>
-      Object.fromEntries(oids.map((oid) => [oid, overrides?.texts?.[oid] ?? null])),
+      ok(Object.fromEntries(oids.map((oid) => [oid, overrides?.texts?.[oid] ?? null]))),
     ),
   };
   const guids: Record<string, Record<string, string>> = { repoKey: { ...overrides?.knownGuids } };
@@ -38,7 +41,7 @@ describe("syncRepoIndex", () => {
   it("builds guid → asset path from meta blobs and persists both layers", async () => {
     const { client, store } = makeFakes({ texts: { sha1: "fileFormatVersion: 2\nguid: g1\n" } });
     const res = await syncRepoIndex(client, store, "o", "r", "repoKey", "H");
-    expect(res).toEqual({ g1: "Assets/S.cs" }); // path with .meta stripped
+    expect(res).toEqual(ok({ g1: "Assets/S.cs" })); // path with .meta stripped
     expect(store.saveGuids).toHaveBeenCalledWith("repoKey", { sha1: "g1" });
     expect(store.saveIndex).toHaveBeenCalledWith("repoKey", { treeSha: "H", guids: { g1: "Assets/S.cs" } });
   });
@@ -48,7 +51,7 @@ describe("syncRepoIndex", () => {
     const stored = { treeSha: "H", guids: { g1: "Assets/S.cs" } };
     const { client, store } = makeFakes({ storedIndex: stored });
     const res = await syncRepoIndex(client, store, "o", "r", "repoKey", "H");
-    expect(res).toEqual(stored.guids);
+    expect(res).toEqual(ok(stored.guids));
     expect(client.listMetaTree).not.toHaveBeenCalled();
   });
 
@@ -65,7 +68,7 @@ describe("syncRepoIndex", () => {
     const res = await syncRepoIndex(client, store, "o", "r", "repoKey", "H");
     expect(client.batchBlobTexts).toHaveBeenCalledTimes(1);
     expect(client.batchBlobTexts.mock.calls[0]?.[2]).toEqual(["new-sha"]);
-    expect(res).toEqual({ gA: "Assets/A.cs", gB: "Assets/B.cs" });
+    expect(res).toEqual(ok({ gA: "Assets/A.cs", gB: "Assets/B.cs" }));
   });
 
   it("chunks graphql fetches at 100 blobs per query", async () => {
@@ -79,14 +82,14 @@ describe("syncRepoIndex", () => {
 
   it("gives up on truncated trees", async () => {
     const { client, store } = makeFakes({ truncated: true });
-    expect(await syncRepoIndex(client, store, "o", "r", "repoKey", "H")).toBeNull();
+    expect(await syncRepoIndex(client, store, "o", "r", "repoKey", "H")).toEqual(ok(null));
     expect(client.batchBlobTexts).not.toHaveBeenCalled();
   });
 
   it("gives up above 50,000 metas (storage quota guard)", async () => {
     const metas = Array.from({ length: 50_001 }, (_, i) => ({ path: `m${i}.meta`, sha: `s${i}` }));
     const { client, store } = makeFakes({ metas });
-    expect(await syncRepoIndex(client, store, "o", "r", "repoKey", "H")).toBeNull();
+    expect(await syncRepoIndex(client, store, "o", "r", "repoKey", "H")).toEqual(ok(null));
     expect(store.saveIndex).not.toHaveBeenCalled();
   });
 
@@ -98,6 +101,6 @@ describe("syncRepoIndex", () => {
       ],
       texts: { sha1: "guid: g1\n", sha2: "not yaml at all" },
     });
-    expect(await syncRepoIndex(client, store, "o", "r", "repoKey", "H")).toEqual({ g1: "Assets/A.cs" });
+    expect(await syncRepoIndex(client, store, "o", "r", "repoKey", "H")).toEqual(ok({ g1: "Assets/A.cs" }));
   });
 });

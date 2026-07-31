@@ -54,18 +54,18 @@ export async function searchGuids(
   let rateLimited = false;
   for (const g of searchable.slice(0, MAX_SEARCHES)) {
     const key = `${repoKey}:${g}`;
-    try {
-      const path = await session.searches.get(key, () => client.searchMetaByGuid(owner, repo, g));
-      if (path) resolved[g] = found[g] = path;
-      else session.misses.add(key);
-    } catch (err) {
+    const pathResult = await session.searches.get(key, () => client.searchMetaByGuid(owner, repo, g));
+    if (!pathResult.ok) {
       // Rate limit truncates the run: report it instead of degrading silently (#194)
-      if (isRateLimited(err)) {
+      if (isRateLimited(pathResult.error)) {
         rateLimited = true;
         break;
       }
       session.misses.add(key);
+      continue;
     }
+    if (pathResult.value) resolved[g] = found[g] = pathResult.value;
+    else session.misses.add(key);
   }
   if (Object.keys(found).length) await deps.guidCache.save(repoKey, found);
   return { resolved, rateLimited };
@@ -88,7 +88,7 @@ async function searchUnresolved(
 }
 
 // Memoized whole-repo index; rate-limited repos stay on fallback for the SW lifetime
-export function getRepoIndex(
+export async function getRepoIndex(
   deps: ResolutionDeps,
   session: DiffSession,
   client: SearchClient,
@@ -97,14 +97,16 @@ export function getRepoIndex(
   repoKey: string,
   ref: string,
 ): Promise<Record<string, string> | null> {
-  if (session.indexFallback.has(repoKey)) return Promise.resolve(null);
-  return session.indexes
-    .get(`${repoKey}@${ref}`, () => syncRepoIndex(client, deps.repoIndexStore, owner, repo, repoKey, ref))
-    .catch((err: unknown) => {
-      // Cache already dropped the failure, so the next visit retries
-      if (isRateLimited(err)) session.indexFallback.add(repoKey);
-      return null;
-    });
+  if (session.indexFallback.has(repoKey)) return null;
+  const result = await session.indexes.get(`${repoKey}@${ref}`, () =>
+    syncRepoIndex(client, deps.repoIndexStore, owner, repo, repoKey, ref),
+  );
+  if (!result.ok) {
+    // Cache already dropped the failure, so the next visit retries
+    if (isRateLimited(result.error)) session.indexFallback.add(repoKey);
+    return null;
+  }
+  return result.value;
 }
 
 // Fetch neededSources via resolved path and re-diff with assets; failure degrades (doesn't drop)
@@ -134,13 +136,12 @@ export async function mergeSources(
       const sha = s.side === "before" ? ctx.refs.baseSha : ctx.refs.headSha;
       // Sources aren't PR files: only base tree can supply a sha; head keeps path fallback
       const blobSha = s.side === "before" ? ctx.baseShas?.get(path) : undefined;
-      let bytes: Uint8Array | null = null;
-      try {
-        bytes = await fetchBlob(session, client, owner, repo, path, sha, blobSha);
-      } catch (err) {
+      const bytesResult = await fetchBlob(session, client, owner, repo, path, sha, blobSha);
+      if (!bytesResult.ok) {
         // Degrade to first-pass diff, but tell the caller why (#194)
-        return { json: current, status: isRateLimited(err) ? "rateLimited" : "failed" };
+        return { json: current, status: isRateLimited(bytesResult.error) ? "rateLimited" : "failed" };
       }
+      const bytes = bytesResult.value;
       if (!bytes) continue;
       // Binary-serialized sources are a no-op re-diff — don't count as progress
       if (!differ.isUnityYaml(bytes)) continue;
@@ -217,7 +218,18 @@ export async function resolveRemaining(
     if (json.neededSources?.length) {
       // Resolution advanced — redo source merging (source guid may have resolved this time)
       const differ = await deps.getDiffer();
-      const [before, after] = await fetchPair(session, client, ctx, req.owner, req.repo, req.path);
+      const pair = await fetchPair(session, client, ctx, req.owner, req.repo, req.path);
+      if (!pair.ok) {
+        push({
+          type: "guidResolved",
+          ...at,
+          resolved: {},
+          done: true,
+          status: isRateLimited(pair.error) ? "rateLimited" : "failed",
+        });
+        return;
+      }
+      const [before, after] = pair.value;
       const merged = await mergeSources(
         deps,
         session,

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { DiffV2, GuidResolvedPush, SemanticDiffRequest, SemanticDiffResponse } from "../../domain/diff/types";
-import { ok } from "../_result";
+import { err, ok } from "../_result";
 import type { DifferPort } from "../port/differ";
 import type { ChangedFile } from "../port/github";
 import { createDiffSession, type DiffSession } from "./_diff-session";
@@ -33,32 +33,34 @@ function makeDeps(overrides?: {
   const contents = overrides?.contents ?? { "Assets/Foo.prefab@base-sha": "b", "Assets/Foo.prefab@head-sha": "a" };
   const getFileAtRef = vi.fn(async (_o: string, _r: string, path: string, ref: string) => {
     const text = contents[`${path}@${ref}`];
-    return text === undefined ? null : new TextEncoder().encode(text);
+    return ok(text === undefined ? null : new TextEncoder().encode(text));
   });
   const client = {
-    getPrRefs: vi.fn(async () => ({ baseSha: "base-sha", headSha: "head-sha" })),
-    listPrFiles: vi.fn(async () => files),
+    getPrRefs: vi.fn(async () => ok({ baseSha: "base-sha", headSha: "head-sha" })),
+    listPrFiles: vi.fn(async () => ok(files)),
     // Commit/compare fakes mirror the PR refs so the same contents table serves every target kind
-    getCommit: vi.fn(async () => ({ sha: "head-sha", parentSha: "base-sha" as string | null, files })),
-    compareRefs: vi.fn(async () => ({ mergeBaseSha: "base-sha", files })),
-    resolveRefSha: vi.fn(async () => "head-sha"),
+    getCommit: vi.fn(async () => ok({ sha: "head-sha", parentSha: "base-sha" as string | null, files })),
+    compareRefs: vi.fn(async () => ok({ mergeBaseSha: "base-sha", files })),
+    resolveRefSha: vi.fn(async () => ok("head-sha")),
     getFileAtRef,
     getBlobRaw: vi.fn(async (_o: string, _r: string, sha: string) => {
       const text = overrides?.blobs?.[sha];
-      return text === undefined ? null : new TextEncoder().encode(text);
+      return ok(text === undefined ? null : new TextEncoder().encode(text));
     }),
-    listBlobShas: vi.fn(async () => ({
-      truncated: false,
-      byPath: new Map(Object.entries(overrides?.baseShas ?? {})),
-    })),
-    searchMetaByGuid: vi.fn(async (_o: string, _r: string, guid: string) => overrides?.search?.[guid] ?? null),
-    listMetaTree: vi.fn(
-      async (): Promise<{ truncated: boolean; metas: Array<{ path: string; sha: string }> }> => ({
+    listBlobShas: vi.fn(async () =>
+      ok({
         truncated: false,
-        metas: [],
+        byPath: new Map(Object.entries(overrides?.baseShas ?? {})),
       }),
     ),
-    batchBlobTexts: vi.fn(async (): Promise<Record<string, string | null>> => ({})),
+    searchMetaByGuid: vi.fn(async (_o: string, _r: string, guid: string) => ok(overrides?.search?.[guid] ?? null)),
+    listMetaTree: vi.fn(async () =>
+      ok({
+        truncated: false,
+        metas: [] as Array<{ path: string; sha: string }>,
+      }),
+    ),
+    batchBlobTexts: vi.fn(async () => ok({})),
   };
   const differ: DifferPort = {
     diff: overrides?.diff ?? vi.fn(() => ok(DIFF)),
@@ -168,7 +170,7 @@ describe("prefetch", () => {
   it("skips oversized files without caching them", async () => {
     const big = new Uint8Array(13 * 1024 * 1024);
     const { deps, client } = makeDeps();
-    client.getFileAtRef.mockResolvedValue(big);
+    client.getFileAtRef.mockResolvedValue(ok(big));
     const session = createDiffSession();
     await prefetchPr(deps, session, { type: "prefetch", owner: "o", repo: "r", prNumber: 1 });
     expect(deps.diffStore.save).not.toHaveBeenCalled();
@@ -178,7 +180,7 @@ describe("prefetch", () => {
 
   it("aborts silently on rate limit instead of surfacing an error", async () => {
     const { deps, client } = makeDeps();
-    client.getFileAtRef.mockRejectedValue({ kind: "rate-limited" });
+    client.getFileAtRef.mockResolvedValue(err({ kind: "rate-limited" as const }) as never);
     await expect(
       prefetchPr(deps, createDiffSession(), { type: "prefetch", owner: "o", repo: "r", prNumber: 1 }),
     ).resolves.toBeUndefined();

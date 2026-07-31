@@ -1,3 +1,5 @@
+import type { Result } from "../_result";
+
 export type GithubFailure =
   | { kind: "auth-failed" }
   | { kind: "rate-limited"; retryAfterMs?: number }
@@ -21,30 +23,42 @@ export function isGithubFailure(e: unknown): e is GithubFailure {
 export type ChangedFile = { path: string; status: string; previousPath?: string; sha?: string };
 export type RefPair = { baseSha: string; headSha: string };
 
-// Method set = today's ClientLike on handler.ts
 export type GithubPort = {
-  getPrRefs(owner: string, repo: string, prNumber: number): Promise<RefPair>;
-  listPrFiles(owner: string, repo: string, prNumber: number): Promise<ChangedFile[]>;
+  getPrRefs(owner: string, repo: string, prNumber: number): Promise<Result<RefPair, GithubFailure>>;
+  listPrFiles(owner: string, repo: string, prNumber: number): Promise<Result<ChangedFile[], GithubFailure>>;
   getCommit(
     owner: string,
     repo: string,
     ref: string,
-  ): Promise<{ sha: string; parentSha: string | null; files: ChangedFile[] }>;
+  ): Promise<Result<{ sha: string; parentSha: string | null; files: ChangedFile[] }, GithubFailure>>;
   compareRefs(
     owner: string,
     repo: string,
     base: string,
     head: string,
-  ): Promise<{ mergeBaseSha: string; files: ChangedFile[] }>;
-  resolveRefSha(owner: string, repo: string, ref: string): Promise<string>;
-  getFileAtRef(owner: string, repo: string, path: string, ref: string): Promise<Uint8Array | null>;
-  getBlobRaw(owner: string, repo: string, sha: string): Promise<Uint8Array | null>;
-  listBlobShas(owner: string, repo: string, ref: string): Promise<{ truncated: boolean; byPath: Map<string, string> }>;
-  searchMetaByGuid(owner: string, repo: string, guid: string): Promise<string | null>;
+  ): Promise<Result<{ mergeBaseSha: string; files: ChangedFile[] }, GithubFailure>>;
+  resolveRefSha(owner: string, repo: string, ref: string): Promise<Result<string, GithubFailure>>;
+  getFileAtRef(
+    owner: string,
+    repo: string,
+    path: string,
+    ref: string,
+  ): Promise<Result<Uint8Array | null, GithubFailure>>;
+  getBlobRaw(owner: string, repo: string, sha: string): Promise<Result<Uint8Array | null, GithubFailure>>;
+  listBlobShas(
+    owner: string,
+    repo: string,
+    ref: string,
+  ): Promise<Result<{ truncated: boolean; byPath: Map<string, string> }, GithubFailure>>;
+  searchMetaByGuid(owner: string, repo: string, guid: string): Promise<Result<string | null, GithubFailure>>;
   listMetaTree(
     owner: string,
     repo: string,
     ref: string,
-  ): Promise<{ truncated: boolean; metas: Array<{ path: string; sha: string }> }>;
-  batchBlobTexts(owner: string, repo: string, oids: string[]): Promise<Record<string, string | null>>;
+  ): Promise<Result<{ truncated: boolean; metas: Array<{ path: string; sha: string }> }, GithubFailure>>;
+  batchBlobTexts(
+    owner: string,
+    repo: string,
+    oids: string[],
+  ): Promise<Result<Record<string, string | null>, GithubFailure>>;
 };

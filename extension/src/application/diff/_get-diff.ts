@@ -23,7 +23,9 @@ async function computeDiff(
   force: boolean,
 ): Promise<DiffOutcome> {
   // Missing from listing (files API caps at 3000) → treat as modified; 404 side → EMPTY
-  const [before, after] = await fetchPair(session, client, ctx, owner, repo, path);
+  const pair = await fetchPair(session, client, ctx, owner, repo, path);
+  if (!pair.ok) return { ok: false, error: pair.error.kind };
+  const [before, after] = pair.value;
   if (!force && before.length + after.length > TOO_LARGE_BYTES) {
     return { ok: false, error: "too-large", bytes: before.length + after.length };
   }

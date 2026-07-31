@@ -1,6 +1,5 @@
 import type { PrefetchRequest } from "../../domain/diff/types";
 import { isUnityPath } from "../../domain/unity";
-import { isRateLimited } from "../port/github";
 import type { DiffSession } from "./_diff-session";
 import { getDiff } from "./_get-diff";
 import { loadContext } from "./_load-context";
@@ -17,7 +16,12 @@ export async function prefetchPr(deps: DiffDeps, session: DiffSession, req: Pref
     const settings = await deps.getSettings();
     if (!settings.accessToken) return;
     const client = deps.makeClient(API_BASE, settings.accessToken, "prefetch");
-    const ctx = await loadContext(session, client, req.owner, req.repo, { kind: "pull", prNumber: req.prNumber });
+    const ctxResult = await loadContext(session, client, req.owner, req.repo, { kind: "pull", prNumber: req.prNumber });
+    if (!ctxResult.ok) {
+      console.debug("prefablens: prefetch aborted", ctxResult.error);
+      return;
+    }
+    const ctx = ctxResult.value;
     // Index sync independent of raw-diff prefetch (speeds 3-stage resolution at serve time)
     void getRepoIndex(
       deps,
@@ -31,14 +35,14 @@ export async function prefetchPr(deps: DiffDeps, session: DiffSession, req: Pref
     const unity = ctx.files.filter((f) => isUnityPath(f.path)).slice(0, PREFETCH_MAX);
     for (let i = 0; i < unity.length; i += PREFETCH_CONCURRENCY) {
       const chunk = unity.slice(i, i + PREFETCH_CONCURRENCY);
-      await Promise.all(
-        chunk.map((f) =>
-          getDiff(deps, session, client, ctx, req.owner, req.repo, f.path, false).catch((err) => {
-            if (isRateLimited(err)) throw err; // only rate limit stops the whole thing
-            // Swallow per-file failures: shown again on manual toggle
-          }),
-        ),
+      const outcomes = await Promise.all(
+        chunk.map((f) => getDiff(deps, session, client, ctx, req.owner, req.repo, f.path, false)),
       );
+      // Only rate limit stops the whole thing; other per-file failures are shown again on manual toggle
+      if (outcomes.some((o) => !o.ok && o.error === "rate-limited")) {
+        console.debug("prefablens: prefetch aborted", { kind: "rate-limited" });
+        return;
+      }
     }
   } catch (err) {
     // Prefetch gives up quietly; only the user-action path surfaces error UI

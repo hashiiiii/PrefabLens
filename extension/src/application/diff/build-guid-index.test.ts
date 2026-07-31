@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { err, ok } from "../_result";
 import { isRateLimited } from "../port/github";
 import { buildGuidIndex } from "./build-guid-index";
 
@@ -16,12 +17,15 @@ describe("buildGuidIndex", () => {
 
   it("indexes changed .meta files, reading removed metas from the base side", async () => {
     const fetched: Array<[string, string]> = [];
-    const index = await buildGuidIndex(files, async (path, side) => {
+    const indexResult = await buildGuidIndex(files, async (path, side) => {
       fetched.push([path, side]);
-      if (path === "Assets/Scripts/Player.cs.meta") return META;
-      if (path === "Assets/Old.cs.meta") return "guid: oldguid\n";
-      return null;
+      if (path === "Assets/Scripts/Player.cs.meta") return ok(META);
+      if (path === "Assets/Old.cs.meta") return ok("guid: oldguid\n");
+      return ok(null);
     });
+    expect(indexResult.ok).toBe(true);
+    if (!indexResult.ok) return;
+    const index = indexResult.value;
     expect(index.get("1234567890abcdef1234567890abcdef")).toBe("Assets/Scripts/Player.cs");
     expect(index.get("oldguid")).toBe("Assets/Old.cs");
     expect(fetched).toContainEqual(["Assets/Scripts/Player.cs.meta", "head"]);
@@ -30,19 +34,18 @@ describe("buildGuidIndex", () => {
   });
 
   it("skips metas that fail to fetch or parse", async () => {
-    const index = await buildGuidIndex(files, async () => {
-      throw new Error("boom");
-    });
-    expect(index.size).toBe(0);
+    const indexResult = await buildGuidIndex(files, async () => err({ kind: "fetch-failed" as const }));
+    expect(indexResult.ok).toBe(true);
+    if (!indexResult.ok) return;
+    expect(indexResult.value.size).toBe(0);
   });
 
   it("propagates rate limits instead of degrading the index silently", async () => {
     // Swallowing would cache a degraded index for the SW's lifetime, and re-toggling would not fix it
-    await expect(
-      buildGuidIndex(files, async () => {
-        throw { kind: "rate-limited" };
-      }),
-    ).rejects.toSatisfy(isRateLimited);
+    const result = await buildGuidIndex(files, async () => err({ kind: "rate-limited" as const }));
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(isRateLimited(result.error)).toBe(true);
   });
 
   it("bounds concurrent fetches to 8 even with many changed metas", async () => {
@@ -52,15 +55,17 @@ describe("buildGuidIndex", () => {
     }));
     let inFlight = 0;
     let maxInFlight = 0;
-    const index = await buildGuidIndex(manyFiles, async (path, _side) => {
+    const indexResult = await buildGuidIndex(manyFiles, async (path, _side) => {
       inFlight++;
       maxInFlight = Math.max(maxInFlight, inFlight);
       await new Promise((r) => setTimeout(r, 0));
       inFlight--;
       const i = path.match(/File(\d+)\.cs\.meta/)?.[1];
-      return `guid: g${i}\n`;
+      return ok(`guid: g${i}\n`);
     });
     expect(maxInFlight).toBeLessThanOrEqual(8);
-    expect(index.size).toBe(20);
+    expect(indexResult.ok).toBe(true);
+    if (!indexResult.ok) return;
+    expect(indexResult.value.size).toBe(20);
   });
 });

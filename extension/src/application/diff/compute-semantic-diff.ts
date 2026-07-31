@@ -38,13 +38,35 @@ export async function computeSemanticDiff(
   const ctxResult = await loadContext(session, client, req.owner, req.repo, req.target);
   if (!ctxResult.ok) return { ok: false, error: ctxResult.error.kind };
   const ctx = ctxResult.value;
-  const outcome = await getDiff(deps, session, client, ctx, req.owner, req.repo, req.path, req.force === true);
+  const outcome = await getDiff(
+    deps.getDiffer,
+    deps.diffStore,
+    session,
+    client,
+    ctx,
+    req.owner,
+    req.repo,
+    req.path,
+    req.force === true,
+  );
   if (!outcome.ok) return outcome;
   const withPr = applyResolved(outcome.json, ctx.guidIndex);
 
   // Return immediately; resolution + source merge continue via push
   const remaining = unresolvedRemaining(withPr);
   if (!remaining.length && !withPr.neededSources?.length) return { ok: true, json: withPr };
-  void resolveRemaining(deps, session, withPr, remaining, client, req, API_BASE, ctx, push);
+  void resolveRemaining(
+    deps.guidCache,
+    deps.repoIndexStore,
+    deps.getDiffer,
+    session,
+    withPr,
+    remaining,
+    client,
+    req,
+    API_BASE,
+    ctx,
+    push,
+  );
   return { ok: true, json: withPr, pending: true };
 }

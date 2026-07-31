@@ -1,9 +1,30 @@
+import { createDiffSession } from "../../application/diff/_diff-session";
 import { computeSemanticDiff } from "../../application/diff/compute-semantic-diff";
 import { prefetchPr } from "../../application/diff/prefetch-pr";
 import type { BackgroundRequest, GuidResolvedPush } from "../../domain/diff/types";
-import { createBackgroundDeps } from "../../infrastructure/container";
+import {
+  createDifferLoader,
+  createDiffStore,
+  createFetchQueue,
+  createGithubClient,
+  createGuidCache,
+  createRepoIndexStore,
+  createTokenStore,
+} from "../../infrastructure/container";
 
-const { deps, session } = createBackgroundDeps();
+const tokenStore = createTokenStore();
+const guidCache = createGuidCache();
+const diffStore = createDiffStore();
+const repoIndexStore = createRepoIndexStore();
+const getDiffer = createDifferLoader();
+const queue = createFetchQueue(6);
+const queuedFetch =
+  (front: boolean): typeof fetch =>
+  (input, init) =>
+    queue(() => fetch(input, init), { front });
+const makeClient = (base: string, token: string, lane: "user" | "prefetch") =>
+  createGithubClient(base, token, queuedFetch(lane === "user"));
+const session = createDiffSession();
 
 function makeGuidPush(tabId: number | undefined): (m: GuidResolvedPush) => void {
   return (m) => {
@@ -23,12 +44,12 @@ chrome.runtime.onMessage.addListener((msg: BackgroundRequest, sender, sendRespon
   switch (msg?.type) {
     case "semanticDiff": {
       void computeSemanticDiff(
-        deps.tokenStore,
-        deps.makeClient,
-        deps.getDiffer,
-        deps.guidCache,
-        deps.diffStore,
-        deps.repoIndexStore,
+        tokenStore,
+        makeClient,
+        getDiffer,
+        guidCache,
+        diffStore,
+        repoIndexStore,
         session,
         msg,
         makeGuidPush(sender.tab?.id),
@@ -36,16 +57,7 @@ chrome.runtime.onMessage.addListener((msg: BackgroundRequest, sender, sendRespon
       return true; // async response
     }
     case "prefetch":
-      void prefetchPr(
-        deps.tokenStore,
-        deps.makeClient,
-        deps.getDiffer,
-        deps.guidCache,
-        deps.diffStore,
-        deps.repoIndexStore,
-        session,
-        msg,
-      );
+      void prefetchPr(tokenStore, makeClient, getDiffer, guidCache, diffStore, repoIndexStore, session, msg);
       return undefined; // prefetch is fire-and-forget
   }
 });

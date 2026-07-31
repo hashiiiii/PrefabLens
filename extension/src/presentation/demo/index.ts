@@ -1,11 +1,16 @@
 // Live demo for site/extension.html: real renderer + toggle, wired like the
-// content script but through createDemoDeps (fixtures instead of GitHub).
+// content script but through createDemo* factories (fixtures instead of GitHub).
 // Bundled as dist/demo.js via `node build.mjs --demo`; fixtures via
 // data-before/data-after URLs (empty side = CLI empty-side semantics).
 
 import { computeLocalDiff } from "../../application/diff/compute-local-diff";
 import { must } from "../../domain/must";
-import { createDemoDeps } from "../../infrastructure/container";
+import {
+  createDemoDiffer,
+  createDemoFetchBytes,
+  createDemoFetchSource,
+  loadFixtureGuidIndex,
+} from "../../infrastructure/container";
 import type { View } from "../content/overlay/view-mode";
 import {
   defaultView,
@@ -18,11 +23,14 @@ import {
 import { injectPageStyles, mountToggle } from "../content/toggle";
 import { render, renderError, renderLoading } from "../renderer/render";
 
-function attachFile(
-  header: HTMLElement,
-  locals: Awaited<ReturnType<typeof createDemoDeps>>,
-  initial: View,
-): (view: View) => void {
+type DemoLocals = {
+  differ: Awaited<ReturnType<typeof createDemoDiffer>>;
+  index: Awaited<ReturnType<typeof loadFixtureGuidIndex>>;
+  fetchBytes: ReturnType<typeof createDemoFetchBytes>;
+  fetchSource: ReturnType<typeof createDemoFetchSource>;
+};
+
+function attachFile(header: HTMLElement, locals: DemoLocals, initial: View): (view: View) => void {
   // Non-null: site/build.mjs always nests the header in a .file with a .js-file-content sibling.
   const content = must(header.parentElement?.querySelector<HTMLElement>(".js-file-content"));
   let host: HTMLDivElement | undefined;
@@ -74,7 +82,11 @@ async function main(): Promise<void> {
   const headers = [...document.querySelectorAll<HTMLElement>(".file-header[data-before]")];
   if (!headers.length) return;
 
-  const deps = await createDemoDeps();
+  const differ = await createDemoDiffer();
+  const index = await loadFixtureGuidIndex();
+  const fetchBytes = createDemoFetchBytes();
+  const fetchSource = createDemoFetchSource();
+  const locals: DemoLocals = { differ, index, fetchBytes, fetchSource };
   // Semantic by default, like the extension once the user has picked it; the
   // demo has no chrome.storage, so persistence is a no-op.
   const state = emptyViewState("semantic");
@@ -98,7 +110,7 @@ async function main(): Promise<void> {
 
   for (const header of headers) {
     const path = header.dataset.path ?? "";
-    const show = attachFile(header, deps, effectiveView(state, path));
+    const show = attachFile(header, locals, effectiveView(state, path));
     const toggle = mountToggle(
       (view) => {
         setOverride(state, path, view); // a click overrides just this file

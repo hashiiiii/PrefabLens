@@ -1,4 +1,3 @@
-import { createDiffSession, type DiffSession } from "../application/diff/_diff-session";
 import type { DiffCachePort } from "../application/port/diff-cache";
 import type { DifferPort } from "../application/port/differ";
 import type { GithubPort } from "../application/port/github";
@@ -9,107 +8,88 @@ import type { RepoIndexPort } from "../application/port/repo-index";
 import type { TokenStorePort } from "../application/port/token-store";
 import { createChromeMessenger } from "./providers/chrome-messenger";
 import { createChromeTokenStore } from "./providers/chrome-token-store";
-import { createQueue } from "./providers/fetch-queue";
+import { createQueue, type Queue } from "./providers/fetch-queue";
 import { GithubClient } from "./providers/github-client";
 import { pollForToken, requestDeviceCode } from "./providers/github-device-flow";
 import { createDiffer } from "./providers/wasm-differ";
 import { createMergeStore } from "./repositories/merge-store";
 import { createSessionDiffStore } from "./repositories/session-diff-store";
 
-// Temporary bag until Task 6 rewrites createDemoDeps to individual createX().
-type DemoDeps = {
-  differ: DifferPort;
-  index: Map<string, string>;
-  fetchBytes(url: string): Promise<Uint8Array<ArrayBuffer>>;
-  fetchSource(side: "before" | "after", path: string): Promise<Uint8Array>;
-};
+export function createTokenStore(): TokenStorePort {
+  return createChromeTokenStore(chrome.storage.local);
+}
 
-// Temporary bag until Task 6 rewrites createBackgroundDeps to individual createX().
-type BackgroundDeps = {
-  tokenStore: TokenStorePort;
-  makeClient(base: string, token: string, lane: "user" | "prefetch"): GithubPort;
-  getDiffer(): Promise<DifferPort>;
-  guidCache: GuidCachePort;
-  diffStore: DiffCachePort;
-  repoIndexStore: RepoIndexPort;
-};
+export function createMessenger(): MessengerPort {
+  return createChromeMessenger();
+}
 
-// Wires providers/repositories for the service worker. Message listening stays in presentation.
-export function createBackgroundDeps(): { deps: BackgroundDeps; session: DiffSession } {
-  let differ: Promise<DifferPort> | undefined;
+export function createDiffStore(): DiffCachePort {
+  return createSessionDiffStore(chrome.storage.session);
+}
 
-  // Six concurrent across REST/GraphQL (GraphQL shares fetchFn). User-action jumps via front.
-  const queue = createQueue(6);
-  const queuedFetch =
-    (front: boolean): typeof fetch =>
-    (input, init) =>
-      queue(() => fetch(input, init), { front });
+export function createGuidCache(): GuidCachePort {
+  return createMergeStore(chrome.storage.local, "guids");
+}
 
-  const tokenStore = createChromeTokenStore(chrome.storage.local);
-
-  // Whole-repo .meta guid records for repoIndexStore.loadGuids/saveGuids
+export function createRepoIndexStore(): RepoIndexPort {
+  // Whole-repo .meta guid records for loadGuids/saveGuids
   const metaGuids = createMergeStore(chrome.storage.local, "metaGuids");
-
-  const session = createDiffSession();
-  const deps: BackgroundDeps = {
-    tokenStore,
-    makeClient: (base, token, lane) => new GithubClient(base, token, queuedFetch(lane === "user")),
-    getDiffer() {
-      // Lazy singleton; SW restart → re-fetch
-      differ ??= fetch(chrome.runtime.getURL("prefablens.wasm"))
-        .then((r) => r.arrayBuffer())
-        .then(createDiffer);
-      return differ;
-    },
-    // Same merge-on-save slot under different prefixes
-    guidCache: createMergeStore(chrome.storage.local, "guids"),
-    diffStore: createSessionDiffStore(chrome.storage.session),
-    repoIndexStore: {
-      loadGuids: (repo) => metaGuids.load(repo),
-      saveGuids: (repo, entries) => metaGuids.save(repo, entries).catch(() => {}), // quota overflow → memory only
-      async loadIndex(repo) {
-        const key = `guidIndex:${repo}`;
-        const stored = await chrome.storage.local.get([key]);
-        return stored[key] as { treeSha: string; guids: Record<string, string> } | undefined;
-      },
-      async saveIndex(repo, index) {
-        await chrome.storage.local.set({ [`guidIndex:${repo}`]: index }).catch(() => {});
-      },
-    },
-  };
-
-  return { deps, session };
-}
-
-// Bundles the content script's ports. Presentation wires sign-in args locally;
-// createContentDeps still returns { messenger, tokenStore, auth } until Task 6.
-export function createContentDeps(): {
-  messenger: MessengerPort;
-  tokenStore: TokenStorePort;
-  auth: GithubAuthPort;
-} {
-  const tokenStore = createChromeTokenStore(chrome.storage.local);
   return {
-    messenger: createChromeMessenger(),
-    tokenStore,
-    auth: { requestDeviceCode, pollForToken },
+    loadGuids: (repo) => metaGuids.load(repo),
+    saveGuids: (repo, entries) => metaGuids.save(repo, entries).catch(() => {}), // quota overflow → memory only
+    async loadIndex(repo) {
+      const key = `guidIndex:${repo}`;
+      const stored = await chrome.storage.local.get([key]);
+      return stored[key] as { treeSha: string; guids: Record<string, string> } | undefined;
+    },
+    async saveIndex(repo, index) {
+      await chrome.storage.local.set({ [`guidIndex:${repo}`]: index }).catch(() => {});
+    },
   };
 }
 
-// Wires the site demo (site/extension.html): WASM differ + fixture-backed index.
-export async function createDemoDeps(): Promise<DemoDeps> {
-  const fetchBytes = async (url: string): Promise<Uint8Array<ArrayBuffer>> => {
+export function createGithubAuth(): GithubAuthPort {
+  return { requestDeviceCode, pollForToken };
+}
+
+export function createGithubClient(base: string, token: string, fetchFn: typeof fetch): GithubPort {
+  return new GithubClient(base, token, fetchFn);
+}
+
+export function createFetchQueue(concurrency: number): Queue {
+  return createQueue(concurrency);
+}
+
+export function createDifferLoader(): () => Promise<DifferPort> {
+  let differ: Promise<DifferPort> | undefined;
+  return () => {
+    // Lazy singleton; SW restart → re-fetch
+    differ ??= fetch(chrome.runtime.getURL("prefablens.wasm"))
+      .then((r) => r.arrayBuffer())
+      .then(createDiffer);
+    return differ;
+  };
+}
+
+export async function createDemoDiffer(): Promise<DifferPort> {
+  const bytes = await createDemoFetchBytes()("prefablens.wasm");
+  return createDiffer(bytes);
+}
+
+export async function loadFixtureGuidIndex(): Promise<Map<string, string>> {
+  // guid → asset path, generated by build.mjs from the fixture .meta files
+  return new Map(Object.entries(await (await fetch("fixtures/guids.json")).json()));
+}
+
+export function createDemoFetchBytes(): (url: string) => Promise<Uint8Array<ArrayBuffer>> {
+  return async (url) => {
     const res = await fetch(url);
     if (!res.ok) throw new Error(`${url}: HTTP ${res.status}`);
     return new Uint8Array(await res.arrayBuffer());
   };
-  const differ = await createDiffer(await fetchBytes("prefablens.wasm"));
-  // guid → asset path, generated by build.mjs from the fixture .meta files
-  const index = new Map<string, string>(Object.entries(await (await fetch("fixtures/guids.json")).json()));
-  return {
-    differ,
-    index,
-    fetchBytes,
-    fetchSource: (side, path) => fetchBytes(`fixtures/${side}/${path}`).catch(() => new Uint8Array()),
-  };
+}
+
+export function createDemoFetchSource(): (side: "before" | "after", path: string) => Promise<Uint8Array> {
+  const fetchBytes = createDemoFetchBytes();
+  return (side, path) => fetchBytes(`fixtures/${side}/${path}`).catch(() => new Uint8Array());
 }

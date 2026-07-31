@@ -20,7 +20,7 @@ export async function prefetchPr(
   tokenStore: TokenStorePort,
   makeClient: (base: string, token: string, lane: "user" | "prefetch") => GithubPort,
   getDiffer: () => Promise<DifferPort>,
-  guidCache: GuidCachePort,
+  _guidCache: GuidCachePort,
   diffStore: DiffCachePort,
   repoIndexStore: RepoIndexPort,
   session: DiffSession,

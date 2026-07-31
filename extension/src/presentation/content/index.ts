@@ -4,7 +4,7 @@ import { requestPrefetch } from "../../application/diff/request-prefetch";
 import { requestSemanticDiff } from "../../application/diff/request-semantic-diff";
 import { type BackgroundError, type GuidResolvedPush, targetKey, unresolvedRemaining } from "../../domain/diff/types";
 import { must } from "../../domain/must";
-import { createContentDeps } from "../../infrastructure/container";
+import { createGithubAuth, createMessenger, createTokenStore } from "../../infrastructure/container";
 import {
   render,
   renderError,
@@ -65,7 +65,9 @@ let prefetchedPr = ""; // prefetch once per PR across conversation + files tabs
 // Auth-blocked panels: retry all when a token lands
 const authRetries = emptyAuthRetries();
 
-const { messenger, tokenStore, auth } = createContentDeps();
+const messenger = createMessenger();
+const tokenStore = createTokenStore();
+const auth = createGithubAuth();
 const signInState: SignInState = { inFlight: false };
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 const openTab = (url: string) => void window.open(url, "_blank", "noopener");

@@ -1,11 +1,18 @@
 import { describe, expect, it, vi } from "vitest";
 import type { DiffV2, GuidResolvedPush, SemanticDiffRequest, SemanticDiffResponse } from "../../domain/diff/types";
 import { err, ok } from "../../domain/result";
+import type { DiffCachePort } from "../port/diff-cache";
 import type { DifferPort } from "../port/differ";
-import type { ChangedFile } from "../port/github";
+import type { ChangedFile, GithubPort } from "../port/github";
+import type { GuidCachePort } from "../port/guid-cache";
+import type { RepoIndexPort } from "../port/repo-index";
+import type { TokenStorePort } from "../port/token-store";
 import { createDiffSession, type DiffSession } from "./_diff-session";
-import { computeSemanticDiff, type DiffDeps } from "./compute-semantic-diff";
+import { computeSemanticDiff } from "./compute-semantic-diff";
 import { prefetchPr } from "./prefetch-pr";
+
+type MakeClient = (base: string, token: string, lane: "user" | "prefetch") => GithubPort;
+type GetDiffer = () => Promise<DifferPort>;
 
 const REQ: SemanticDiffRequest = {
   type: "semanticDiff",
@@ -17,7 +24,7 @@ const REQ: SemanticDiffRequest = {
 
 const DIFF: DiffV2 = { schema: "prefablens.diff.v2", unresolvedGuids: ["g1"], roots: [], loose: [] };
 
-function makeDeps(overrides?: {
+function makeFakes(overrides?: {
   files?: ChangedFile[];
   contents?: Record<string, string>; // `${path}@${ref}` → text
   blobs?: Record<string, string>; // blob sha → text (getBlobRaw; absent sha = 404 → null)
@@ -98,29 +105,43 @@ function makeDeps(overrides?: {
       indexData[repo] = index;
     }),
   };
-  const deps: DiffDeps = {
-    getSettings: async () => ({
-      accessToken: Object.hasOwn(overrides ?? {}, "accessToken") ? overrides?.accessToken : "tok",
-    }),
-    makeClient: (_base: string, _token: string, _lane: "user" | "prefetch") => client,
-    getDiffer: async () => differ,
-    guidCache,
-    diffStore,
-    repoIndexStore,
+  const tokenStore: TokenStorePort = {
+    readAccessToken: async () => (Object.hasOwn(overrides ?? {}, "accessToken") ? overrides?.accessToken : "tok"),
+    saveAccessToken: async () => {},
+    savePendingSignIn: async () => {},
+    readPendingSignIn: async () => undefined,
+    clearPendingSignIn: async () => {},
   };
-  return { deps, client, differ, guidCache, diffStore, repoIndexStore };
+  const makeClient = (_base: string, _token: string, _lane: "user" | "prefetch") => client;
+  const getDiffer = async () => differ;
+  return { tokenStore, makeClient, getDiffer, guidCache, diffStore, repoIndexStore, client, differ };
 }
 
 /** Drives semanticDiff to completion — the immediate response plus every push — and returns the
  *  fully-resolved response. Errors and fully-in-PR-resolved diffs pass through unchanged; a pending
  *  diff resolves to the final push's json, i.e. what the pipeline ultimately produces. */
 async function resolveFully(
-  deps: DiffDeps,
+  tokenStore: TokenStorePort,
+  makeClient: MakeClient,
+  getDiffer: GetDiffer,
+  guidCache: GuidCachePort,
+  diffStore: DiffCachePort,
+  repoIndexStore: RepoIndexPort,
   session: DiffSession,
   req: SemanticDiffRequest,
 ): Promise<SemanticDiffResponse> {
   const pushes: GuidResolvedPush[] = [];
-  const res = await computeSemanticDiff(deps, session, req, (m) => pushes.push(m));
+  const res = await computeSemanticDiff(
+    tokenStore,
+    makeClient,
+    getDiffer,
+    guidCache,
+    diffStore,
+    repoIndexStore,
+    session,
+    req,
+    (m) => pushes.push(m),
+  );
   if (!res.ok || !res.pending) return res;
   await vi.waitFor(() => expect(pushes.at(-1)?.done).toBe(true));
   const final = pushes.at(-1);
@@ -129,27 +150,55 @@ async function resolveFully(
 
 describe("prefetch", () => {
   it("precomputes diffs so a later toggle serves without new blob fetches", async () => {
-    const { deps, client } = makeDeps();
+    const { tokenStore, makeClient, getDiffer, guidCache, diffStore, repoIndexStore, client } = makeFakes();
     const session = createDiffSession();
-    await prefetchPr(deps, session, { type: "prefetch", owner: "o", repo: "r", prNumber: 1 });
+    await prefetchPr(tokenStore, makeClient, getDiffer, guidCache, diffStore, repoIndexStore, session, {
+      type: "prefetch",
+      owner: "o",
+      repo: "r",
+      prNumber: 1,
+    });
     expect(client.searchMetaByGuid).not.toHaveBeenCalled(); // prefetch doesn't touch the 10 req/min Code Search
     const fetchesAfterPrefetch = client.getFileAtRef.mock.calls.length;
-    const res = await resolveFully(deps, session, REQ);
+    const res = await resolveFully(
+      tokenStore,
+      makeClient,
+      getDiffer,
+      guidCache,
+      diffStore,
+      repoIndexStore,
+      session,
+      REQ,
+    );
     expect(res.ok).toBe(true);
     expect(client.getFileAtRef.mock.calls.length).toBe(fetchesAfterPrefetch); // no blob re-fetch
   });
 
   it("persists prefetched diffs to the diff store (sw restart survival)", async () => {
-    const { deps } = makeDeps();
-    await prefetchPr(deps, createDiffSession(), { type: "prefetch", owner: "o", repo: "r", prNumber: 1 });
-    expect(deps.diffStore.save).toHaveBeenCalledWith("base-sha:head-sha:Assets/Foo.prefab", DIFF);
+    const { tokenStore, makeClient, getDiffer, guidCache, diffStore, repoIndexStore } = makeFakes();
+    await prefetchPr(tokenStore, makeClient, getDiffer, guidCache, diffStore, repoIndexStore, createDiffSession(), {
+      type: "prefetch",
+      owner: "o",
+      repo: "r",
+      prNumber: 1,
+    });
+    expect(diffStore.save).toHaveBeenCalledWith("base-sha:head-sha:Assets/Foo.prefab", DIFF);
   });
 
   it("serves a diff persisted by a previous worker from the store", async () => {
     // The SW dies after 30 seconds: a result prefetched in a prior life must be recoverable via storage.session
-    const { deps, client, diffStore } = makeDeps();
+    const { tokenStore, makeClient, getDiffer, guidCache, diffStore, repoIndexStore, client } = makeFakes();
     diffStore.data["base-sha:head-sha:Assets/Foo.prefab"] = DIFF; // seeded as if saved by a prior SW life
-    const res = await resolveFully(deps, createDiffSession(), REQ);
+    const res = await resolveFully(
+      tokenStore,
+      makeClient,
+      getDiffer,
+      guidCache,
+      diffStore,
+      repoIndexStore,
+      createDiffSession(),
+      REQ,
+    );
     expect(res.ok).toBe(true);
     expect(client.getFileAtRef).not.toHaveBeenCalledWith("o", "r", "Assets/Foo.prefab", "base-sha");
   });
@@ -160,8 +209,13 @@ describe("prefetch", () => {
       status: "modified",
     }));
     files.push({ path: "README.md", status: "modified" });
-    const { deps, client } = makeDeps({ files });
-    await prefetchPr(deps, createDiffSession(), { type: "prefetch", owner: "o", repo: "r", prNumber: 1 });
+    const { tokenStore, makeClient, getDiffer, guidCache, diffStore, repoIndexStore, client } = makeFakes({ files });
+    await prefetchPr(tokenStore, makeClient, getDiffer, guidCache, diffStore, repoIndexStore, createDiffSession(), {
+      type: "prefetch",
+      owner: "o",
+      repo: "r",
+      prNumber: 1,
+    });
     const paths = new Set(client.getFileAtRef.mock.calls.map((c) => c[2]));
     expect(paths.has("README.md")).toBe(false);
     expect(paths.size).toBe(100); // cut off at the cap
@@ -169,26 +223,45 @@ describe("prefetch", () => {
 
   it("skips oversized files without caching them", async () => {
     const big = new Uint8Array(13 * 1024 * 1024);
-    const { deps, client } = makeDeps();
+    const { tokenStore, makeClient, getDiffer, guidCache, diffStore, repoIndexStore, client } = makeFakes();
     client.getFileAtRef.mockResolvedValue(ok(big));
     const session = createDiffSession();
-    await prefetchPr(deps, session, { type: "prefetch", owner: "o", repo: "r", prNumber: 1 });
-    expect(deps.diffStore.save).not.toHaveBeenCalled();
+    await prefetchPr(tokenStore, makeClient, getDiffer, guidCache, diffStore, repoIndexStore, session, {
+      type: "prefetch",
+      owner: "o",
+      repo: "r",
+      prNumber: 1,
+    });
+    expect(diffStore.save).not.toHaveBeenCalled();
     // A later manual toggle still shows the too-large gate as before
-    expect(await resolveFully(deps, session, REQ)).toEqual({ ok: false, error: "too-large", bytes: big.length * 2 });
+    expect(
+      await resolveFully(tokenStore, makeClient, getDiffer, guidCache, diffStore, repoIndexStore, session, REQ),
+    ).toEqual({ ok: false, error: "too-large", bytes: big.length * 2 });
   });
 
   it("aborts silently on rate limit instead of surfacing an error", async () => {
-    const { deps, client } = makeDeps();
+    const { tokenStore, makeClient, getDiffer, guidCache, diffStore, repoIndexStore, client } = makeFakes();
     client.getFileAtRef.mockResolvedValue(err({ kind: "rate-limited" as const }) as never);
     await expect(
-      prefetchPr(deps, createDiffSession(), { type: "prefetch", owner: "o", repo: "r", prNumber: 1 }),
+      prefetchPr(tokenStore, makeClient, getDiffer, guidCache, diffStore, repoIndexStore, createDiffSession(), {
+        type: "prefetch",
+        owner: "o",
+        repo: "r",
+        prNumber: 1,
+      }),
     ).resolves.toBeUndefined();
   });
 
   it("returns without network when the access token is missing", async () => {
-    const { deps, client } = makeDeps({ accessToken: undefined });
-    await prefetchPr(deps, createDiffSession(), { type: "prefetch", owner: "o", repo: "r", prNumber: 1 });
+    const { tokenStore, makeClient, getDiffer, guidCache, diffStore, repoIndexStore, client } = makeFakes({
+      accessToken: undefined,
+    });
+    await prefetchPr(tokenStore, makeClient, getDiffer, guidCache, diffStore, repoIndexStore, createDiffSession(), {
+      type: "prefetch",
+      owner: "o",
+      repo: "r",
+      prNumber: 1,
+    });
     expect(client.getPrRefs).not.toHaveBeenCalled();
   });
 });

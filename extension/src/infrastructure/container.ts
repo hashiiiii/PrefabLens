@@ -1,9 +1,12 @@
 import type { SignInDeps } from "../application/auth/sign-in";
 import { createDiffSession, type DiffSession } from "../application/diff/_diff-session";
 import type { ComputeLocalDiffDeps } from "../application/diff/compute-local-diff";
-import type { DiffDeps } from "../application/diff/compute-semantic-diff";
+import type { DiffCachePort } from "../application/port/diff-cache";
 import type { DifferPort } from "../application/port/differ";
+import type { GithubPort } from "../application/port/github";
+import type { GuidCachePort } from "../application/port/guid-cache";
 import type { MessengerPort } from "../application/port/messenger";
+import type { RepoIndexPort } from "../application/port/repo-index";
 import type { TokenStorePort } from "../application/port/token-store";
 import { createChromeMessenger } from "./providers/chrome-messenger";
 import { createChromeTokenStore } from "./providers/chrome-token-store";
@@ -14,8 +17,18 @@ import { createDiffer } from "./providers/wasm-differ";
 import { createMergeStore } from "./repositories/merge-store";
 import { createSessionDiffStore } from "./repositories/session-diff-store";
 
+// Temporary bag until Task 6 rewrites createBackgroundDeps to individual createX().
+type BackgroundDeps = {
+  tokenStore: TokenStorePort;
+  makeClient(base: string, token: string, lane: "user" | "prefetch"): GithubPort;
+  getDiffer(): Promise<DifferPort>;
+  guidCache: GuidCachePort;
+  diffStore: DiffCachePort;
+  repoIndexStore: RepoIndexPort;
+};
+
 // Wires providers/repositories for the service worker. Message listening stays in presentation.
-export function createBackgroundDeps(): { deps: DiffDeps; session: DiffSession } {
+export function createBackgroundDeps(): { deps: BackgroundDeps; session: DiffSession } {
   let differ: Promise<DifferPort> | undefined;
 
   // Six concurrent across REST/GraphQL (GraphQL shares fetchFn). User-action jumps via front.
@@ -31,8 +44,8 @@ export function createBackgroundDeps(): { deps: DiffDeps; session: DiffSession }
   const metaGuids = createMergeStore(chrome.storage.local, "metaGuids");
 
   const session = createDiffSession();
-  const deps: DiffDeps = {
-    getSettings: async () => ({ accessToken: await tokenStore.readAccessToken() }),
+  const deps: BackgroundDeps = {
+    tokenStore,
     makeClient: (base, token, lane) => new GithubClient(base, token, queuedFetch(lane === "user")),
     getDiffer() {
       // Lazy singleton; SW restart → re-fetch

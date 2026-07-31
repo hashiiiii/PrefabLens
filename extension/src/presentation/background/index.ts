@@ -22,11 +22,30 @@ function makeGuidPush(tabId: number | undefined): (m: GuidResolvedPush) => void 
 chrome.runtime.onMessage.addListener((msg: BackgroundRequest, sender, sendResponse) => {
   switch (msg?.type) {
     case "semanticDiff": {
-      void computeSemanticDiff(deps, session, msg, makeGuidPush(sender.tab?.id)).then(sendResponse);
+      void computeSemanticDiff(
+        deps.tokenStore,
+        deps.makeClient,
+        deps.getDiffer,
+        deps.guidCache,
+        deps.diffStore,
+        deps.repoIndexStore,
+        session,
+        msg,
+        makeGuidPush(sender.tab?.id),
+      ).then(sendResponse);
       return true; // async response
     }
     case "prefetch":
-      void prefetchPr(deps, session, msg);
+      void prefetchPr(
+        deps.tokenStore,
+        deps.makeClient,
+        deps.getDiffer,
+        deps.guidCache,
+        deps.diffStore,
+        deps.repoIndexStore,
+        session,
+        msg,
+      );
       return undefined; // prefetch is fire-and-forget
   }
 });

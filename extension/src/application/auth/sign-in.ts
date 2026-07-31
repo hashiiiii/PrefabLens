@@ -4,6 +4,8 @@ import type { TokenStorePort } from "../port/token-store";
 // Written before the verification tab opens; /login/device reads it to pre-fill
 export type PendingSignIn = { userCode: string; expiresAt: number };
 
+export type SignInState = { inFlight: boolean };
+
 export type SignInDeps = {
   auth: GithubAuthPort;
   tokenStore: TokenStorePort;
@@ -24,29 +26,26 @@ export const FAILURE_TEXT = {
   failed: "Sign-in failed — try again.",
 } as const;
 
-export function createSignIn(deps: SignInDeps): (ui: SignInUi) => Promise<void> {
-  let inFlight = false; // one flow per page; second click while polling is a no-op
-  return async (ui) => {
-    if (inFlight) return;
-    inFlight = true;
-    try {
-      const code = await deps.auth.requestDeviceCode(deps.fetchFn);
-      await deps.tokenStore.savePendingSignIn({
-        userCode: code.userCode,
-        expiresAt: deps.now() + code.expiresIn * 1000,
-      });
-      ui.showPending(code.userCode, code.verificationUri);
-      deps.openTab(code.verificationUri);
-      const result = await deps.auth.pollForToken(deps.fetchFn, deps.sleep, code);
-      // Success: saveToken → storage.onChanged in index.ts retries auth-blocked panels
-      if (result.status === "ok") await deps.tokenStore.saveAccessToken(result.token);
-      else ui.showFailure(FAILURE_TEXT[result.status]);
-      await deps.tokenStore.clearPendingSignIn();
-    } catch {
-      ui.showFailure(FAILURE_TEXT.failed);
-      await deps.tokenStore.clearPendingSignIn().catch(() => {});
-    } finally {
-      inFlight = false;
-    }
-  };
+export async function signIn(deps: SignInDeps, state: SignInState, ui: SignInUi): Promise<void> {
+  if (state.inFlight) return;
+  state.inFlight = true;
+  try {
+    const code = await deps.auth.requestDeviceCode(deps.fetchFn);
+    await deps.tokenStore.savePendingSignIn({
+      userCode: code.userCode,
+      expiresAt: deps.now() + code.expiresIn * 1000,
+    });
+    ui.showPending(code.userCode, code.verificationUri);
+    deps.openTab(code.verificationUri);
+    const result = await deps.auth.pollForToken(deps.fetchFn, deps.sleep, code);
+    // Success: saveToken → storage.onChanged in index.ts retries auth-blocked panels
+    if (result.status === "ok") await deps.tokenStore.saveAccessToken(result.token);
+    else ui.showFailure(FAILURE_TEXT[result.status]);
+    await deps.tokenStore.clearPendingSignIn();
+  } catch {
+    ui.showFailure(FAILURE_TEXT.failed);
+    await deps.tokenStore.clearPendingSignIn().catch(() => {});
+  } finally {
+    state.inFlight = false;
+  }
 }

@@ -1,6 +1,6 @@
 import { expect, it } from "vitest";
 import type { TokenStorePort } from "../port/token-store";
-import { createGetPendingSignIn } from "./get-pending-sign-in";
+import { getPendingSignIn } from "./get-pending-sign-in";
 
 function tokenStore(readPendingSignIn: TokenStorePort["readPendingSignIn"]): TokenStorePort {
   return {
@@ -14,15 +14,12 @@ function tokenStore(readPendingSignIn: TokenStorePort["readPendingSignIn"]): Tok
 
 it("returns the stored pending sign-in", async () => {
   const pending = { userCode: "ABCD-1234", expiresAt: 99 };
-  const get = createGetPendingSignIn({ tokenStore: tokenStore(async () => pending) });
-  expect(await get()).toEqual(pending);
+  expect(await getPendingSignIn(tokenStore(async () => pending))).toEqual(pending);
 });
 
 it("returns undefined when storage fails (device page then skips pre-fill)", async () => {
-  const get = createGetPendingSignIn({
-    tokenStore: tokenStore(async () => {
-      throw new Error("storage gone");
-    }),
+  const store = tokenStore(async () => {
+    throw new Error("storage gone");
   });
-  expect(await get()).toBeUndefined();
+  expect(await getPendingSignIn(store)).toBeUndefined();
 });

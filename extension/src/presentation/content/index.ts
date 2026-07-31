@@ -1,6 +1,10 @@
+import { getPendingSignIn } from "../../application/auth/get-pending-sign-in";
+import { type SignInState, signIn } from "../../application/auth/sign-in";
+import { requestPrefetch } from "../../application/diff/request-prefetch";
+import { requestSemanticDiff } from "../../application/diff/request-semantic-diff";
 import { type BackgroundError, type GuidResolvedPush, targetKey, unresolvedRemaining } from "../../domain/diff/types";
 import { must } from "../../domain/must";
-import { createContentApp } from "../../infrastructure/container";
+import { createContentDeps } from "../../infrastructure/container";
 import {
   render,
   renderError,
@@ -51,12 +55,13 @@ let prefetchedPr = ""; // prefetch once per PR across conversation + files tabs
 // Auth-blocked panels: retry all when a token lands
 const authRetries = createAuthRetries();
 
-const app = createContentApp();
+const { messenger, tokenStore, signInDeps } = createContentDeps();
+const signInState: SignInState = { inFlight: false };
 
 // Auth-error panel: device flow; failures land back here for retry
 function signInPanel(root: ShadowRoot, message: string): void {
   renderSignIn(root, message, () => {
-    void app.signIn({
+    void signIn(signInDeps, signInState, {
       showPending: (userCode, verificationUri) =>
         renderSignInPending(root, userCode, verificationUri, () => void navigator.clipboard.writeText(userCode)),
       showFailure: (text) => signInPanel(root, text),
@@ -71,7 +76,7 @@ function attach(viewState: ViewState): void {
     if (prKey !== prefetchedPr) {
       prefetchedPr = prKey;
       // Fire-and-forget; manual toggle stays available if prefetch fails
-      void app.requestPrefetch({ type: "prefetch", ...prPage });
+      void requestPrefetch(messenger, { type: "prefetch", ...prPage });
     }
   }
   const page = parseDiffUrl(location.pathname);
@@ -141,7 +146,7 @@ function attachToggle(viewState: ViewState, page: DiffPage, entry: FileEntry): v
       };
     },
     requestDiff: (force) =>
-      app.requestSemanticDiff({
+      requestSemanticDiff(messenger, {
         type: "semanticDiff",
         owner: page.owner,
         repo: page.repo,
@@ -179,7 +184,7 @@ function attachToggle(viewState: ViewState, page: DiffPage, entry: FileEntry): v
 async function init(): Promise<void> {
   // Device page: only pre-fill the code the PR page issued
   if (location.pathname === "/login/device") {
-    const pending = await app.getPendingSignIn();
+    const pending = await getPendingSignIn(tokenStore);
     if (pending) fillDeviceCode(document, pending, Date.now());
     return;
   }

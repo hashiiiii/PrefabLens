@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { DeviceCode, PollResult } from "../port/github-auth";
-import { createSignIn, FAILURE_TEXT, type PendingSignIn, type SignInDeps, type SignInUi } from "./sign-in";
+import { FAILURE_TEXT, type PendingSignIn, type SignInDeps, type SignInState, type SignInUi, signIn } from "./sign-in";
 
 const CODE: DeviceCode = {
   deviceCode: "dc1",
@@ -67,11 +67,12 @@ function fakeUi() {
   return { ui, pending, failures };
 }
 
-describe("createSignIn", () => {
+describe("signIn", () => {
   it("saves the pending code, opens the tab, and stores the token on success", async () => {
     const { deps, pendings, tokens, urls, calls } = fakeDeps(async () => ({ status: "ok", token: "tok123" }));
     const { ui, pending, failures } = fakeUi();
-    await createSignIn(deps)(ui);
+    const state: SignInState = { inFlight: false };
+    await signIn(deps, state, ui);
     // expiresAt derives from the injected now(): 1000 + 900s in ms.
     expect(pendings).toEqual([{ userCode: "ABCD-1234", expiresAt: 901_000 }]);
     expect(pending).toEqual([{ userCode: "ABCD-1234", verificationUri: "https://github.com/login/device" }]);
@@ -86,7 +87,8 @@ describe("createSignIn", () => {
   it("maps denied to its failure copy without storing a token", async () => {
     const { deps, tokens, calls } = fakeDeps(async () => ({ status: "denied" }));
     const { ui, failures } = fakeUi();
-    await createSignIn(deps)(ui);
+    const state: SignInState = { inFlight: false };
+    await signIn(deps, state, ui);
     expect(failures).toEqual([FAILURE_TEXT.denied]);
     expect(tokens).toEqual([]);
     expect(calls).toContain("clearPending");
@@ -95,7 +97,8 @@ describe("createSignIn", () => {
   it("maps expired to its failure copy", async () => {
     const { deps } = fakeDeps(async () => ({ status: "expired" }));
     const { ui, failures } = fakeUi();
-    await createSignIn(deps)(ui);
+    const state: SignInState = { inFlight: false };
+    await signIn(deps, state, ui);
     expect(failures).toEqual([FAILURE_TEXT.expired]);
   });
 
@@ -105,7 +108,8 @@ describe("createSignIn", () => {
       throw new Error("network down");
     };
     const { ui, failures } = fakeUi();
-    await createSignIn(deps)(ui);
+    const state: SignInState = { inFlight: false };
+    await signIn(deps, state, ui);
     expect(failures).toEqual([FAILURE_TEXT.failed]);
     expect(calls).not.toContain("openTab");
   });
@@ -114,16 +118,16 @@ describe("createSignIn", () => {
     let resolvePoll!: (r: PollResult) => void;
     const { deps, calls } = fakeDeps(() => new Promise<PollResult>((resolve) => (resolvePoll = resolve)));
     const { ui } = fakeUi();
-    const signIn = createSignIn(deps);
-    const first = signIn(ui);
-    await signIn(ui); // resolves immediately: the guard rejects re-entry
+    const state: SignInState = { inFlight: false };
+    const first = signIn(deps, state, ui);
+    await signIn(deps, state, ui); // resolves immediately: the guard rejects re-entry
     expect(calls.filter((c) => c === "request")).toHaveLength(1);
     // Drain microtasks until the first flow reaches the poll, so resolvePoll is assigned.
     for (let i = 0; i < 10 && !calls.includes("poll"); i++) await Promise.resolve();
     resolvePoll({ status: "ok", token: "tok" });
     await first;
     // With the first flow settled, a new one may start (its poll stays pending; only the guard matters here).
-    void signIn(ui);
+    void signIn(deps, state, ui);
     expect(calls.filter((c) => c === "request")).toHaveLength(2);
   });
 });

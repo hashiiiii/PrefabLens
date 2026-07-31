@@ -1,4 +1,4 @@
-import { cpSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { copyFileSync, cpSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { build } from "esbuild";
 
 mkdirSync("dist", { recursive: true });
@@ -43,6 +43,7 @@ if (e2e) {
 }
 writeFileSync("dist/manifest.json", JSON.stringify(manifest, null, 2));
 
-cpSync("../zig-out/bin/prefablens.wasm", "dist/prefablens.wasm");
+// realpath so a worktree symlink to the main checkout wasm still copies a real file
+copyFileSync(realpathSync("../zig-out/bin/prefablens.wasm"), "dist/prefablens.wasm");
 mkdirSync("dist/images", { recursive: true });
 for (const size of [16, 32, 48, 128]) cpSync(`images/icon${size}.png`, `dist/images/icon${size}.png`);

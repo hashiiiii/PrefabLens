@@ -65,8 +65,11 @@ let prefetchedPr = ""; // prefetch once per PR across conversation + files tabs
 // Auth-blocked panels: retry all when a token lands
 const authRetries = emptyAuthRetries();
 
-const { messenger, tokenStore, signInDeps } = createContentDeps();
+const { messenger, tokenStore, auth } = createContentDeps();
 const signInState: SignInState = { inFlight: false };
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+const openTab = (url: string) => void window.open(url, "_blank", "noopener");
+const now = () => Date.now();
 
 const persistView = (view: View): void => {
   void chrome.storage.local.set({ viewMode: view }).catch(() => {});
@@ -75,7 +78,7 @@ const persistView = (view: View): void => {
 // Auth-error panel: device flow; failures land back here for retry
 function signInPanel(root: ShadowRoot, message: string): void {
   renderSignIn(root, message, () => {
-    void signIn(signInDeps, signInState, {
+    void signIn(auth, tokenStore, fetch, sleep, openTab, now, signInState, {
       showPending: (userCode, verificationUri) =>
         renderSignInPending(root, userCode, verificationUri, () => void navigator.clipboard.writeText(userCode)),
       showFailure: (text) => signInPanel(root, text),

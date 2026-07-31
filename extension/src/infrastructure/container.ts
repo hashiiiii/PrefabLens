@@ -1,9 +1,9 @@
-import type { SignInDeps } from "../application/auth/sign-in";
 import { createDiffSession, type DiffSession } from "../application/diff/_diff-session";
 import type { ComputeLocalDiffDeps } from "../application/diff/compute-local-diff";
 import type { DiffCachePort } from "../application/port/diff-cache";
 import type { DifferPort } from "../application/port/differ";
 import type { GithubPort } from "../application/port/github";
+import type { GithubAuthPort } from "../application/port/github-auth";
 import type { GuidCachePort } from "../application/port/guid-cache";
 import type { MessengerPort } from "../application/port/messenger";
 import type { RepoIndexPort } from "../application/port/repo-index";
@@ -74,25 +74,18 @@ export function createBackgroundDeps(): { deps: BackgroundDeps; session: DiffSes
   return { deps, session };
 }
 
-// Bundles the content script's ports and sign-in wiring. Presentation passes
-// these to plain use-case functions; it never calls port methods itself.
+// Bundles the content script's ports. Presentation wires sign-in args locally;
+// createContentDeps still returns { messenger, tokenStore, auth } until Task 6.
 export function createContentDeps(): {
   messenger: MessengerPort;
   tokenStore: TokenStorePort;
-  signInDeps: SignInDeps;
+  auth: GithubAuthPort;
 } {
   const tokenStore = createChromeTokenStore(chrome.storage.local);
   return {
     messenger: createChromeMessenger(),
     tokenStore,
-    signInDeps: {
-      auth: { requestDeviceCode, pollForToken },
-      tokenStore,
-      fetchFn: fetch,
-      sleep: (ms) => new Promise<void>((resolve) => setTimeout(resolve, ms)),
-      openTab: (url) => void window.open(url, "_blank", "noopener"),
-      now: () => Date.now(),
-    },
+    auth: { requestDeviceCode, pollForToken },
   };
 }
 

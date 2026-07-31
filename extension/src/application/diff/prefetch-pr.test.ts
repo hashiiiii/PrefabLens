@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { DiffV2, GuidResolvedPush, SemanticDiffRequest, SemanticDiffResponse } from "../../domain/diff/types";
-import { err, ok } from "../_result";
+import { err, ok } from "../../domain/result";
 import type { DifferPort } from "../port/differ";
 import type { ChangedFile } from "../port/github";
 import { createDiffSession, type DiffSession } from "./_diff-session";

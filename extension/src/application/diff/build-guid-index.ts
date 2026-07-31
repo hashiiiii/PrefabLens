@@ -1,5 +1,5 @@
 import { parseGuidFromMeta } from "../../domain/diff/meta-guid";
-import { err, ok, type Result } from "../_result";
+import { err, ok, type Result } from "../../domain/result";
 import { type ChangedFile, type GithubFailure, isRateLimited } from "../port/github";
 
 export type MetaFetcher = (path: string, side: "base" | "head") => Promise<Result<string | null, GithubFailure>>;

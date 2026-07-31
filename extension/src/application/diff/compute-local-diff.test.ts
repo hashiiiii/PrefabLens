@@ -1,6 +1,6 @@
 import { expect, it } from "vitest";
 import type { DiffV2 } from "../../domain/diff/types";
-import { ok } from "../_result";
+import { ok } from "../../domain/result";
 import type { DifferPort } from "../port/differ";
 import { type ComputeLocalDiffDeps, computeLocalDiff } from "./compute-local-diff";
 

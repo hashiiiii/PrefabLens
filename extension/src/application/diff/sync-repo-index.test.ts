@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { ok } from "../_result";
+import { ok } from "../../domain/result";
 import type { RepoIndexPort } from "../port/repo-index";
 import { syncRepoIndex } from "./sync-repo-index";
 

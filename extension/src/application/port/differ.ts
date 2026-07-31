@@ -1,5 +1,5 @@
 import type { DiffV2 } from "../../domain/diff/types";
-import type { Result } from "../_result";
+import type { Result } from "../../domain/result";
 
 export type DiffFailure = { kind: "diff-failed"; message: string };
 

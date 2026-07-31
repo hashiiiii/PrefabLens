@@ -1,5 +1,5 @@
 import { parseGuidFromMeta } from "../../domain/diff/meta-guid";
-import { ok, type Result } from "../_result";
+import { ok, type Result } from "../../domain/result";
 import type { GithubFailure, GithubPort } from "../port/github";
 import type { RepoIndexPort } from "../port/repo-index";
 

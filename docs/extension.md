@@ -1,8 +1,7 @@
 # Extension Architecture
 
-Layer structure and dependency rules for `extension/src/`. Modeled on
-[reknotes ARCHITECTURE.md](https://github.com/hashiiiii/reknotes/blob/main/docs/ARCHITECTURE.md),
-adapted for a Chrome MV3 extension. `src/layering.test.ts` enforces the import
+Layer structure and dependency rules for `extension/src/`. A layered architecture
+adapted for a Chrome Manifest V3 extension. `src/layering.test.ts` enforces the import
 rules mechanically.
 
 ## Overview
@@ -26,6 +25,11 @@ container factory:
 
 Pure types and pure functions. Imports nothing outside `domain/`.
 
+- **Result**: expected failures travel as tagged unions via
+  `Result<T, E>` from `domain/result.ts` — no `Error` subclasses,
+  no `throw` for expected failures. Shared by ports, use cases, and
+  infrastructure implementations.
+
 ### Application (`src/application/`)
 
 Use cases composed from domain logic and ports.
@@ -36,15 +40,8 @@ Use cases composed from domain logic and ports.
   `create<X>()` / `empty<X>()` constructors; the container (or presentation,
   for UI state) creates them once and callers pass them explicitly. No
   `create<UseCase>(deps)` factories, no method-bag objects.
-- **Result**: expected failures travel as tagged unions via
-  `Result<T, E>` from `application/_result.ts` — no `Error` subclasses,
-  no `throw` for expected failures. `_result.ts` is the one non-port
-  application file that infrastructure may import (pure primitives shared
-  by ports and their implementations); `src/layering.test.ts` encodes that
-  exception.
 - **Port** (`application/port/<name>.ts`): `XxxPort` types abstracting
-  infrastructure capabilities. (reknotes uses `I*Provider`; this codebase
-  keeps its established `*Port` naming.)
+  infrastructure capabilities.
 - **Shared internals**: files used by several use cases in a feature folder
   get an underscore prefix (`_diff-session.ts`, `_resolution.ts`,
   `_promise-cache.ts`) to distinguish them from verb-noun use cases.
@@ -61,7 +58,8 @@ Use cases composed from domain logic and ports.
 - **`container.ts`**: the only DI file. Exports one `create<Context>Deps()`
   factory per JS context returning the deps (and state) bundles presentation
   passes to use-case functions. Only container.ts may import application use
-  cases; all other infrastructure files import `application/port` at most.
+  cases; all other infrastructure files import `application/port` and domain
+  at most.
 
 ### Presentation (`src/presentation/`)
 

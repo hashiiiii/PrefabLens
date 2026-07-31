@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { err, ok } from "../../application/_result";
+import { err, ok } from "../../domain/result";
 import { must } from "../../domain/must";
 import { GithubClient, graphqlUrl, isAuthFailed, isRateLimited } from "./github-client";
 

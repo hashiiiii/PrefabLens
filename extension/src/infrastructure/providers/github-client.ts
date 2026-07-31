@@ -1,4 +1,4 @@
-import { err, ok, type Result } from "../../application/_result";
+import { err, ok, type Result } from "../../domain/result";
 import {
   type ChangedFile,
   type GithubFailure,

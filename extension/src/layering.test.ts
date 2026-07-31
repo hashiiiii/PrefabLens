@@ -71,11 +71,8 @@ it("keeps presentation off application ports and non-container infra off use cas
       const application = layerOf(target) === "application";
       // Presentation reaches business logic through use cases, never ports
       if (from === "presentation" && port) violations.push(`${relative(SRC, file)} -> ${spec}`);
-      // _result.ts is the one non-port application file infra may import:
-      // pure Result primitives shared by ports and their implementations
-      const resultPrimitive = /application[\\/]_result$/.test(resolve(dirname(file), spec));
       // Infra implements ports; only container.ts may compose use cases
-      if (from === "infrastructure" && file !== CONTAINER && application && !port && !resultPrimitive) {
+      if (from === "infrastructure" && file !== CONTAINER && application && !port) {
         violations.push(`${relative(SRC, file)} -> ${spec}`);
       }
     }

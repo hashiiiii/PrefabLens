@@ -1,6 +1,6 @@
 import type { DiffTarget } from "../../domain/diff/types";
 import { targetKey } from "../../domain/diff/types";
-import { ok, type Result } from "../_result";
+import { ok, type Result } from "../../domain/result";
 import { type ChangedFile, type GithubFailure, type GithubPort, isRateLimited, type RefPair } from "../port/github";
 import type { DiffContext, DiffSession } from "./_diff-session";
 import { fetchBlob } from "./_fetch-blobs";

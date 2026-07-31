@@ -1,4 +1,4 @@
-import type { Result } from "../_result";
+import type { Result } from "../../domain/result";
 
 export type GithubFailure =
   | { kind: "auth-failed" }

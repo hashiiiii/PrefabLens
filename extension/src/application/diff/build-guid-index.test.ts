@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { err, ok } from "../_result";
+import { err, ok } from "../../domain/result";
 import { isRateLimited } from "../port/github";
 import { buildGuidIndex } from "./build-guid-index";
 

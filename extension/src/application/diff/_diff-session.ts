@@ -1,4 +1,4 @@
-import type { Result } from "../_result";
+import type { Result } from "../../domain/result";
 import type { ChangedFile, GithubFailure, RefPair } from "../port/github";
 import { createPromiseCache, type PromiseCache } from "./_promise-cache";
 

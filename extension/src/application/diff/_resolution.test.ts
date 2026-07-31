@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { DiffV2, GuidResolvedPush, SemanticDiffRequest } from "../../domain/diff/types";
 import { must } from "../../domain/must";
-import { err, ok } from "../_result";
+import { err, ok } from "../../domain/result";
 import type { DifferPort } from "../port/differ";
 import { createDiffSession, type DiffContext } from "./_diff-session";
 import { getRepoIndex, mergeSources, type ResolutionDeps, resolveRemaining, searchGuids } from "./_resolution";

@@ -1,16 +1,14 @@
-import { readdirSync, readFileSync } from "node:fs";
+import { globSync, readFileSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { expect, it } from "vitest";
 
-// Source-grep enforcement of the layer rules in docs/extension.md. Same style
-// as the parity tests: cheap, mechanical, and loud when a boundary breaks.
-
 const SRC = import.meta.dirname;
-const SEP = /[\\/]/;
+const SEPARATOR = /[\\/]/;
+const TS_FILES = globSync("**/*.ts", { cwd: SRC }).map((f) => join(SRC, f));
 
 type Layer = "domain" | "application" | "infrastructure" | "presentation";
 
-// Layers each layer may import from (itself is always allowed)
+// Allowed import targets per layer
 const ALLOWED: Record<Layer, Layer[]> = {
   domain: [],
   application: ["domain"],
@@ -18,29 +16,29 @@ const ALLOWED: Record<Layer, Layer[]> = {
   presentation: ["domain", "application"],
 };
 
-function walk(dir: string): string[] {
-  return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
-    const full = join(dir, entry.name);
-    if (entry.isDirectory()) return walk(full);
-    return entry.name.endsWith(".ts") ? [full] : [];
-  });
-}
-
 function layerOf(file: string): Layer | null {
-  const top = relative(SRC, file).split(SEP)[0];
+  const top = relative(SRC, file).split(SEPARATOR)[0];
   return top === "domain" || top === "application" || top === "infrastructure" || top === "presentation" ? top : null; // globals.d.ts, this test
 }
 
-const CONTAINER = join(SRC, "infrastructure", "container.ts");
+// e.g.
+// presentation/background/index.ts
+// presentation/content/index.ts
 const ENTRY = /presentation[\\/][^\\/]+[\\/]index\.ts$/;
+const CONTAINER = join(SRC, "infrastructure", "container.ts");
 
 it("keeps imports pointing inward across layers", () => {
   const violations: string[] = [];
-  for (const file of walk(SRC)) {
+  for (const file of TS_FILES) {
     const from = layerOf(file);
     if (from === null) continue;
-    // Matches `from "<spec>"` (import/export-from, incl. multiline), bare
-    // `import "<spec>";` side effects, and dynamic `import("<spec>")`.
+    // [
+    //   'from "./port/github"',
+    //   './port/github',
+    //   index: 18,
+    //   input: '...full contents...',
+    //   groups: undefined,
+    // ]
     for (const match of readFileSync(file, "utf8").matchAll(/(?:from\s*|import\s*\(?\s*)"(\.[^"]+)"/g)) {
       const spec = match[1];
       if (spec === undefined) continue;
@@ -48,7 +46,7 @@ it("keeps imports pointing inward across layers", () => {
       const to = layerOf(target);
       if (to === null || to === from) continue;
       const label = `${relative(SRC, file)} -> ${spec}`;
-      // Entry points wire their app through the DI container — the only allowed infra import
+      // Entry points wire their app through the DI container
       if (to === "infrastructure" && target === CONTAINER && ENTRY.test(file)) continue;
       if (!ALLOWED[from].includes(to)) violations.push(label);
     }
@@ -58,7 +56,7 @@ it("keeps imports pointing inward across layers", () => {
 
 it("keeps presentation off application ports and non-container infra off use cases", () => {
   const violations: string[] = [];
-  for (const file of walk(SRC)) {
+  for (const file of TS_FILES) {
     const from = layerOf(file);
     if (from === null) continue;
     // Matches `from "<spec>"` (import/export-from, incl. multiline), bare

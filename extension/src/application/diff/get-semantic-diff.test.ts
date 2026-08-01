@@ -9,8 +9,8 @@ import type { GuidCachePort } from "../port/guid-cache";
 import type { RepoIndexPort } from "../port/repo-index";
 import type { TokenStorePort } from "../port/token-store";
 import { createDiffSession, type DiffSession } from "./_diff-session";
-import { computeSemanticDiff } from "./compute-semantic-diff";
-import { prefetchPr } from "./prefetch-pr";
+import { createPrPrefetch } from "./create-pr-prefetch";
+import { getSemanticDiff } from "./get-semantic-diff";
 
 type MakeClient = (base: string, token: string, lane: "user" | "prefetch") => GithubPort;
 type GetDiffer = () => Promise<DifferPort>;
@@ -130,7 +130,7 @@ async function serveAndResolve(
   req: SemanticDiffRequest,
 ): Promise<{ res: SemanticDiffResponse; pushes: GuidResolvedPush[] }> {
   const pushes: GuidResolvedPush[] = [];
-  const res = await computeSemanticDiff(
+  const res = await getSemanticDiff(
     tokenStore,
     makeClient,
     getDiffer,
@@ -159,7 +159,7 @@ async function resolveFully(
   req: SemanticDiffRequest,
 ): Promise<SemanticDiffResponse> {
   const pushes: GuidResolvedPush[] = [];
-  const res = await computeSemanticDiff(
+  const res = await getSemanticDiff(
     tokenStore,
     makeClient,
     getDiffer,
@@ -357,7 +357,7 @@ describe("semanticDiff", () => {
     const { tokenStore, makeClient, getDiffer, guidCache, diffStore, repoIndexStore } = makeFakes({ isUnityYaml });
     const session = createDiffSession();
     expect(
-      await computeSemanticDiff(
+      await getSemanticDiff(
         tokenStore,
         makeClient,
         getDiffer,
@@ -371,7 +371,7 @@ describe("semanticDiff", () => {
     ).toEqual({ ok: false, error: "not-unity-yaml" });
     const sniffs = isUnityYaml.mock.calls.length;
     expect(
-      await computeSemanticDiff(
+      await getSemanticDiff(
         tokenStore,
         makeClient,
         getDiffer,
@@ -468,7 +468,7 @@ describe("semanticDiff", () => {
       const { tokenStore, makeClient, getDiffer, guidCache, diffStore, repoIndexStore, client } = makeFakes();
       const session = createDiffSession();
       // Fake timers make resolveFully's vi.waitFor hang; this test only needs the immediate response.
-      await computeSemanticDiff(
+      await getSemanticDiff(
         tokenStore,
         makeClient,
         getDiffer,
@@ -480,7 +480,7 @@ describe("semanticDiff", () => {
         () => {},
       );
       vi.setSystemTime(Date.now() + 59_000);
-      await computeSemanticDiff(
+      await getSemanticDiff(
         tokenStore,
         makeClient,
         getDiffer,
@@ -493,7 +493,7 @@ describe("semanticDiff", () => {
       );
       expect(client.getPrRefs).toHaveBeenCalledTimes(1);
       vi.setSystemTime(Date.now() + 2_000); // 61 seconds total
-      await computeSemanticDiff(
+      await getSemanticDiff(
         tokenStore,
         makeClient,
         getDiffer,
@@ -1158,7 +1158,7 @@ describe("semanticDiff", () => {
         diffWithAssets,
       });
       const session = createDiffSession();
-      await prefetchPr(tokenStore, makeClient, getDiffer, guidCache, diffStore, repoIndexStore, session, {
+      await createPrPrefetch(tokenStore, makeClient, getDiffer, guidCache, diffStore, repoIndexStore, session, {
         type: "prefetch",
         owner: "o",
         repo: "r",
@@ -1186,7 +1186,7 @@ it("dedupes a concurrent user toggle against an in-flight prefetch compute", asy
   const { tokenStore, makeClient, getDiffer, guidCache, diffStore, repoIndexStore, client } = makeFakes();
   const session = createDiffSession();
   const [, res] = await Promise.all([
-    prefetchPr(tokenStore, makeClient, getDiffer, guidCache, diffStore, repoIndexStore, session, {
+    createPrPrefetch(tokenStore, makeClient, getDiffer, guidCache, diffStore, repoIndexStore, session, {
       type: "prefetch",
       owner: "o",
       repo: "r",
@@ -1325,7 +1325,7 @@ describe("semanticDiff with push (two-stage)", () => {
     // (done:true is only emitted after mergeSources completes). Asserting "not yet called" must be done
     // right after the immediate response (before waiting for the push to finish), so this one is assembled manually.
     const pushes: GuidResolvedPush[] = [];
-    const res = await computeSemanticDiff(
+    const res = await getSemanticDiff(
       tokenStore,
       makeClient,
       getDiffer,
@@ -1345,12 +1345,21 @@ describe("semanticDiff with push (two-stage)", () => {
 
   it("kicks the repo index sync from prefetch", async () => {
     const { tokenStore, makeClient, getDiffer, guidCache, diffStore, repoIndexStore, client } = makeFakes();
-    await prefetchPr(tokenStore, makeClient, getDiffer, guidCache, diffStore, repoIndexStore, createDiffSession(), {
-      type: "prefetch",
-      owner: "o",
-      repo: "r",
-      prNumber: 1,
-    });
+    await createPrPrefetch(
+      tokenStore,
+      makeClient,
+      getDiffer,
+      guidCache,
+      diffStore,
+      repoIndexStore,
+      createDiffSession(),
+      {
+        type: "prefetch",
+        owner: "o",
+        repo: "r",
+        prNumber: 1,
+      },
+    );
     await vi.waitFor(() => expect(client.listMetaTree).toHaveBeenCalledWith("o", "r", "head-sha"));
   });
 });

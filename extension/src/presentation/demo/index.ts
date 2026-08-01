@@ -3,7 +3,7 @@
 // Bundled as dist/demo.js via `node build.mjs --demo`; fixtures via
 // data-before/data-after URLs (empty side = CLI empty-side semantics).
 
-import { computeLocalDiff } from "../../application/diff/compute-local-diff";
+import { getLocalDiff } from "../../application/diff/get-local-diff";
 import { must } from "../../domain/must";
 import {
   createDemoDiffer,
@@ -59,7 +59,7 @@ function attachFile(header: HTMLElement, locals: DemoLocals, initial: View): (vi
     const target = root;
     renderLoading(target);
     const { differ, index, fetchBytes, fetchSource } = locals;
-    computeLocalDiff(differ, index, fetchBytes, fetchSource, header.dataset.before, header.dataset.after)
+    getLocalDiff(differ, index, fetchBytes, fetchSource, header.dataset.before, header.dataset.after)
       .then((diff) => render(target, diff))
       .catch((err) => renderError(target, String(err)));
   };

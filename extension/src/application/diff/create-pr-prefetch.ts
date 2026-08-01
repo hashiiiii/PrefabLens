@@ -16,7 +16,7 @@ const PREFETCH_CONCURRENCY = 4;
 const API_BASE = __API_BASE__;
 
 // Raw diff only — leave Code Search / updateSources to serve time (10 req/min)
-export async function prefetchPr(
+export async function createPrPrefetch(
   tokenStore: TokenStorePort,
   makeClient: (base: string, token: string, lane: "user" | "prefetch") => GithubPort,
   getDiffer: () => Promise<DifferPort>,

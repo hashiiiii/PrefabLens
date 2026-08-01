@@ -6,7 +6,7 @@ const MAX_SOURCE_ROUNDS = 3; // same cap as the background pipeline
 
 // Guid resolution like the background pipeline: applyResolved + updateSources
 // loop, but source prefabs come from fixture URLs instead of the GitHub API.
-export async function computeLocalDiff(
+export async function getLocalDiff(
   differ: DifferPort,
   index: Map<string, string>,
   fetchBytes: (url: string) => Promise<Uint8Array<ArrayBuffer>>,

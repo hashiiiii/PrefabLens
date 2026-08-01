@@ -1,6 +1,6 @@
 import { createDiffSession } from "../../application/diff/_diff-session";
-import { computeSemanticDiff } from "../../application/diff/compute-semantic-diff";
-import { prefetchPr } from "../../application/diff/prefetch-pr";
+import { createPrPrefetch } from "../../application/diff/create-pr-prefetch";
+import { getSemanticDiff } from "../../application/diff/get-semantic-diff";
 import type { BackgroundRequest, GuidResolvedPush } from "../../domain/diff/types";
 import {
   createDifferLoader,
@@ -43,7 +43,7 @@ function makeGuidPush(tabId: number | undefined): (m: GuidResolvedPush) => void 
 chrome.runtime.onMessage.addListener((msg: BackgroundRequest, sender, sendResponse) => {
   switch (msg?.type) {
     case "semanticDiff": {
-      void computeSemanticDiff(
+      void getSemanticDiff(
         tokenStore,
         makeClient,
         getDiffer,
@@ -57,7 +57,7 @@ chrome.runtime.onMessage.addListener((msg: BackgroundRequest, sender, sendRespon
       return true; // async response
     }
     case "prefetch":
-      void prefetchPr(tokenStore, makeClient, getDiffer, guidCache, diffStore, repoIndexStore, session, msg);
+      void createPrPrefetch(tokenStore, makeClient, getDiffer, guidCache, diffStore, repoIndexStore, session, msg);
       return undefined; // prefetch is fire-and-forget
   }
 });

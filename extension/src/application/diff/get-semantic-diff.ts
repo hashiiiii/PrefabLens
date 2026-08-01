@@ -18,7 +18,7 @@ import { updateRemaining } from "./_resolution";
 
 const API_BASE = __API_BASE__;
 
-export async function computeSemanticDiff(
+export async function getSemanticDiff(
   tokenStore: TokenStorePort,
   makeClient: (base: string, token: string, lane: "user" | "prefetch") => GithubPort,
   getDiffer: () => Promise<DifferPort>,

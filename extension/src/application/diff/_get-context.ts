@@ -4,7 +4,7 @@ import { ok, type Result } from "../../domain/result";
 import { type ChangedFile, type GithubFailure, type GithubPort, isRateLimited, type RefPair } from "../port/github";
 import type { DiffContext, DiffSession } from "./_diff-session";
 import { getBlob } from "./_get-blobs";
-import { buildGuidIndex } from "./build-guid-index";
+import { createGuidIndex } from "./create-guid-index";
 
 // Per-kind: refs + changed-file discovery; everything downstream is target-agnostic
 async function loadRefsAndFiles(
@@ -54,8 +54,8 @@ export function getContext(
     const { refs, files } = loaded.value;
     const bySha = new Map(files.map((f) => [f.path, f.sha]));
     const [guidIndex, tree] = await Promise.all([
-      buildGuidIndex(files, async (path, side) => {
-        // files API sha matches the side buildGuidIndex reads (head, or base for removed metas)
+      createGuidIndex(files, async (path, side) => {
+        // files API sha matches the side createGuidIndex reads (head, or base for removed metas)
         const bytes = await getBlob(
           session,
           client,

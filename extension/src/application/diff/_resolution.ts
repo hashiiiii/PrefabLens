@@ -12,7 +12,7 @@ import type { GuidCachePort } from "../port/guid-cache";
 import type { RepoIndexPort } from "../port/repo-index";
 import type { DiffContext, DiffSession } from "./_diff-session";
 import { type BlobClient, getBlob, getPair } from "./_get-blobs";
-import { syncRepoIndex } from "./sync-repo-index";
+import { updateRepoIndex } from "./update-repo-index";
 
 // Pipeline's GitHub surface; callers thread a richer client through C so blob fetchers keep their view
 export type SearchClient = Pick<GithubPort, "searchMetaByGuid" | "listMetaTree" | "batchBlobTexts">;
@@ -93,7 +93,7 @@ export async function getRepoIndex(
 ): Promise<Record<string, string> | null> {
   if (session.indexFallback.has(repoKey)) return null;
   const result = await session.indexes.get(`${repoKey}@${ref}`, () =>
-    syncRepoIndex(client, repoIndexStore, owner, repo, repoKey, ref),
+    updateRepoIndex(client, repoIndexStore, owner, repo, repoKey, ref),
   );
   if (!result.ok) {
     // Cache already dropped the failure, so the next visit retries

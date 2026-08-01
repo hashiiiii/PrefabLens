@@ -23,49 +23,43 @@ function layerOf(file: string): Layer | null {
 
 const CONTAINER = join(SRC, "infrastructure", "container.ts");
 
+function* relativeImports(file: string): Generator<{ spec: string; target: string }> {
+  for (const match of readFileSync(file, "utf8").matchAll(/(?:from\s*|import\s*\(?\s*)"(\.[^"]+)"/g)) {
+    const spec = match[1];
+    if (spec === undefined) continue;
+    yield { spec, target: `${resolve(dirname(file), spec)}.ts` };
+  }
+}
+
 it("keeps imports pointing inward across layers", () => {
   const violations: string[] = [];
   for (const file of TS_FILES) {
     const from = layerOf(file);
     if (from === null) continue;
-    // [
-    //   'from "../port/github"',
-    //   '../port/github',
-    //   index: 18,
-    //   input: '...full contents...',
-    //   groups: undefined,
-    // ]
-    for (const match of readFileSync(file, "utf8").matchAll(/(?:from\s*|import\s*\(?\s*)"(\.[^"]+)"/g)) {
-      const spec = match[1];
-      if (spec === undefined) continue;
-      const target = `${resolve(dirname(file), spec)}.ts`;
+    for (const { spec, target } of relativeImports(file)) {
       const to = layerOf(target);
       if (to === null || to === from) continue;
-      const label = `${relative(SRC, file)} -> ${spec}`;
+      // Entry points may import container.ts for DI wiring
       if (to === "infrastructure" && target === CONTAINER && /presentation[\\/][^\\/]+[\\/]index\.ts$/.test(file))
         continue;
-      if (!ALLOWED[from].includes(to)) violations.push(label);
+      if (!ALLOWED[from].includes(to)) violations.push(`${relative(SRC, file)} -> ${spec}`);
     }
   }
   expect(violations).toEqual([]);
 });
 
-// Infra implements ports; only container.ts may compose use cases.
-// Presentation may call application/port for transport-shaped outbound work.
-it("keeps non-container infra off application use cases", () => {
+it("keeps non-container infrastructure off application use cases", () => {
   const violations: string[] = [];
   for (const file of TS_FILES) {
     const from = layerOf(file);
     if (from === null) continue;
-    for (const match of readFileSync(file, "utf8").matchAll(/(?:from\s*|import\s*\(?\s*)"(\.[^"]+)"/g)) {
-      const spec = match[1];
-      if (spec === undefined) continue;
-      const target = `${resolve(dirname(file), spec)}.ts`;
-      const port = /application[\\/]port[\\/]/.test(relative(SRC, target));
-      const application = layerOf(target) === "application";
-      if (from === "infrastructure" && file !== CONTAINER && application && !port) {
-        violations.push(`${relative(SRC, file)} -> ${spec}`);
-      }
+    for (const { spec, target } of relativeImports(file)) {
+      const to = layerOf(target);
+      if (from !== "infrastructure" || file === CONTAINER) continue;
+      // Providers may import ports to implement them
+      // Use cases are the violation
+      if (to !== "application" || /application[\\/]port[\\/]/.test(relative(SRC, target))) continue;
+      violations.push(`${relative(SRC, file)} -> ${spec}`);
     }
   }
   expect(violations).toEqual([]);

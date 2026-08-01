@@ -1,10 +1,12 @@
-# Extension Architecture
+# Extension
+
+## Architecture
 
 Layer structure and dependency rules for `extension/src/`. A layered architecture
 adapted for a Chrome Manifest V3 extension. `src/layering.test.ts` enforces the import
 rules mechanically.
 
-## Overview
+### Overview
 
 Dependencies always point inward (toward `domain/`):
 
@@ -19,9 +21,9 @@ container wiring:
 | Content script | `presentation/content/index.ts` |
 | Site demo | `presentation/demo/index.ts` |
 
-## Layers
+### Layers
 
-### Domain (`src/domain/`)
+#### Domain (`src/domain/`)
 
 Pure types and pure functions. Imports nothing outside `domain/`.
 
@@ -32,7 +34,7 @@ Pure types and pure functions. Imports nothing outside `domain/`.
   `Result<T, E>` from `domain/result.ts` — no `Error` subclasses,
   no `throw` for expected failures.
 
-### Application (`src/application/`)
+#### Application (`src/application/`)
 
 Use cases composed from domain logic and ports.
 
@@ -53,7 +55,7 @@ Use cases composed from domain logic and ports.
   `makeClient`, `getDiffer`) are plain parameters. Multi-method contracts
   live in `application/port/`.
 
-### Infrastructure (`src/infrastructure/`)
+#### Infrastructure (`src/infrastructure/`)
 
 - **`providers/`**: implementations of `application/port` contracts
   (GitHub client, WASM differ, chrome.runtime messaging, device-flow helpers).
@@ -64,7 +66,7 @@ Use cases composed from domain logic and ports.
   factories that return ports and repositories (and lifetime-managed
   loaders). Does not import application use cases or session constructors.
 
-### Presentation (`src/presentation/`)
+#### Presentation (`src/presentation/`)
 
 Receives outside input and decides whether to call a use case or a port.
 
@@ -88,7 +90,7 @@ Receives outside input and decides whether to call a use case or a port.
   presentation. The `accessToken`/`signin` keys are owned by the token
   repository, and presentation only observes their change events.
 
-## Startup pattern
+### Startup pattern
 
 Every entry point follows:
 

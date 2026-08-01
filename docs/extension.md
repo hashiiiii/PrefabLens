@@ -13,11 +13,11 @@ Dependencies always point inward (toward `domain/`):
 The extension has three JS contexts, each with its own entry point and
 container wiring:
 
-| Context | Entry point | Factory |
-|---|---|---|
-| Service worker | `presentation/background/index.ts` | individual `createX()` from `container.ts` |
-| Content script | `presentation/content/index.ts` | individual `createX()` from `container.ts` |
-| Site demo | `presentation/demo/index.ts` | individual `createX()` from `container.ts` |
+| Context | Entry point |
+|---|---|
+| Service worker | `presentation/background/index.ts` |
+| Content script | `presentation/content/index.ts` |
+| Site demo | `presentation/demo/index.ts` |
 
 ## Layers
 
@@ -26,25 +26,21 @@ container wiring:
 Pure types and pure functions. Imports nothing outside `domain/`.
 
 - **Repository**: interfaces for domain-model persistence live in
-  `domain/` (alongside models). Use cases depend on these interfaces;
-  infrastructure supplies the implementations.
+  `domain/`. Use cases depend on these interfaces.
+  Infrastructure supplies the implementations.
 - **Result**: expected failures travel as tagged unions via
   `Result<T, E>` from `domain/result.ts` — no `Error` subclasses,
-  no `throw` for expected failures. Shared by ports, use cases, and
-  infrastructure implementations.
+  no `throw` for expected failures.
 
 ### Application (`src/application/`)
 
 Use cases composed from domain logic and ports.
 
 - **Use-case verbs**: prefer CRUD names — `create`, `get`, `update`, `delete`.
-  `signIn` is the allowed non-CRUD exception (OAuth device flow).
 - **Use case**: one per file, named `<verb>-<noun>.ts`, exporting a plain
   verb function `<verb>(ports…, [state,] input)`. Long-lived state (in-flight
   caches, latches, view state) lives in plain state records created by
-  `create<X>()` / `empty<X>()` constructors; callers pass state explicitly.
-  No `create<UseCase>(deps)` factories, no method-bag objects, no `XxxDeps`
-  bags.
+  `create<X>()` / `empty<X>()` constructors. Callers pass state explicitly.
 - **Port** (`application/port/<name>.ts`): `XxxPort` types abstracting
   outside capabilities that do **not** load or save domain models (GitHub
   API, WASM differ, chrome.runtime messaging, device-flow helpers).
@@ -52,7 +48,7 @@ Use cases composed from domain logic and ports.
   get an underscore prefix (`_diff-session.ts`, `_resolution.ts`,
   `_promise-cache.ts`) to distinguish them from verb-noun use cases.
 - **Function params**: single-function dependencies (e.g. `fetchBytes`,
-  `makeClient`, `getDiffer`) are plain parameters; multi-method contracts
+  `makeClient`, `getDiffer`) are plain parameters. Multi-method contracts
   live in `application/port/`.
 
 ### Infrastructure (`src/infrastructure/`)
@@ -79,7 +75,7 @@ Receives outside input and decides whether to call a use case or a port.
   (content → background messaging, thin repository reads for UI pre-fill)
   may invoke port/repository methods directly. Multi-step business
   orchestration (device-flow sign-in, semantic diff pipeline, PR prefetch)
-  stays in application use cases; presentation passes ports/repositories
+  stays in application use cases. Presentation passes ports/repositories
   into those verbs.
 - **Inbound vs outbound**: inbound transport events
   (`chrome.runtime.onMessage`, `chrome.storage.onChanged`, DOM events) are
@@ -87,7 +83,7 @@ Receives outside input and decides whether to call a use case or a port.
 - UI view models (`content/overlay/`: view state, view registry, per-file
   state machine, auth retries) are presentation-owned. The `viewMode`
   storage key is a UI preference and is read/written directly by
-  presentation; the `accessToken`/`signin` keys are owned by the token
+  presentation. The `accessToken`/`signin` keys are owned by the token
   repository, and presentation only observes their change events.
 
 ## Startup pattern

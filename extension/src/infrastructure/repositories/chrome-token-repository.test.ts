@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createChromeTokenStore, readAccessToken, type SettingsStorage } from "./chrome-token-store";
+import { createChromeTokenRepository, readAccessToken, type SettingsStorage } from "./chrome-token-repository";
 
 function mem(initial: Record<string, unknown> = {}): SettingsStorage & { data: Record<string, unknown> } {
   const data = { ...initial };
@@ -39,7 +39,7 @@ describe("readAccessToken", () => {
 it("round-trips the pending sign-in", async () => {
   // In-memory SettingsStorage fake, same shape as the other tests in this file
   const data: Record<string, unknown> = {};
-  const store = createChromeTokenStore({
+  const store = createChromeTokenRepository({
     get: async (keys) => Object.fromEntries(keys.filter((k) => k in data).map((k) => [k, data[k]])),
     set: async (items) => void Object.assign(data, items),
     remove: async (keys) => {

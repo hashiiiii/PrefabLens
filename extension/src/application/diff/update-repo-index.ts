@@ -1,7 +1,7 @@
 import { parseGuidFromMeta } from "../../domain/diff/meta-guid";
+import type { RepoIndexRepository } from "../../domain/guid/repo-index-repository";
 import { ok, type Result } from "../../domain/result";
 import type { GithubFailure, GithubPort } from "../port/github";
-import type { RepoIndexPort } from "../port/repo-index";
 
 type ClientLike = Pick<GithubPort, "listMetaTree" | "batchBlobTexts">;
 
@@ -12,7 +12,7 @@ const GRAPHQL_BATCH = 100;
 // blobSha→guid is content-derived (cache forever); after a push only changed .meta are fetched.
 export async function updateRepoIndex(
   client: ClientLike,
-  store: RepoIndexPort,
+  store: RepoIndexRepository,
   owner: string,
   repo: string,
   repoKey: string,

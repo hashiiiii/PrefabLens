@@ -6,10 +6,10 @@ import {
   type SemanticDiffRequest,
   unresolvedRemaining,
 } from "../../domain/diff/types";
+import type { GuidRepository } from "../../domain/guid/guid-repository";
+import type { RepoIndexRepository } from "../../domain/guid/repo-index-repository";
 import type { DifferPort } from "../port/differ";
 import { type GithubPort, isRateLimited } from "../port/github";
-import type { GuidCachePort } from "../port/guid-cache";
-import type { RepoIndexPort } from "../port/repo-index";
 import type { DiffContext, DiffSession } from "./_diff-session";
 import { type BlobClient, getBlob, getPair } from "./_get-blobs";
 import { updateRepoIndex } from "./update-repo-index";
@@ -24,7 +24,7 @@ const MAX_SOURCE_ROUNDS = 3; // re-diff cap for nested sources (independent of c
 
 // cache → Code Search; failures (incl. rate limits) don't drop the diff — return what resolved
 export async function getGuids(
-  guidCache: GuidCachePort,
+  guidCache: GuidRepository,
   session: DiffSession,
   guids: string[],
   client: SearchClient,
@@ -67,7 +67,7 @@ export async function getGuids(
 
 // Unresolved-by-in-PR-.meta → cache → Code Search; rateLimited folds into updateSources status
 async function getUnresolved(
-  guidCache: GuidCachePort,
+  guidCache: GuidRepository,
   session: DiffSession,
   json: DiffV2,
   client: SearchClient,
@@ -83,7 +83,7 @@ async function getUnresolved(
 
 // Memoized whole-repo index; rate-limited repos stay on fallback for the SW lifetime
 export async function getRepoIndex(
-  repoIndexStore: RepoIndexPort,
+  repoIndexStore: RepoIndexRepository,
   session: DiffSession,
   client: SearchClient,
   owner: string,
@@ -105,7 +105,7 @@ export async function getRepoIndex(
 
 // Fetch neededSources via resolved path and re-diff with assets; failure degrades (doesn't drop)
 export async function updateSources(
-  guidCache: GuidCachePort,
+  guidCache: GuidRepository,
   session: DiffSession,
   first: DiffV2,
   differ: DifferPort,
@@ -171,8 +171,8 @@ function combine(a: ResolutionStatus, b: ResolutionStatus): ResolutionStatus {
 
 // Background index → Code Search + source re-merge via push; catch still emits done to release waiters
 export async function updateRemaining(
-  guidCache: GuidCachePort,
-  repoIndexStore: RepoIndexPort,
+  guidCache: GuidRepository,
+  repoIndexStore: RepoIndexRepository,
   getDiffer: () => Promise<DifferPort>,
   session: DiffSession,
   first: DiffV2,

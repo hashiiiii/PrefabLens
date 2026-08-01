@@ -1,4 +1,5 @@
-import type { TokenStorePort } from "../../application/port/token-store";
+import type { PendingSignIn } from "../../domain/auth/token";
+import type { TokenRepository } from "../../domain/auth/token-repository";
 
 export type SettingsStorage = {
   get(keys: string[]): Promise<Record<string, unknown>>;
@@ -16,14 +17,14 @@ export async function readAccessToken(storage: SettingsStorage): Promise<string 
   return stored.pat;
 }
 
-export function createChromeTokenStore(storage: SettingsStorage): TokenStorePort {
+export function createChromeTokenRepository(storage: SettingsStorage): TokenRepository {
   return {
     readAccessToken: () => readAccessToken(storage),
     saveAccessToken: (token) => storage.set({ accessToken: token }),
     savePendingSignIn: (pending) => storage.set({ signin: pending }),
     readPendingSignIn: async () => {
       const stored = await storage.get(["signin"]);
-      return stored.signin as { userCode: string; expiresAt: number } | undefined;
+      return stored.signin as PendingSignIn | undefined;
     },
     clearPendingSignIn: () => storage.remove("signin"),
   };

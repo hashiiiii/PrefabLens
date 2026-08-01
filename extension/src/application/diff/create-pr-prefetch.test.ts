@@ -1,12 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
+import type { TokenRepository } from "../../domain/auth/token-repository";
+import type { DiffRepository } from "../../domain/diff/diff-repository";
 import type { DiffV2, GuidResolvedPush, SemanticDiffRequest, SemanticDiffResponse } from "../../domain/diff/types";
+import type { GuidRepository } from "../../domain/guid/guid-repository";
+import type { RepoIndexRepository } from "../../domain/guid/repo-index-repository";
 import { err, ok } from "../../domain/result";
-import type { DiffCachePort } from "../port/diff-cache";
 import type { DifferPort } from "../port/differ";
 import type { ChangedFile, GithubPort } from "../port/github";
-import type { GuidCachePort } from "../port/guid-cache";
-import type { RepoIndexPort } from "../port/repo-index";
-import type { TokenStorePort } from "../port/token-store";
 import { createDiffSession, type DiffSession } from "./_diff-session";
 import { createPrPrefetch } from "./create-pr-prefetch";
 import { getSemanticDiff } from "./get-semantic-diff";
@@ -105,7 +105,7 @@ function makeFakes(overrides?: {
       indexData[repo] = index;
     }),
   };
-  const tokenStore: TokenStorePort = {
+  const tokenStore: TokenRepository = {
     readAccessToken: async () => (Object.hasOwn(overrides ?? {}, "accessToken") ? overrides?.accessToken : "tok"),
     saveAccessToken: async () => {},
     savePendingSignIn: async () => {},
@@ -121,12 +121,12 @@ function makeFakes(overrides?: {
  *  fully-resolved response. Errors and fully-in-PR-resolved diffs pass through unchanged; a pending
  *  diff resolves to the final push's json, i.e. what the pipeline ultimately produces. */
 async function resolveFully(
-  tokenStore: TokenStorePort,
+  tokenStore: TokenRepository,
   makeClient: MakeClient,
   getDiffer: GetDiffer,
-  guidCache: GuidCachePort,
-  diffStore: DiffCachePort,
-  repoIndexStore: RepoIndexPort,
+  guidCache: GuidRepository,
+  diffStore: DiffRepository,
+  repoIndexStore: RepoIndexRepository,
   session: DiffSession,
   req: SemanticDiffRequest,
 ): Promise<SemanticDiffResponse> {

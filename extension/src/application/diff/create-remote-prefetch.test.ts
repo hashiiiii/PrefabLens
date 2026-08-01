@@ -1,6 +1,6 @@
 import { expect, it } from "vitest";
 import type { PrefetchRequest } from "../../domain/diff/types";
-import { requestPrefetch } from "./request-prefetch";
+import { createRemotePrefetch } from "./create-remote-prefetch";
 
 const REQ: PrefetchRequest = { type: "prefetch", owner: "o", repo: "r", prNumber: 1 };
 
@@ -14,6 +14,6 @@ it("fires the prefetch and swallows channel failures", async () => {
     },
   };
   // Fire-and-forget: manual toggle stays available if prefetch fails
-  await expect(requestPrefetch(messenger, REQ)).resolves.toBeUndefined();
+  await expect(createRemotePrefetch(messenger, REQ)).resolves.toBeUndefined();
   expect(seen).toEqual([REQ]);
 });

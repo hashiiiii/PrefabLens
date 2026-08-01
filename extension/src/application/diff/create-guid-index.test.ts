@@ -1,14 +1,14 @@
 import { describe, expect, it } from "vitest";
 import { err, ok } from "../../domain/result";
 import { isRateLimited } from "../port/github";
-import { buildGuidIndex } from "./build-guid-index";
+import { createGuidIndex } from "./create-guid-index";
 
 const META = `fileFormatVersion: 2
 guid: 1234567890abcdef1234567890abcdef
 MonoImporter:
   serializedVersion: 2`;
 
-describe("buildGuidIndex", () => {
+describe("createGuidIndex", () => {
   const files = [
     { path: "Assets/Scripts/Player.cs", status: "modified" },
     { path: "Assets/Scripts/Player.cs.meta", status: "modified" },
@@ -17,7 +17,7 @@ describe("buildGuidIndex", () => {
 
   it("indexes changed .meta files, reading removed metas from the base side", async () => {
     const fetched: Array<[string, string]> = [];
-    const indexResult = await buildGuidIndex(files, async (path, side) => {
+    const indexResult = await createGuidIndex(files, async (path, side) => {
       fetched.push([path, side]);
       if (path === "Assets/Scripts/Player.cs.meta") return ok(META);
       if (path === "Assets/Old.cs.meta") return ok("guid: oldguid\n");
@@ -34,7 +34,7 @@ describe("buildGuidIndex", () => {
   });
 
   it("skips metas that fail to fetch or parse", async () => {
-    const indexResult = await buildGuidIndex(files, async () => err({ kind: "fetch-failed" as const }));
+    const indexResult = await createGuidIndex(files, async () => err({ kind: "fetch-failed" as const }));
     expect(indexResult.ok).toBe(true);
     if (!indexResult.ok) return;
     expect(indexResult.value.size).toBe(0);
@@ -42,7 +42,7 @@ describe("buildGuidIndex", () => {
 
   it("propagates rate limits instead of degrading the index silently", async () => {
     // Swallowing would cache a degraded index for the SW's lifetime, and re-toggling would not fix it
-    const result = await buildGuidIndex(files, async () => err({ kind: "rate-limited" as const }));
+    const result = await createGuidIndex(files, async () => err({ kind: "rate-limited" as const }));
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(isRateLimited(result.error)).toBe(true);
@@ -55,7 +55,7 @@ describe("buildGuidIndex", () => {
     }));
     let inFlight = 0;
     let maxInFlight = 0;
-    const indexResult = await buildGuidIndex(manyFiles, async (path, _side) => {
+    const indexResult = await createGuidIndex(manyFiles, async (path, _side) => {
       inFlight++;
       maxInFlight = Math.max(maxInFlight, inFlight);
       await new Promise((r) => setTimeout(r, 0));

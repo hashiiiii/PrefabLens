@@ -10,7 +10,7 @@ const GRAPHQL_BATCH = 100;
 
 // Whole-repo guid→asset path. Truncated / over cap → null (defer to Code Search).
 // blobSha→guid is content-derived (cache forever); after a push only changed .meta are fetched.
-export async function syncRepoIndex(
+export async function updateRepoIndex(
   client: ClientLike,
   store: RepoIndexPort,
   owner: string,

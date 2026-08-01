@@ -8,7 +8,7 @@ const MAX_CONCURRENT_META_FETCHES = 8;
 
 // guid→path from .meta files changed in the PR (removed → base side).
 // Cap 8 concurrent fetches to avoid GitHub secondary rate limits.
-export async function buildGuidIndex(
+export async function createGuidIndex(
   files: ChangedFile[],
   fetchMeta: MetaFetcher,
 ): Promise<Result<Map<string, string>, GithubFailure>> {

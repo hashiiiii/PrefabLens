@@ -7,7 +7,7 @@ const EMPTY = new Uint8Array(0);
 export type BlobClient = Pick<GithubPort, "getBlobRaw" | "getFileAtRef">;
 
 // Prefer blob-sha when known (#110); 404 (force push) falls back to path+ref
-export function fetchBlob(
+export function getBlob(
   session: DiffSession,
   client: BlobClient,
   owner: string,
@@ -27,7 +27,7 @@ export function fetchBlob(
 }
 
 // Before/after blobs; status/previousPath follow the files API
-export async function fetchPair(
+export async function getPair(
   session: DiffSession,
   client: BlobClient,
   ctx: DiffContext,
@@ -42,7 +42,7 @@ export async function fetchPair(
   const beforeBlob = status === "removed" ? file?.sha : ctx.baseShas?.get(beforePath);
   const afterBlob = status === "removed" ? undefined : file?.sha;
   const fetchSide = async (p: string, ref: string, blob?: string): Promise<Result<Uint8Array, GithubFailure>> => {
-    const bytes = await fetchBlob(session, client, owner, repo, p, ref, blob);
+    const bytes = await getBlob(session, client, owner, repo, p, ref, blob);
     if (!bytes.ok) return bytes;
     return ok(bytes.value ?? EMPTY);
   };

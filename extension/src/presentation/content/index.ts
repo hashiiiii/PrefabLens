@@ -1,10 +1,10 @@
 import { getPendingSignIn } from "../../application/auth/get-pending-sign-in";
 import { type SignInState, signIn } from "../../application/auth/sign-in";
-import { requestPrefetch } from "../../application/diff/request-prefetch";
-import { requestSemanticDiff } from "../../application/diff/request-semantic-diff";
+import { createRemotePrefetch } from "../../application/diff/create-remote-prefetch";
+import { getRemoteSemanticDiff } from "../../application/diff/get-remote-semantic-diff";
 import { type BackgroundError, type GuidResolvedPush, targetKey, unresolvedRemaining } from "../../domain/diff/types";
 import { must } from "../../domain/must";
-import { createContentDeps } from "../../infrastructure/container";
+import { createGithubAuth, createMessenger, createTokenStore } from "../../infrastructure/container";
 import {
   render,
   renderError,
@@ -65,8 +65,13 @@ let prefetchedPr = ""; // prefetch once per PR across conversation + files tabs
 // Auth-blocked panels: retry all when a token lands
 const authRetries = emptyAuthRetries();
 
-const { messenger, tokenStore, signInDeps } = createContentDeps();
+const messenger = createMessenger();
+const tokenStore = createTokenStore();
+const auth = createGithubAuth();
 const signInState: SignInState = { inFlight: false };
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+const openTab = (url: string) => void window.open(url, "_blank", "noopener");
+const now = () => Date.now();
 
 const persistView = (view: View): void => {
   void chrome.storage.local.set({ viewMode: view }).catch(() => {});
@@ -75,7 +80,7 @@ const persistView = (view: View): void => {
 // Auth-error panel: device flow; failures land back here for retry
 function signInPanel(root: ShadowRoot, message: string): void {
   renderSignIn(root, message, () => {
-    void signIn(signInDeps, signInState, {
+    void signIn(auth, tokenStore, fetch, sleep, openTab, now, signInState, {
       showPending: (userCode, verificationUri) =>
         renderSignInPending(root, userCode, verificationUri, () => void navigator.clipboard.writeText(userCode)),
       showFailure: (text) => signInPanel(root, text),
@@ -90,7 +95,7 @@ function attach(viewState: ViewStateData): void {
     if (prKey !== prefetchedPr) {
       prefetchedPr = prKey;
       // Fire-and-forget; manual toggle stays available if prefetch fails
-      void requestPrefetch(messenger, { type: "prefetch", ...prPage });
+      void createRemotePrefetch(messenger, { type: "prefetch", ...prPage });
     }
   }
   const page = parseDiffUrl(location.pathname);
@@ -161,7 +166,7 @@ function attachToggle(viewState: ViewStateData, page: DiffPage, entry: FileEntry
       };
     },
     requestDiff: (force) =>
-      requestSemanticDiff(messenger, {
+      getRemoteSemanticDiff(messenger, {
         type: "semanticDiff",
         owner: page.owner,
         repo: page.repo,

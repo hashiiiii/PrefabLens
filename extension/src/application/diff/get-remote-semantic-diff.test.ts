@@ -1,7 +1,7 @@
 import { expect, it } from "vitest";
 import type { SemanticDiffRequest, SemanticDiffResponse } from "../../domain/diff/types";
 import type { MessengerPort } from "../port/messenger";
-import { requestSemanticDiff } from "./request-semantic-diff";
+import { getRemoteSemanticDiff } from "./get-remote-semantic-diff";
 
 const REQ: SemanticDiffRequest = {
   type: "semanticDiff",
@@ -22,7 +22,7 @@ function messenger(semanticDiff: MessengerPort["semanticDiff"]): MessengerPort {
 
 it("passes the request through and returns the background response", async () => {
   const seen: SemanticDiffRequest[] = [];
-  const result = await requestSemanticDiff(
+  const result = await getRemoteSemanticDiff(
     messenger(async (req) => {
       seen.push(req);
       return OK;
@@ -35,7 +35,7 @@ it("passes the request through and returns the background response", async () =>
 
 it("maps a lost channel (rejection) to fetch-failed instead of throwing", async () => {
   // chrome.runtime.sendMessage rejects when the SW restarts mid-flight
-  const result = await requestSemanticDiff(
+  const result = await getRemoteSemanticDiff(
     messenger(async () => {
       throw new Error("channel closed");
     }),

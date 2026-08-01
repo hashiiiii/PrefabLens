@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { ok } from "../../domain/result";
 import type { RepoIndexPort } from "../port/repo-index";
-import { syncRepoIndex } from "./sync-repo-index";
+import { updateRepoIndex } from "./update-repo-index";
 
 function makeFakes(overrides?: {
   metas?: Array<{ path: string; sha: string }>;
@@ -37,10 +37,10 @@ function makeFakes(overrides?: {
   return { client, store };
 }
 
-describe("syncRepoIndex", () => {
+describe("updateRepoIndex", () => {
   it("builds guid → asset path from meta blobs and persists both layers", async () => {
     const { client, store } = makeFakes({ texts: { sha1: "fileFormatVersion: 2\nguid: g1\n" } });
-    const res = await syncRepoIndex(client, store, "o", "r", "repoKey", "H");
+    const res = await updateRepoIndex(client, store, "o", "r", "repoKey", "H");
     expect(res).toEqual(ok({ g1: "Assets/S.cs" })); // path with .meta stripped
     expect(store.saveGuids).toHaveBeenCalledWith("repoKey", { sha1: "g1" });
     expect(store.saveIndex).toHaveBeenCalledWith("repoKey", { treeSha: "H", guids: { g1: "Assets/S.cs" } });
@@ -50,7 +50,7 @@ describe("syncRepoIndex", () => {
     // Without a push, neither the tree nor blobs are re-fetched (repeat visits are zero-cost)
     const stored = { treeSha: "H", guids: { g1: "Assets/S.cs" } };
     const { client, store } = makeFakes({ storedIndex: stored });
-    const res = await syncRepoIndex(client, store, "o", "r", "repoKey", "H");
+    const res = await updateRepoIndex(client, store, "o", "r", "repoKey", "H");
     expect(res).toEqual(ok(stored.guids));
     expect(client.listMetaTree).not.toHaveBeenCalled();
   });
@@ -65,7 +65,7 @@ describe("syncRepoIndex", () => {
       knownGuids: { "known-sha": "gA" },
       texts: { "new-sha": "guid: gB\n" },
     });
-    const res = await syncRepoIndex(client, store, "o", "r", "repoKey", "H");
+    const res = await updateRepoIndex(client, store, "o", "r", "repoKey", "H");
     expect(client.batchBlobTexts).toHaveBeenCalledTimes(1);
     expect(client.batchBlobTexts.mock.calls[0]?.[2]).toEqual(["new-sha"]);
     expect(res).toEqual(ok({ gA: "Assets/A.cs", gB: "Assets/B.cs" }));
@@ -74,7 +74,7 @@ describe("syncRepoIndex", () => {
   it("chunks graphql fetches at 100 blobs per query", async () => {
     const metas = Array.from({ length: 250 }, (_, i) => ({ path: `Assets/F${i}.cs.meta`, sha: `s${i}` }));
     const { client, store } = makeFakes({ metas });
-    await syncRepoIndex(client, store, "o", "r", "repoKey", "H");
+    await updateRepoIndex(client, store, "o", "r", "repoKey", "H");
     expect(client.batchBlobTexts).toHaveBeenCalledTimes(3); // 100 + 100 + 50
     expect(client.batchBlobTexts.mock.calls[0]?.[2]).toHaveLength(100);
     expect(client.batchBlobTexts.mock.calls[2]?.[2]).toHaveLength(50);
@@ -82,14 +82,14 @@ describe("syncRepoIndex", () => {
 
   it("gives up on truncated trees", async () => {
     const { client, store } = makeFakes({ truncated: true });
-    expect(await syncRepoIndex(client, store, "o", "r", "repoKey", "H")).toEqual(ok(null));
+    expect(await updateRepoIndex(client, store, "o", "r", "repoKey", "H")).toEqual(ok(null));
     expect(client.batchBlobTexts).not.toHaveBeenCalled();
   });
 
   it("gives up above 50,000 metas (storage quota guard)", async () => {
     const metas = Array.from({ length: 50_001 }, (_, i) => ({ path: `m${i}.meta`, sha: `s${i}` }));
     const { client, store } = makeFakes({ metas });
-    expect(await syncRepoIndex(client, store, "o", "r", "repoKey", "H")).toEqual(ok(null));
+    expect(await updateRepoIndex(client, store, "o", "r", "repoKey", "H")).toEqual(ok(null));
     expect(store.saveIndex).not.toHaveBeenCalled();
   });
 
@@ -101,6 +101,6 @@ describe("syncRepoIndex", () => {
       ],
       texts: { sha1: "guid: g1\n", sha2: "not yaml at all" },
     });
-    expect(await syncRepoIndex(client, store, "o", "r", "repoKey", "H")).toEqual(ok({ g1: "Assets/A.cs" }));
+    expect(await updateRepoIndex(client, store, "o", "r", "repoKey", "H")).toEqual(ok({ g1: "Assets/A.cs" }));
   });
 });

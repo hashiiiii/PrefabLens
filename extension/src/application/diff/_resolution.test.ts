@@ -3,8 +3,10 @@ import type { DiffV2, GuidResolvedPush, SemanticDiffRequest } from "../../domain
 import { must } from "../../domain/must";
 import { err, ok } from "../../domain/result";
 import type { DifferPort } from "../port/differ";
+import type { GuidCachePort } from "../port/guid-cache";
+import type { RepoIndexPort } from "../port/repo-index";
 import { createDiffSession, type DiffContext } from "./_diff-session";
-import { getRepoIndex, mergeSources, type ResolutionDeps, resolveRemaining, searchGuids } from "./_resolution";
+import { getGuids, getRepoIndex, updateRemaining, updateSources } from "./_resolution";
 
 const REPO_KEY = "https://api.github.com/o/r";
 
@@ -78,22 +80,18 @@ function makeResolution(overrides?: {
     // Fixture contents are shorthand strings, not real UnityYAML: accept by default.
     isUnityYaml: overrides?.isUnityYaml ?? (() => true),
   };
-  const deps: ResolutionDeps = {
-    guidCache,
-    repoIndexStore,
-    getDiffer: async () => differ,
-  };
+  const getDiffer = async () => differ;
   const session = createDiffSession();
-  return { deps, session, client, guidCache, repoIndexStore, differ };
+  return { session, client, guidCache, repoIndexStore, getDiffer, differ };
 }
 
-describe("searchGuids", () => {
+describe("getGuids", () => {
   it("serves cached guids and searches only the unknown ones, persisting hits", async () => {
-    const { deps, session, client, guidCache } = makeResolution({
+    const { session, client, guidCache } = makeResolution({
       cached: { g1: "Assets/Cached.cs" },
       search: { g2: "Assets/Found.cs" },
     });
-    const result = await searchGuids(deps, session, ["g1", "g2"], client, "o", "r", REPO_KEY);
+    const result = await getGuids(guidCache, session, ["g1", "g2"], client, "o", "r", REPO_KEY);
     expect(result).toEqual({ resolved: { g1: "Assets/Cached.cs", g2: "Assets/Found.cs" }, rateLimited: false });
     expect(client.searchMetaByGuid).toHaveBeenCalledTimes(1);
     expect(client.searchMetaByGuid).toHaveBeenCalledWith("o", "r", "g2");
@@ -101,36 +99,36 @@ describe("searchGuids", () => {
   });
 
   it("caps code searches at 10 per call", async () => {
-    const { deps, session, client } = makeResolution();
+    const { session, client, guidCache } = makeResolution();
     const guids = Array.from({ length: 12 }, (_, i) => `g${i}`);
-    await searchGuids(deps, session, guids, client, "o", "r", REPO_KEY);
+    await getGuids(guidCache, session, guids, client, "o", "r", REPO_KEY);
     expect(client.searchMetaByGuid).toHaveBeenCalledTimes(10);
   });
 
   it("does not re-search misses but still emits their cached names later", async () => {
     // misses gates the search, not the name: an index resolution can land in guidCache afterwards.
-    const { deps, session, client, guidCache } = makeResolution(); // search misses
-    expect((await searchGuids(deps, session, ["g1"], client, "o", "r", REPO_KEY)).resolved).toEqual({});
+    const { session, client, guidCache } = makeResolution(); // search misses
+    expect((await getGuids(guidCache, session, ["g1"], client, "o", "r", REPO_KEY)).resolved).toEqual({});
     guidCache.data[REPO_KEY] = { g1: "Assets/Later.cs" }; // as if the repo index wrote it later
-    expect((await searchGuids(deps, session, ["g1"], client, "o", "r", REPO_KEY)).resolved).toEqual({
+    expect((await getGuids(guidCache, session, ["g1"], client, "o", "r", REPO_KEY)).resolved).toEqual({
       g1: "Assets/Later.cs",
     });
     expect(client.searchMetaByGuid).toHaveBeenCalledTimes(1);
   });
 
   it("returns partial results and reports the rate limit that interrupted the search loop", async () => {
-    const { deps, session, client } = makeResolution();
+    const { session, client, guidCache } = makeResolution();
     client.searchMetaByGuid
       .mockResolvedValueOnce(ok("Assets/First.cs"))
       .mockResolvedValueOnce(err({ kind: "rate-limited" as const }) as never);
-    const result = await searchGuids(deps, session, ["g1", "g2", "g3"], client, "o", "r", REPO_KEY);
+    const result = await getGuids(guidCache, session, ["g1", "g2", "g3"], client, "o", "r", REPO_KEY);
     // g1 survives, g2 aborts the loop, g3 is never attempted (the budget is already gone).
     expect(result).toEqual({ resolved: { g1: "Assets/First.cs" }, rateLimited: true });
     expect(client.searchMetaByGuid).toHaveBeenCalledTimes(2);
   });
 
   it("folds concurrent searches for the same guid into one request", async () => {
-    const { deps, session, client } = makeResolution();
+    const { session, client, guidCache } = makeResolution();
     let release!: (v: ReturnType<typeof ok<string | null>>) => void;
     client.searchMetaByGuid.mockImplementation(
       () =>
@@ -139,8 +137,8 @@ describe("searchGuids", () => {
         }),
     );
     const [a, b] = [
-      searchGuids(deps, session, ["g1"], client, "o", "r", REPO_KEY),
-      searchGuids(deps, session, ["g1"], client, "o", "r", REPO_KEY),
+      getGuids(guidCache, session, ["g1"], client, "o", "r", REPO_KEY),
+      getGuids(guidCache, session, ["g1"], client, "o", "r", REPO_KEY),
     ];
     await vi.waitFor(() => expect(client.searchMetaByGuid).toHaveBeenCalled());
     release(ok("Assets/S.cs"));
@@ -152,8 +150,8 @@ describe("searchGuids", () => {
   });
 
   it("does not treat Object.prototype members as cache hits (hostile guid)", async () => {
-    const { deps, session, client } = makeResolution({ cached: { g9: "Assets/X.cs" } });
-    const result = await searchGuids(deps, session, ["constructor"], client, "o", "r", REPO_KEY);
+    const { session, client, guidCache } = makeResolution({ cached: { g9: "Assets/X.cs" } });
+    const result = await getGuids(guidCache, session, ["constructor"], client, "o", "r", REPO_KEY);
     expect(client.searchMetaByGuid).toHaveBeenCalledWith("o", "r", "constructor");
     expect(result.resolved).toEqual({});
   });
@@ -161,38 +159,40 @@ describe("searchGuids", () => {
 
 describe("getRepoIndex", () => {
   it("memoizes the index per repoKey@ref", async () => {
-    const { deps, session, client, repoIndexStore } = makeResolution({
+    const { session, client, repoIndexStore } = makeResolution({
       metas: [{ path: "Assets/S.cs.meta", sha: "sha1" }],
       metaTexts: { sha1: "guid: g1\n" },
     });
-    const first = await getRepoIndex(deps, session, client, "o", "r", REPO_KEY, "head-sha");
+    const first = await getRepoIndex(repoIndexStore, session, client, "o", "r", REPO_KEY, "head-sha");
     expect(first).toEqual({ g1: "Assets/S.cs" });
-    await getRepoIndex(deps, session, client, "o", "r", REPO_KEY, "head-sha");
+    await getRepoIndex(repoIndexStore, session, client, "o", "r", REPO_KEY, "head-sha");
     // The second call folds on the cached promise: not even the store is consulted again.
     expect(repoIndexStore.loadIndex).toHaveBeenCalledTimes(1);
     expect(client.listMetaTree).toHaveBeenCalledTimes(1);
   });
 
   it("pins the repo to fallback for the session after a rate limit", async () => {
-    const { deps, session, client } = makeResolution();
+    const { session, client, repoIndexStore } = makeResolution();
     client.listMetaTree.mockResolvedValue(err({ kind: "rate-limited" as const }) as never);
-    expect(await getRepoIndex(deps, session, client, "o", "r", REPO_KEY, "head-sha")).toBeNull();
-    expect(await getRepoIndex(deps, session, client, "o", "r", REPO_KEY, "head-sha")).toBeNull();
+    expect(await getRepoIndex(repoIndexStore, session, client, "o", "r", REPO_KEY, "head-sha")).toBeNull();
+    expect(await getRepoIndex(repoIndexStore, session, client, "o", "r", REPO_KEY, "head-sha")).toBeNull();
     expect(client.listMetaTree).toHaveBeenCalledTimes(1); // fallback: Code Search only from here on
   });
 
   it("retries after a non-rate-limit failure instead of caching it", async () => {
-    const { deps, session, client } = makeResolution({
+    const { session, client, repoIndexStore } = makeResolution({
       metas: [{ path: "Assets/S.cs.meta", sha: "sha1" }],
       metaTexts: { sha1: "guid: g1\n" },
     });
     client.listMetaTree.mockResolvedValueOnce(err({ kind: "fetch-failed" as const }) as never);
-    expect(await getRepoIndex(deps, session, client, "o", "r", REPO_KEY, "head-sha")).toBeNull();
-    expect(await getRepoIndex(deps, session, client, "o", "r", REPO_KEY, "head-sha")).toEqual({ g1: "Assets/S.cs" });
+    expect(await getRepoIndex(repoIndexStore, session, client, "o", "r", REPO_KEY, "head-sha")).toBeNull();
+    expect(await getRepoIndex(repoIndexStore, session, client, "o", "r", REPO_KEY, "head-sha")).toEqual({
+      g1: "Assets/S.cs",
+    });
   });
 });
 
-describe("mergeSources", () => {
+describe("updateSources", () => {
   const BYTES: [Uint8Array, Uint8Array] = [new TextEncoder().encode("b"), new TextEncoder().encode("a")];
   const NEEDS: DiffV2 = {
     ...DIFF,
@@ -204,12 +204,12 @@ describe("mergeSources", () => {
 
   it("fetches an after-side source at head and re-diffs with assets", async () => {
     const diffWithAssets = vi.fn<DifferPort["diffWithAssets"]>(() => ok(MERGED));
-    const { deps, session, client } = makeResolution({
+    const { session, client, guidCache } = makeResolution({
       diffWithAssets,
       blobs: { "Assets/Cyl.prefab@head-sha": "SRC" },
     });
     const differ = { diff: vi.fn(() => ok(DIFF)), diffWithAssets, isUnityYaml: () => true };
-    const result = await mergeSources(deps, session, NEEDS, differ, ...BYTES, CTX, client, "o", "r", REPO_KEY);
+    const result = await updateSources(guidCache, session, NEEDS, differ, ...BYTES, CTX, client, "o", "r", REPO_KEY);
     expect(client.getFileAtRef).toHaveBeenCalledWith("o", "r", "Assets/Cyl.prefab", "head-sha");
     const assets = must(diffWithAssets.mock.calls[0]?.[2]);
     expect(new TextDecoder().decode(must(assets.get("src1")))).toBe("SRC");
@@ -219,14 +219,14 @@ describe("mergeSources", () => {
 
   it("fetches a before-side source at base, riding the base-tree blob sha", async () => {
     const diffWithAssets = vi.fn<DifferPort["diffWithAssets"]>(() => ok(MERGED));
-    const { deps, session, client } = makeResolution({
+    const { session, client, guidCache } = makeResolution({
       diffWithAssets,
       blobs: { "Assets/Cyl.prefab@base-sha": "OLD" },
     });
     const differ = { diff: vi.fn(() => ok(DIFF)), diffWithAssets, isUnityYaml: () => true };
     const ctx: DiffContext = { ...CTX, baseShas: new Map([["Assets/Cyl.prefab", "cyl-base"]]) };
     const before: DiffV2 = { ...NEEDS, neededSources: [{ guid: "src1", side: "before" }] };
-    await mergeSources(deps, session, before, differ, ...BYTES, ctx, client, "o", "r", REPO_KEY);
+    await updateSources(guidCache, session, before, differ, ...BYTES, ctx, client, "o", "r", REPO_KEY);
     // blob-sha miss falls back to path+ref; both seams are exercised
     expect(client.getBlobRaw).toHaveBeenCalledWith("o", "r", "cyl-base");
     expect(client.getFileAtRef).toHaveBeenCalledWith("o", "r", "Assets/Cyl.prefab", "base-sha");
@@ -234,23 +234,34 @@ describe("mergeSources", () => {
 
   it("returns the first-pass diff when the source path is unresolved", async () => {
     const diffWithAssets = vi.fn<DifferPort["diffWithAssets"]>(() => ok(MERGED));
-    const { deps, session, client } = makeResolution({ diffWithAssets });
+    const { session, client, guidCache } = makeResolution({ diffWithAssets });
     const differ = { diff: vi.fn(() => ok(DIFF)), diffWithAssets, isUnityYaml: () => true };
     const unresolved: DiffV2 = { ...NEEDS, resolved: {} };
-    const result = await mergeSources(deps, session, unresolved, differ, ...BYTES, CTX, client, "o", "r", REPO_KEY);
+    const result = await updateSources(
+      guidCache,
+      session,
+      unresolved,
+      differ,
+      ...BYTES,
+      CTX,
+      client,
+      "o",
+      "r",
+      REPO_KEY,
+    );
     expect(diffWithAssets).not.toHaveBeenCalled();
     expect(result).toEqual({ json: unresolved, status: "complete" });
   });
 
   it("skips binary-serialized sources without counting them as progress", async () => {
     const diffWithAssets = vi.fn<DifferPort["diffWithAssets"]>(() => ok(MERGED));
-    const { deps, session, client } = makeResolution({
+    const { session, client, guidCache } = makeResolution({
       diffWithAssets,
       isUnityYaml: () => false,
       blobs: { "Assets/Cyl.prefab@head-sha": "\x00binary" },
     });
     const differ = { diff: vi.fn(() => ok(DIFF)), diffWithAssets, isUnityYaml: () => false };
-    const result = await mergeSources(deps, session, NEEDS, differ, ...BYTES, CTX, client, "o", "r", REPO_KEY);
+    const result = await updateSources(guidCache, session, NEEDS, differ, ...BYTES, CTX, client, "o", "r", REPO_KEY);
     // Merging a binary source would be a no-op re-diff: give up and keep the first pass.
     expect(diffWithAssets).not.toHaveBeenCalled();
     expect(result).toEqual({ json: NEEDS, status: "complete" });
@@ -258,19 +269,19 @@ describe("mergeSources", () => {
 
   it("degrades to the current diff and reports rateLimited when the source fetch hits the limit", async () => {
     const diffWithAssets = vi.fn<DifferPort["diffWithAssets"]>(() => ok(MERGED));
-    const { deps, session, client } = makeResolution({ diffWithAssets });
+    const { session, client, guidCache } = makeResolution({ diffWithAssets });
     client.getFileAtRef.mockResolvedValue(err({ kind: "rate-limited" as const }) as never);
     const differ = { diff: vi.fn(() => ok(DIFF)), diffWithAssets, isUnityYaml: () => true };
-    const result = await mergeSources(deps, session, NEEDS, differ, ...BYTES, CTX, client, "o", "r", REPO_KEY);
+    const result = await updateSources(guidCache, session, NEEDS, differ, ...BYTES, CTX, client, "o", "r", REPO_KEY);
     expect(result).toEqual({ json: NEEDS, status: "rateLimited" });
   });
 
   it("degrades to the current diff and reports failed on a non-rate-limit fetch error", async () => {
     const diffWithAssets = vi.fn<DifferPort["diffWithAssets"]>(() => ok(MERGED));
-    const { deps, session, client } = makeResolution({ diffWithAssets });
+    const { session, client, guidCache } = makeResolution({ diffWithAssets });
     client.getFileAtRef.mockResolvedValue(err({ kind: "fetch-failed" as const }) as never);
     const differ = { diff: vi.fn(() => ok(DIFF)), diffWithAssets, isUnityYaml: () => true };
-    const result = await mergeSources(deps, session, NEEDS, differ, ...BYTES, CTX, client, "o", "r", REPO_KEY);
+    const result = await updateSources(guidCache, session, NEEDS, differ, ...BYTES, CTX, client, "o", "r", REPO_KEY);
     expect(result).toEqual({ json: NEEDS, status: "failed" });
   });
 
@@ -286,7 +297,7 @@ describe("mergeSources", () => {
         neededSources: [{ guid: `s${round}`, side: "after" }],
       });
     });
-    const { deps, session, client } = makeResolution({
+    const { session, client, guidCache } = makeResolution({
       diffWithAssets,
       cached: { s1: "Assets/S1.prefab", s2: "Assets/S2.prefab", s3: "Assets/S3.prefab" },
       blobs: {
@@ -302,15 +313,17 @@ describe("mergeSources", () => {
       resolved: { s0: "Assets/S0.prefab" },
       neededSources: [{ guid: "s0", side: "after" }],
     };
-    const result = await mergeSources(deps, session, first, differ, ...BYTES, CTX, client, "o", "r", REPO_KEY);
+    const result = await updateSources(guidCache, session, first, differ, ...BYTES, CTX, client, "o", "r", REPO_KEY);
     expect(diffWithAssets).toHaveBeenCalledTimes(3);
     expect(result.json.neededSources).toEqual([{ guid: "s3", side: "after" }]); // degraded at the cap
   });
 });
 
-describe("resolveRemaining", () => {
+describe("updateRemaining", () => {
   async function run(
-    deps: ResolutionDeps,
+    guidCache: GuidCachePort,
+    repoIndexStore: RepoIndexPort,
+    getDiffer: () => Promise<DifferPort>,
     session: ReturnType<typeof createDiffSession>,
     client: ReturnType<typeof makeResolution>["client"],
     first: DiffV2,
@@ -318,20 +331,30 @@ describe("resolveRemaining", () => {
     ctx: DiffContext = CTX,
   ): Promise<GuidResolvedPush[]> {
     const pushes: GuidResolvedPush[] = [];
-    await resolveRemaining(deps, session, first, remaining, client, REQ, "https://api.github.com", ctx, (m) =>
-      pushes.push(m),
+    await updateRemaining(
+      guidCache,
+      repoIndexStore,
+      getDiffer,
+      session,
+      first,
+      remaining,
+      client,
+      REQ,
+      "https://api.github.com",
+      ctx,
+      (m) => pushes.push(m),
     );
     return pushes;
   }
 
   it("resolves via the repo index first and searches only the leftover", async () => {
-    const { deps, session, client, guidCache } = makeResolution({
+    const { session, client, guidCache, repoIndexStore, getDiffer } = makeResolution({
       metas: [{ path: "Assets/S.cs.meta", sha: "sha1" }],
       metaTexts: { sha1: "guid: g1\n" },
       search: { g2: "Assets/Other.cs" },
     });
     const first: DiffV2 = { ...DIFF, unresolvedGuids: ["g1", "g2"] };
-    const pushes = await run(deps, session, client, first, ["g1", "g2"]);
+    const pushes = await run(guidCache, repoIndexStore, getDiffer, session, client, first, ["g1", "g2"]);
     // Index names arrive in an intermediate push; the final push carries the full json.
     expect(pushes[0]).toMatchObject({ resolved: { g1: "Assets/S.cs" }, done: false });
     expect(must(pushes.at(-1))).toMatchObject({ done: true, status: "complete" });
@@ -346,7 +369,7 @@ describe("resolveRemaining", () => {
     // The first index build can take tens of seconds and cannot help: no guid names are missing.
     const merged: DiffV2 = { ...DIFF, unresolvedGuids: [] };
     const diffWithAssets = vi.fn<DifferPort["diffWithAssets"]>(() => ok(merged));
-    const { deps, session, client } = makeResolution({
+    const { session, client, guidCache, repoIndexStore, getDiffer } = makeResolution({
       diffWithAssets,
       cached: { src1: "Assets/Src.prefab" },
       blobs: {
@@ -361,7 +384,7 @@ describe("resolveRemaining", () => {
       resolved: { src1: "Assets/Src.prefab" },
       neededSources: [{ guid: "src1", side: "after" }],
     };
-    const pushes = await run(deps, session, client, first, []);
+    const pushes = await run(guidCache, repoIndexStore, getDiffer, session, client, first, []);
     expect(client.listMetaTree).not.toHaveBeenCalled();
     expect(diffWithAssets).toHaveBeenCalledTimes(1);
     expect(must(pushes.at(-1))).toMatchObject({ done: true, status: "complete" });
@@ -370,19 +393,19 @@ describe("resolveRemaining", () => {
 
   it("marks the final push rateLimited when Code Search hits the limit", async () => {
     // Rate-limited runs must be distinguishable from completed ones (issue #194).
-    const { deps, session, client } = makeResolution();
+    const { session, client, guidCache, repoIndexStore, getDiffer } = makeResolution();
     client.searchMetaByGuid.mockResolvedValue(err({ kind: "rate-limited" as const }) as never);
     const first: DiffV2 = { ...DIFF, unresolvedGuids: ["g1"] };
-    const pushes = await run(deps, session, client, first, ["g1"]);
+    const pushes = await run(guidCache, repoIndexStore, getDiffer, session, client, first, ["g1"]);
     expect(must(pushes.at(-1))).toMatchObject({ done: true, status: "rateLimited" });
   });
 
   it("still emits the done push, marked failed, when the pipeline crashes", async () => {
     // Waiters key off done: a crash that swallowed it would leave the indicator spinning forever.
-    const { deps, session, client } = makeResolution();
+    const { session, client, guidCache, repoIndexStore, getDiffer } = makeResolution();
     client.getFileAtRef.mockResolvedValue(err({ kind: "fetch-failed" as const }) as never);
     const first: DiffV2 = { ...DIFF, unresolvedGuids: [], neededSources: [{ guid: "src1", side: "after" }] };
-    const pushes = await run(deps, session, client, first, []);
+    const pushes = await run(guidCache, repoIndexStore, getDiffer, session, client, first, []);
     expect(pushes).toEqual([
       {
         type: "guidResolved",

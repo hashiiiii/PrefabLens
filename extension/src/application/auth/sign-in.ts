@@ -6,15 +6,6 @@ export type PendingSignIn = { userCode: string; expiresAt: number };
 
 export type SignInState = { inFlight: boolean };
 
-export type SignInDeps = {
-  auth: GithubAuthPort;
-  tokenStore: TokenStorePort;
-  fetchFn: typeof fetch;
-  sleep: (ms: number) => Promise<void>;
-  openTab: (url: string) => void;
-  now: () => number;
-};
-
 export type SignInUi = {
   showPending(userCode: string, verificationUri: string): void;
   showFailure(message: string): void;
@@ -26,25 +17,34 @@ export const FAILURE_TEXT = {
   failed: "Sign-in failed — try again.",
 } as const;
 
-export async function signIn(deps: SignInDeps, state: SignInState, ui: SignInUi): Promise<void> {
+export async function signIn(
+  auth: GithubAuthPort,
+  tokenStore: TokenStorePort,
+  fetchFn: typeof fetch,
+  sleep: (ms: number) => Promise<void>,
+  openTab: (url: string) => void,
+  now: () => number,
+  state: SignInState,
+  ui: SignInUi,
+): Promise<void> {
   if (state.inFlight) return;
   state.inFlight = true;
   try {
-    const code = await deps.auth.requestDeviceCode(deps.fetchFn);
-    await deps.tokenStore.savePendingSignIn({
+    const code = await auth.requestDeviceCode(fetchFn);
+    await tokenStore.savePendingSignIn({
       userCode: code.userCode,
-      expiresAt: deps.now() + code.expiresIn * 1000,
+      expiresAt: now() + code.expiresIn * 1000,
     });
     ui.showPending(code.userCode, code.verificationUri);
-    deps.openTab(code.verificationUri);
-    const result = await deps.auth.pollForToken(deps.fetchFn, deps.sleep, code);
+    openTab(code.verificationUri);
+    const result = await auth.pollForToken(fetchFn, sleep, code);
     // Success: saveToken → storage.onChanged in index.ts retries auth-blocked panels
-    if (result.status === "ok") await deps.tokenStore.saveAccessToken(result.token);
+    if (result.status === "ok") await tokenStore.saveAccessToken(result.token);
     else ui.showFailure(FAILURE_TEXT[result.status]);
-    await deps.tokenStore.clearPendingSignIn();
+    await tokenStore.clearPendingSignIn();
   } catch {
     ui.showFailure(FAILURE_TEXT.failed);
-    await deps.tokenStore.clearPendingSignIn().catch(() => {});
+    await tokenStore.clearPendingSignIn().catch(() => {});
   } finally {
     state.inFlight = false;
   }

@@ -2,18 +2,13 @@ import type { DiffCachePort } from "../port/diff-cache";
 import type { DifferPort } from "../port/differ";
 import type { GithubPort } from "../port/github";
 import type { DiffContext, DiffOutcome, DiffSession } from "./_diff-session";
-import { fetchPair } from "./_fetch-blobs";
+import { getPair } from "./_get-blobs";
 
 const TOO_LARGE_BYTES = 25 * 1024 * 1024; // over 25MB renders on click
 
-export type GetDiffDeps = {
-  getDiffer(): Promise<DifferPort>;
-  diffStore: DiffCachePort;
-};
-
-// Raw sha-keyed diff only; resolution/mergeSources stay out (Code Search improves later)
+// Raw sha-keyed diff only; resolution/updateSources stay out (Code Search improves later)
 async function computeDiff(
-  deps: GetDiffDeps,
+  getDiffer: () => Promise<DifferPort>,
   session: DiffSession,
   client: GithubPort,
   ctx: DiffContext,
@@ -23,13 +18,13 @@ async function computeDiff(
   force: boolean,
 ): Promise<DiffOutcome> {
   // Missing from listing (files API caps at 3000) → treat as modified; 404 side → EMPTY
-  const pair = await fetchPair(session, client, ctx, owner, repo, path);
+  const pair = await getPair(session, client, ctx, owner, repo, path);
   if (!pair.ok) return { ok: false, error: pair.error.kind };
   const [before, after] = pair.value;
   if (!force && before.length + after.length > TOO_LARGE_BYTES) {
     return { ok: false, error: "too-large", bytes: before.length + after.length };
   }
-  const differ = await deps.getDiffer();
+  const differ = await getDiffer();
   // Prefilter passed, but some .asset files are binary regardless of ForceText
   if (!differ.isUnityYaml(before) && !differ.isUnityYaml(after)) {
     return { ok: false, error: "not-unity-yaml" };
@@ -41,7 +36,8 @@ async function computeDiff(
 
 // Sha-keyed: a push produces a new key (no invalidation)
 export function getDiff(
-  deps: GetDiffDeps,
+  getDiffer: () => Promise<DifferPort>,
+  diffStore: DiffCachePort,
   session: DiffSession,
   client: GithubPort,
   ctx: DiffContext,
@@ -52,10 +48,10 @@ export function getDiff(
 ): Promise<DiffOutcome> {
   const key = `${ctx.refs.baseSha}:${ctx.refs.headSha}:${path}`;
   return session.diffs.get(key, async (): Promise<DiffOutcome> => {
-    const stored = await deps.diffStore.load(key); // prior SW life
+    const stored = await diffStore.load(key); // prior SW life
     if (stored) return { ok: true, json: stored };
-    const outcome = await computeDiff(deps, session, client, ctx, owner, repo, path, force);
-    if (outcome.ok) void deps.diffStore.save(key, outcome.json);
+    const outcome = await computeDiff(getDiffer, session, client, ctx, owner, repo, path, force);
+    if (outcome.ok) void diffStore.save(key, outcome.json);
     return outcome;
   });
 }

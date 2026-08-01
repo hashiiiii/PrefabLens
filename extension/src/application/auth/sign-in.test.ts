@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
-import type { DeviceCode, PollResult } from "../port/github-auth";
-import { FAILURE_TEXT, type PendingSignIn, type SignInDeps, type SignInState, type SignInUi, signIn } from "./sign-in";
+import type { DeviceCode, GithubAuthPort, PollResult } from "../port/github-auth";
+import type { TokenStorePort } from "../port/token-store";
+import { FAILURE_TEXT, type PendingSignIn, type SignInState, type SignInUi, signIn } from "./sign-in";
 
 const CODE: DeviceCode = {
   deviceCode: "dc1",
@@ -10,51 +11,49 @@ const CODE: DeviceCode = {
   expiresIn: 900,
 };
 
-// Recording deps fake: every hook appends its name to `calls` so tests can assert both effects and order.
+// Recording fakes: every hook appends its name to `calls` so tests can assert both effects and order.
 function fakeDeps(poll: () => Promise<PollResult>) {
   const calls: string[] = [];
   const pendings: PendingSignIn[] = [];
   const tokens: string[] = [];
   const urls: string[] = [];
-  const deps: SignInDeps = {
-    auth: {
-      async requestDeviceCode() {
-        calls.push("request");
-        return CODE;
-      },
-      pollForToken() {
-        calls.push("poll");
-        return poll();
-      },
+  const auth: GithubAuthPort = {
+    async requestDeviceCode() {
+      calls.push("request");
+      return CODE;
     },
-    tokenStore: {
-      async readAccessToken() {
-        return undefined;
-      },
-      async savePendingSignIn(pending) {
-        calls.push("savePending");
-        pendings.push(pending);
-      },
-      async readPendingSignIn() {
-        return undefined;
-      },
-      async clearPendingSignIn() {
-        calls.push("clearPending");
-      },
-      async saveAccessToken(token) {
-        calls.push("saveToken");
-        tokens.push(token);
-      },
+    pollForToken() {
+      calls.push("poll");
+      return poll();
     },
-    fetchFn: fetch,
-    sleep: async () => {},
-    openTab(url) {
-      calls.push("openTab");
-      urls.push(url);
-    },
-    now: () => 1_000,
   };
-  return { deps, calls, pendings, tokens, urls };
+  const tokenStore: TokenStorePort = {
+    async readAccessToken() {
+      return undefined;
+    },
+    async savePendingSignIn(pending) {
+      calls.push("savePending");
+      pendings.push(pending);
+    },
+    async readPendingSignIn() {
+      return undefined;
+    },
+    async clearPendingSignIn() {
+      calls.push("clearPending");
+    },
+    async saveAccessToken(token) {
+      calls.push("saveToken");
+      tokens.push(token);
+    },
+  };
+  const fetchFn = fetch;
+  const sleep = async () => {};
+  const openTab = (url: string) => {
+    calls.push("openTab");
+    urls.push(url);
+  };
+  const now = () => 1_000;
+  return { auth, tokenStore, fetchFn, sleep, openTab, now, calls, pendings, tokens, urls };
 }
 
 function fakeUi() {
@@ -69,10 +68,13 @@ function fakeUi() {
 
 describe("signIn", () => {
   it("saves the pending code, opens the tab, and stores the token on success", async () => {
-    const { deps, pendings, tokens, urls, calls } = fakeDeps(async () => ({ status: "ok", token: "tok123" }));
+    const { auth, tokenStore, fetchFn, sleep, openTab, now, pendings, tokens, urls, calls } = fakeDeps(async () => ({
+      status: "ok",
+      token: "tok123",
+    }));
     const { ui, pending, failures } = fakeUi();
     const state: SignInState = { inFlight: false };
-    await signIn(deps, state, ui);
+    await signIn(auth, tokenStore, fetchFn, sleep, openTab, now, state, ui);
     // expiresAt derives from the injected now(): 1000 + 900s in ms.
     expect(pendings).toEqual([{ userCode: "ABCD-1234", expiresAt: 901_000 }]);
     expect(pending).toEqual([{ userCode: "ABCD-1234", verificationUri: "https://github.com/login/device" }]);
@@ -85,49 +87,56 @@ describe("signIn", () => {
   });
 
   it("maps denied to its failure copy without storing a token", async () => {
-    const { deps, tokens, calls } = fakeDeps(async () => ({ status: "denied" }));
+    const { auth, tokenStore, fetchFn, sleep, openTab, now, tokens, calls } = fakeDeps(async () => ({
+      status: "denied",
+    }));
     const { ui, failures } = fakeUi();
     const state: SignInState = { inFlight: false };
-    await signIn(deps, state, ui);
+    await signIn(auth, tokenStore, fetchFn, sleep, openTab, now, state, ui);
     expect(failures).toEqual([FAILURE_TEXT.denied]);
     expect(tokens).toEqual([]);
     expect(calls).toContain("clearPending");
   });
 
   it("maps expired to its failure copy", async () => {
-    const { deps } = fakeDeps(async () => ({ status: "expired" }));
+    const { auth, tokenStore, fetchFn, sleep, openTab, now } = fakeDeps(async () => ({ status: "expired" }));
     const { ui, failures } = fakeUi();
     const state: SignInState = { inFlight: false };
-    await signIn(deps, state, ui);
+    await signIn(auth, tokenStore, fetchFn, sleep, openTab, now, state, ui);
     expect(failures).toEqual([FAILURE_TEXT.expired]);
   });
 
   it("shows the generic failure when the code request throws", async () => {
-    const { deps, calls } = fakeDeps(async () => ({ status: "ok", token: "t" }));
-    deps.auth.requestDeviceCode = async () => {
+    const { auth, tokenStore, fetchFn, sleep, openTab, now, calls } = fakeDeps(async () => ({
+      status: "ok",
+      token: "t",
+    }));
+    auth.requestDeviceCode = async () => {
       throw new Error("network down");
     };
     const { ui, failures } = fakeUi();
     const state: SignInState = { inFlight: false };
-    await signIn(deps, state, ui);
+    await signIn(auth, tokenStore, fetchFn, sleep, openTab, now, state, ui);
     expect(failures).toEqual([FAILURE_TEXT.failed]);
     expect(calls).not.toContain("openTab");
   });
 
   it("ignores a second start while a flow is polling", async () => {
     let resolvePoll!: (r: PollResult) => void;
-    const { deps, calls } = fakeDeps(() => new Promise<PollResult>((resolve) => (resolvePoll = resolve)));
+    const { auth, tokenStore, fetchFn, sleep, openTab, now, calls } = fakeDeps(
+      () => new Promise<PollResult>((resolve) => (resolvePoll = resolve)),
+    );
     const { ui } = fakeUi();
     const state: SignInState = { inFlight: false };
-    const first = signIn(deps, state, ui);
-    await signIn(deps, state, ui); // resolves immediately: the guard rejects re-entry
+    const first = signIn(auth, tokenStore, fetchFn, sleep, openTab, now, state, ui);
+    await signIn(auth, tokenStore, fetchFn, sleep, openTab, now, state, ui); // resolves immediately: the guard rejects re-entry
     expect(calls.filter((c) => c === "request")).toHaveLength(1);
     // Drain microtasks until the first flow reaches the poll, so resolvePoll is assigned.
     for (let i = 0; i < 10 && !calls.includes("poll"); i++) await Promise.resolve();
     resolvePoll({ status: "ok", token: "tok" });
     await first;
     // With the first flow settled, a new one may start (its poll stays pending; only the guard matters here).
-    void signIn(deps, state, ui);
+    void signIn(auth, tokenStore, fetchFn, sleep, openTab, now, state, ui);
     expect(calls.filter((c) => c === "request")).toHaveLength(2);
   });
 });

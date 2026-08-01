@@ -1,4 +1,3 @@
-import type { DiffCachePort } from "../application/port/diff-cache";
 import type { DifferPort } from "../application/port/differ";
 import type { GithubPort } from "../application/port/github";
 import type { GithubAuthPort } from "../application/port/github-auth";
@@ -6,6 +5,7 @@ import type { GuidCachePort } from "../application/port/guid-cache";
 import type { MessengerPort } from "../application/port/messenger";
 import type { RepoIndexPort } from "../application/port/repo-index";
 import type { TokenStorePort } from "../application/port/token-store";
+import type { DiffRepository } from "../domain/diff/diff-repository";
 import { createChromeMessenger } from "./providers/chrome-messenger";
 import { createChromeTokenStore } from "./providers/chrome-token-store";
 import { createQueue, type Queue } from "./providers/fetch-queue";
@@ -23,7 +23,7 @@ export function createMessenger(): MessengerPort {
   return createChromeMessenger();
 }
 
-export function createDiffStore(): DiffCachePort {
+export function createDiffStore(): DiffRepository {
   return createSessionDiffStore(chrome.storage.session);
 }
 

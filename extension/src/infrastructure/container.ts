@@ -2,22 +2,22 @@ import type { DifferPort } from "../application/port/differ";
 import type { GithubPort } from "../application/port/github";
 import type { GithubAuthPort } from "../application/port/github-auth";
 import type { MessengerPort } from "../application/port/messenger";
-import type { TokenStorePort } from "../application/port/token-store";
+import type { TokenRepository } from "../domain/auth/token-repository";
 import type { DiffRepository } from "../domain/diff/diff-repository";
 import type { GuidRepository } from "../domain/guid/guid-repository";
 import type { RepoIndexRepository } from "../domain/guid/repo-index-repository";
 import { createChromeMessenger } from "./providers/chrome-messenger";
-import { createChromeTokenStore } from "./providers/chrome-token-store";
 import { createQueue, type Queue } from "./providers/fetch-queue";
 import { GithubClient } from "./providers/github-client";
 import { pollForToken, requestDeviceCode } from "./providers/github-device-flow";
 import { createDiffer } from "./providers/wasm-differ";
 import { createChromeGuidRepository } from "./repositories/chrome-guid-repository";
 import { createChromeRepoIndexRepository } from "./repositories/chrome-repo-index-repository";
+import { createChromeTokenRepository } from "./repositories/chrome-token-repository";
 import { createSessionDiffStore } from "./repositories/session-diff-store";
 
-export function createTokenStore(): TokenStorePort {
-  return createChromeTokenStore(chrome.storage.local);
+export function createTokenStore(): TokenRepository {
+  return createChromeTokenRepository(chrome.storage.local);
 }
 
 export function createMessenger(): MessengerPort {

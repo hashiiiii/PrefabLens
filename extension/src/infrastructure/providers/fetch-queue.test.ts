@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { must } from "../../domain/must";
+import { must } from "../../must";
 import { createQueue } from "./fetch-queue";
 import { isRateLimited } from "./github-client";
 

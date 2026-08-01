@@ -1,7 +1,9 @@
 import { type SignInState, signIn } from "../../application/auth/sign-in";
-import { type BackgroundError, type GuidResolvedPush, targetKey, unresolvedRemaining } from "../../domain/diff/types";
-import { must } from "../../domain/must";
+import { targetKey } from "../../domain/diff/fn/target-key";
+import { unresolvedRemaining } from "../../domain/diff/fn/unresolved-remaining";
+import type { BackgroundError, GuidResolvedPush } from "../../domain/diff/types";
 import { createGithubAuth, createMessenger, createTokenStore } from "../../infrastructure/container";
+import { must } from "../../must";
 import {
   render,
   renderError,

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseGuidFromMeta } from "./meta-guid";
+import { parseGuidFromMeta } from "./parse-guid-from-meta";
 
 const META = `fileFormatVersion: 2
 guid: 1234567890abcdef1234567890abcdef

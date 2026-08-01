@@ -1,7 +1,7 @@
 import type { DiffRepository } from "../domain/diff/diff-repository";
-import { parseGuidFromMeta } from "../domain/diff/meta-guid";
+import { parseGuidFromMeta } from "../domain/diff/fn/parse-guid-from-meta";
+import { targetKey } from "../domain/diff/fn/target-key";
 import type { DiffTarget } from "../domain/diff/types";
-import { targetKey } from "../domain/diff/types";
 import { err, ok, type Result } from "../domain/result";
 import type { DiffContext, DiffOutcome, DiffSession } from "./create-diff-session";
 import type { DifferPort } from "./port/differ";

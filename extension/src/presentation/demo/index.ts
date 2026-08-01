@@ -4,13 +4,13 @@
 // data-before/data-after URLs (empty side = CLI empty-side semantics).
 
 import { getLocalDiff } from "../../application/diff/get-local-diff";
-import { must } from "../../domain/must";
 import {
   createDemoDiffer,
   createDemoFetchBytes,
   createDemoFetchSource,
   loadFixtureGuidIndex,
 } from "../../infrastructure/container";
+import { must } from "../../must";
 import type { View } from "../content/overlay/view-mode";
 import {
   defaultView,

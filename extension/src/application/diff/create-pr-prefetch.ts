@@ -2,7 +2,7 @@ import type { TokenRepository } from "../../domain/auth/token-repository";
 import type { DiffRepository } from "../../domain/diff/diff-repository";
 import type { PrefetchRequest } from "../../domain/diff/types";
 import type { RepoIndexRepository } from "../../domain/guid/repo-index-repository";
-import { isUnityPath } from "../../domain/unity";
+import { isUnityPath } from "../../domain/unity/fn/is-unity-path";
 import type { DiffSession } from "../create-diff-session";
 import { getContext, getDiff } from "../get-raw-diff";
 import { getRepoIndex } from "../get-repo-index";

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { applyResolved } from "./resolved";
-import type { DiffV2 } from "./types";
+import type { DiffV2 } from "../types";
+import { applyResolved } from "./apply-resolved";
 
 describe("applyResolved", () => {
   const diff: DiffV2 = {

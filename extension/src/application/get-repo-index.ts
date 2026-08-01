@@ -1,4 +1,4 @@
-import { parseGuidFromMeta } from "../domain/diff/meta-guid";
+import { parseGuidFromMeta } from "../domain/diff/fn/parse-guid-from-meta";
 import type { RepoIndexRepository } from "../domain/guid/repo-index-repository";
 import { ok, type Result } from "../domain/result";
 import type { DiffSession } from "./create-diff-session";

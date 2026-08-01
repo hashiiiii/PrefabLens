@@ -1,13 +1,13 @@
 import type { TokenRepository } from "../../domain/auth/token-repository";
 import type { DiffRepository } from "../../domain/diff/diff-repository";
-import { applyResolved } from "../../domain/diff/resolved";
-import {
-  type DiffV2,
-  type GuidResolvedPush,
-  type ResolutionStatus,
-  type SemanticDiffRequest,
-  type SemanticDiffResponse,
-  unresolvedRemaining,
+import { applyResolved } from "../../domain/diff/fn/apply-resolved";
+import { unresolvedRemaining } from "../../domain/diff/fn/unresolved-remaining";
+import type {
+  DiffV2,
+  GuidResolvedPush,
+  ResolutionStatus,
+  SemanticDiffRequest,
+  SemanticDiffResponse,
 } from "../../domain/diff/types";
 import type { GuidRepository } from "../../domain/guid/guid-repository";
 import type { RepoIndexRepository } from "../../domain/guid/repo-index-repository";

@@ -1,4 +1,4 @@
-import { applyResolved } from "../../domain/diff/resolved";
+import { applyResolved } from "../../domain/diff/fn/apply-resolved";
 import type { DiffV2 } from "../../domain/diff/types";
 import type { DifferPort } from "../port/differ";
 

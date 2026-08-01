@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { unresolvedRemaining } from "./types";
+import { unresolvedRemaining } from "./unresolved-remaining";
 
 describe("unresolvedRemaining", () => {
   it("returns the guids without a resolved name, in order", () => {

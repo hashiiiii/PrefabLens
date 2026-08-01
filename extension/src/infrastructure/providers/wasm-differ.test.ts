@@ -2,7 +2,7 @@
 import { readFileSync } from "node:fs";
 import { beforeAll, describe, expect, it } from "vitest";
 import type { DifferPort } from "../../application/port/differ";
-import { must } from "../../domain/must";
+import { must } from "../../must";
 import { createDiffer } from "./wasm-differ";
 
 const enc = new TextEncoder();

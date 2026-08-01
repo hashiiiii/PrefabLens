@@ -1,5 +1,5 @@
 //! Suffix gate for Unity text-serialized assets (UnityYAML).
-//! Mirrors extension/src/unity.ts UNITY_PATH — keep both lists in sync.
+//! Mirrors extension/src/domain/unity/fn/is-unity-path.ts UNITY_PATH — keep both lists in sync.
 const std = @import("std");
 const testing = std.testing;
 

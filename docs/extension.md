@@ -25,10 +25,28 @@ container wiring:
 
 #### Domain (`src/domain/`)
 
-Pure types and pure functions. Imports nothing outside `domain/`.
+Domain vocabulary only. Imports nothing outside `domain/`.
 
+**Where to put a new symbol** (one pass, no other axes):
+
+1. Needs I/O, port wiring, or multi-step orchestration → `application/`
+   (single-use-case helper: non-exported in that use case file).
+2. Pure function that reads or builds a domain type →
+   `domain/<area>/fn/<name>.ts`.
+3. Type or interface (including repository ports and `Result`) →
+   `domain/<area>/` (outside `fn/`). No function bodies in these files.
+
+`<area>` matches an existing concept folder (`diff`, `guid`, `auth`, …).
+Add a new area only when a new concept appears.
+
+- **Constructors / type guards**: may live in the same file as their type
+  (e.g. `ok` / `err` next to `Result`). Queries and transforms
+  (`unresolvedRemaining`, `applyResolved`, `targetKey`, …) always go under
+  `fn/`.
+- **Not domain**: helpers that are not vocabulary of a domain type
+  stay out of `domain/` (e.g. `must` lives at `src/must.ts`).
 - **Repository**: interfaces for domain-model persistence live in
-  `domain/`. Use cases depend on these interfaces.
+  `domain/<area>/`. Use cases depend on these interfaces.
   Infrastructure supplies the implementations.
 - **Result**: expected failures travel as tagged unions via
   `Result<T, E>` from `domain/result.ts` — no `Error` subclasses,
@@ -47,10 +65,12 @@ Use cases composed from domain logic and ports.
   outside capabilities that do **not** load or save domain models (GitHub
   API, WASM differ, chrome.runtime messaging, device-flow helpers).
 - **Shared helpers**: live directly under `application/` when used by two or
-  more production callers (or by presentation) — e.g. `create-diff-session.ts`,
-  `get-raw-diff.ts`, `get-repo-index.ts`. Single-use-case helpers stay
-  non-exported in that use case file. Test-only helpers stay in test files.
-  Feature folders hold verb-noun use cases only.
+  more production callers (or by presentation) and they are *not* domain
+  queries/transforms — e.g. `create-diff-session.ts`, `get-raw-diff.ts`,
+  `get-repo-index.ts`. Pure reads/builds of domain types go in
+  `domain/<area>/fn/` instead. Single-use-case helpers stay non-exported
+  in that use case file. Test-only helpers stay in test files. Feature
+  folders hold verb-noun use cases only.
 - **Function params**: single-function dependencies (e.g. `fetchBytes`,
   `makeClient`, `getDiffer`) are plain parameters. Multi-method contracts
   live in `application/port/`.
@@ -71,7 +91,7 @@ Use cases composed from domain logic and ports.
 Receives outside input and decides whether to call a use case or a port.
 
 - May import: application use cases (and their types), `application/port`,
-  domain types and pure functions, other presentation files.
+  domain types and `domain/<area>/fn` pure functions, other presentation files.
 - Must not import: any infrastructure file — except the entry point
   (`presentation/*/index.ts`), which imports `container.ts` to construct
   ports **and repositories**.

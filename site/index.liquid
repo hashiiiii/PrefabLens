@@ -5,13 +5,13 @@ layout: layout.liquid
 ---
 <h1>Human-readable diffs for UnityYAML assets</h1>
 <p>
-  PrefabLens shows UnityYAML diffs in a Hierarchy and Inspector style view. On GitHub pull requests, in your terminal,
-  and in the Unity Editor.
+  PrefabLens shows UnityYAML diffs in a view like the Hierarchy and the Inspector.
+  You can use PrefabLens on GitHub pull requests, in the terminal, and in the Unity Editor.
 </p>
 
 <!--
-  Same Robot.prefab change, both views produced by the real tooling at
-  build time: git for the raw diff, the prefablens binary for the report.
+  Same Robot.prefab change, both views from the real tools at build time:
+  git for the raw diff, the prefablens binary for the report.
 -->
 <div class="compare">
   <div>
@@ -33,11 +33,11 @@ layout: layout.liquid
 <h2>Demos</h2>
 <ul>
   <li>
-    <a href="extension.html">GitHub pull requests</a>: a simulated Files changed page running the real extension and
-    WASM diff engine.
+    <a href="extension.html">GitHub pull requests</a>: a simulated Files changed page with the real
+    extension and the WASM diff engine.
   </li>
   <li><a href="cli.html">CLI</a>: the terminal tree and the HTML report.</li>
-  <li><a href="editor.html">Unity Editor</a>: a window with a diff for every changed asset.</li>
+  <li><a href="editor.html">Unity Editor</a>: a window that shows a diff for every changed asset.</li>
 </ul>
 
 <h2>Install</h2>
@@ -53,7 +53,7 @@ layout: layout.liquid
 
 <h3>Unity Editor</h3>
 <pre><code><span class="cmd">openupm</span> add com.hashiiiii.prefablens</code></pre>
-<p>Or the Package Manager git URL: <code>https://github.com/hashiiiii/PrefabLens.git?path=editor</code></p>
+<p>Or use the Package Manager git URL: <code>https://github.com/hashiiiii/PrefabLens.git?path=editor</code></p>
 
-<h3>Everything else</h3>
-<p>Prebuilt binaries are on the <a href="https://github.com/hashiiiii/PrefabLens/releases">releases page</a>.</p>
+<h3>Other installs</h3>
+<p>Get the prebuilt binaries from the <a href="https://github.com/hashiiiii/PrefabLens/releases">releases page</a>.</p>

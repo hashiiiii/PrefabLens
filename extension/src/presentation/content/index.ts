@@ -1,7 +1,4 @@
-import { getPendingSignIn } from "../../application/auth/get-pending-sign-in";
 import { type SignInState, signIn } from "../../application/auth/sign-in";
-import { createRemotePrefetch } from "../../application/diff/create-remote-prefetch";
-import { getRemoteSemanticDiff } from "../../application/diff/get-remote-semantic-diff";
 import { type BackgroundError, type GuidResolvedPush, targetKey, unresolvedRemaining } from "../../domain/diff/types";
 import { must } from "../../domain/must";
 import { createGithubAuth, createMessenger, createTokenStore } from "../../infrastructure/container";
@@ -95,7 +92,7 @@ function attach(viewState: ViewStateData): void {
     if (prKey !== prefetchedPr) {
       prefetchedPr = prKey;
       // Fire-and-forget; manual toggle stays available if prefetch fails
-      void createRemotePrefetch(messenger, { type: "prefetch", ...prPage });
+      void messenger.prefetch({ type: "prefetch", ...prPage }).catch(() => {});
     }
   }
   const page = parseDiffUrl(location.pathname);
@@ -165,15 +162,18 @@ function attachToggle(viewState: ViewStateData, page: DiffPage, entry: FileEntry
         },
       };
     },
+    // Channel loss (SW restart, teardown) → fetch-failed; callers never see a rejection
     requestDiff: (force) =>
-      getRemoteSemanticDiff(messenger, {
-        type: "semanticDiff",
-        owner: page.owner,
-        repo: page.repo,
-        target: page.target,
-        path: entry.path,
-        force,
-      }),
+      messenger
+        .semanticDiff({
+          type: "semanticDiff",
+          owner: page.owner,
+          repo: page.repo,
+          target: page.target,
+          path: entry.path,
+          force,
+        })
+        .catch(() => ({ ok: false as const, error: "fetch-failed" as const })),
     results: {
       set: ({ json, retry }) => setView(views, viewKey, { root: must(shadow), json, retry }),
       get: () => getView(views, viewKey),
@@ -206,8 +206,10 @@ function attachToggle(viewState: ViewStateData, page: DiffPage, entry: FileEntry
 
 async function init(): Promise<void> {
   // Device page: only pre-fill the code the PR page issued
+  // Device-page pre-fill: only the code this browser's PR page issued; storage
+  // failure degrades to no pre-fill (the user pastes the code instead)
   if (location.pathname === "/login/device") {
-    const pending = await getPendingSignIn(tokenStore);
+    const pending = await tokenStore.readPendingSignIn().catch(() => undefined);
     if (pending) fillDeviceCode(document, pending, Date.now());
     return;
   }

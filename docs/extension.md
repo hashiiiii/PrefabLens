@@ -68,20 +68,22 @@ Use cases composed from domain logic and ports.
 
 ### Presentation (`src/presentation/`)
 
-Receives outside input and decides which use case to call.
+Receives outside input and decides whether to call a use case or a port.
 
-- May import: application use cases (and their types), domain types and
-  pure functions, other presentation files.
-- Must not import: `application/port`, any infrastructure file — except the
-  entry point (`presentation/*/index.ts`), which imports `container.ts` to
-  construct ports **and repositories** and pass them into use cases.
-  Presentation holds port and repository values and passes them to use
-  cases; it never invokes port methods itself (except where already
-  documented for UI prefs / token change observation).
+- May import: application use cases (and their types), `application/port`,
+  domain types and pure functions, other presentation files.
+- Must not import: any infrastructure file — except the entry point
+  (`presentation/*/index.ts`), which imports `container.ts` to construct
+  ports **and repositories**.
+- **When to call a port vs a use case**: transport-shaped outbound work
+  (content → background messaging, thin repository reads for UI pre-fill)
+  may invoke port/repository methods directly. Multi-step business
+  orchestration (device-flow sign-in, semantic diff pipeline, PR prefetch)
+  stays in application use cases; presentation passes ports/repositories
+  into those verbs.
 - **Inbound vs outbound**: inbound transport events
   (`chrome.runtime.onMessage`, `chrome.storage.onChanged`, DOM events) are
-  presentation's job, like HTTP routes. Outbound calls (requests to the
-  background, GitHub API) go through a use case and a port.
+  presentation's job, like HTTP routes.
 - UI view models (`content/overlay/`: view state, view registry, per-file
   state machine, auth retries) are presentation-owned. The `viewMode`
   storage key is a UI preference and is read/written directly by

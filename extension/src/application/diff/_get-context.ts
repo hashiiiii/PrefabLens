@@ -3,7 +3,7 @@ import { targetKey } from "../../domain/diff/types";
 import { ok, type Result } from "../../domain/result";
 import { type ChangedFile, type GithubFailure, type GithubPort, isRateLimited, type RefPair } from "../port/github";
 import type { DiffContext, DiffSession } from "./_diff-session";
-import { fetchBlob } from "./_fetch-blobs";
+import { getBlob } from "./_get-blobs";
 import { buildGuidIndex } from "./build-guid-index";
 
 // Per-kind: refs + changed-file discovery; everything downstream is target-agnostic
@@ -41,7 +41,7 @@ async function loadRefsAndFiles(
   return ok({ refs: { baseSha: cmp.value.mergeBaseSha, headSha: headSha.value }, files: cmp.value.files });
 }
 
-export function loadContext(
+export function getContext(
   session: DiffSession,
   client: GithubPort,
   owner: string,
@@ -56,7 +56,7 @@ export function loadContext(
     const [guidIndex, tree] = await Promise.all([
       buildGuidIndex(files, async (path, side) => {
         // files API sha matches the side buildGuidIndex reads (head, or base for removed metas)
-        const bytes = await fetchBlob(
+        const bytes = await getBlob(
           session,
           client,
           owner,

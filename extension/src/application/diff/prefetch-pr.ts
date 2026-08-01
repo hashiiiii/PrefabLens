@@ -7,15 +7,15 @@ import type { GuidCachePort } from "../port/guid-cache";
 import type { RepoIndexPort } from "../port/repo-index";
 import type { TokenStorePort } from "../port/token-store";
 import type { DiffSession } from "./_diff-session";
+import { getContext } from "./_get-context";
 import { getDiff } from "./_get-diff";
-import { loadContext } from "./_load-context";
 import { getRepoIndex } from "./_resolution";
 
 const PREFETCH_MAX = 100; // bounds API usage per PR
 const PREFETCH_CONCURRENCY = 4;
 const API_BASE = __API_BASE__;
 
-// Raw diff only — leave Code Search / mergeSources to serve time (10 req/min)
+// Raw diff only — leave Code Search / updateSources to serve time (10 req/min)
 export async function prefetchPr(
   tokenStore: TokenStorePort,
   makeClient: (base: string, token: string, lane: "user" | "prefetch") => GithubPort,
@@ -30,7 +30,7 @@ export async function prefetchPr(
     const accessToken = await tokenStore.readAccessToken();
     if (!accessToken) return;
     const client = makeClient(API_BASE, accessToken, "prefetch");
-    const ctxResult = await loadContext(session, client, req.owner, req.repo, { kind: "pull", prNumber: req.prNumber });
+    const ctxResult = await getContext(session, client, req.owner, req.repo, { kind: "pull", prNumber: req.prNumber });
     if (!ctxResult.ok) {
       console.debug("prefablens: prefetch aborted", ctxResult.error);
       return;

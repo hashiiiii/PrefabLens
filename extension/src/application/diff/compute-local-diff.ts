@@ -4,7 +4,7 @@ import type { DifferPort } from "../port/differ";
 
 const MAX_SOURCE_ROUNDS = 3; // same cap as the background pipeline
 
-// Guid resolution like the background pipeline: applyResolved + mergeSources
+// Guid resolution like the background pipeline: applyResolved + updateSources
 // loop, but source prefabs come from fixture URLs instead of the GitHub API.
 export async function computeLocalDiff(
   differ: DifferPort,

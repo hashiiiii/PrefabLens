@@ -12,9 +12,9 @@ import type { GuidCachePort } from "../port/guid-cache";
 import type { RepoIndexPort } from "../port/repo-index";
 import type { TokenStorePort } from "../port/token-store";
 import type { DiffSession } from "./_diff-session";
+import { getContext } from "./_get-context";
 import { getDiff } from "./_get-diff";
-import { loadContext } from "./_load-context";
-import { resolveRemaining } from "./_resolution";
+import { updateRemaining } from "./_resolution";
 
 const API_BASE = __API_BASE__;
 
@@ -32,7 +32,7 @@ export async function computeSemanticDiff(
   const accessToken = await tokenStore.readAccessToken();
   if (!accessToken) return { ok: false, error: "access-token-missing" };
   const client = makeClient(API_BASE, accessToken, "user");
-  const ctxResult = await loadContext(session, client, req.owner, req.repo, req.target);
+  const ctxResult = await getContext(session, client, req.owner, req.repo, req.target);
   if (!ctxResult.ok) return { ok: false, error: ctxResult.error.kind };
   const ctx = ctxResult.value;
   const outcome = await getDiff(
@@ -52,7 +52,7 @@ export async function computeSemanticDiff(
   // Return immediately; resolution + source merge continue via push
   const remaining = unresolvedRemaining(withPr);
   if (!remaining.length && !withPr.neededSources?.length) return { ok: true, json: withPr };
-  void resolveRemaining(
+  void updateRemaining(
     guidCache,
     repoIndexStore,
     getDiffer,

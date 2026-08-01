@@ -2,11 +2,11 @@ import type { DiffCachePort } from "../port/diff-cache";
 import type { DifferPort } from "../port/differ";
 import type { GithubPort } from "../port/github";
 import type { DiffContext, DiffOutcome, DiffSession } from "./_diff-session";
-import { fetchPair } from "./_fetch-blobs";
+import { getPair } from "./_get-blobs";
 
 const TOO_LARGE_BYTES = 25 * 1024 * 1024; // over 25MB renders on click
 
-// Raw sha-keyed diff only; resolution/mergeSources stay out (Code Search improves later)
+// Raw sha-keyed diff only; resolution/updateSources stay out (Code Search improves later)
 async function computeDiff(
   getDiffer: () => Promise<DifferPort>,
   session: DiffSession,
@@ -18,7 +18,7 @@ async function computeDiff(
   force: boolean,
 ): Promise<DiffOutcome> {
   // Missing from listing (files API caps at 3000) → treat as modified; 404 side → EMPTY
-  const pair = await fetchPair(session, client, ctx, owner, repo, path);
+  const pair = await getPair(session, client, ctx, owner, repo, path);
   if (!pair.ok) return { ok: false, error: pair.error.kind };
   const [before, after] = pair.value;
   if (!force && before.length + after.length > TOO_LARGE_BYTES) {

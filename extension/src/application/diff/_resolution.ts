@@ -11,7 +11,7 @@ import { type GithubPort, isRateLimited } from "../port/github";
 import type { GuidCachePort } from "../port/guid-cache";
 import type { RepoIndexPort } from "../port/repo-index";
 import type { DiffContext, DiffSession } from "./_diff-session";
-import { type BlobClient, fetchBlob, fetchPair } from "./_fetch-blobs";
+import { type BlobClient, getBlob, getPair } from "./_get-blobs";
 import { syncRepoIndex } from "./sync-repo-index";
 
 // Pipeline's GitHub surface; callers thread a richer client through C so blob fetchers keep their view
@@ -23,7 +23,7 @@ const MAX_SEARCHES = 10; // Code Search is authenticated 10 req/min — don't bu
 const MAX_SOURCE_ROUNDS = 3; // re-diff cap for nested sources (independent of core's depth cap of 8)
 
 // cache → Code Search; failures (incl. rate limits) don't drop the diff — return what resolved
-export async function searchGuids(
+export async function getGuids(
   guidCache: GuidCachePort,
   session: DiffSession,
   guids: string[],
@@ -65,8 +65,8 @@ export async function searchGuids(
   return { resolved, rateLimited };
 }
 
-// Unresolved-by-in-PR-.meta → cache → Code Search; rateLimited folds into mergeSources status
-async function searchUnresolved(
+// Unresolved-by-in-PR-.meta → cache → Code Search; rateLimited folds into updateSources status
+async function getUnresolved(
   guidCache: GuidCachePort,
   session: DiffSession,
   json: DiffV2,
@@ -77,7 +77,7 @@ async function searchUnresolved(
 ): Promise<{ json: DiffV2; rateLimited: boolean }> {
   const resolved = { ...json.resolved };
   const pending = unresolvedRemaining(json);
-  const found = await searchGuids(guidCache, session, pending, client, owner, repo, repoKey);
+  const found = await getGuids(guidCache, session, pending, client, owner, repo, repoKey);
   return { json: { ...json, resolved: { ...resolved, ...found.resolved } }, rateLimited: found.rateLimited };
 }
 
@@ -104,7 +104,7 @@ export async function getRepoIndex(
 }
 
 // Fetch neededSources via resolved path and re-diff with assets; failure degrades (doesn't drop)
-export async function mergeSources(
+export async function updateSources(
   guidCache: GuidCachePort,
   session: DiffSession,
   first: DiffV2,
@@ -130,7 +130,7 @@ export async function mergeSources(
       const sha = s.side === "before" ? ctx.refs.baseSha : ctx.refs.headSha;
       // Sources aren't PR files: only base tree can supply a sha; head keeps path fallback
       const blobSha = s.side === "before" ? ctx.baseShas?.get(path) : undefined;
-      const bytesResult = await fetchBlob(session, client, owner, repo, path, sha, blobSha);
+      const bytesResult = await getBlob(session, client, owner, repo, path, sha, blobSha);
       if (!bytesResult.ok) {
         // Degrade to first-pass diff, but tell the caller why (#194)
         return { json: current, status: isRateLimited(bytesResult.error) ? "rateLimited" : "failed" };
@@ -147,7 +147,7 @@ export async function mergeSources(
     if (!mergedResult.ok) return { json: current, status: "failed" }; // merge failure degrades to current result
     const merged = mergedResult.value;
     // Merging surfaces new external refs inside the source, so resolve again
-    const next = await searchUnresolved(
+    const next = await getUnresolved(
       guidCache,
       session,
       applyResolved(merged, ctx.guidIndex),
@@ -170,7 +170,7 @@ function combine(a: ResolutionStatus, b: ResolutionStatus): ResolutionStatus {
 }
 
 // Background index → Code Search + source re-merge via push; catch still emits done to release waiters
-export async function resolveRemaining(
+export async function updateRemaining(
   guidCache: GuidCachePort,
   repoIndexStore: RepoIndexPort,
   getDiffer: () => Promise<DifferPort>,
@@ -199,7 +199,7 @@ export async function resolveRemaining(
       }
       leftover = remaining.filter((g) => !Object.hasOwn(fromIndex, g));
       if (Object.keys(fromIndex).length) {
-        // Land in guidCache: mergeSources rebuilds via applyResolved; without this, index hits vanish
+        // Land in guidCache: updateSources rebuilds via applyResolved; without this, index hits vanish
         await guidCache.save(repoKey, fromIndex);
         // Deliver available names first; structure finalized by the later final push
         push({ type: "guidResolved", ...at, resolved: fromIndex, done: false });
@@ -207,14 +207,14 @@ export async function resolveRemaining(
     }
     // Only guids missing from the index go to Code Search
     const search = leftover.length
-      ? await searchGuids(guidCache, session, leftover, client, req.owner, req.repo, repoKey)
+      ? await getGuids(guidCache, session, leftover, client, req.owner, req.repo, repoKey)
       : { resolved: {}, rateLimited: false };
     let status: ResolutionStatus = search.rateLimited ? "rateLimited" : "complete";
     let json: DiffV2 = { ...first, resolved: { ...first.resolved, ...fromIndex, ...search.resolved } };
     if (json.neededSources?.length) {
       // Resolution advanced — redo source merging (source guid may have resolved this time)
       const differ = await getDiffer();
-      const pair = await fetchPair(session, client, ctx, req.owner, req.repo, req.path);
+      const pair = await getPair(session, client, ctx, req.owner, req.repo, req.path);
       if (!pair.ok) {
         push({
           type: "guidResolved",
@@ -226,7 +226,7 @@ export async function resolveRemaining(
         return;
       }
       const [before, after] = pair.value;
-      const merged = await mergeSources(
+      const merged = await updateSources(
         guidCache,
         session,
         json,

@@ -1,17 +1,19 @@
-import { parseGuidFromMeta } from "../../domain/diff/meta-guid";
-import type { RepoIndexRepository } from "../../domain/guid/repo-index-repository";
-import { ok, type Result } from "../../domain/result";
-import type { GithubFailure, GithubPort } from "../port/github";
+import { parseGuidFromMeta } from "../domain/diff/meta-guid";
+import type { RepoIndexRepository } from "../domain/guid/repo-index-repository";
+import { ok, type Result } from "../domain/result";
+import type { DiffSession } from "./create-diff-session";
+import type { GithubFailure, GithubPort } from "./port/github";
+import { isRateLimited } from "./port/github";
 
-type ClientLike = Pick<GithubPort, "listMetaTree" | "batchBlobTexts">;
+type SearchClient = Pick<GithubPort, "listMetaTree" | "batchBlobTexts">;
 
 const INDEX_MAX_METAS = 50_000; // above this, give up on the index to protect the storage quota
 const GRAPHQL_BATCH = 100;
 
 // Whole-repo guid→asset path. Truncated / over cap → null (defer to Code Search).
 // blobSha→guid is content-derived (cache forever); after a push only changed .meta are fetched.
-export async function updateRepoIndex(
-  client: ClientLike,
+async function updateRepoIndex(
+  client: SearchClient,
   store: RepoIndexRepository,
   owner: string,
   repo: string,
@@ -51,4 +53,26 @@ export async function updateRepoIndex(
   }
   await store.saveIndex(repoKey, { treeSha: ref, guids });
   return ok(guids);
+}
+
+// Memoized whole-repo index; rate-limited repos stay on fallback for the SW lifetime
+export async function getRepoIndex(
+  repoIndexStore: RepoIndexRepository,
+  session: DiffSession,
+  client: SearchClient,
+  owner: string,
+  repo: string,
+  repoKey: string,
+  ref: string,
+): Promise<Record<string, string> | null> {
+  if (session.indexFallback.has(repoKey)) return null;
+  const result = await session.indexes.get(`${repoKey}@${ref}`, () =>
+    updateRepoIndex(client, repoIndexStore, owner, repo, repoKey, ref),
+  );
+  if (!result.ok) {
+    // Cache already dropped the failure, so the next visit retries
+    if (isRateLimited(result.error)) session.indexFallback.add(repoKey);
+    return null;
+  }
+  return result.value;
 }

@@ -6,9 +6,9 @@ import type { GuidRepository } from "../../domain/guid/guid-repository";
 import type { RepoIndexRepository } from "../../domain/guid/repo-index-repository";
 import { must } from "../../domain/must";
 import { err, ok } from "../../domain/result";
+import { createDiffSession, type DiffSession } from "../create-diff-session";
 import type { DifferPort } from "../port/differ";
 import type { ChangedFile, GithubPort } from "../port/github";
-import { createDiffSession, type DiffSession } from "./_diff-session";
 import { createPrPrefetch } from "./create-pr-prefetch";
 import { getSemanticDiff } from "./get-semantic-diff";
 
@@ -1086,6 +1086,107 @@ describe("semanticDiff", () => {
       expect(client.getFileAtRef).toHaveBeenCalledWith("o", "r", "Assets/Cyl.prefab", "base-sha");
     });
 
+    it("fetches a before-side source riding the base-tree blob sha", async () => {
+      const diffWithAssets = vi.fn<DifferPort["diffWithAssets"]>(() => ok(MERGED));
+      const { tokenStore, makeClient, getDiffer, guidCache, diffStore, repoIndexStore, client } = makeFakes({
+        diff: () => ok({ ...NEEDS, neededSources: [{ guid: "src1", side: "before" }] }),
+        diffWithAssets,
+        search: { src1: "Assets/Cyl.prefab" },
+        baseShas: { "Assets/Cyl.prefab": "cyl-base" },
+        contents: {
+          "Assets/Foo.prefab@base-sha": "b",
+          "Assets/Foo.prefab@head-sha": "a",
+          "Assets/Cyl.prefab@base-sha": "OLD",
+        },
+      });
+      await resolveFully(
+        tokenStore,
+        makeClient,
+        getDiffer,
+        guidCache,
+        diffStore,
+        repoIndexStore,
+        createDiffSession(),
+        REQ,
+      );
+      // blob-sha miss falls back to path+ref; both seams are exercised
+      expect(client.getBlobRaw).toHaveBeenCalledWith("o", "r", "cyl-base");
+      expect(client.getFileAtRef).toHaveBeenCalledWith("o", "r", "Assets/Cyl.prefab", "base-sha");
+    });
+
+    it("skips binary-serialized sources without counting them as progress", async () => {
+      const diffWithAssets = vi.fn<DifferPort["diffWithAssets"]>(() => ok(MERGED));
+      const { tokenStore, makeClient, getDiffer, guidCache, diffStore, repoIndexStore } = makeFakes({
+        diff: () => ok(NEEDS),
+        diffWithAssets,
+        // Main prefab sides stay YAML; only the fetched source is treated as binary.
+        isUnityYaml: (bytes) => !new TextDecoder().decode(bytes).includes("\x00"),
+        search: { src1: "Assets/Cyl.prefab" },
+        contents: {
+          "Assets/Foo.prefab@base-sha": "b",
+          "Assets/Foo.prefab@head-sha": "a",
+          "Assets/Cyl.prefab@head-sha": "\x00binary",
+        },
+      });
+      const res = await resolveFully(
+        tokenStore,
+        makeClient,
+        getDiffer,
+        guidCache,
+        diffStore,
+        repoIndexStore,
+        createDiffSession(),
+        REQ,
+      );
+      // Merging a binary source would be a no-op re-diff: give up and keep the first pass.
+      expect(diffWithAssets).not.toHaveBeenCalled();
+      expect(res).toEqual({ ok: true, json: { ...NEEDS, resolved: { src1: "Assets/Cyl.prefab" } } });
+    });
+
+    it("caps source re-diff rounds at 3 even while progressing", async () => {
+      // Each merge output requests the next source, which always resolves: without the cap
+      // a deep source chain would keep re-diffing forever.
+      let round = 0;
+      const diffWithAssets = vi.fn<DifferPort["diffWithAssets"]>(() => {
+        round += 1;
+        return ok({
+          ...DIFF,
+          unresolvedGuids: [`s${round}`],
+          neededSources: [{ guid: `s${round}`, side: "after" }],
+        });
+      });
+      const { tokenStore, makeClient, getDiffer, guidCache, diffStore, repoIndexStore } = makeFakes({
+        // applyResolved rebuilds `resolved` from the PR index only — seed names via guidCache.
+        diff: () =>
+          ok({
+            ...DIFF,
+            unresolvedGuids: ["s0"],
+            neededSources: [{ guid: "s0", side: "after" }],
+          }),
+        diffWithAssets,
+        cached: { s0: "Assets/S0.prefab", s1: "Assets/S1.prefab", s2: "Assets/S2.prefab", s3: "Assets/S3.prefab" },
+        contents: {
+          "Assets/Foo.prefab@base-sha": "b",
+          "Assets/Foo.prefab@head-sha": "a",
+          "Assets/S0.prefab@head-sha": "S0",
+          "Assets/S1.prefab@head-sha": "S1",
+          "Assets/S2.prefab@head-sha": "S2",
+        },
+      });
+      const res = await resolveFully(
+        tokenStore,
+        makeClient,
+        getDiffer,
+        guidCache,
+        diffStore,
+        repoIndexStore,
+        createDiffSession(),
+        REQ,
+      );
+      expect(diffWithAssets).toHaveBeenCalledTimes(3);
+      expect(res.ok && res.json.neededSources).toEqual([{ guid: "s3", side: "after" }]); // degraded at the cap
+    });
+
     it("keeps the first-pass diff when the source path cannot be resolved", async () => {
       const diffWithAssets = vi.fn<DifferPort["diffWithAssets"]>(() => ok(MERGED));
       const { tokenStore, makeClient, getDiffer, guidCache, diffStore, repoIndexStore } = makeFakes({
@@ -1158,7 +1259,7 @@ describe("semanticDiff", () => {
         diffWithAssets,
       });
       const session = createDiffSession();
-      await createPrPrefetch(tokenStore, makeClient, getDiffer, guidCache, diffStore, repoIndexStore, session, {
+      await createPrPrefetch(tokenStore, makeClient, getDiffer, diffStore, repoIndexStore, session, {
         type: "prefetch",
         owner: "o",
         repo: "r",
@@ -1186,7 +1287,7 @@ it("dedupes a concurrent user toggle against an in-flight prefetch compute", asy
   const { tokenStore, makeClient, getDiffer, guidCache, diffStore, repoIndexStore, client } = makeFakes();
   const session = createDiffSession();
   const [, res] = await Promise.all([
-    createPrPrefetch(tokenStore, makeClient, getDiffer, guidCache, diffStore, repoIndexStore, session, {
+    createPrPrefetch(tokenStore, makeClient, getDiffer, diffStore, repoIndexStore, session, {
       type: "prefetch",
       owner: "o",
       repo: "r",
@@ -1299,6 +1400,98 @@ describe("semanticDiff with push (two-stage)", () => {
     expect(client.listMetaTree).toHaveBeenCalledTimes(1); // pinned to fallback for the SW lifetime
   });
 
+  it("skips the index when only a source re-merge is pending", async () => {
+    // The first index build can take tens of seconds and cannot help: no guid names are missing.
+    // Resolve the source guid via the in-PR .meta index so remaining is empty but neededSources remains.
+    const merged: DiffV2 = { ...DIFF, unresolvedGuids: [] };
+    const diffWithAssets = vi.fn<DifferPort["diffWithAssets"]>(() => ok(merged));
+    const { tokenStore, makeClient, getDiffer, guidCache, diffStore, repoIndexStore, client } = makeFakes({
+      files: [
+        { path: "Assets/Foo.prefab", status: "modified" },
+        { path: "Assets/Src.prefab.meta", status: "modified" },
+      ],
+      diff: () =>
+        ok({
+          ...DIFF,
+          unresolvedGuids: ["src1"],
+          neededSources: [{ guid: "src1", side: "after" }],
+        }),
+      diffWithAssets,
+      contents: {
+        "Assets/Foo.prefab@base-sha": "b",
+        "Assets/Foo.prefab@head-sha": "a",
+        "Assets/Src.prefab.meta@head-sha": "guid: src1\n",
+        "Assets/Src.prefab@head-sha": "SRC",
+      },
+    });
+    const { pushes } = await serveAndResolve(
+      tokenStore,
+      makeClient,
+      getDiffer,
+      guidCache,
+      diffStore,
+      repoIndexStore,
+      createDiffSession(),
+      REQ,
+    );
+    expect(client.listMetaTree).not.toHaveBeenCalled();
+    expect(diffWithAssets).toHaveBeenCalledTimes(1);
+    expect(must(pushes.at(-1))).toMatchObject({ done: true, status: "complete" });
+  });
+
+  it("marks the final push rateLimited when Code Search hits the limit", async () => {
+    const { tokenStore, makeClient, getDiffer, guidCache, diffStore, repoIndexStore, client } = makeFakes();
+    client.searchMetaByGuid.mockResolvedValue(err({ kind: "rate-limited" as const }) as never);
+    const { pushes } = await serveAndResolve(
+      tokenStore,
+      makeClient,
+      getDiffer,
+      guidCache,
+      diffStore,
+      repoIndexStore,
+      createDiffSession(),
+      REQ,
+    );
+    expect(must(pushes.at(-1))).toMatchObject({ done: true, status: "rateLimited" });
+  });
+
+  it("still emits the done push, marked failed, when source fetch fails during re-merge", async () => {
+    // Waiters key off done: a crash that swallowed it would leave the indicator spinning forever.
+    const { tokenStore, makeClient, getDiffer, guidCache, diffStore, repoIndexStore, client } = makeFakes({
+      diff: () =>
+        ok({
+          ...DIFF,
+          unresolvedGuids: ["src1"],
+          neededSources: [{ guid: "src1", side: "after" }],
+        }),
+      cached: { src1: "Assets/Src.prefab" },
+      contents: {
+        "Assets/Foo.prefab@base-sha": "b",
+        "Assets/Foo.prefab@head-sha": "a",
+      },
+    });
+    client.getFileAtRef.mockImplementation((async (_o: string, _r: string, path: string, ref: string) => {
+      if (path === "Assets/Src.prefab") return err({ kind: "fetch-failed" as const });
+      const contents: Record<string, string> = {
+        "Assets/Foo.prefab@base-sha": "b",
+        "Assets/Foo.prefab@head-sha": "a",
+      };
+      const text = contents[`${path}@${ref}`];
+      return ok(text === undefined ? null : new TextEncoder().encode(text));
+    }) as never);
+    const { pushes } = await serveAndResolve(
+      tokenStore,
+      makeClient,
+      getDiffer,
+      guidCache,
+      diffStore,
+      repoIndexStore,
+      createDiffSession(),
+      REQ,
+    );
+    expect(must(pushes.at(-1))).toMatchObject({ done: true, status: "failed" });
+  });
+
   it("re-merges sources in the async stage once the source guid resolves", async () => {
     // The crux of updateSources consistency: the immediate response comes back without merging,
     // and once the repo index resolves the source guid, the re-merged json arrives in the final push
@@ -1344,22 +1537,13 @@ describe("semanticDiff with push (two-stage)", () => {
   });
 
   it("kicks the repo index sync from prefetch", async () => {
-    const { tokenStore, makeClient, getDiffer, guidCache, diffStore, repoIndexStore, client } = makeFakes();
-    await createPrPrefetch(
-      tokenStore,
-      makeClient,
-      getDiffer,
-      guidCache,
-      diffStore,
-      repoIndexStore,
-      createDiffSession(),
-      {
-        type: "prefetch",
-        owner: "o",
-        repo: "r",
-        prNumber: 1,
-      },
-    );
+    const { tokenStore, makeClient, getDiffer, diffStore, repoIndexStore, client } = makeFakes();
+    await createPrPrefetch(tokenStore, makeClient, getDiffer, diffStore, repoIndexStore, createDiffSession(), {
+      type: "prefetch",
+      owner: "o",
+      repo: "r",
+      prNumber: 1,
+    });
     await vi.waitFor(() => expect(client.listMetaTree).toHaveBeenCalledWith("o", "r", "head-sha"));
   });
 });

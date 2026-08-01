@@ -44,9 +44,11 @@ Use cases composed from domain logic and ports.
 - **Port** (`application/port/<name>.ts`): `XxxPort` types abstracting
   outside capabilities that do **not** load or save domain models (GitHub
   API, WASM differ, chrome.runtime messaging, device-flow helpers).
-- **Shared internals**: files used by several use cases in a feature folder
-  get an underscore prefix (`_diff-session.ts`, `_resolution.ts`,
-  `_promise-cache.ts`) to distinguish them from verb-noun use cases.
+- **Shared helpers**: live directly under `application/` when used by two or
+  more production callers (or by presentation) — e.g. `create-diff-session.ts`,
+  `get-raw-diff.ts`, `get-repo-index.ts`. Single-use-case helpers stay
+  non-exported in that use case file. Test-only helpers stay in test files.
+  Feature folders hold verb-noun use cases only.
 - **Function params**: single-function dependencies (e.g. `fetchBytes`,
   `makeClient`, `getDiffer`) are plain parameters. Multi-method contracts
   live in `application/port/`.

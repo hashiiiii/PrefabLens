@@ -5,9 +5,9 @@ import type { DiffV2, GuidResolvedPush, SemanticDiffRequest, SemanticDiffRespons
 import type { GuidRepository } from "../../domain/guid/guid-repository";
 import type { RepoIndexRepository } from "../../domain/guid/repo-index-repository";
 import { err, ok } from "../../domain/result";
+import { createDiffSession, type DiffSession } from "../create-diff-session";
 import type { DifferPort } from "../port/differ";
 import type { ChangedFile, GithubPort } from "../port/github";
-import { createDiffSession, type DiffSession } from "./_diff-session";
 import { createPrPrefetch } from "./create-pr-prefetch";
 import { getSemanticDiff } from "./get-semantic-diff";
 
@@ -152,7 +152,7 @@ describe("prefetch", () => {
   it("precomputes diffs so a later toggle serves without new blob fetches", async () => {
     const { tokenStore, makeClient, getDiffer, guidCache, diffStore, repoIndexStore, client } = makeFakes();
     const session = createDiffSession();
-    await createPrPrefetch(tokenStore, makeClient, getDiffer, guidCache, diffStore, repoIndexStore, session, {
+    await createPrPrefetch(tokenStore, makeClient, getDiffer, diffStore, repoIndexStore, session, {
       type: "prefetch",
       owner: "o",
       repo: "r",
@@ -175,22 +175,13 @@ describe("prefetch", () => {
   });
 
   it("persists prefetched diffs to the diff store (sw restart survival)", async () => {
-    const { tokenStore, makeClient, getDiffer, guidCache, diffStore, repoIndexStore } = makeFakes();
-    await createPrPrefetch(
-      tokenStore,
-      makeClient,
-      getDiffer,
-      guidCache,
-      diffStore,
-      repoIndexStore,
-      createDiffSession(),
-      {
-        type: "prefetch",
-        owner: "o",
-        repo: "r",
-        prNumber: 1,
-      },
-    );
+    const { tokenStore, makeClient, getDiffer, diffStore, repoIndexStore } = makeFakes();
+    await createPrPrefetch(tokenStore, makeClient, getDiffer, diffStore, repoIndexStore, createDiffSession(), {
+      type: "prefetch",
+      owner: "o",
+      repo: "r",
+      prNumber: 1,
+    });
     expect(diffStore.save).toHaveBeenCalledWith("base-sha:head-sha:Assets/Foo.prefab", DIFF);
   });
 
@@ -218,22 +209,13 @@ describe("prefetch", () => {
       status: "modified",
     }));
     files.push({ path: "README.md", status: "modified" });
-    const { tokenStore, makeClient, getDiffer, guidCache, diffStore, repoIndexStore, client } = makeFakes({ files });
-    await createPrPrefetch(
-      tokenStore,
-      makeClient,
-      getDiffer,
-      guidCache,
-      diffStore,
-      repoIndexStore,
-      createDiffSession(),
-      {
-        type: "prefetch",
-        owner: "o",
-        repo: "r",
-        prNumber: 1,
-      },
-    );
+    const { tokenStore, makeClient, getDiffer, diffStore, repoIndexStore, client } = makeFakes({ files });
+    await createPrPrefetch(tokenStore, makeClient, getDiffer, diffStore, repoIndexStore, createDiffSession(), {
+      type: "prefetch",
+      owner: "o",
+      repo: "r",
+      prNumber: 1,
+    });
     const paths = new Set(client.getFileAtRef.mock.calls.map((c) => c[2]));
     expect(paths.has("README.md")).toBe(false);
     expect(paths.size).toBe(100); // cut off at the cap
@@ -244,7 +226,7 @@ describe("prefetch", () => {
     const { tokenStore, makeClient, getDiffer, guidCache, diffStore, repoIndexStore, client } = makeFakes();
     client.getFileAtRef.mockResolvedValue(ok(big));
     const session = createDiffSession();
-    await createPrPrefetch(tokenStore, makeClient, getDiffer, guidCache, diffStore, repoIndexStore, session, {
+    await createPrPrefetch(tokenStore, makeClient, getDiffer, diffStore, repoIndexStore, session, {
       type: "prefetch",
       owner: "o",
       repo: "r",
@@ -258,10 +240,10 @@ describe("prefetch", () => {
   });
 
   it("aborts silently on rate limit instead of surfacing an error", async () => {
-    const { tokenStore, makeClient, getDiffer, guidCache, diffStore, repoIndexStore, client } = makeFakes();
+    const { tokenStore, makeClient, getDiffer, diffStore, repoIndexStore, client } = makeFakes();
     client.getFileAtRef.mockResolvedValue(err({ kind: "rate-limited" as const }) as never);
     await expect(
-      createPrPrefetch(tokenStore, makeClient, getDiffer, guidCache, diffStore, repoIndexStore, createDiffSession(), {
+      createPrPrefetch(tokenStore, makeClient, getDiffer, diffStore, repoIndexStore, createDiffSession(), {
         type: "prefetch",
         owner: "o",
         repo: "r",
@@ -271,24 +253,15 @@ describe("prefetch", () => {
   });
 
   it("returns without network when the access token is missing", async () => {
-    const { tokenStore, makeClient, getDiffer, guidCache, diffStore, repoIndexStore, client } = makeFakes({
+    const { tokenStore, makeClient, getDiffer, diffStore, repoIndexStore, client } = makeFakes({
       accessToken: undefined,
     });
-    await createPrPrefetch(
-      tokenStore,
-      makeClient,
-      getDiffer,
-      guidCache,
-      diffStore,
-      repoIndexStore,
-      createDiffSession(),
-      {
-        type: "prefetch",
-        owner: "o",
-        repo: "r",
-        prNumber: 1,
-      },
-    );
+    await createPrPrefetch(tokenStore, makeClient, getDiffer, diffStore, repoIndexStore, createDiffSession(), {
+      type: "prefetch",
+      owner: "o",
+      repo: "r",
+      prNumber: 1,
+    });
     expect(client.getPrRefs).not.toHaveBeenCalled();
   });
 });

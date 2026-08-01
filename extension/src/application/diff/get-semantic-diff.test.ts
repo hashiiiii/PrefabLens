@@ -1135,7 +1135,7 @@ describe("semanticDiff", () => {
     });
 
     it("still merges sources when serving a prefetched diff", async () => {
-      // The crux of caching only the raw diff: the later stages (resolve → mergeSources) run every time, even on a cache hit
+      // The crux of caching only the raw diff: the later stages (resolve → updateSources) run every time, even on a cache hit
       const withSource: DiffV2 = {
         ...DIFF,
         unresolvedGuids: ["src1"],
@@ -1300,7 +1300,7 @@ describe("semanticDiff with push (two-stage)", () => {
   });
 
   it("re-merges sources in the async stage once the source guid resolves", async () => {
-    // The crux of mergeSources consistency: the immediate response comes back without merging,
+    // The crux of updateSources consistency: the immediate response comes back without merging,
     // and once the repo index resolves the source guid, the re-merged json arrives in the final push
     const withSource: DiffV2 = { ...DIFF, unresolvedGuids: ["src1"], neededSources: [{ guid: "src1", side: "after" }] };
     const merged: DiffV2 = { ...DIFF, unresolvedGuids: ["src1"], resolved: { src1: "Assets/Src.prefab" } };
@@ -1322,7 +1322,7 @@ describe("semanticDiff with push (two-stage)", () => {
     );
     client.batchBlobTexts.mockResolvedValue(ok({ sha1: "guid: src1\n" }));
     // Note: serveAndResolve waits for the done push, so by that point diffWithAssets has always been called
-    // (done:true is only emitted after mergeSources completes). Asserting "not yet called" must be done
+    // (done:true is only emitted after updateSources completes). Asserting "not yet called" must be done
     // right after the immediate response (before waiting for the push to finish), so this one is assembled manually.
     const pushes: GuidResolvedPush[] = [];
     const res = await getSemanticDiff(

@@ -34,6 +34,8 @@ Pure types and pure functions. Imports nothing outside `domain/`.
 
 Use cases composed from domain logic and ports.
 
+- **Use-case verbs**: prefer CRUD names — `create`, `get`, `update`, `delete`.
+  `signIn` is the allowed non-CRUD exception (OAuth device flow).
 - **Use case**: one per file, named `<verb>-<noun>.ts`, exporting a plain
   verb function `<verb>(ports…, [state,] input)`. Long-lived state (in-flight
   caches, latches, view state) lives in plain state records created by

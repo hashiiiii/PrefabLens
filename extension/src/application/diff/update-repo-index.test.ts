@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
+import type { RepoIndexRepository } from "../../domain/guid/repo-index-repository";
 import { ok } from "../../domain/result";
-import type { RepoIndexPort } from "../port/repo-index";
 import { updateRepoIndex } from "./update-repo-index";
 
 function makeFakes(overrides?: {
@@ -24,7 +24,7 @@ function makeFakes(overrides?: {
   const guids: Record<string, Record<string, string>> = { repoKey: { ...overrides?.knownGuids } };
   const indexes: Record<string, { treeSha: string; guids: Record<string, string> }> = {};
   if (overrides?.storedIndex) indexes.repoKey = overrides.storedIndex;
-  const store: RepoIndexPort = {
+  const store: RepoIndexRepository = {
     loadGuids: vi.fn(async (repo) => guids[repo] ?? {}),
     saveGuids: vi.fn(async (repo, entries) => {
       guids[repo] = { ...guids[repo], ...entries };

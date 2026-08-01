@@ -1,10 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import type { DiffV2, GuidResolvedPush, SemanticDiffRequest } from "../../domain/diff/types";
+import type { GuidRepository } from "../../domain/guid/guid-repository";
+import type { RepoIndexRepository } from "../../domain/guid/repo-index-repository";
 import { must } from "../../domain/must";
 import { err, ok } from "../../domain/result";
 import type { DifferPort } from "../port/differ";
-import type { GuidCachePort } from "../port/guid-cache";
-import type { RepoIndexPort } from "../port/repo-index";
 import { createDiffSession, type DiffContext } from "./_diff-session";
 import { getGuids, getRepoIndex, updateRemaining, updateSources } from "./_resolution";
 
@@ -321,8 +321,8 @@ describe("updateSources", () => {
 
 describe("updateRemaining", () => {
   async function run(
-    guidCache: GuidCachePort,
-    repoIndexStore: RepoIndexPort,
+    guidCache: GuidRepository,
+    repoIndexStore: RepoIndexRepository,
     getDiffer: () => Promise<DifferPort>,
     session: ReturnType<typeof createDiffSession>,
     client: ReturnType<typeof makeResolution>["client"],

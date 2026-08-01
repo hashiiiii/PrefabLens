@@ -1,8 +1,8 @@
 import { expect, it } from "vitest";
-import type { TokenStorePort } from "../port/token-store";
+import type { TokenRepository } from "../../domain/auth/token-repository";
 import { getPendingSignIn } from "./get-pending-sign-in";
 
-function tokenStore(readPendingSignIn: TokenStorePort["readPendingSignIn"]): TokenStorePort {
+function tokenStore(readPendingSignIn: TokenRepository["readPendingSignIn"]): TokenRepository {
   return {
     readAccessToken: async () => undefined,
     saveAccessToken: async () => {},

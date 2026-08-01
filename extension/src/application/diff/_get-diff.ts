@@ -1,4 +1,4 @@
-import type { DiffCachePort } from "../port/diff-cache";
+import type { DiffRepository } from "../../domain/diff/diff-repository";
 import type { DifferPort } from "../port/differ";
 import type { GithubPort } from "../port/github";
 import type { DiffContext, DiffOutcome, DiffSession } from "./_diff-session";
@@ -37,7 +37,7 @@ async function computeDiff(
 // Sha-keyed: a push produces a new key (no invalidation)
 export function getDiff(
   getDiffer: () => Promise<DifferPort>,
-  diffStore: DiffCachePort,
+  diffStore: DiffRepository,
   session: DiffSession,
   client: GithubPort,
   ctx: DiffContext,

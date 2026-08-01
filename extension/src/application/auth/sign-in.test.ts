@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
+import type { TokenRepository } from "../../domain/auth/token-repository";
 import type { DeviceCode, GithubAuthPort, PollResult } from "../port/github-auth";
-import type { TokenStorePort } from "../port/token-store";
 import { FAILURE_TEXT, type PendingSignIn, type SignInState, type SignInUi, signIn } from "./sign-in";
 
 const CODE: DeviceCode = {
@@ -27,7 +27,7 @@ function fakeDeps(poll: () => Promise<PollResult>) {
       return poll();
     },
   };
-  const tokenStore: TokenStorePort = {
+  const tokenStore: TokenRepository = {
     async readAccessToken() {
       return undefined;
     },

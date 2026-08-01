@@ -1,5 +1,5 @@
+import type { TokenRepository } from "../../domain/auth/token-repository";
 import type { GithubAuthPort } from "../port/github-auth";
-import type { TokenStorePort } from "../port/token-store";
 
 // Written before the verification tab opens; /login/device reads it to pre-fill
 export type PendingSignIn = { userCode: string; expiresAt: number };
@@ -19,7 +19,7 @@ export const FAILURE_TEXT = {
 
 export async function signIn(
   auth: GithubAuthPort,
-  tokenStore: TokenStorePort,
+  tokenStore: TokenRepository,
   fetchFn: typeof fetch,
   sleep: (ms: number) => Promise<void>,
   openTab: (url: string) => void,

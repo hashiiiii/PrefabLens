@@ -1,7 +1,7 @@
 import { getPendingSignIn } from "../../application/auth/get-pending-sign-in";
 import { type SignInState, signIn } from "../../application/auth/sign-in";
-import { requestPrefetch } from "../../application/diff/request-prefetch";
-import { requestSemanticDiff } from "../../application/diff/request-semantic-diff";
+import { createRemotePrefetch } from "../../application/diff/create-remote-prefetch";
+import { getRemoteSemanticDiff } from "../../application/diff/get-remote-semantic-diff";
 import { type BackgroundError, type GuidResolvedPush, targetKey, unresolvedRemaining } from "../../domain/diff/types";
 import { must } from "../../domain/must";
 import { createGithubAuth, createMessenger, createTokenStore } from "../../infrastructure/container";
@@ -95,7 +95,7 @@ function attach(viewState: ViewStateData): void {
     if (prKey !== prefetchedPr) {
       prefetchedPr = prKey;
       // Fire-and-forget; manual toggle stays available if prefetch fails
-      void requestPrefetch(messenger, { type: "prefetch", ...prPage });
+      void createRemotePrefetch(messenger, { type: "prefetch", ...prPage });
     }
   }
   const page = parseDiffUrl(location.pathname);
@@ -166,7 +166,7 @@ function attachToggle(viewState: ViewStateData, page: DiffPage, entry: FileEntry
       };
     },
     requestDiff: (force) =>
-      requestSemanticDiff(messenger, {
+      getRemoteSemanticDiff(messenger, {
         type: "semanticDiff",
         owner: page.owner,
         repo: page.repo,

@@ -2,8 +2,9 @@
 
 ## Supported Versions
 
-PrefabLens is pre-1.0 software. Security fixes are applied to the latest
-released version only. Please upgrade to the newest release before reporting.
+PrefabLens is pre-1.0 software.
+The maintainer applies security fixes to the latest released version only.
+Upgrade to the newest release before you report a vulnerability.
 
 | Version        | Supported          |
 | -------------- | ------------------ |
@@ -12,30 +13,30 @@ released version only. Please upgrade to the newest release before reporting.
 
 ## Reporting a Vulnerability
 
-Please **do not** open a public issue for security vulnerabilities.
+Do **not** open a public issue for security vulnerabilities.
 
-Report privately through GitHub's built-in advisory workflow:
+Report the vulnerability in private through the GitHub advisory workflow:
 
 1. Open the [Security tab](https://github.com/hashiiiii/PrefabLens/security).
-2. Click **Report a vulnerability** to file a private advisory.
+2. Select **Report a vulnerability** to file a private advisory.
 
-This routes the report directly to the maintainer without public disclosure.
+The report goes to the maintainer.
+The report is not public.
 
 ### What to include
 
 - A description of the vulnerability and its impact.
-- Steps to reproduce (a minimal UnityYAML asset or command line is ideal).
+- Steps to reproduce. A minimal UnityYAML asset or command line is ideal.
 - The PrefabLens version and platform (OS / architecture).
 
 ### What to expect
 
-- Acknowledgement on a best-effort basis.
-- An assessment and, if confirmed, a fix in a subsequent release.
-- Coordinated disclosure once a fix is available.
+- Acknowledgement when possible.
+- An assessment. If the report is valid, a fix in a later release.
+- Coordinated disclosure after a fix is available.
 
 ## Scope
 
-PrefabLens parses untrusted UnityYAML assets. Parser crashes, out-of-bounds
-reads, and excessive resource use triggered by crafted input are in scope.
-Vulnerabilities in third-party dependencies are tracked separately through
-automated dependency updates.
+PrefabLens parses untrusted UnityYAML assets.
+Parser crashes, out-of-bounds reads, and excessive resource use from crafted input are in scope.
+The project tracks vulnerabilities in third-party dependencies through automated dependency updates.

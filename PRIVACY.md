@@ -2,57 +2,54 @@
 
 Last updated: 2026-07-12
 
-PrefabLens renders semantic diffs for Unity YAML files on GitHub pull request
-pages. It runs entirely inside your browser. There is no developer-operated
-server: no data ever leaves your browser except in requests to GitHub itself.
+PrefabLens shows semantic diffs for Unity YAML files on GitHub pull request pages.
+The extension runs only in your browser.
+There is no developer-operated server.
+Data leaves your browser only in requests to GitHub.
 
 ## Data the extension handles
 
-- **GitHub OAuth token (authentication information).** Obtained when you sign
-  in via the GitHub device flow. Used to authenticate requests to the GitHub
-  API.
-- **Extension settings.** Your view-mode preference (semantic or raw) and a
-  per-repository GUID index derived from repository contents, kept to speed up
-  diff rendering.
-- **Diff cache.** Rendered diff data for the pull requests you view, cached
-  for the duration of the browser session.
+- **GitHub OAuth token (authentication information).** GitHub issues this token when you authenticate with the GitHub device flow. The extension uses the token to authenticate requests to the GitHub API.
+- **Extension settings.** Your view-mode preference (semantic or raw) and a per-repository GUID index from repository contents. The index makes diff rendering faster.
+- **Diff cache.** Rendered diff data for the pull requests that you view. The cache lasts for the browser session.
 
 ## How data is collected and used
 
-The token is issued by GitHub only after you complete GitHub's own device-flow
-authorization. The extension uses it for exactly one purpose: fetching file
-contents and pull request metadata from the GitHub API so it can render
-diffs. The extension collects nothing else —
-no browsing history, no page content from sites other than
-`https://github.com`, and no personal information.
+GitHub issues the token only after you complete the GitHub device-flow authorization.
+The extension uses the token for one purpose only.
+It fetches file contents and pull request metadata from the GitHub API so that it can show diffs.
+The extension collects no other data.
+It does not collect browsing history.
+It does not collect page content from sites other than `https://github.com`.
+It does not collect personal information.
 
 ## Where data is stored
 
 All data stays on your device:
 
-- The token and settings are stored locally via `chrome.storage.local`.
-- The diff cache is stored via `chrome.storage.session` and is discarded when
-  the browser closes.
+- The token and settings are stored locally in `chrome.storage.local`.
+- The diff cache is stored in `chrome.storage.session`. The browser discards the cache when it closes.
 
-Nothing is synced to other devices or uploaded anywhere.
+The extension does not sync data to other devices.
+The extension does not upload data to any other location.
 
 ## Who data is shared with
 
-No one. The token is sent only to `github.com` (device-flow endpoints) and
-`api.github.com` (file contents and pull request metadata) over HTTPS. There
-is no developer server, no third-party service, and no analytics, tracking, or
-telemetry of any kind.
+The extension shares data with no one except GitHub.
+The token goes only to `github.com` (device-flow endpoints) and `api.github.com` (file contents and pull request metadata) over HTTPS.
+There is no developer server.
+There is no third-party service.
+There is no analytics, tracking, or telemetry.
 
 ## Data removal
 
-Remove the extension to delete everything it stored on your device. You can
-also revoke the token itself at any time from your GitHub account settings
-under [Applications](https://github.com/settings/applications).
+Remove the extension to delete all data that it stored on your device.
+You can also revoke the token at any time from your GitHub account settings under [Applications](https://github.com/settings/applications).
 
 ## Changes to this policy
 
-Changes are published to this file in the repository; the revision history is
-visible in the Git log.
+Changes appear in this file in the repository.
+The revision history is in the Git log.
 
 ## Contact
 

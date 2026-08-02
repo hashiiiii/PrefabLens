@@ -4,7 +4,8 @@
 [![Release](https://img.shields.io/github/v/release/hashiiiii/PrefabLens)](https://github.com/hashiiiii/PrefabLens/releases)
 [![CI](https://img.shields.io/github/actions/workflow/status/hashiiiii/PrefabLens/ci.yml?branch=main&label=CI)](https://github.com/hashiiiii/PrefabLens/actions/workflows/ci.yml)
 
-**Human-readable diffs for UnityYAML assets.** Instead of raw text diffs, PrefabLens shows changes at the GameObject, component, and field level.
+PrefabLens shows human-readable diffs for UnityYAML assets.
+It shows changes at the GameObject, component, and field level.
 
 Try the [live demo](https://prefablens.hashiiiii.workers.dev/).
 
@@ -36,13 +37,13 @@ Try the [live demo](https://prefablens.hashiiiii.workers.dev/).
 | `cli/` | `prefablens` command-line tool |
 | `extension/` | Chrome extension for semantic diffs on GitHub pull requests |
 | `editor/` | Unity Editor package for semantic UnityYAML diffs |
-| `site/` | Live demo site published to GitHub Pages, built from the CLI and extension artifacts |
+| `site/` | Live demo site on Cloudflare Workers, built from the CLI and extension artifacts |
 
 ## Installation
 
 ### Chrome extension (Chrome Web Store)
 
-Install from the [Chrome Web Store](https://chromewebstore.google.com/detail/dlhnalbfkikchkfedfneiimadommcnip).
+Install the extension from the [Chrome Web Store](https://chromewebstore.google.com/detail/dlhnalbfkikchkfedfneiimadommcnip).
 
 ### CLI
 
@@ -71,22 +72,25 @@ Download the zip for your platform from [GitHub Releases](https://github.com/has
 
 ### Unity Editor package (OpenUPM)
 
-Requires Unity `2022.3+`.
+Unity `2022.3+` is required.
 
 ```bash
 openupm add com.hashiiiii.prefablens
 ```
 
-Without the [openupm-cli](https://github.com/openupm/openupm-cli), add the scoped registry as described on the [package page](https://openupm.com/packages/com.hashiiiii.prefablens/), or install via the Package Manager git URL: `https://github.com/hashiiiii/PrefabLens.git?path=editor`.
+If you do not use [openupm-cli](https://github.com/openupm/openupm-cli), add the scoped registry as described on the [package page](https://openupm.com/packages/com.hashiiiii.prefablens/).
+You can also install from the Package Manager git URL: `https://github.com/hashiiiii/PrefabLens.git?path=editor`.
 
 ## Usage
 
 ### Chrome extension
 
-Shows UnityYAML diffs in a human-readable format directly on GitHub PRs. Authenticate via GitHub Device Flow right from the diff panel with zero token setup needed.
+The extension shows UnityYAML diffs in a human-readable format on GitHub pull requests.
+You can authenticate with the GitHub Device Flow from the diff panel.
+You do not need to set a token by hand.
 
 > [!NOTE]
-> The extension is currently available on github.com only.
+> The extension works on github.com only.
 
 ### CLI
 
@@ -102,24 +106,28 @@ prefablens --html main                  # self-contained HTML report on stdout
 prefablens --open main                  # write the report to a temp file and open it
 ```
 
-Operands ending in a Unity YAML extension (`.prefab`, `.unity`, `.asset`, ...) are
-treated as paths; everything else is a git ref.
+Operands that end in a Unity YAML extension (`.prefab`, `.unity`, `.asset`, ...) are paths.
+All other operands are git refs.
 
-Full reference — every flag, exit code, and resolution rule: [docs/cli.md](docs/cli.md).
+For every flag, exit code, and resolution rule, see [docs/cli.md](docs/cli.md).
 
 ### Unity Editor
 
-Open `Window > PrefabLens`. The window lists every changed UnityYAML asset vs HEAD and shows the selected asset's semantic diff. The CLI binary is downloaded automatically from GitHub Releases.
+Open `Window > PrefabLens`.
+The window lists every changed UnityYAML asset against HEAD.
+It shows the semantic diff for the selected asset.
+The Editor package downloads the CLI binary from GitHub Releases.
 
-Details — configuration, the CLI download, troubleshooting: [docs/editor.md](docs/editor.md).
+For configuration, the CLI download, and troubleshooting, see [docs/editor.md](docs/editor.md).
 
 ## Supported files
 
-Text-serialized Unity assets such as `.prefab`, `.unity`, `.asset`, `.mat`, `.anim`, and `.controller`. Excludes `.meta`, `.asmdef`, and other non-UnityYAML formats.
+PrefabLens supports text-serialized Unity assets such as `.prefab`, `.unity`, `.asset`, `.mat`, `.anim`, and `.controller`.
+It does not support `.meta`, `.asmdef`, and other non-UnityYAML formats.
 
 ## Development
 
-Toolchain is managed with [mise](https://mise.jdx.dev/) (Zig 0.16, Node 24, pnpm 11, .NET 10).
+Use [mise](https://mise.jdx.dev/) to manage the toolchain (Zig 0.16, Node 24, pnpm 11, .NET 10).
 
 ```bash
 mise install
@@ -143,7 +151,9 @@ cd site && node build.mjs
 
 ## Contributing
 
-Contributions follow an issue-first flow: open an issue and wait for the `approved` label before sending a pull request. See [CONTRIBUTING.md](CONTRIBUTING.md) for details.
+Open an issue first.
+Wait for the `approved` label before you open a pull request.
+See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 

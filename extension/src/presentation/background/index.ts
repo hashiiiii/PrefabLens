@@ -7,6 +7,7 @@ import {
   createDiffStore,
   createFetchQueue,
   createGithubClient,
+  createGithubFetch,
   createGuidCache,
   createRepoIndexStore,
   createTokenStore,
@@ -18,12 +19,8 @@ const diffStore = createDiffStore();
 const repoIndexStore = createRepoIndexStore();
 const getDiffer = createDifferLoader();
 const queue = createFetchQueue(6);
-const queuedFetch =
-  (front: boolean): typeof fetch =>
-  (input, init) =>
-    queue(() => fetch(input, init), { front });
 const makeClient = (base: string, token: string, lane: "user" | "prefetch") =>
-  createGithubClient(base, token, queuedFetch(lane === "user"));
+  createGithubClient(base, token, createGithubFetch(queue, lane));
 const session = createDiffSession();
 
 function makeGuidPush(tabId: number | undefined): (m: GuidResolvedPush) => void {

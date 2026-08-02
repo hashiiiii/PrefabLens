@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { err, ok } from "../../domain/result";
 import { must } from "../../must";
-import { GithubClient, graphqlUrl, isAuthFailed, isRateLimited } from "./github-client";
+import { createQueue } from "./fetch-queue";
+import { createQueuedFetch, GithubClient, graphqlUrl, isAuthFailed, isRateLimited } from "./github-client";
 
 // fetch fake that returns a fixed path→response table. It also records calls.
 // Matching is url.includes(key), so keys must be unique substrings
@@ -319,6 +320,69 @@ describe("GithubClient", () => {
     expect(isRateLimited(result.error)).toBe(true);
     if (!isRateLimited(result.error)) return;
     expect(result.error.retryAfterMs).toBeGreaterThan(0);
+  });
+});
+
+describe("createQueuedFetch", () => {
+  // Production regression this pins: bare fetch resolves on 429/403, so the queue's
+  // rate-limit backoff never saw a rejection and never ran. The wrapper converts
+  // rate-limited responses into classified rejections the queue retries.
+  const swapFetch = async (impl: typeof fetch, run: () => Promise<void>) => {
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = impl;
+    try {
+      await run();
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  };
+
+  it("retries a rate-limited response through the queue", async () => {
+    const queue = createQueue(1, async () => {}); // instant sleep: backoff fires without waiting
+    let calls = 0;
+    await swapFetch(
+      (async () => {
+        calls++;
+        return calls === 1 ? new Response("", { status: 429 }) : new Response("ok", { status: 200 });
+      }) as typeof fetch,
+      async () => {
+        const res = await createQueuedFetch(queue, true)("https://api.github.com/x", {});
+        expect(res.status).toBe(200);
+        expect(calls).toBe(2);
+      },
+    );
+  });
+
+  it("maps exhausted retries to a rate-limited result", async () => {
+    const queue = createQueue(1, async () => {});
+    let calls = 0;
+    await swapFetch(
+      (async () => {
+        calls++;
+        return new Response("", { status: 429 });
+      }) as typeof fetch,
+      async () => {
+        const client = new GithubClient("https://api.github.com", "tok", createQueuedFetch(queue, true));
+        await expect(client.getPrRefs("o", "r", 1)).resolves.toSatisfy((r) => !r.ok && isRateLimited(r.error));
+        expect(calls).toBe(3); // initial attempt + MAX_RATE_LIMIT_RETRIES
+      },
+    );
+  });
+
+  it("passes non-rate-limited responses through without retry", async () => {
+    const queue = createQueue(1, async () => {});
+    let calls = 0;
+    await swapFetch(
+      (async () => {
+        calls++;
+        return new Response("", { status: 401 });
+      }) as typeof fetch,
+      async () => {
+        const client = new GithubClient("https://api.github.com", "tok", createQueuedFetch(queue, true));
+        await expect(client.getPrRefs("o", "r", 1)).resolves.toEqual(err({ kind: "auth-failed" }));
+        expect(calls).toBe(1);
+      },
+    );
   });
 });
 

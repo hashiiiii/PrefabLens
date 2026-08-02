@@ -8,7 +8,7 @@ import type { GuidRepository } from "../domain/guid/guid-repository";
 import type { RepoIndexRepository } from "../domain/guid/repo-index-repository";
 import { createChromeMessenger } from "./providers/chrome-messenger";
 import { createQueue, type Queue } from "./providers/fetch-queue";
-import { GithubClient } from "./providers/github-client";
+import { createQueuedFetch, GithubClient } from "./providers/github-client";
 import { pollForToken, requestDeviceCode } from "./providers/github-device-flow";
 import { createDiffer } from "./providers/wasm-differ";
 import { createChromeGuidRepository } from "./repositories/chrome-guid-repository";
@@ -46,6 +46,10 @@ export function createGithubClient(base: string, token: string, fetchFn: typeof 
 
 export function createFetchQueue(concurrency: number): Queue {
   return createQueue(concurrency);
+}
+
+export function createGithubFetch(queue: Queue, lane: "user" | "prefetch"): typeof fetch {
+  return createQueuedFetch(queue, lane === "user");
 }
 
 export function createDifferLoader(): () => Promise<DifferPort> {

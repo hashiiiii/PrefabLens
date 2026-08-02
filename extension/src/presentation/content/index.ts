@@ -103,9 +103,10 @@ function attach(viewState: ViewStateData): void {
   if (key !== currentPage) {
     currentPage = key;
     clearOverrides(viewState);
-    pruneDisconnectedViews(views); // drop refs so late pushes can't revive dead views
   }
-  // React virtualizes and discards off-screen DOM; prune every scan (also plugs classic soft leak)
+  // React virtualizes and discards off-screen DOM; prune both registries every scan
+  // (drops the DiffV2 + shadow root a dead view pins; also plugs the classic soft leak)
+  pruneDisconnectedViews(views);
   for (const a of [...appliers]) if (!a.header.isConnected) appliers.delete(a);
   const entries = scanUnityFiles(document);
   const first = entries[0];

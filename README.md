@@ -139,7 +139,7 @@ zig build run -- before.prefab after.prefab
 # WASM (for the extension)
 zig build wasm
 
-# Extension
+# Extension (build / test run zig build wasm when needed)
 cd extension && pnpm install && pnpm run build && pnpm test
 
 # Editor (EditMode tests run on .NET, no Unity required)

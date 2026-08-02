@@ -33,7 +33,9 @@ The live demo site uses a `--demo` bundle from the same build script.
 This section describes the layer structure and the dependency rules for
 `extension/src/`.
 The design is a layered architecture for a Chrome Manifest V3 extension.
-`src/layering.test.ts` enforces the import rules.
+`src/layering.test.ts` enforces the import direction, the domain isolation,
+the container rule, and the entry-point exception.
+The placement and naming rules below are review-time conventions.
 
 ### Overview
 
@@ -61,15 +63,19 @@ Do not use other axes.
    If a helper serves one use case only, keep it non-exported in that use case file.
 2. If the symbol is a pure function that reads or builds a domain type, put it in
    `domain/<area>/fn/<name>.ts`.
-3. If the symbol is a type (including repository ports and `Result`), put it in
-   `domain/<area>/` (outside `fn/`).
+3. If the symbol is a domain vocabulary type (including repository interfaces
+   and `Result`), put it in `domain/<area>/` (outside `fn/`).
    Do not put function bodies in these files.
+   Types that one layer owns stay next to that layer's code
+   (port types, use-case state records, view models).
 4. If a helper is not a domain query or transform, and two or more production callers
    (or presentation) share it, put it directly under `application/`.
    Examples: `create-diff-session.ts`, `get-raw-diff.ts`, `get-repo-index.ts`.
 5. If a helper is not vocabulary of a domain type, keep it out of `domain/`.
    Example: `must` lives at `src/must.ts`.
 6. Keep test-only helpers in test files.
+   If two test files share one harness, put it in a `*-test-fakes.ts` module
+   next to them.
 
 `<area>` matches an existing concept folder (`diff`, `guid`, `auth`, and more).
 Add a new area only when a new concept appears.
@@ -97,6 +103,8 @@ Add a new area only when a new concept appears.
 - Expected failures travel as tagged unions via `Result<T, E>` from `domain/result.ts`.
 - Expected failures do not use `Error` subclasses.
 - Expected failures do not use `throw`.
+- Infrastructure adapters can reject for unexpected failures.
+  The nearest use case converts them to `Result` at the boundary.
 
 #### Application (`src/application/`)
 
@@ -107,8 +115,11 @@ It cannot import `infrastructure/` or `presentation/`.
 
 **Naming and ownership.**
 
-- Use CRUD names for use-case verbs: `create`, `get`, `update`, `delete`.
+- Prefer CRUD names for use-case verbs: `create`, `get`, `update`, `delete`.
+  When a CRUD name hides the intent, you can use a domain verb like `sign-in`.
 - Put one use case in each file.
+  Shared helper modules directly under `application/` (rule 4) can export
+  several sibling verbs.
 - Name the file `<verb>-<noun>.ts`.
 - Export a plain verb function `<verb>(ports…, [state,] input)`.
 - Long-lived state lives in plain state records
@@ -141,9 +152,12 @@ It cannot import application use cases.
 - `repositories/`: implementations of domain repository interfaces
   (chrome.storage-backed).
   `merge-store.ts` is an internal helper for those implementations.
+  `session-diff-store.ts` keeps its historical name.
+  New repository implementations use the `chrome-<noun>-repository.ts` pattern.
 - `container.ts` is the only DI file.
   It exports individual `createX()` factories that return ports and repositories
-  (and lifetime-managed loaders).
+  (and lifetime-managed loaders, for example the demo fixture loader
+  `loadFixtureGuidIndex`).
 
 **Notes.**
 

@@ -1,8 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
+import { isAuthFailed, isRateLimited } from "../../application/port/github";
 import { err, ok } from "../../domain/result";
 import { must } from "../../must";
 import { createQueue } from "./fetch-queue";
-import { createQueuedFetch, GithubClient, graphqlUrl, isAuthFailed, isRateLimited } from "./github-client";
+import { createQueuedFetch, GithubClient, graphqlUrl } from "./github-client";
 
 // fetch fake that returns a fixed path→response table. It also records calls.
 // Matching is url.includes(key), so keys must be unique substrings

@@ -11,14 +11,6 @@ export function isRateLimited(e: unknown): e is Extract<GithubFailure, { kind: "
 export function isAuthFailed(e: unknown): e is Extract<GithubFailure, { kind: "auth-failed" }> {
   return typeof e === "object" && e !== null && (e as { kind?: string }).kind === "auth-failed";
 }
-export function isGithubFailure(e: unknown): e is GithubFailure {
-  return (
-    isRateLimited(e) ||
-    isAuthFailed(e) ||
-    (typeof e === "object" && e !== null && (e as { kind?: string }).kind === "fetch-failed")
-  );
-}
-
 // sha is the blob at head (at base for removed files) — the files API provides it for every status.
 export type ChangedFile = { path: string; status: string; previousPath?: string; sha?: string };
 export type RefPair = { baseSha: string; headSha: string };

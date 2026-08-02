@@ -326,7 +326,7 @@ describe("semanticDiff", () => {
   });
 
   it("rejects a file whose content is not UnityYAML on either side", async () => {
-    // Real sniff behavior lives in differ.test.ts; here the fake reproduces its
+    // Real sniff behavior lives in wasm-differ.test.ts; here the fake reproduces its
     // contract so the outcome plumbing (computeDiff -> response) is what's tested.
     const diff = vi.fn<DifferPort["diff"]>(() => ok(DIFF));
     const { tokenStore, makeClient, getDiffer, guidCache, diffStore, repoIndexStore } = makeFakes({

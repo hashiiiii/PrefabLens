@@ -1,6 +1,6 @@
 import { expect, it } from "vitest";
 import type { DiffV2 } from "../../domain/diff/types";
-import { ok } from "../../domain/result";
+import { err, ok } from "../../domain/result";
 import type { DifferPort } from "../port/differ";
 import { getLocalDiff } from "./get-local-diff";
 
@@ -36,7 +36,7 @@ it("diffs both sides and applies names from the fixture index", async () => {
     files: { "b.prefab": "b", "a.prefab": "a" },
   });
   const diff = await getLocalDiff(differ, index, fetchBytes, fetchSource, "b.prefab", "a.prefab");
-  expect(diff).toEqual({ ...DIFF, resolved: { g1: "Assets/S.cs" } });
+  expect(diff).toEqual(ok({ ...DIFF, resolved: { g1: "Assets/S.cs" } }));
 });
 
 it("treats a missing url as the empty side (added/removed fixtures)", async () => {
@@ -66,7 +66,7 @@ it("re-diffs with fetched source assets until sources are satisfied", async () =
   });
   const diff = await getLocalDiff(differ, index, fetchBytes, fetchSource, "b.prefab", "a.prefab");
   expect(assetsSeen).toEqual(["SRC"]);
-  expect(diff).toEqual({ ...DIFF, resolved: { g1: "Assets/S.cs" } });
+  expect(diff).toEqual(ok({ ...DIFF, resolved: { g1: "Assets/S.cs" } }));
 });
 
 it("keeps the first-pass diff when a source path is unresolved or missing", async () => {
@@ -79,7 +79,18 @@ it("keeps the first-pass diff when a source path is unresolved or missing", asyn
     files: { "b.prefab": "b", "a.prefab": "a" },
     diff: () => ok(NEEDS),
   });
-  const diff = await getLocalDiff(differ, index, fetchBytes, fetchSource, "b.prefab", "a.prefab");
-  // gX is not in the index and fixtures have no source: degrade, don't throw
-  expect(diff.neededSources).toEqual(NEEDS.neededSources);
+  const res = await getLocalDiff(differ, index, fetchBytes, fetchSource, "b.prefab", "a.prefab");
+  // gX is not in the index and fixtures have no source: degrade, don't fail
+  expect(res.ok && res.value.neededSources).toEqual(NEEDS.neededSources);
+});
+
+it("returns the differ failure as a result instead of throwing", async () => {
+  // Expected failures travel as Result (docs/extension.md); the demo branches on ok
+  const { differ, index, fetchBytes, fetchSource } = makeFakes({
+    files: { "b.prefab": "b", "a.prefab": "a" },
+    diff: () => err({ kind: "diff-failed", message: "bad yaml" }),
+  });
+  await expect(getLocalDiff(differ, index, fetchBytes, fetchSource, "b.prefab", "a.prefab")).resolves.toEqual(
+    err({ kind: "diff-failed", message: "bad yaml" }),
+  );
 });

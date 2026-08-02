@@ -60,8 +60,8 @@ function attachFile(header: HTMLElement, locals: DemoLocals, initial: View): (vi
     renderLoading(target);
     const { differ, index, fetchBytes, fetchSource } = locals;
     getLocalDiff(differ, index, fetchBytes, fetchSource, header.dataset.before, header.dataset.after)
-      .then((diff) => render(target, diff))
-      .catch((err) => renderError(target, String(err)));
+      .then((res) => (res.ok ? render(target, res.value) : renderError(target, res.error.message)))
+      .catch((err) => renderError(target, String(err))); // unexpected rejections (missing fixture)
   };
 
   show(initial);

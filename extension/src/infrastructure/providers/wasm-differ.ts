@@ -13,7 +13,7 @@ type Exports = {
 
 // assets TLV (LE): [u32 count] repeat{ [u32 guid_len][guid][u32 data_len][data] }.
 // 1:1 with parseAssets in core/src/wasm.zig.
-export function encodeAssets(assets: Map<string, Uint8Array>): Uint8Array {
+function encodeAssets(assets: Map<string, Uint8Array>): Uint8Array {
   const enc = new TextEncoder();
   const entries = [...assets].map(([guid, data]) => ({ guid: enc.encode(guid), data }));
   let total = 4;

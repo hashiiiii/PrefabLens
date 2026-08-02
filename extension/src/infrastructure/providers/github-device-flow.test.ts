@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { CLIENT_ID, type DeviceCode, pollForToken, requestDeviceCode } from "./github-device-flow";
+import type { DeviceCode } from "../../application/port/github-auth";
+import { err, ok } from "../../domain/result";
+import { CLIENT_ID, pollForToken, requestDeviceCode } from "./github-device-flow";
 
 // Queue-based fetch fake: each call shifts the next canned Response and records the request.
 function fakeFetch(responses: Response[]) {
@@ -46,7 +48,7 @@ describe("requestDeviceCode", () => {
       }),
     ]);
     const result = await requestDeviceCode(fn);
-    expect(result).toEqual(code);
+    expect(result).toEqual(ok(code));
     expect(calls[0]?.url).toBe("https://github.com/login/device/code");
     expect(calls[0]?.init.method).toBe("POST");
     expect((calls[0]?.init.headers as Record<string, string>).accept).toBe("application/json");
@@ -55,14 +57,17 @@ describe("requestDeviceCode", () => {
     expect(calls[0]?.init.credentials).toBe("omit");
   });
 
-  it("throws on a non-OK response", async () => {
+  it("returns a device-flow failure on a non-OK response", async () => {
+    // An HTTP failure is an expected outcome: it travels as a Result, not a throw
     const { fn } = fakeFetch([json({}, 500)]);
-    await expect(requestDeviceCode(fn)).rejects.toThrow();
+    await expect(requestDeviceCode(fn)).resolves.toEqual(
+      err({ kind: "device-flow-failed", message: "device code request failed (HTTP 500)" }),
+    );
   });
 
-  it("throws when the JSON body carries an error field", async () => {
+  it("returns a device-flow failure when the JSON body carries an error field", async () => {
     const { fn } = fakeFetch([json({ error: "invalid_client", error_description: "bad client id" })]);
-    await expect(requestDeviceCode(fn)).rejects.toThrow("bad client id");
+    await expect(requestDeviceCode(fn)).resolves.toEqual(err({ kind: "device-flow-failed", message: "bad client id" }));
   });
 });
 
@@ -121,13 +126,13 @@ describe("pollForToken", () => {
     expect(result).toEqual({ status: "denied" });
   });
 
-  it("throws on an unrecognized error code", async () => {
+  it("maps an unrecognized error code to a failed status", async () => {
     const { fn } = fakeFetch([json({ error: "incorrect_client_credentials" })]);
-    await expect(pollForToken(fn, fakeSleep().fn, code)).rejects.toThrow();
+    await expect(pollForToken(fn, fakeSleep().fn, code)).resolves.toEqual({ status: "failed" });
   });
 
-  it("throws on a non-OK response", async () => {
+  it("maps a non-OK response to a failed status", async () => {
     const { fn } = fakeFetch([json({}, 500)]);
-    await expect(pollForToken(fn, fakeSleep().fn, code)).rejects.toThrow();
+    await expect(pollForToken(fn, fakeSleep().fn, code)).resolves.toEqual({ status: "failed" });
   });
 });

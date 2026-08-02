@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
+import type { PendingSignIn } from "../../domain/auth/token";
 import type { TokenRepository } from "../../domain/auth/token-repository";
+import { err, ok } from "../../domain/result";
 import type { DeviceCode, GithubAuthPort, PollResult } from "../port/github-auth";
-import { FAILURE_TEXT, type PendingSignIn, type SignInState, type SignInUi, signIn } from "./sign-in";
+import { emptySignInState, type SignInUi, signIn } from "./sign-in";
 
 const CODE: DeviceCode = {
   deviceCode: "dc1",
@@ -20,7 +22,7 @@ function fakeDeps(poll: () => Promise<PollResult>) {
   const auth: GithubAuthPort = {
     async requestDeviceCode() {
       calls.push("request");
-      return CODE;
+      return ok(CODE);
     },
     pollForToken() {
       calls.push("poll");
@@ -73,7 +75,7 @@ describe("signIn", () => {
       token: "tok123",
     }));
     const { ui, pending, failures } = fakeUi();
-    const state: SignInState = { inFlight: false };
+    const state = emptySignInState();
     await signIn(auth, tokenStore, fetchFn, sleep, openTab, now, state, ui);
     // expiresAt derives from the injected now(): 1000 + 900s in ms.
     expect(pendings).toEqual([{ userCode: "ABCD-1234", expiresAt: 901_000 }]);
@@ -91,9 +93,9 @@ describe("signIn", () => {
       status: "denied",
     }));
     const { ui, failures } = fakeUi();
-    const state: SignInState = { inFlight: false };
+    const state = emptySignInState();
     await signIn(auth, tokenStore, fetchFn, sleep, openTab, now, state, ui);
-    expect(failures).toEqual([FAILURE_TEXT.denied]);
+    expect(failures).toEqual(["Authorization denied — try again."]);
     expect(tokens).toEqual([]);
     expect(calls).toContain("clearPending");
   });
@@ -101,23 +103,21 @@ describe("signIn", () => {
   it("maps expired to its failure copy", async () => {
     const { auth, tokenStore, fetchFn, sleep, openTab, now } = fakeDeps(async () => ({ status: "expired" }));
     const { ui, failures } = fakeUi();
-    const state: SignInState = { inFlight: false };
+    const state = emptySignInState();
     await signIn(auth, tokenStore, fetchFn, sleep, openTab, now, state, ui);
-    expect(failures).toEqual([FAILURE_TEXT.expired]);
+    expect(failures).toEqual(["Code expired — try again."]);
   });
 
-  it("shows the generic failure when the code request throws", async () => {
+  it("shows the generic failure when the code request fails", async () => {
     const { auth, tokenStore, fetchFn, sleep, openTab, now, calls } = fakeDeps(async () => ({
       status: "ok",
       token: "t",
     }));
-    auth.requestDeviceCode = async () => {
-      throw new Error("network down");
-    };
+    auth.requestDeviceCode = async () => err({ kind: "device-flow-failed", message: "network down" });
     const { ui, failures } = fakeUi();
-    const state: SignInState = { inFlight: false };
+    const state = emptySignInState();
     await signIn(auth, tokenStore, fetchFn, sleep, openTab, now, state, ui);
-    expect(failures).toEqual([FAILURE_TEXT.failed]);
+    expect(failures).toEqual(["Sign-in failed — try again."]);
     expect(calls).not.toContain("openTab");
   });
 
@@ -127,7 +127,7 @@ describe("signIn", () => {
       () => new Promise<PollResult>((resolve) => (resolvePoll = resolve)),
     );
     const { ui } = fakeUi();
-    const state: SignInState = { inFlight: false };
+    const state = emptySignInState();
     const first = signIn(auth, tokenStore, fetchFn, sleep, openTab, now, state, ui);
     await signIn(auth, tokenStore, fetchFn, sleep, openTab, now, state, ui); // resolves immediately: the guard rejects re-entry
     expect(calls.filter((c) => c === "request")).toHaveLength(1);

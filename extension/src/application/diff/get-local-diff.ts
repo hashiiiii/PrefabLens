@@ -1,6 +1,7 @@
 import { applyResolved } from "../../domain/diff/fn/apply-resolved";
 import type { DiffV2 } from "../../domain/diff/types";
-import type { DifferPort } from "../port/differ";
+import { ok, type Result } from "../../domain/result";
+import type { DifferPort, DiffFailure } from "../port/differ";
 
 const MAX_SOURCE_ROUNDS = 3; // same cap as the background pipeline
 
@@ -13,13 +14,13 @@ export async function getLocalDiff(
   fetchSource: (side: "before" | "after", path: string) => Promise<Uint8Array>,
   beforeUrl: string | undefined,
   afterUrl: string | undefined,
-): Promise<DiffV2> {
+): Promise<Result<DiffV2, DiffFailure>> {
   // Empty side = CLI empty-side semantics (added/removed fixtures)
   const side = (url: string | undefined): Promise<Uint8Array> =>
     url ? fetchBytes(url) : Promise.resolve(new Uint8Array());
   const [before, after] = await Promise.all([side(beforeUrl), side(afterUrl)]);
   const first = differ.diff(before, after);
-  if (!first.ok) throw new Error(first.error.message);
+  if (!first.ok) return first;
   let diff = applyResolved(first.value, index);
   const assets = new Map<string, Uint8Array>();
   for (let round = 0; round < MAX_SOURCE_ROUNDS; round++) {
@@ -37,8 +38,8 @@ export async function getLocalDiff(
     }
     if (!progressed) break;
     const merged = differ.diffWithAssets(before, after, assets);
-    if (!merged.ok) throw new Error(merged.error.message);
+    if (!merged.ok) return merged;
     diff = applyResolved(merged.value, index);
   }
-  return diff;
+  return ok(diff);
 }

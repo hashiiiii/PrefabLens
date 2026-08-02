@@ -1,6 +1,5 @@
 import type { View } from "./overlay/view-mode";
 
-export type { View };
 export type Toggle = { element: HTMLElement; set(view: View): void };
 
 const FONT = `-apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif`;

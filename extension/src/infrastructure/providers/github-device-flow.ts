@@ -1,6 +1,5 @@
-import type { DeviceCode, PollResult } from "../../application/port/github-auth";
-
-export type { DeviceCode, PollResult };
+import type { DeviceCode, DeviceFlowFailure, PollResult } from "../../application/port/github-auth";
+import { err, ok, type Result } from "../../domain/result";
 
 // Public client id of the GitHub OAuth App (device flow enabled).
 export const CLIENT_ID = "Ov23liYYM6t34p7Hxkc1";
@@ -11,7 +10,9 @@ type DeviceCodeResponse =
 
 type TokenResponse = { access_token: string } | { error: string; interval?: number };
 
-export async function requestDeviceCode(fetchFn: typeof fetch): Promise<DeviceCode> {
+const failed = (message: string) => err<DeviceFlowFailure>({ kind: "device-flow-failed", message });
+
+export async function requestDeviceCode(fetchFn: typeof fetch): Promise<Result<DeviceCode, DeviceFlowFailure>> {
   const res = await fetchFn(`${__GITHUB_ORIGIN__}/login/device/code`, {
     method: "POST",
     headers: { accept: "application/json" },
@@ -19,16 +20,16 @@ export async function requestDeviceCode(fetchFn: typeof fetch): Promise<DeviceCo
     // Cookie-less: same-origin content-script call must not attach session state
     credentials: "omit",
   });
-  if (!res.ok) throw new Error(`device code request failed (HTTP ${res.status})`);
+  if (!res.ok) return failed(`device code request failed (HTTP ${res.status})`);
   const body = (await res.json()) as DeviceCodeResponse;
-  if ("error" in body) throw new Error(body.error_description ?? body.error);
-  return {
+  if ("error" in body) return failed(body.error_description ?? body.error);
+  return ok({
     deviceCode: body.device_code,
     userCode: body.user_code,
     verificationUri: body.verification_uri,
     interval: body.interval,
     expiresIn: body.expires_in,
-  };
+  });
 }
 
 export async function pollForToken(
@@ -49,7 +50,7 @@ export async function pollForToken(
       }),
       credentials: "omit",
     });
-    if (!res.ok) throw new Error(`device token poll failed (HTTP ${res.status})`);
+    if (!res.ok) return { status: "failed" };
     const body = (await res.json()) as TokenResponse;
     if ("access_token" in body) return { status: "ok", token: body.access_token };
     switch (body.error) {
@@ -64,7 +65,7 @@ export async function pollForToken(
       case "access_denied":
         return { status: "denied" };
       default:
-        throw new Error(body.error ?? "device token poll failed: unexpected response");
+        return { status: "failed" };
     }
   }
 }

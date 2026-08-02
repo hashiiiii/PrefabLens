@@ -1,15 +1,6 @@
-import {
-  type ChangedFile,
-  type GithubFailure,
-  isAuthFailed,
-  isGithubFailure,
-  isRateLimited,
-  type RefPair,
-} from "../../application/port/github";
+import { type ChangedFile, type GithubFailure, isRateLimited, type RefPair } from "../../application/port/github";
 import { err, ok, type Result } from "../../domain/result";
 import type { Queue } from "./fetch-queue";
-
-export { type ChangedFile, isAuthFailed, isGithubFailure, isRateLimited, type RefPair };
 
 // retry-after (seconds) wins; else x-ratelimit-reset (epoch seconds) relative to now.
 // Number(null) is 0 and Number("") is NaN, so absent headers fail the > 0 guards.
@@ -64,9 +55,6 @@ const toChangedFile = (f: DiffEntry): ChangedFile => ({
 });
 
 const FETCH_FAILED = err({ kind: "fetch-failed" as const });
-
-// Fixed at build time (see build.mjs's esbuild define).
-export const API_BASE = __API_BASE__;
 
 export function graphqlUrl(restBase: string): string {
   return `${restBase}/graphql`;

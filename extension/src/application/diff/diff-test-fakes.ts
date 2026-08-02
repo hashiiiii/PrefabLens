@@ -6,7 +6,9 @@ import { expect, vi } from "vitest";
 import type { TokenRepository } from "../../domain/auth/token-repository";
 import type { DiffRepository } from "../../domain/diff/diff-repository";
 import type { DiffV2, GuidResolvedPush, SemanticDiffRequest, SemanticDiffResponse } from "../../domain/diff/types";
+import type { GuidMap } from "../../domain/guid/guid-map";
 import type { GuidRepository } from "../../domain/guid/guid-repository";
+import type { RepoGuidIndex } from "../../domain/guid/repo-guid-index";
 import type { RepoIndexRepository } from "../../domain/guid/repo-index-repository";
 import { ok } from "../../domain/result";
 import type { DiffSession } from "../create-diff-session";
@@ -16,6 +18,17 @@ import { getSemanticDiff } from "./get-semantic-diff";
 
 type MakeClient = (base: string, token: string, lane: "user" | "prefetch") => GithubPort;
 type GetDiffer = () => Promise<DifferPort>;
+
+type GithubResult<K extends keyof GithubPort> = Awaited<ReturnType<GithubPort[K]>>;
+/** Argument tuples recorded per client method, in call order. */
+export type GithubCalls = { [K in keyof GithubPort]: Array<Parameters<GithubPort[K]>> };
+/** Canned answers consulted before the state-derived default: an array is a once-queue
+ *  (shifted per call; once drained, calls fall through), a single value answers every call. */
+export type GithubResults = { [K in keyof GithubPort]?: GithubResult<K> | Array<GithubResult<K>> };
+/** Replacement behaviors, consulted after `results` and before the state-derived default. */
+export type GithubImpls = {
+  [K in keyof GithubPort]?: (...args: Parameters<GithubPort[K]>) => Promise<GithubResult<K>>;
+};
 
 export const REQ: SemanticDiffRequest = {
   type: "semanticDiff",
@@ -41,72 +54,115 @@ export function makeFakes(overrides?: {
 }) {
   const files = overrides?.files ?? [{ path: "Assets/Foo.prefab", status: "modified" }];
   const contents = overrides?.contents ?? { "Assets/Foo.prefab@base-sha": "b", "Assets/Foo.prefab@head-sha": "a" };
-  const getFileAtRef = vi.fn(async (_o: string, _r: string, path: string, ref: string) => {
-    const text = contents[`${path}@${ref}`];
-    return ok(text === undefined ? null : new TextEncoder().encode(text));
-  });
-  const client = {
-    getPrRefs: vi.fn(async () => ok({ baseSha: "base-sha", headSha: "head-sha" })),
-    listPrFiles: vi.fn(async () => ok(files)),
+  const calls: GithubCalls = {
+    getPrRefs: [],
+    listPrFiles: [],
+    getCommit: [],
+    compareRefs: [],
+    resolveRefSha: [],
+    getFileAtRef: [],
+    getBlobRaw: [],
+    listBlobShas: [],
+    searchMetaByGuid: [],
+    listMetaTree: [],
+    batchBlobTexts: [],
+  };
+  const results: GithubResults = {};
+  const impls: GithubImpls = {};
+  // Records the argument tuple, then answers from `results` (canned), `impls`
+  // (replacement behavior), or the constructor state tables, in that order.
+  const method =
+    <K extends keyof GithubPort>(key: K, fromState: (...args: Parameters<GithubPort[K]>) => Promise<GithubResult<K>>) =>
+    async (...args: Parameters<GithubPort[K]>): Promise<GithubResult<K>> => {
+      calls[key].push(args);
+      const queued: GithubResult<K> | Array<GithubResult<K>> | undefined = results[key];
+      if (Array.isArray(queued)) {
+        const next = queued.shift();
+        if (next !== undefined) return next;
+      } else if (queued !== undefined) {
+        return queued;
+      }
+      const impl = impls[key];
+      if (impl) return impl(...args);
+      return fromState(...args);
+    };
+  const client: GithubPort = {
+    getPrRefs: method("getPrRefs", async () => ok({ baseSha: "base-sha", headSha: "head-sha" })),
+    listPrFiles: method("listPrFiles", async () => ok(files)),
     // Commit/compare fakes mirror the PR refs so the same contents table serves every target kind
-    getCommit: vi.fn(async () => ok({ sha: "head-sha", parentSha: "base-sha" as string | null, files })),
-    compareRefs: vi.fn(async () => ok({ mergeBaseSha: "base-sha", files })),
-    resolveRefSha: vi.fn(async () => ok("head-sha")),
-    getFileAtRef,
-    getBlobRaw: vi.fn(async (_o: string, _r: string, sha: string) => {
+    getCommit: method("getCommit", async () => ok({ sha: "head-sha", parentSha: "base-sha", files })),
+    compareRefs: method("compareRefs", async () => ok({ mergeBaseSha: "base-sha", files })),
+    resolveRefSha: method("resolveRefSha", async () => ok("head-sha")),
+    getFileAtRef: method("getFileAtRef", async (_o, _r, path, ref) => {
+      const text = contents[`${path}@${ref}`];
+      return ok(text === undefined ? null : new TextEncoder().encode(text));
+    }),
+    getBlobRaw: method("getBlobRaw", async (_o, _r, sha) => {
       const text = overrides?.blobs?.[sha];
       return ok(text === undefined ? null : new TextEncoder().encode(text));
     }),
-    listBlobShas: vi.fn(async () =>
+    listBlobShas: method("listBlobShas", async () =>
       ok({
         truncated: false,
         byPath: new Map(Object.entries(overrides?.baseShas ?? {})),
       }),
     ),
-    searchMetaByGuid: vi.fn(async (_o: string, _r: string, guid: string) => ok(overrides?.search?.[guid] ?? null)),
-    listMetaTree: vi.fn(async () =>
+    searchMetaByGuid: method("searchMetaByGuid", async (_o, _r, guid) => ok(overrides?.search?.[guid] ?? null)),
+    listMetaTree: method("listMetaTree", async () =>
       ok({
         truncated: false,
-        metas: [] as Array<{ path: string; sha: string }>,
+        metas: [],
       }),
     ),
-    batchBlobTexts: vi.fn(async () => ok({})),
+    batchBlobTexts: method("batchBlobTexts", async () => ok({})),
   };
   const differ: DifferPort = {
-    diff: overrides?.diff ?? vi.fn(() => ok(DIFF)),
-    diffWithAssets: overrides?.diffWithAssets ?? vi.fn(() => ok(DIFF)),
+    diff: overrides?.diff ?? (() => ok(DIFF)),
+    diffWithAssets: overrides?.diffWithAssets ?? (() => ok(DIFF)),
     // Fixture contents are shorthand strings, not real UnityYAML: accept by default.
     isUnityYaml: overrides?.isUnityYaml ?? (() => true),
   };
-  const cacheData: Record<string, Record<string, string>> = {};
+  const cacheData: Record<string, GuidMap> = {};
   if (overrides?.cached) cacheData["https://api.github.com/o/r"] = { ...overrides.cached };
+  const guidSaves: Array<[string, GuidMap]> = [];
   const guidCache = {
     data: cacheData,
-    load: vi.fn(async (repo: string) => cacheData[repo] ?? {}),
-    save: vi.fn(async (repo: string, entries: Record<string, string>) => {
+    saves: guidSaves,
+    load: async (repo: string) => cacheData[repo] ?? {},
+    save: async (repo: string, entries: GuidMap) => {
+      guidSaves.push([repo, entries]);
       cacheData[repo] = { ...cacheData[repo], ...entries };
-    }),
+    },
   };
   const diffStoreData: Record<string, DiffV2> = {};
+  const diffSaves: Array<[string, DiffV2]> = [];
   const diffStore = {
     data: diffStoreData,
-    load: vi.fn(async (key: string) => diffStoreData[key]),
-    save: vi.fn(async (key: string, json: DiffV2) => {
+    saves: diffSaves,
+    load: async (key: string) => diffStoreData[key],
+    save: async (key: string, json: DiffV2) => {
+      diffSaves.push([key, json]);
       diffStoreData[key] = json;
-    }),
+    },
   };
   // Mirrors the RepoIndexStore interface (loadGuids/saveGuids/loadIndex/saveIndex). Starts empty per test.
-  const guidsData: Record<string, Record<string, string>> = {};
-  const indexData: Record<string, { treeSha: string; guids: Record<string, string> }> = {};
+  const guidsData: Record<string, GuidMap> = {};
+  const indexData: Record<string, RepoGuidIndex> = {};
+  const savedGuids: Array<[string, GuidMap]> = [];
+  const savedIndexes: Array<[string, RepoGuidIndex]> = [];
   const repoIndexStore = {
-    loadGuids: vi.fn(async (repo: string) => guidsData[repo] ?? {}),
-    saveGuids: vi.fn(async (repo: string, entries: Record<string, string>) => {
+    savedGuids,
+    savedIndexes,
+    loadGuids: async (repo: string) => guidsData[repo] ?? {},
+    saveGuids: async (repo: string, entries: GuidMap) => {
+      savedGuids.push([repo, entries]);
       guidsData[repo] = { ...guidsData[repo], ...entries };
-    }),
-    loadIndex: vi.fn(async (repo: string) => indexData[repo]),
-    saveIndex: vi.fn(async (repo: string, index: { treeSha: string; guids: Record<string, string> }) => {
+    },
+    loadIndex: async (repo: string) => indexData[repo],
+    saveIndex: async (repo: string, index: RepoGuidIndex) => {
+      savedIndexes.push([repo, index]);
       indexData[repo] = index;
-    }),
+    },
   };
   const tokenStore: TokenRepository = {
     readAccessToken: async () => (Object.hasOwn(overrides ?? {}, "accessToken") ? overrides?.accessToken : "tok"),
@@ -117,7 +173,7 @@ export function makeFakes(overrides?: {
   };
   const makeClient = (_base: string, _token: string, _lane: "user" | "prefetch") => client;
   const getDiffer = async () => differ;
-  return { tokenStore, makeClient, getDiffer, guidCache, diffStore, repoIndexStore, client };
+  return { tokenStore, makeClient, getDiffer, guidCache, diffStore, repoIndexStore, client, calls, results, impls };
 }
 
 /** Drives semanticDiff to completion — the immediate response plus every push — and returns the

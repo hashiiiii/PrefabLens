@@ -7,7 +7,7 @@ import { DIFF, makeFakes, REQ, resolveFully } from "./diff-test-fakes";
 
 describe("prefetch", () => {
   it("precomputes diffs so a later toggle serves without new blob fetches", async () => {
-    const { tokenStore, makeClient, getDiffer, guidCache, diffStore, repoIndexStore, client } = makeFakes();
+    const { tokenStore, makeClient, getDiffer, guidCache, diffStore, repoIndexStore, calls } = makeFakes();
     const session = createDiffSession();
     await createPrPrefetch(tokenStore, makeClient, getDiffer, diffStore, repoIndexStore, session, {
       type: "prefetch",
@@ -15,8 +15,8 @@ describe("prefetch", () => {
       repo: "r",
       prNumber: 1,
     });
-    expect(client.searchMetaByGuid).not.toHaveBeenCalled(); // prefetch doesn't touch the 10 req/min Code Search
-    const fetchesAfterPrefetch = client.getFileAtRef.mock.calls.length;
+    expect(calls.searchMetaByGuid).toEqual([]); // prefetch doesn't touch the 10 req/min Code Search
+    const fetchesAfterPrefetch = calls.getFileAtRef.length;
     const res = await resolveFully(
       tokenStore,
       makeClient,
@@ -28,7 +28,7 @@ describe("prefetch", () => {
       REQ,
     );
     expect(res.ok).toBe(true);
-    expect(client.getFileAtRef.mock.calls.length).toBe(fetchesAfterPrefetch); // no blob re-fetch
+    expect(calls.getFileAtRef).toHaveLength(fetchesAfterPrefetch); // no blob re-fetch
   });
 
   it("persists prefetched diffs to the diff store (sw restart survival)", async () => {
@@ -39,12 +39,12 @@ describe("prefetch", () => {
       repo: "r",
       prNumber: 1,
     });
-    expect(diffStore.save).toHaveBeenCalledWith("base-sha:head-sha:Assets/Foo.prefab", DIFF);
+    expect(diffStore.saves).toContainEqual(["base-sha:head-sha:Assets/Foo.prefab", DIFF]);
   });
 
   it("serves a diff persisted by a previous worker from the store", async () => {
     // The SW dies after 30 seconds: a result prefetched in a prior life must be recoverable via storage.session
-    const { tokenStore, makeClient, getDiffer, guidCache, diffStore, repoIndexStore, client } = makeFakes();
+    const { tokenStore, makeClient, getDiffer, guidCache, diffStore, repoIndexStore, calls } = makeFakes();
     diffStore.data["base-sha:head-sha:Assets/Foo.prefab"] = DIFF; // seeded as if saved by a prior SW life
     const res = await resolveFully(
       tokenStore,
@@ -57,7 +57,7 @@ describe("prefetch", () => {
       REQ,
     );
     expect(res.ok).toBe(true);
-    expect(client.getFileAtRef).not.toHaveBeenCalledWith("o", "r", "Assets/Foo.prefab", "base-sha");
+    expect(calls.getFileAtRef).not.toContainEqual(["o", "r", "Assets/Foo.prefab", "base-sha"]);
   });
 
   it("prefetches only unity files and caps at 100", async () => {
@@ -66,22 +66,22 @@ describe("prefetch", () => {
       status: "modified",
     }));
     files.push({ path: "README.md", status: "modified" });
-    const { tokenStore, makeClient, getDiffer, diffStore, repoIndexStore, client } = makeFakes({ files });
+    const { tokenStore, makeClient, getDiffer, diffStore, repoIndexStore, calls } = makeFakes({ files });
     await createPrPrefetch(tokenStore, makeClient, getDiffer, diffStore, repoIndexStore, createDiffSession(), {
       type: "prefetch",
       owner: "o",
       repo: "r",
       prNumber: 1,
     });
-    const paths = new Set(client.getFileAtRef.mock.calls.map((c) => c[2]));
+    const paths = new Set(calls.getFileAtRef.map((c) => c[2]));
     expect(paths.has("README.md")).toBe(false);
     expect(paths.size).toBe(100); // cut off at the cap
   });
 
   it("skips oversized files without caching them", async () => {
     const big = new Uint8Array(13 * 1024 * 1024);
-    const { tokenStore, makeClient, getDiffer, guidCache, diffStore, repoIndexStore, client } = makeFakes();
-    client.getFileAtRef.mockResolvedValue(ok(big));
+    const { tokenStore, makeClient, getDiffer, guidCache, diffStore, repoIndexStore, results } = makeFakes();
+    results.getFileAtRef = ok(big);
     const session = createDiffSession();
     await createPrPrefetch(tokenStore, makeClient, getDiffer, diffStore, repoIndexStore, session, {
       type: "prefetch",
@@ -89,7 +89,7 @@ describe("prefetch", () => {
       repo: "r",
       prNumber: 1,
     });
-    expect(diffStore.save).not.toHaveBeenCalled();
+    expect(diffStore.saves).toEqual([]);
     // A later manual toggle still shows the too-large gate as before
     expect(
       await resolveFully(tokenStore, makeClient, getDiffer, guidCache, diffStore, repoIndexStore, session, REQ),
@@ -102,8 +102,8 @@ describe("prefetch", () => {
       path: `Assets/F${i}.prefab`,
       status: "modified",
     }));
-    const { tokenStore, makeClient, getDiffer, diffStore, repoIndexStore, client } = makeFakes({ files });
-    client.getFileAtRef.mockResolvedValue(err({ kind: "rate-limited" as const }) as never);
+    const { tokenStore, makeClient, getDiffer, diffStore, repoIndexStore, calls, results } = makeFakes({ files });
+    results.getFileAtRef = err({ kind: "rate-limited" as const });
     await expect(
       createPrPrefetch(tokenStore, makeClient, getDiffer, diffStore, repoIndexStore, createDiffSession(), {
         type: "prefetch",
@@ -113,13 +113,13 @@ describe("prefetch", () => {
       }),
     ).resolves.toBeUndefined();
     // The abort is observable: nothing was cached and only the first chunk was attempted
-    expect(diffStore.save).not.toHaveBeenCalled();
-    const attempted = new Set(client.getFileAtRef.mock.calls.map((c) => c[2]));
+    expect(diffStore.saves).toEqual([]);
+    const attempted = new Set(calls.getFileAtRef.map((c) => c[2]));
     expect(attempted.size).toBeLessThanOrEqual(4); // PREFETCH_CONCURRENCY
   });
 
   it("returns without network when the access token is missing", async () => {
-    const { tokenStore, makeClient, getDiffer, diffStore, repoIndexStore, client } = makeFakes({
+    const { tokenStore, makeClient, getDiffer, diffStore, repoIndexStore, calls } = makeFakes({
       accessToken: undefined,
     });
     await createPrPrefetch(tokenStore, makeClient, getDiffer, diffStore, repoIndexStore, createDiffSession(), {
@@ -128,6 +128,6 @@ describe("prefetch", () => {
       repo: "r",
       prNumber: 1,
     });
-    expect(client.getPrRefs).not.toHaveBeenCalled();
+    expect(calls.getPrRefs).toEqual([]);
   });
 });

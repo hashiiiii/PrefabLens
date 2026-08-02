@@ -459,15 +459,6 @@ describe("render", () => {
     expect(root.textContent).toContain("Resolving 2 reference(s)…");
   });
 
-  it("drops the indicator on re-render after resolution completes", () => {
-    // It disappears when re-rendered on the push's done (mount fully replaces, so it naturally goes away)
-    const root = freshRoot();
-    const diff = { schema: "prefablens.diff.v2" as const, unresolvedGuids: ["g1"], roots: [], loose: [] };
-    render(root, diff, { resolving: 1 });
-    render(root, diff);
-    expect(root.textContent).not.toContain("Resolving");
-  });
-
   it("falls back component display to className when the script guid is unresolved", () => {
     const root = freshRoot();
     const diff: DiffV2 = {

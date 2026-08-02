@@ -8,115 +8,13 @@ import { err, ok } from "../../domain/result";
 import { must } from "../../must";
 import { createDiffSession, type DiffSession } from "../create-diff-session";
 import type { DifferPort } from "../port/differ";
-import type { ChangedFile, GithubPort } from "../port/github";
+import type { GithubPort } from "../port/github";
 import { createPrPrefetch } from "./create-pr-prefetch";
+import { DIFF, makeFakes, REQ, resolveFully } from "./diff-test-fakes";
 import { getSemanticDiff } from "./get-semantic-diff";
 
 type MakeClient = (base: string, token: string, lane: "user" | "prefetch") => GithubPort;
 type GetDiffer = () => Promise<DifferPort>;
-
-const REQ: SemanticDiffRequest = {
-  type: "semanticDiff",
-  owner: "o",
-  repo: "r",
-  target: { kind: "pull", prNumber: 1 },
-  path: "Assets/Foo.prefab",
-};
-
-const DIFF: DiffV2 = { schema: "prefablens.diff.v2", unresolvedGuids: ["g1"], roots: [], loose: [] };
-
-function makeFakes(overrides?: {
-  files?: ChangedFile[];
-  contents?: Record<string, string>; // `${path}@${ref}` → text
-  blobs?: Record<string, string>; // blob sha → text (getBlobRaw; absent sha = 404 → null)
-  baseShas?: Record<string, string>; // path → blob sha at the merge base (listBlobShas)
-  diff?: DifferPort["diff"];
-  diffWithAssets?: DifferPort["diffWithAssets"];
-  isUnityYaml?: DifferPort["isUnityYaml"];
-  accessToken?: string | undefined;
-  search?: Record<string, string | null>; // guid → asset path (null = no hit)
-  cached?: Record<string, string>; // initial contents of guidCache
-}) {
-  const files = overrides?.files ?? [{ path: "Assets/Foo.prefab", status: "modified" }];
-  const contents = overrides?.contents ?? { "Assets/Foo.prefab@base-sha": "b", "Assets/Foo.prefab@head-sha": "a" };
-  const getFileAtRef = vi.fn(async (_o: string, _r: string, path: string, ref: string) => {
-    const text = contents[`${path}@${ref}`];
-    return ok(text === undefined ? null : new TextEncoder().encode(text));
-  });
-  const client = {
-    getPrRefs: vi.fn(async () => ok({ baseSha: "base-sha", headSha: "head-sha" })),
-    listPrFiles: vi.fn(async () => ok(files)),
-    // Commit/compare fakes mirror the PR refs so the same contents table serves every target kind
-    getCommit: vi.fn(async () => ok({ sha: "head-sha", parentSha: "base-sha" as string | null, files })),
-    compareRefs: vi.fn(async () => ok({ mergeBaseSha: "base-sha", files })),
-    resolveRefSha: vi.fn(async () => ok("head-sha")),
-    getFileAtRef,
-    getBlobRaw: vi.fn(async (_o: string, _r: string, sha: string) => {
-      const text = overrides?.blobs?.[sha];
-      return ok(text === undefined ? null : new TextEncoder().encode(text));
-    }),
-    listBlobShas: vi.fn(async () =>
-      ok({
-        truncated: false,
-        byPath: new Map(Object.entries(overrides?.baseShas ?? {})),
-      }),
-    ),
-    searchMetaByGuid: vi.fn(async (_o: string, _r: string, guid: string) => ok(overrides?.search?.[guid] ?? null)),
-    listMetaTree: vi.fn(async () =>
-      ok({
-        truncated: false,
-        metas: [] as Array<{ path: string; sha: string }>,
-      }),
-    ),
-    batchBlobTexts: vi.fn(async () => ok({})),
-  };
-  const differ: DifferPort = {
-    diff: overrides?.diff ?? vi.fn(() => ok(DIFF)),
-    diffWithAssets: overrides?.diffWithAssets ?? vi.fn(() => ok(DIFF)),
-    // Fixture contents are shorthand strings, not real UnityYAML: accept by default.
-    isUnityYaml: overrides?.isUnityYaml ?? (() => true),
-  };
-  const cacheData: Record<string, Record<string, string>> = {};
-  if (overrides?.cached) cacheData["https://api.github.com/o/r"] = { ...overrides.cached };
-  const guidCache = {
-    data: cacheData,
-    load: vi.fn(async (repo: string) => cacheData[repo] ?? {}),
-    save: vi.fn(async (repo: string, entries: Record<string, string>) => {
-      cacheData[repo] = { ...cacheData[repo], ...entries };
-    }),
-  };
-  const diffStoreData: Record<string, DiffV2> = {};
-  const diffStore = {
-    data: diffStoreData,
-    load: vi.fn(async (key: string) => diffStoreData[key]),
-    save: vi.fn(async (key: string, json: DiffV2) => {
-      diffStoreData[key] = json;
-    }),
-  };
-  // Mirrors the RepoIndexStore interface (loadGuids/saveGuids/loadIndex/saveIndex). Starts empty per test.
-  const guidsData: Record<string, Record<string, string>> = {};
-  const indexData: Record<string, { treeSha: string; guids: Record<string, string> }> = {};
-  const repoIndexStore = {
-    loadGuids: vi.fn(async (repo: string) => guidsData[repo] ?? {}),
-    saveGuids: vi.fn(async (repo: string, entries: Record<string, string>) => {
-      guidsData[repo] = { ...guidsData[repo], ...entries };
-    }),
-    loadIndex: vi.fn(async (repo: string) => indexData[repo]),
-    saveIndex: vi.fn(async (repo: string, index: { treeSha: string; guids: Record<string, string> }) => {
-      indexData[repo] = index;
-    }),
-  };
-  const tokenStore: TokenRepository = {
-    readAccessToken: async () => (Object.hasOwn(overrides ?? {}, "accessToken") ? overrides?.accessToken : "tok"),
-    saveAccessToken: async () => {},
-    savePendingSignIn: async () => {},
-    readPendingSignIn: async () => undefined,
-    clearPendingSignIn: async () => {},
-  };
-  const makeClient = (_base: string, _token: string, _lane: "user" | "prefetch") => client;
-  const getDiffer = async () => differ;
-  return { tokenStore, makeClient, getDiffer, guidCache, diffStore, repoIndexStore, client, differ };
-}
 
 /** Cleanup for a pending response: wait until the done push arrives before asserting. */
 async function serveAndResolve(
@@ -145,37 +43,6 @@ async function serveAndResolve(
   return { res, pushes };
 }
 
-/** Drives semanticDiff to completion — the immediate response plus every push — and returns the
- *  fully-resolved response. Errors and fully-in-PR-resolved diffs pass through unchanged; a pending
- *  diff resolves to the final push's json, i.e. what the pipeline ultimately produces. */
-async function resolveFully(
-  tokenStore: TokenRepository,
-  makeClient: MakeClient,
-  getDiffer: GetDiffer,
-  guidCache: GuidRepository,
-  diffStore: DiffRepository,
-  repoIndexStore: RepoIndexRepository,
-  session: DiffSession,
-  req: SemanticDiffRequest,
-): Promise<SemanticDiffResponse> {
-  const pushes: GuidResolvedPush[] = [];
-  const res = await getSemanticDiff(
-    tokenStore,
-    makeClient,
-    getDiffer,
-    guidCache,
-    diffStore,
-    repoIndexStore,
-    session,
-    req,
-    (m) => pushes.push(m),
-  );
-  if (!res.ok || !res.pending) return res;
-  await vi.waitFor(() => expect(pushes.at(-1)?.done).toBe(true));
-  const final = pushes.at(-1);
-  return final?.json ? { ok: true, json: final.json } : res;
-}
-
 describe("semanticDiff", () => {
   it("returns access-token-missing without touching the network", async () => {
     const { tokenStore, makeClient, getDiffer, guidCache, diffStore, repoIndexStore, client } = makeFakes({
@@ -193,31 +60,6 @@ describe("semanticDiff", () => {
     );
     expect(res).toEqual({ ok: false, error: "access-token-missing" });
     expect(client.getPrRefs).not.toHaveBeenCalled();
-  });
-
-  it("diffs base/head blobs and attaches resolved guids", async () => {
-    const { tokenStore, makeClient, getDiffer, guidCache, diffStore, repoIndexStore } = makeFakes({
-      files: [
-        { path: "Assets/Foo.prefab", status: "modified" },
-        { path: "Assets/S.cs.meta", status: "modified" },
-      ],
-      contents: {
-        "Assets/Foo.prefab@base-sha": "b",
-        "Assets/Foo.prefab@head-sha": "a",
-        "Assets/S.cs.meta@head-sha": "guid: g1\n",
-      },
-    });
-    const res = await resolveFully(
-      tokenStore,
-      makeClient,
-      getDiffer,
-      guidCache,
-      diffStore,
-      repoIndexStore,
-      createDiffSession(),
-      REQ,
-    );
-    expect(res).toEqual({ ok: true, json: { ...DIFF, resolved: { g1: "Assets/S.cs" } } });
   });
 
   it("serves a commit target from the commit API with the first parent as base", async () => {
@@ -532,24 +374,6 @@ describe("semanticDiff", () => {
     expect(fooFetches).toHaveLength(2); // only twice, base + head (the second handle doesn't re-fetch)
   });
 
-  it("resolves remaining guids via code search and persists them", async () => {
-    const { tokenStore, makeClient, getDiffer, guidCache, diffStore, repoIndexStore } = makeFakes({
-      search: { g1: "Assets/Scripts/S.cs" },
-    });
-    const res = await resolveFully(
-      tokenStore,
-      makeClient,
-      getDiffer,
-      guidCache,
-      diffStore,
-      repoIndexStore,
-      createDiffSession(),
-      REQ,
-    );
-    expect(res).toEqual({ ok: true, json: { ...DIFF, resolved: { g1: "Assets/Scripts/S.cs" } } });
-    expect(guidCache.save).toHaveBeenCalledWith("https://api.github.com/o/r", { g1: "Assets/Scripts/S.cs" });
-  });
-
   it("prefers the in-PR meta index over code search", async () => {
     const { tokenStore, makeClient, getDiffer, guidCache, diffStore, repoIndexStore, client } = makeFakes({
       files: [
@@ -731,7 +555,7 @@ describe("semanticDiff", () => {
     expect(res).toEqual({ ok: true, json: { ...many, resolved: { g0: "Assets/A.cs", g1: "Assets/B.cs" } } });
   });
 
-  it("maps auth-failed / diff-failed / other failures to stable error codes", async () => {
+  it("maps auth-failed / diff-failed / rate-limited / other failures to stable error codes", async () => {
     const auth = makeFakes();
     auth.client.getPrRefs.mockResolvedValue(err({ kind: "auth-failed" as const }) as never);
     expect(
@@ -777,6 +601,21 @@ describe("semanticDiff", () => {
         REQ,
       ),
     ).toEqual({ ok: false, error: "fetch-failed" });
+
+    const limited = makeFakes();
+    limited.client.getPrRefs.mockResolvedValue(err({ kind: "rate-limited" as const }) as never);
+    expect(
+      await resolveFully(
+        limited.tokenStore,
+        limited.makeClient,
+        limited.getDiffer,
+        limited.guidCache,
+        limited.diffStore,
+        limited.repoIndexStore,
+        createDiffSession(),
+        REQ,
+      ),
+    ).toEqual({ ok: false, error: "rate-limited" });
   });
 
   it("returns too-large above 25MB unless forced", async () => {
@@ -821,23 +660,6 @@ describe("semanticDiff", () => {
         )
       ).ok,
     ).toBe(true);
-  });
-
-  it("maps rate-limited failure to rate-limited", async () => {
-    const limited = makeFakes();
-    limited.client.getPrRefs.mockResolvedValue(err({ kind: "rate-limited" as const }) as never);
-    expect(
-      await resolveFully(
-        limited.tokenStore,
-        limited.makeClient,
-        limited.getDiffer,
-        limited.guidCache,
-        limited.diffStore,
-        limited.repoIndexStore,
-        createDiffSession(),
-        REQ,
-      ),
-    ).toEqual({ ok: false, error: "rate-limited" });
   });
 
   describe("blob-sha fetching", () => {

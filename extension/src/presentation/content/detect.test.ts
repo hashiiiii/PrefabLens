@@ -311,8 +311,9 @@ describe("scanUnityFiles (react ui)", () => {
     // the debounced rescan re-hides it only ~200ms later. The marker + document-level
     // rule pair hides the fresh body before first paint instead.
     expect(region.hasAttribute("data-prefablens-raw-hidden")).toBe(true);
-    const style = document.head.querySelector("style[data-prefablens-hide-rule]");
-    expect(style?.textContent).toContain("[data-prefablens-raw-hidden] > .border.rounded-bottom-2");
+    // The rule's exact selector is an implementation detail; only its presence is the contract
+    // (react.spec.ts proves the pre-paint hiding against a real browser)
+    expect(document.head.querySelector("style[data-prefablens-hide-rule]")).not.toBeNull();
     // Un-hiding must lift the CSS rule too, or the restored body would stay invisible
     entry.setRawHidden(false);
     expect(region.hasAttribute("data-prefablens-raw-hidden")).toBe(false);

@@ -106,19 +106,43 @@ prefablens --html main                  # self-contained HTML report on stdout
 prefablens --open main                  # write the report to a temp file and open it
 ```
 
-Operands that end in a Unity YAML extension (`.prefab`, `.unity`, `.asset`, ...) are paths.
+Operands that end in a Unity YAML extension (`.prefab`, `.unity`, `.asset`, and more) are paths.
 All other operands are git refs.
 
-For every flag, exit code, and resolution rule, see [docs/cli.md](docs/cli.md).
+The project must use text asset serialization (Edit > Project Settings > Editor >
+Asset Serialization > Force Text).
+Binary-serialized assets do not produce useful diffs.
 
 ### Unity Editor
 
-Open `Window > PrefabLens`.
-The window lists every changed UnityYAML asset against HEAD.
-It shows the semantic diff for the selected asset.
-The Editor package downloads the CLI binary from GitHub Releases.
+Requirements:
 
-For configuration, the CLI download, and troubleshooting, see [docs/editor.md](docs/editor.md).
+- Unity 2022.3 or newer
+- The project is inside a git repository
+- Text asset serialization (Force Text)
+
+Open `Window > PrefabLens`.
+The left pane lists every changed UnityYAML asset against the **Base** ref
+(empty means HEAD).
+The right pane shows the semantic diff for the selected asset.
+The window refreshes on focus and via **Refresh**.
+
+On first use, the package downloads the pinned `prefablens` CLI from GitHub
+Releases into `Library/PrefabLens/` (not version-controlled).
+
+To use your own binary:
+
+1. Open Preferences > PrefabLens.
+2. Set **CLI path override** to an absolute path.
+3. Or set the `PrefabLens.CliPath` EditorPrefs key to that path.
+
+| Symptom | What to do |
+|---|---|
+| `Download failed: …` | Retry. Or download the release zip by hand and set the CLI path override. |
+| `prefablens exited with N` / one-line CLI error | Most often the project is not in a git repo, or git timed out. |
+| `Could not parse CLI output (CLI version mismatch?):` | Clear a stale CLI path override, or update the binary. |
+| `prefablens timed out after 90s and was killed` | Make sure that `git status` is fast in that repository. |
+| Changed assets never appear | Switch Asset Serialization to Force Text. |
 
 ## Supported files
 
@@ -148,6 +172,12 @@ cd editor && dotnet test DotNetTests~/Tests
 # Site (build the CLI, WASM, and extension demo bundle first: `pnpm run demo`)
 cd site && node build.mjs
 ```
+
+Documents (why, design, verification, deploy):
+
+- [CLI](docs/cli.md)
+- [Chrome extension](docs/extension.md)
+- [Unity Editor package](docs/editor.md)
 
 ## Contributing
 

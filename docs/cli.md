@@ -1,25 +1,84 @@
-# prefablens CLI reference
+# CLI
 
-`prefablens` renders semantic diffs for text-serialized Unity assets: GameObject /
-component / field level changes instead of raw YAML lines. It reads either a git
-repository (comparing refs and the working tree) or two files directly.
+This page is for people who change `cli/` or the shared engine in `core/`.
+For install steps and quick-start examples, see the [README](../README.md).
+For the contribution process, see [CONTRIBUTING.md](../CONTRIBUTING.md).
 
-Quick-start examples live in the [README](../README.md#usage); this page is the full
-reference.
+## Why
 
-## Synopsis
+`prefablens` shows semantic diffs for text-serialized Unity assets.
+It shows GameObject, component, and field changes.
+It does not show raw YAML line diffs.
+
+The CLI owns git and filesystem I/O.
+The shared engine in `core/` owns parse, diff, tree build, and JSON output.
+The Editor package and other tools call this CLI.
+They must not reimplement git logic.
+
+The JSON contract is `prefablens.diff.v2`.
+The schema stays stable unless a release notes a break on purpose.
+
+## Tech stack
+
+| Piece | Choice |
+|---|---|
+| Language | Zig 0.16 (see root `mise.toml` and `build.zig.zon`) |
+| Diff engine | `core/` (also built to WASM for the extension) |
+| CLI entry | `cli/src/main.zig` → binary `prefablens` |
+| Version source | `build.zig.zon` (injected via `build_options`) |
+| Build | `zig build` installs to `zig-out/bin/` |
+| Unit tests | `zig build test` (core + CLI) |
+| Lint | `zig build lint` |
+| Perf gates | `zig build perf` (includes the guid-scan budget) |
+
+## Design
+
+### Layout
+
+| Path | Role |
+|---|---|
+| `core/src/` | Parse, diff, tree, JSON (`prefablens.diff.v2`), WASM export |
+| `cli/src/main.zig` | Argument parse and orchestration |
+| `cli/src/input.zig` | Git subprocess I/O and file reads |
+| `cli/src/resolve.zig` | `.meta` guid index scan |
+| `cli/src/unity_path.zig` | Unity YAML extension detection |
+| `cli/src/builtin_refs.zig` | Built-in Unity resource names |
+| `cli/src/render_tree.zig`, `render_html.zig`, `display.zig` | Tree, HTML, and ANSI output |
+| `cli/pkg/` | Scripts that write the Homebrew formula for release |
+
+Dependencies point from `cli/` into `core/`.
+`core/` does not import `cli/`.
+
+### Constraints
+
+- All git work uses subprocesses in `cli/src/input.zig`.
+- Each input file has a size cap of 64 MiB.
+- Git subprocesses time out after 60 s.
+- Binary-serialized assets produce an empty diff for an explicit path.
+  Bulk git mode skips binary candidates after a content sniff.
+- `.meta`, `.asmdef`, and other non-UnityYAML names are never path operands.
+  The CLI treats them as git refs on purpose.
+
+### CLI contract
+
+Consumers (humans, the Editor package, scripts) rely on this surface.
+A change to this surface needs a clear release note.
+
+#### Synopsis
 
 ```
 prefablens [--json|--html] [--open] [--project DIR|--no-project] [--color|--no-color] [<ref>] [<ref>] [<path>]
 prefablens [flags] <before> <after>
 ```
 
-## Operands and argument resolution
+#### Operands and argument resolution
 
-An operand ending in a Unity YAML extension (case-insensitive) is a **path**;
-anything else is a **git ref**. Flags may appear anywhere among the operands. Among
-operands of the same kind, order is significant: the first ref (or path) is the
-before side and the second is the after side.
+An operand that ends in a Unity YAML extension (case-insensitive) is a **path**.
+Any other operand is a **git ref**.
+Flags can appear anywhere among the operands.
+Among operands of the same kind, order matters.
+The first ref (or path) is the before side.
+The second is the after side.
 
 | Operands | Meaning |
 |---|---|
@@ -31,86 +90,86 @@ before side and the second is the after side.
 | `<ref> <ref> <path>` | first ref (before) vs second ref (after), one file |
 | `<before> <after>` (two paths) | plain two-file compare, no git involved |
 
-More than two refs, more than two paths, or mixing two paths with a ref is an
+More than two refs, more than two paths, or a mix of two paths with a ref is an
 error (`too many arguments`, exit 2).
 
 Recognized Unity YAML extensions:
+
 `.prefab` `.unity` `.asset` `.mat` `.anim` `.controller` `.overrideController`
 `.physicMaterial` `.physicsMaterial2D` `.playable` `.mask` `.brush` `.flare`
 `.fontsettings` `.guiskin` `.giparams` `.renderTexture` `.spriteatlas`
 `.spriteatlasv2` `.terrainlayer` `.mixer` `.shadervariants` `.preset` `.signal`
 `.lighting` `.scenetemplate`
 
-`.meta`, `.asmdef`, and other non-UnityYAML files are never treated as paths — an
-operand like `Foo.meta` is parsed as a git ref and will fail in git, by design.
-A binary-serialized asset (no Force Text) passed as an explicit path produces a
-silent empty diff, not an error: the parser finds no YAML document headers, which
-is indistinguishable from "no changes". Bulk (git) mode content-sniffs candidates
-and skips binary files up front; explicit path operands are never second-guessed.
-Switch the project to text serialization for meaningful diffs.
-
-## Options
+#### Options
 
 | Flag | Effect |
 |---|---|
-| `--json` | Emit `prefablens.diff.v2` JSON. In bulk mode the output is a `[{path, diff}]` array; exit 0 always yields valid JSON (an array, possibly empty), never prose. |
+| `--json` | Emit `prefablens.diff.v2` JSON. Bulk mode emits a `[{path, diff}]` array. Exit 0 always emits valid JSON, never prose. |
 | `--html` | Emit a self-contained HTML report on stdout. |
-| `--open` | Implies `--html`; writes the report to a temp file, prints its path on stdout, and opens it in a browser. Conflicts with `--json`. |
-| `--project DIR` | Unity project root for guid resolution, and the git repo dir. An unreadable DIR is an error (exit 1). |
+| `--open` | Implies `--html`. Writes a temp report, prints its path, and opens a browser. Conflicts with `--json`. |
+| `--project DIR` | Unity project root for guid resolution and the git repo dir. An unreadable DIR is an error (exit 1). |
 | `--no-project` | Skip the default guid-resolution scan. Conflicts with `--project`. |
-| `--color` | Force ANSI colors when stdout is not a TTY (e.g. piping). |
-| `--no-color` | Disable ANSI colors (overrides TTY detection and `--color`). |
-| `--version` | Print `prefablens X.Y.Z` on stdout and exit 0. Short-circuits everything else. |
-| `-h`, `--help` | Print usage on stdout and exit 0. Short-circuits everything else. |
+| `--color` | Force ANSI colors when stdout is not a TTY (for example a pipe). |
+| `--no-color` | Disable ANSI colors. Overrides TTY detection and `--color`. |
+| `--version` | Print `prefablens X.Y.Z` on stdout and exit 0. Ignores other work. |
+| `-h`, `--help` | Print usage on stdout and exit 0. Ignores other work. |
 
-## Output formats
+#### Output formats
 
-- **tree** (default): human-readable hierarchy on stdout. Colors are on when
-  stdout is a TTY, forced by `--color`, and always suppressed by `--no-color`.
+- **tree** (default): human-readable hierarchy on stdout.
+  Colors are on for a TTY, on with `--color`, and off with `--no-color`.
 - **json** (`--json`): the `prefablens.diff.v2` schema (single-file mode) or a
   `[{path, diff}]` array (bulk mode). Unresolved guid references are listed in
-  `unresolvedGuids`; resolved names appear in `resolved` when a project scan ran.
+  `unresolvedGuids`. Resolved names appear in `resolved` after a project scan.
 - **html** (`--html` / `--open`): one self-contained page, no external assets.
-  With `--open` the report file is named `prefablens-<stem>-<millis>.html` and
-  written to the first of `TMPDIR`, `TEMP`, or `/tmp` (checked in that order, on
-  every platform).
-  Failing to launch a browser prints a warning but still exits 0 — the path was
-  already printed. Failing to write the report is an error (exit 1).
+  With `--open` the report file is named `prefablens-<stem>-<millis>.html`.
+  The write path is the first of `TMPDIR`, `TEMP`, or `/tmp`
+  (in that order, on every platform).
+  If the CLI fails to open a browser, it prints a warning and still exits 0.
+  The path was already printed.
+  If the report write fails, the CLI exits 1.
 
-## Guid resolution
+#### Guid resolution
 
-Unity serializes references as `{fileID, guid, type}`. prefablens resolves guids
-to asset paths in three ways:
+Unity serializes references as `{fileID, guid, type}`.
+prefablens resolves guids to asset paths in three ways:
 
-1. `--project DIR`: scan DIR's `.meta` files up front and resolve against them.
-2. Default (git mode, no `--project`, no `--no-project`): resolve lazily against
-   the repository root — the scan runs only when the computed diffs actually
-   contain unresolved references, so ref-free changes cost nothing. A failed or
-   empty scan degrades to unresolved output.
-3. Built-in engine references (default materials, meshes, and so on) resolve by
-   name with no scan at all.
+1. `--project DIR`: scan the `.meta` files in DIR up front and resolve against them.
+2. Default (git mode, no `--project`, no `--no-project`): resolve in a lazy way
+   against the repository root. The scan runs only when the diffs contain
+   unresolved references. A failed or empty scan degrades to unresolved output.
+3. Built-in engine references resolve by name with no scan.
 
-Unresolved references render as `guid:<hex>` in tree/HTML output and stay listed
-in `unresolvedGuids` in JSON.
+Unresolved references show as `guid:<hex>` in tree/HTML output.
+They stay listed in `unresolvedGuids` in JSON.
 
-## Exit codes
+#### Exit codes
 
 | Code | Meaning |
 |---|---|
-| 0 | Success — including bulk mode finding nothing to diff (prints `no Unity YAML changes`, or `[]` with `--json`). |
-| 1 | Runtime error: git failed or timed out, a file could not be read, the `--project` directory could not be read, input nested too deeply, or the `--open` report could not be written. One-line `error: …` message on stderr. |
-| 2 | Usage error: unknown flag, too many arguments, conflicting flags, or a missing operand after `--project`. Usage/hint on stderr. |
+| 0 | Success. This includes bulk mode with nothing to diff (`no Unity YAML changes`, or `[]` with `--json`). |
+| 1 | Runtime error. See the list below. One-line `error: …` message on stderr. |
+| 2 | Usage error. Unknown flag, too many arguments, flag conflict, or a missing operand after `--project`. Usage/hint on stderr. |
 
-Anything else crashing with a Zig error trace is a prefablens bug, not a user
-mistake — the trace is the bug report; please file it.
+Exit 1 covers these failures:
 
-## Limits and environment
+- git failed or timed out
+- a file read failed
+- the `--project` directory was not readable
+- input nested too deeply
+- the `--open` report write failed
+
+A Zig error trace that is not one of these exits is a prefablens bug.
+Report that trace as a bug.
+
+#### Limits and environment
 
 - Input files are capped at 64 MiB each.
-- git subprocesses time out after 60 s (surfaced as `error: git timed out …`, exit 1).
+- Git subprocesses time out after 60 s (`error: git timed out …`, exit 1).
 - `TMPDIR` / `TEMP` control where `--open` writes its report (fallback `/tmp`).
 
-## Examples
+#### Contract examples
 
 ```bash
 prefablens                                  # HEAD vs working tree, everything, as a tree
@@ -123,3 +182,51 @@ prefablens --json main | jq '.[].path'      # bulk JSON, changed paths only
 prefablens --open main                      # HTML report in the browser
 prefablens --project . --no-color HEAD~3    # explicit project scan, plain text
 ```
+
+## Verification
+
+Install the toolchain from the repository root:
+
+```bash
+mise install
+```
+
+Then run the core and CLI checks:
+
+```bash
+zig build lint
+zig build test
+zig build perf
+zig build run -- before.prefab after.prefab
+```
+
+`cli/pkg/render_test.sh` covers the Homebrew formula scripts.
+CI also runs `.github/scripts/check-version-sync.sh` on Ubuntu.
+
+CI runs these checks in the `core` job of
+[`.github/workflows/ci.yml`](../.github/workflows/ci.yml).
+
+## Deploy
+
+Maintainers publish CLI binaries through the Release workflow on `main`.
+
+1. Run [`.github/workflows/release.yml`](../.github/workflows/release.yml)
+   with `workflow_dispatch` and a version `X.Y.Z` (no `v` prefix).
+2. Make sure that you run the workflow from `main`.
+
+After you start the workflow, it bumps versions (including `build.zig.zon`).
+It builds platform zips under `dist/`:
+
+- `prefablens-macos-arm64.zip`
+- `prefablens-macos-x64.zip`
+- `prefablens-linux-x64.zip`
+- `prefablens-linux-arm64.zip`
+- `prefablens-windows-x64.zip`
+- `prefablens-windows-arm64.zip`
+
+It commits, tags `v$VERSION`, and creates the GitHub Release with `SHA256SUMS`.
+Then the `publish-formula` job writes the Homebrew formula with
+`cli/pkg/render.sh` and pushes it to `hashiiiii/homebrew-tap`.
+
+The Scoop bucket is not pushed from this repository.
+It updates itself from the release and `SHA256SUMS`.

@@ -1,4 +1,4 @@
-# Chrome extension (contributors)
+# Chrome extension
 
 This page is for people who change `extension/`.
 For install steps and the product overview, see the [README](../README.md).
@@ -75,8 +75,6 @@ Do not use other axes.
 Add a new area only when a new concept appears.
 
 ### Layer contracts
-
-Each layer section uses the same shape: role, imports, naming and ownership, then notes.
 
 #### Domain (`src/domain/`)
 

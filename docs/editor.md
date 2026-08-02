@@ -1,126 +1,178 @@
-# PrefabLens for the Unity Editor
+# Unity Editor package
 
-The editor package shows semantic diffs of your working tree inside Unity:
-which UnityYAML assets changed against a chosen git ref, and what changed inside
-each one at the GameObject / component / field level.
+This page is for people who change `editor/`.
+For install steps and product overview, see the [README](../README.md).
+For the contribution process, see [CONTRIBUTING.md](../CONTRIBUTING.md).
 
-## Requirements
+## Why
 
-- Unity 2022.3 or newer.
-- The project is inside a git repository (the CLI shells out to git).
-- Text asset serialization (Edit > Project Settings > Editor > Asset
-  Serialization > Force Text) — binary-serialized assets cannot be diffed.
+The Editor package shows semantic UnityYAML diffs inside Unity.
+Authors stay in the Editor.
+They do not leave for a separate CLI session for every look at a change.
 
-## Installation
+The package does not reimplement git or the diff engine.
+It runs the `prefablens` CLI as a child process and shows `--json` output.
+All git logic stays in the CLI.
+See [docs/cli.md](cli.md).
 
-Via [OpenUPM](https://openupm.com/packages/com.hashiiiii.prefablens/):
+The UI resolves guids with the local `AssetDatabase`.
+Script and prefab references show as project paths.
+The CLI can still run its own `.meta` scan when the working directory is the
+project root.
 
-```bash
-openupm add com.hashiiiii.prefablens
-```
+## Tech stack
 
-Or without the openupm CLI: add the scoped registry as described on the package
-page, or install straight from git via Package Manager > Add package from git
-URL:
-
-```
-https://github.com/hashiiiii/PrefabLens.git?path=editor
-```
-
-## The PrefabLens window
-
-Open **Window > PrefabLens**.
-
-- The left pane lists every changed UnityYAML asset compared to the **Base**
-  ref; the right pane shows the selected asset's semantic diff.
-- **Base** accepts a branch, tag, or commit; empty means HEAD. The field commits
-  on Enter or focus loss, and each committed edit triggers exactly one CLI run —
-  edits made while a run is in flight are queued and re-run automatically once
-  the in-flight run returns.
-- After a refresh completes, the status line names the ref the displayed data was
-  produced from (for example `3 changed vs HEAD`) — even if the Base field has
-  already been edited again. While a run is in flight it shows `Refreshing…`.
-- The window refreshes when it gains focus and via the **Refresh** button.
-- Reference fields resolve guids through the local `AssetDatabase`, so script
-  and prefab references display as project paths.
-
-## The CLI binary
-
-The window runs the `prefablens` CLI as a child process. On first use it
-downloads the pinned version automatically from GitHub Releases:
-
-- Download target: `Library/PrefabLens/<version>/prefablens` (`.exe` on
-  Windows), relative to the project root. `Library/` is not meant to be version-controlled,
-  so the binary never enters your repository.
-- Integrity: the release's `SHA256SUMS` is fetched first and the zip is verified
-  against it before extraction. A mismatch aborts the install.
-- On macOS/Linux the binary is marked executable; a failed `chmod` fails the
-  download with the binary path in the message.
-- Older cached versions under `Library/PrefabLens/` are deleted after a
-  successful install.
-- The whole download is capped at 120 s and can be canceled from the window.
-- CLI runs are capped at 90 s; closing the window kills an in-flight run.
-
-When neither the override nor a downloaded binary is available, the window
-shows a `prefablens CLI not found (v<version>).` screen instead of the diff
-panes, with a **Download from GitHub Releases** button and a reminder that a
-manual path can be set via the `PrefabLens.CliPath` EditorPrefs key. If the
-previous auto-download attempt failed, its error appears above that message;
-if a broken CLI path override caused the screen, that is called out above it
-too (see [Using your own CLI binary](#using-your-own-cli-binary)).
-
-## Using your own CLI binary
-
-Preferences > **PrefabLens** (Edit > Preferences on Windows/Linux, Unity >
-Settings on macOS) exposes the override:
-
-- **CLI path override** — an absolute path to a `prefablens` binary. Empty means
-  "auto-download the pinned version". The page also offers Browse….
-- **Resolved CLI (override|downloaded): …** — the binary the window would run
-  right now, tagged with where it came from, for diagnostics. When neither the
-  override nor a downloaded binary exists it instead reads `Resolved CLI: not
-  found — the PrefabLens window downloads v<version> on its next refresh`. A
-  broken override additionally shows `Override points at a missing file: …`
-  underneath.
-- The setting is stored in the `PrefabLens.CliPath` EditorPrefs key (per-machine,
-  not per-project), so it can also be set from scripts:
-
-```csharp
-UnityEditor.EditorPrefs.SetString("PrefabLens.CliPath", "/usr/local/bin/prefablens");
-```
-
-Resolution order: the override wins when its file exists; otherwise the
-downloaded binary under `Library/` is used if present. An override pointing at
-a missing file falls back to that downloaded binary if it exists, or otherwise
-to an automatic download attempt (the missing-CLI screen instead, if a
-previous attempt in this session already failed). The broken override itself
-is reported in three places: a console warning
-(`PrefabLens: EditorPrefs 'PrefabLens.CliPath' points at a missing file: <path>.
-Falling back to the default location.`), a note on the missing-CLI screen
-(`Override 'PrefabLens.CliPath' points at a missing file: <path>`), and the
-Preferences page (`Override points at a missing file: <path>`). Fix or clear
-the override to silence all three. The console warning specifically is logged
-once per distinct missing path, not on every refresh; clearing or fixing the
-override re-arms it, so a later broken path is reported too.
-
-## Troubleshooting
-
-| Symptom | Cause and fix |
+| Piece | Choice |
 |---|---|
-| `Download failed: …` in the window | Network/proxy blocked GitHub Releases, or the SHA-256 check failed. Retry, or download the zip manually from Releases and point the CLI path override at the extracted binary. |
-| A one-line error from the CLI, or `prefablens exited with N` when the CLI printed nothing | The CLI's own error (stderr) — most commonly the project is not inside a git repository, or git timed out. See [docs/cli.md](cli.md) for the CLI's error contract. |
-| `Could not parse CLI output (CLI version mismatch?):` | The binary at the override path is too old/new for this package. The Unity console carries the exact parse exception. Clear the override or update the binary. |
-| `prefablens timed out after 90s and was killed` | A hung git or an enormous working tree. Check `git status` performance in that repository. |
-| Edited assets never appear in the changed list | The project is serializing assets as binary; bulk mode content-sniffs candidates and silently skips non-text files (see [docs/cli.md](cli.md)). Switch Edit > Project Settings > Editor > Asset Serialization to Force Text. |
+| Package id | `com.hashiiiii.prefablens` (`editor/package.json`) |
+| Unity minimum | 2022.3 |
+| Language | C# (Unity Editor assemblies) |
+| Diff engine | External `prefablens` CLI (pinned version in `Editor/Cli.cs`) |
+| Headless tests | `DotNetTests~/` via `dotnet test` (Unity stubs, no Editor app) |
+| In-Editor tests | `Tests/Editor/` (needs a real Unity Editor) |
+| Lint / format | CSharpier (`dotnet csharpier check`) |
 
-## How the window invokes the CLI
+## Design
 
-For the curious (and for debugging): a refresh runs
+### Layout
+
+| Path | Role |
+|---|---|
+| `editor/Editor/` | Window, CLI locate/download/run, models, settings |
+| `editor/Tests/Editor/` | Unity EditMode tests |
+| `editor/DotNetTests~/` | Headless harness. The trailing `~` hides it from Unity import |
+| `editor/package.json` | UPM package manifest |
+
+Important types under `Editor/`:
+
+- `PrefabLensWindow.cs` — Window UI and refresh flow
+- `Cli.cs`, `Cli.Download.cs`, `Cli.Run.cs` — locate, download, and run the CLI
+- `BulkModel.cs`, `DiffModel.cs`, `DiffTree.cs` — JSON models and tree view
+- `RefreshGate.cs` — one in-flight CLI run, with a queue for later Base edits
+- `PrefabLensSettings.cs` — Preferences UI for the CLI path override
+- `BuiltinRefs.cs`, `ValueFormat.cs` — built-in names and field text
+
+### CLI run contract
+
+A refresh runs:
 
 ```
 prefablens [<base-ref>] --json
 ```
 
-with the project root as the working directory, and renders the resulting
-`[{path, diff}]` array. Everything documented in [docs/cli.md](cli.md) about
-bulk mode and guid resolution applies as-is.
+The working directory is the Unity project root.
+An empty Base field means no ref operand (HEAD vs working tree, bulk mode).
+The window parses a `[{path, diff}]` array.
+Each `diff` uses `prefablens.diff.v2`.
+
+CLI runs time out after 90 s.
+If the window closes, the package kills an in-flight run.
+
+### CLI binary locate and download
+
+The pinned CLI version is `Cli.Version` in `Editor/Cli.cs`.
+Release automation keeps it in sync with `editor/package.json` and
+`build.zig.zon`.
+
+Download target (relative to the project root):
+
+`Library/PrefabLens/<version>/prefablens` (`.exe` on Windows)
+
+`Library/` is not for version control.
+The binary must not enter the repository.
+
+On first need, the package downloads the pinned zip from GitHub Releases.
+It fetches `SHA256SUMS` first and compares the zip digest before extract.
+A mismatch aborts the install.
+On macOS/Linux it marks the binary executable.
+A failed `chmod` fails the download.
+After a successful install, it deletes older cached versions under
+`Library/PrefabLens/`.
+The download has a 120 s cap.
+The window can cancel it.
+
+### `PrefabLens.CliPath` resolution
+
+Preferences store an optional absolute path in EditorPrefs key
+`PrefabLens.CliPath` (per machine, not per project).
+
+Resolution order:
+
+1. If the override is set and the file exists, the package uses the override.
+2. If the override is set and the file is missing, the package uses the
+   downloaded binary when that file exists. Otherwise the CLI is missing, and
+   the package reports the broken override.
+3. If no override is set, the package uses the downloaded binary when that file
+   exists. Otherwise the CLI is missing, and the window can start a download.
+
+The package reports a missing override in the console (once per distinct missing
+path), on the missing-CLI screen, and on the Preferences page.
+
+### Guid resolution in the UI
+
+After JSON parse, the window resolves remaining guids with
+`AssetDatabase.GUIDToAssetPath`.
+Built-in engine references use `BuiltinRefs.cs`
+(aligned with `cli/src/builtin_refs.zig`).
+
+## Verification
+
+Install the toolchain from the repository root:
+
+```bash
+mise install
+```
+
+Then run the headless Editor checks:
+
+```bash
+cd editor
+dotnet tool restore
+dotnet csharpier check . --no-msbuild-check
+dotnet test DotNetTests~/Tests
+```
+
+These commands do not need the Unity Editor app.
+
+For `Tests/Editor/` EditMode tests:
+
+1. Open the package in Unity 2022.3 or newer.
+2. Run the EditMode test runner there.
+
+For a local CLI build from the Editor:
+
+1. Build the CLI with `zig build` at the repository root.
+2. Set `PrefabLens.CliPath` to the absolute path of `zig-out/bin/prefablens`
+   (add `.exe` on Windows).
+3. Open **Window > PrefabLens**.
+4. Refresh the window.
+
+CI runs csharpier and `DotNetTests~/` in the `editor` job of
+[`.github/workflows/ci.yml`](../.github/workflows/ci.yml).
+CI does not run the in-Editor EditMode suite.
+
+## Deploy
+
+The Editor package ships as UPM content under `editor/` in this repository.
+
+1. Run [`.github/workflows/release.yml`](../.github/workflows/release.yml)
+   with `workflow_dispatch` and a version `X.Y.Z` (no `v` prefix).
+2. Make sure that `Cli.Version` stays aligned with the release tag (`v$VERSION`).
+   The bump step updates the synced version files.
+
+After you start the workflow, it bumps `editor/package.json` and related
+version files.
+It tags `v$VERSION` and publishes GitHub Release assets that the package
+downloads at runtime.
+
+OpenUPM serves `com.hashiiiii.prefablens` from this repository path `editor`.
+This repository has no OpenUPM publish job.
+OpenUPM tracks the package outside this workflow.
+
+After a tag lands on `main`:
+
+1. Make sure that the OpenUPM package page shows the new version.
+2. If the page is stale, update the OpenUPM registration.
+3. If you cannot update it, ask a maintainer who owns that listing.
+
+Users can also install from the git URL with `?path=editor` (see the README).

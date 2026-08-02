@@ -1,5 +1,6 @@
 import type { TokenRepository } from "../../domain/auth/token-repository";
 import type { DiffRepository } from "../../domain/diff/diff-repository";
+import { repoKey } from "../../domain/diff/fn/repo-key";
 import type { PrefetchRequest } from "../../domain/diff/types";
 import type { RepoIndexRepository } from "../../domain/guid/repo-index-repository";
 import { isUnityPath } from "../../domain/unity/fn/is-unity-path";
@@ -40,7 +41,7 @@ export async function createPrPrefetch(
       client,
       req.owner,
       req.repo,
-      `${API_BASE}/${req.owner}/${req.repo}`,
+      repoKey(API_BASE, req.owner, req.repo),
       ctx.refs.headSha,
     );
     const unity = ctx.files.filter((f) => isUnityPath(f.path)).slice(0, PREFETCH_MAX);

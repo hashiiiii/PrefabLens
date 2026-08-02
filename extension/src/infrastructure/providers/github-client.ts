@@ -1,14 +1,6 @@
-import {
-  type ChangedFile,
-  type GithubFailure,
-  isAuthFailed,
-  isGithubFailure,
-  isRateLimited,
-  type RefPair,
-} from "../../application/port/github";
+import { type ChangedFile, type GithubFailure, isRateLimited, type RefPair } from "../../application/port/github";
 import { err, ok, type Result } from "../../domain/result";
-
-export { type ChangedFile, isAuthFailed, isGithubFailure, isRateLimited, type RefPair };
+import type { Queue } from "./fetch-queue";
 
 // retry-after (seconds) wins; else x-ratelimit-reset (epoch seconds) relative to now.
 // Number(null) is 0 and Number("") is NaN, so absent headers fail the > 0 guards.
@@ -18,6 +10,40 @@ function adviceMs(headers: Headers): number | undefined {
   const reset = Number(headers.get("x-ratelimit-reset"));
   if (reset > 0) return Math.max(0, reset * 1000 - Date.now());
   return undefined;
+}
+
+// Single owner of GitHub's rate-limit shape: a 429, or a 403 whose headers or
+// body show a rate limit. Secondary limits sometimes advise only in the body
+// (octokit checks the body too).
+export async function rateLimitFailure(
+  res: Response,
+): Promise<Extract<GithubFailure, { kind: "rate-limited" }> | null> {
+  if (res.status !== 403 && res.status !== 429) return null;
+  const body = await res
+    .clone()
+    .text()
+    .catch(() => "");
+  const limited =
+    res.status === 429 ||
+    res.headers.has("retry-after") ||
+    res.headers.get("x-ratelimit-remaining") === "0" ||
+    /rate limit|abuse/i.test(body);
+  return limited ? { kind: "rate-limited", retryAfterMs: adviceMs(res.headers) } : null;
+}
+
+// Queue-aware fetch: rate-limited responses become classified rejections, so the
+// backoff and retry logic of the queue (fetch-queue.ts) sees them.
+export function createQueuedFetch(queue: Queue, front: boolean): typeof fetch {
+  return (input, init) =>
+    queue(
+      async () => {
+        const res = await fetch(input, init);
+        const limited = await rateLimitFailure(res);
+        if (limited) throw limited;
+        return res;
+      },
+      { front },
+    );
 }
 
 // GitHub's shared "diff entry" schema: PR files, commit files, and compare files all use it.
@@ -31,10 +57,7 @@ const toChangedFile = (f: DiffEntry): ChangedFile => ({
 
 const FETCH_FAILED = err({ kind: "fetch-failed" as const });
 
-// Fixed at build time (see build.mjs's esbuild define).
-export const API_BASE = __API_BASE__;
-
-export function graphqlUrl(restBase: string): string {
+function graphqlUrl(restBase: string): string {
   return `${restBase}/graphql`;
 }
 
@@ -51,18 +74,13 @@ export class GithubClient {
     let res: Response;
     try {
       res = await this.fetchFn(url, init);
-    } catch {
-      return FETCH_FAILED;
+    } catch (e) {
+      // The queued fetch rejects with the classified failure after it exhausts its retries
+      return isRateLimited(e) ? err(e) : FETCH_FAILED;
     }
     if (res.status === 403 || res.status === 429) {
-      // 403 + remaining 0 / retry-after, or 429; body classifies only (not retained)
-      const body = await res.text().catch(() => "");
-      const rateLimited =
-        res.status === 429 ||
-        res.headers.has("retry-after") ||
-        res.headers.get("x-ratelimit-remaining") === "0" ||
-        /rate limit|abuse/i.test(body);
-      if (rateLimited) return err({ kind: "rate-limited", retryAfterMs: adviceMs(res.headers) });
+      const limited = await rateLimitFailure(res);
+      if (limited) return err(limited);
       return err({ kind: "auth-failed" });
     }
     if (res.status === 401) return err({ kind: "auth-failed" });

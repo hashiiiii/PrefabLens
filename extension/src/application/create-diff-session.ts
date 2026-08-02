@@ -24,7 +24,12 @@ function createPromiseCache<V>(options: PromiseCacheOptions<V> = {}): PromiseCac
   return {
     get(key, compute) {
       const hit = entries.get(key);
-      if (hit && (ttlMs === undefined || Date.now() - hit.at < ttlMs)) return hit.promise;
+      if (hit && (ttlMs === undefined || Date.now() - hit.at < ttlMs)) {
+        // LRU: a hit re-inserts the entry, so bursts (prefetch) evict the least recently used entry, not the oldest
+        entries.delete(key);
+        entries.set(key, hit);
+        return hit.promise;
+      }
       const promise = compute();
       promise.then(
         (value) => {

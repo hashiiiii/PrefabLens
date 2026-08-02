@@ -11,11 +11,9 @@ type Area = {
   remove(keys: string | string[]): Promise<void>;
 };
 
-export type DiffStore = DiffRepository;
-
 // Raw diffs in storage.session under a sha key across SW restarts.
 // Quota overflow → wipe diffs and rewrite once; without this every SW restart recomputes forever.
-export function createSessionDiffStore(area: Area): DiffRepository {
+export function createChromeDiffRepository(area: Area): DiffRepository {
   return {
     async load(key) {
       const stored = await area.get(PREFIX + key);
@@ -35,7 +33,7 @@ export function createSessionDiffStore(area: Area): DiffRepository {
   };
 }
 
-// Wipe only diff: keys (keeps unrelated session keys like viewMode)
+// Wipe only diff: keys (unrelated session keys stay)
 async function flushDiffs(area: Area): Promise<void> {
   const all = await area.get(null).catch(() => ({}));
   const keys = Object.keys(all).filter((k) => k.startsWith(PREFIX));

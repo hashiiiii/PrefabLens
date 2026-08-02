@@ -1,6 +1,7 @@
 import type { TokenRepository } from "../../domain/auth/token-repository";
 import type { DiffRepository } from "../../domain/diff/diff-repository";
 import { applyResolved } from "../../domain/diff/fn/apply-resolved";
+import { repoKey } from "../../domain/diff/fn/repo-key";
 import { unresolvedRemaining } from "../../domain/diff/fn/unresolved-remaining";
 import type {
   DiffV2,
@@ -163,12 +164,12 @@ async function updateRemaining(
   ctx: DiffContext,
   push: (msg: GuidResolvedPush) => void,
 ): Promise<void> {
-  const repoKey = `${apiBase}/${req.owner}/${req.repo}`;
+  const key = repoKey(apiBase, req.owner, req.repo);
   const at = { owner: req.owner, repo: req.repo, target: req.target, path: req.path };
   try {
     // Empty remaining (source re-merge only): skip index — first build can take tens of seconds
     const index = remaining.length
-      ? await getRepoIndex(repoIndexStore, session, client, req.owner, req.repo, repoKey, ctx.refs.headSha)
+      ? await getRepoIndex(repoIndexStore, session, client, req.owner, req.repo, key, ctx.refs.headSha)
       : null;
     const fromIndex: Record<string, string> = {};
     let leftover = remaining;
@@ -180,14 +181,14 @@ async function updateRemaining(
       leftover = remaining.filter((g) => !Object.hasOwn(fromIndex, g));
       if (Object.keys(fromIndex).length) {
         // Land in guidCache: updateSources rebuilds via applyResolved; without this, index hits vanish
-        await guidCache.save(repoKey, fromIndex);
+        await guidCache.save(key, fromIndex);
         // Deliver available names first; structure finalized by the later final push
         push({ type: "guidResolved", ...at, resolved: fromIndex, done: false });
       }
     }
     // Only guids missing from the index go to Code Search
     const search = leftover.length
-      ? await getGuids(guidCache, session, leftover, client, req.owner, req.repo, repoKey)
+      ? await getGuids(guidCache, session, leftover, client, req.owner, req.repo, key)
       : { resolved: {}, rateLimited: false };
     let status: ResolutionStatus = search.rateLimited ? "rateLimited" : "complete";
     let json: DiffV2 = { ...first, resolved: { ...first.resolved, ...fromIndex, ...search.resolved } };
@@ -217,7 +218,7 @@ async function updateRemaining(
         client,
         req.owner,
         req.repo,
-        repoKey,
+        key,
       );
       json = merged.json;
       status = combine(status, merged.status);

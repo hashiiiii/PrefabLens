@@ -1,3 +1,5 @@
+import type { Result } from "../../domain/result";
+
 export type DeviceCode = {
   deviceCode: string;
   userCode: string;
@@ -6,9 +8,16 @@ export type DeviceCode = {
   expiresIn: number;
 };
 
-export type PollResult = { status: "ok"; token: string } | { status: "denied" } | { status: "expired" };
+export type DeviceFlowFailure = { kind: "device-flow-failed"; message: string };
+
+// "failed" covers HTTP errors and unexpected poll responses: expected outcomes, not thrown errors
+export type PollResult =
+  | { status: "ok"; token: string }
+  | { status: "denied" }
+  | { status: "expired" }
+  | { status: "failed" };
 
 export type GithubAuthPort = {
-  requestDeviceCode(fetchFn: typeof fetch): Promise<DeviceCode>;
+  requestDeviceCode(fetchFn: typeof fetch): Promise<Result<DeviceCode, DeviceFlowFailure>>;
   pollForToken(fetchFn: typeof fetch, sleep: (ms: number) => Promise<void>, code: DeviceCode): Promise<PollResult>;
 };

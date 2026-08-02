@@ -55,11 +55,27 @@ it("keeps non-container infrastructure off application use cases", () => {
     if (from === null) continue;
     for (const { spec, target } of relativeImports(file)) {
       const to = layerOf(target);
-      if (from !== "infrastructure" || file === CONTAINER) continue;
+      if (from !== "infrastructure") continue;
       // Providers may import ports to implement them
       // Use cases are the violation
       if (to !== "application" || /application[\\/]port[\\/]/.test(relative(SRC, target))) continue;
       violations.push(`${relative(SRC, file)} -> ${spec}`);
+    }
+  }
+  expect(violations).toEqual([]);
+});
+
+it("keeps production domain files inside domain", () => {
+  // Doc rule: "This layer imports nothing outside domain/." Tests are exempt
+  // (parity tests read sources via node:fs and use must).
+  const violations: string[] = [];
+  for (const file of TS_FILES) {
+    if (layerOf(file) !== "domain" || file.endsWith(".test.ts")) continue;
+    for (const match of readFileSync(file, "utf8").matchAll(/(?:from\s*|import\s*\(?\s*)"([^"]+)"/g)) {
+      const spec = match[1];
+      if (spec === undefined) continue;
+      const inside = spec.startsWith(".") && layerOf(`${resolve(dirname(file), spec)}.ts`) === "domain";
+      if (!inside) violations.push(`${relative(SRC, file)} -> ${spec}`);
     }
   }
   expect(violations).toEqual([]);

@@ -54,7 +54,7 @@ const cannedResponse = {
 test("detects a Unity file, toggles to Semantic, renders the tree", async ({ page }) => {
   // The content script inspects the URL (/pull/N/files): serve the fixture at a PR URL
   await page.route("**/pull/1/files", (route) => route.fulfill({ body: fixture, contentType: "text/html" }));
-  // Stub background with a fixed response (handler.test.ts covers the real path here)
+  // Stub background with a fixed response (full.spec.ts covers the real background path)
   await stubChrome(page, cannedResponse);
 
   await page.goto("https://prefablens.test/owner/repo/pull/1/files");

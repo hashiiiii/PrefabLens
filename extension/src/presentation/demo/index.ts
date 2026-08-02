@@ -8,7 +8,7 @@ import {
   createDemoDiffer,
   createDemoFetchBytes,
   createDemoFetchSource,
-  loadFixtureGuidIndex,
+  createFixtureGuidIndexLoader,
 } from "../../infrastructure/container";
 import { must } from "../../must";
 import type { View } from "../content/overlay/view-mode";
@@ -25,7 +25,7 @@ import { render, renderError, renderLoading } from "../renderer/render";
 
 type DemoLocals = {
   differ: Awaited<ReturnType<typeof createDemoDiffer>>;
-  index: Awaited<ReturnType<typeof loadFixtureGuidIndex>>;
+  index: Awaited<ReturnType<ReturnType<typeof createFixtureGuidIndexLoader>>>;
   fetchBytes: ReturnType<typeof createDemoFetchBytes>;
   fetchSource: ReturnType<typeof createDemoFetchSource>;
 };
@@ -60,8 +60,8 @@ function attachFile(header: HTMLElement, locals: DemoLocals, initial: View): (vi
     renderLoading(target);
     const { differ, index, fetchBytes, fetchSource } = locals;
     getLocalDiff(differ, index, fetchBytes, fetchSource, header.dataset.before, header.dataset.after)
-      .then((diff) => render(target, diff))
-      .catch((err) => renderError(target, String(err)));
+      .then((res) => (res.ok ? render(target, res.value) : renderError(target, res.error.message)))
+      .catch((err) => renderError(target, String(err))); // unexpected rejections (missing fixture)
   };
 
   show(initial);
@@ -83,7 +83,7 @@ async function main(): Promise<void> {
   if (!headers.length) return;
 
   const differ = await createDemoDiffer();
-  const index = await loadFixtureGuidIndex();
+  const index = await createFixtureGuidIndexLoader()();
   const fetchBytes = createDemoFetchBytes();
   const fetchSource = createDemoFetchSource();
   const locals: DemoLocals = { differ, index, fetchBytes, fetchSource };

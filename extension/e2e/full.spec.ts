@@ -27,6 +27,8 @@ const AFTER = BEFORE.replace("0.5", "0.8");
 const BIG = `%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n${"x".repeat(26 * 1024 * 1024)}`;
 
 function startServer(): Promise<Server> {
+  // One-shot 429 for the backoff test: a new server instance resets it
+  let servedRateLimit = false;
   const server = createServer((req, res) => {
     const url = new URL(req.url ?? "/", "http://127.0.0.1");
     const send = (body: string, type: string): void => {
@@ -68,10 +70,24 @@ function startServer(): Promise<Server> {
         });
       case "/repos/o/r/commits/topic":
         return send("HT\n", "application/vnd.github.sha");
+      // Backoff commit: commit pages have no prefetch, so the toggle's own attempt receives the 429
+      case "/o/r/commit/e2e4290":
+        return send(fixture, "text/html");
+      case "/repos/o/r/commits/e2e4290":
+        return json({
+          sha: "H429",
+          parents: [{ sha: "P429" }],
+          files: [{ filename: "Assets/Foo.prefab", status: "modified" }],
+        });
       case "/repos/o/r/contents/Assets/Foo.prefab": {
-        // MB/PC/MC are the base side of the pull/commit/compare flows respectively
+        // MB/PC/MC/P429 are the base side of the pull/commit/compare/backoff flows respectively
         const ref = url.searchParams.get("ref") ?? "";
-        return send(["MB", "PC", "MC"].includes(ref) ? BEFORE : AFTER, "application/vnd.github.raw+json");
+        if (ref === "H429" && !servedRateLimit) {
+          servedRateLimit = true;
+          res.writeHead(429, { "retry-after": "1" });
+          return res.end("rate limit");
+        }
+        return send(["MB", "PC", "MC", "P429"].includes(ref) ? BEFORE : AFTER, "application/vnd.github.raw+json");
       }
       case "/repos/o/r/contents/Assets/Big.unity":
         return send(BIG, "application/vnd.github.raw+json");
@@ -193,6 +209,23 @@ test("rejects a binary .asset through the real wasm sniff", async () => {
 
   const view = page.locator("[data-prefablens-view]");
   await expect(view).toContainText("not a text-serialized Unity asset", { timeout: 30_000 });
+  await page.close();
+});
+
+test("recovers from a 429 through the real queue backoff", async () => {
+  // The wiring regression that this test pins: bare fetch resolved on a 429.
+  // The queue's backoff never ran, and the panel showed the rate-limit error.
+  // The server returns one 429 for the head blob (retry-after: 1). The shipped
+  // pipeline (background → container → createQueuedFetch → queue) must pause and retry.
+  const page = await context.newPage();
+  await page.goto(`http://127.0.0.1:${PORT}/o/r/commit/e2e4290`);
+
+  const header = page.locator('.file-header[data-path="Assets/Foo.prefab"]');
+  await header.getByRole("button", { name: "Semantic" }).click();
+
+  const view = page.locator("[data-prefablens-view]");
+  await expect(view).toContainText("0.5", { timeout: 15_000 });
+  await expect(view).toContainText("0.8");
   await page.close();
 });
 

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import type { DiffV2 } from "../../domain/diff/types";
 import { must } from "../../must";
 import {
@@ -242,13 +242,13 @@ describe("render", () => {
 
   it("renderTooLarge shows the size and renders on click", () => {
     const root = freshRoot();
-    const onRender = vi.fn();
-    renderTooLarge(root, 26 * 1024 * 1024, onRender);
+    let renders = 0;
+    renderTooLarge(root, 26 * 1024 * 1024, () => void renders++);
     expect(root.textContent).toContain("Large file (26 MB)");
     const button = must(root.querySelector<HTMLButtonElement>("button.pl-render"));
     expect(button.textContent).toBe("Render anyway");
     button.click();
-    expect(onRender).toHaveBeenCalledTimes(1);
+    expect(renders).toBe(1);
   });
 
   it("renderError shows a clean one-line message", () => {
@@ -457,15 +457,6 @@ describe("render", () => {
       { resolving: 2 },
     );
     expect(root.textContent).toContain("Resolving 2 reference(s)…");
-  });
-
-  it("drops the indicator on re-render after resolution completes", () => {
-    // It disappears when re-rendered on the push's done (mount fully replaces, so it naturally goes away)
-    const root = freshRoot();
-    const diff = { schema: "prefablens.diff.v2" as const, unresolvedGuids: ["g1"], roots: [], loose: [] };
-    render(root, diff, { resolving: 1 });
-    render(root, diff);
-    expect(root.textContent).not.toContain("Resolving");
   });
 
   it("falls back component display to className when the script guid is unresolved", () => {

@@ -1,4 +1,4 @@
-import { type SignInState, signIn } from "../../application/auth/sign-in";
+import { emptySignInState, signIn } from "../../application/auth/sign-in";
 import { targetKey } from "../../domain/diff/fn/target-key";
 import { unresolvedRemaining } from "../../domain/diff/fn/unresolved-remaining";
 import type { BackgroundError, GuidResolvedPush } from "../../domain/diff/types";
@@ -67,7 +67,7 @@ const authRetries = emptyAuthRetries();
 const messenger = createMessenger();
 const tokenStore = createTokenStore();
 const auth = createGithubAuth();
-const signInState: SignInState = { inFlight: false };
+const signInState = emptySignInState();
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 const openTab = (url: string) => void window.open(url, "_blank", "noopener");
 const now = () => Date.now();
@@ -103,9 +103,11 @@ function attach(viewState: ViewStateData): void {
   if (key !== currentPage) {
     currentPage = key;
     clearOverrides(viewState);
-    pruneDisconnectedViews(views); // drop refs so late pushes can't revive dead views
   }
-  // React virtualizes and discards off-screen DOM; prune every scan (also plugs classic soft leak)
+  // React virtualizes and discards off-screen DOM, so prune both registries on every
+  // scan. This drops the DiffV2 and shadow root that a dead view pins, and it also
+  // plugs the classic soft leak.
+  pruneDisconnectedViews(views);
   for (const a of [...appliers]) if (!a.header.isConnected) appliers.delete(a);
   const entries = scanUnityFiles(document);
   const first = entries[0];
@@ -207,7 +209,6 @@ function attachToggle(viewState: ViewStateData, page: DiffPage, entry: FileEntry
 }
 
 async function init(): Promise<void> {
-  // Device page: only pre-fill the code the PR page issued
   // Device-page pre-fill: only the code this browser's PR page issued; storage
   // failure degrades to no pre-fill (the user pastes the code instead)
   if (location.pathname === "/login/device") {

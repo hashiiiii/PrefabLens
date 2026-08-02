@@ -1,4 +1,4 @@
-import type { PendingSignIn } from "../../application/auth/sign-in";
+import type { PendingSignIn } from "../../domain/auth/token";
 
 // Autofill Device Activation boxes (js-user-code-field). Markup drift → no-op; user pastes instead.
 export function fillDeviceCode(doc: Document, pending: PendingSignIn, now: number): boolean {

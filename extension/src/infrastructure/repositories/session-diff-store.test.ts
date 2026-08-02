@@ -1,28 +1,35 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import type { DiffV2 } from "../../domain/diff/types";
 import { createSessionDiffStore } from "./session-diff-store";
 
 const DIFF: DiffV2 = { schema: "prefablens.diff.v2", unresolvedGuids: [], roots: [], loose: [] };
 
-// A fake that mimics only the needed subset of chrome.storage.session with a Map. set reproduces overflow via failWhen.
+// A fake that mimics only the needed subset of chrome.storage.session with a Map.
+// set reproduces quota overflow via failWhen; calls land in plain arrays, not spies.
 function fakeArea(failWhen?: () => boolean) {
   const data = new Map<string, unknown>();
+  const sets: Array<Record<string, unknown>> = [];
+  const removes: Array<string | string[]> = [];
   const area = {
     data,
-    get: vi.fn(async (keys: string | string[] | null) => {
+    sets,
+    removes,
+    async get(keys: string | string[] | null) {
       if (keys === null) return Object.fromEntries(data);
       const list = Array.isArray(keys) ? keys : [keys];
       const out: Record<string, unknown> = {};
       for (const k of list) if (data.has(k)) out[k] = data.get(k);
       return out;
-    }),
-    set: vi.fn(async (items: Record<string, unknown>) => {
+    },
+    async set(items: Record<string, unknown>) {
+      sets.push(items);
       if (failWhen?.()) throw new Error("QUOTA_BYTES quota exceeded");
       for (const [k, v] of Object.entries(items)) data.set(k, v);
-    }),
-    remove: vi.fn(async (keys: string | string[]) => {
+    },
+    async remove(keys: string | string[]) {
+      removes.push(keys);
       for (const k of Array.isArray(keys) ? keys : [keys]) data.delete(k);
-    }),
+    },
   };
   return area;
 }
@@ -47,29 +54,27 @@ describe("createSessionDiffStore", () => {
     const store = createSessionDiffStore(area);
     const big: DiffV2 = { ...DIFF, unresolvedGuids: [" ".repeat(600 * 1024)] };
     await store.save("k", big);
-    expect(area.set).not.toHaveBeenCalled();
+    expect(area.sets).toEqual([]);
   });
 
   it("flushes stale diff entries and retries once when the quota overflows", async () => {
     // Prevents the permanent degradation where, once full, every SW restart recomputes everything:
     // on overflow, wipe the accumulated diffs and rewrite once
-    const area = fakeArea(); // the default set succeeds. Only the first is made to overflow below
+    let setCalls = 0;
+    const area = fakeArea(() => ++setCalls === 1); // only the first set overflows
     // Seed existing diff entries and one unrelated key
     area.data.set("diff:old1", DIFF);
     area.data.set("diff:old2", DIFF);
     area.data.set("viewMode", "semantic"); // don't delete anything but diff:
     const store = createSessionDiffStore(area);
 
-    // The first set overflows → flush → retry (the default set) succeeds
-    area.set.mockImplementationOnce(async () => {
-      throw new Error("quota exceeded");
-    });
+    // The first set overflows → flush → retry succeeds
     await store.save("new", DIFF);
 
-    expect(area.remove).toHaveBeenCalledWith(["diff:old1", "diff:old2"]); // wipe only diff:
+    expect(area.removes).toEqual([["diff:old1", "diff:old2"]]); // wipe only diff:
     expect(area.data.has("viewMode")).toBe(true); // keep unrelated keys
     expect(area.data.get("diff:new")).toEqual(DIFF); // the retry wrote it
-    expect(area.set).toHaveBeenCalledTimes(2); // just 1 overflow + 1 retry (pins against a regression to looping)
+    expect(area.sets).toHaveLength(2); // just 1 overflow + 1 retry (pins against a regression to looping)
   });
 
   it("gives up quietly if the retry also fails", async () => {

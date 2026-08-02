@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { isAuthFailed, isRateLimited } from "../../application/port/github";
 import { err, ok } from "../../domain/result";
 import { must } from "../../must";
@@ -9,10 +9,10 @@ import { createQueuedFetch, GithubClient, graphqlUrl } from "./github-client";
 // Matching is url.includes(key), so keys must be unique substrings
 // (e.g. 'page=1' also matches 'per_page=100' — use '&page=1').
 function fakeFetch(routes: Record<string, () => Response>) {
-  const calls: Array<{ url: string; headers: Record<string, string> }> = [];
+  const calls: Array<{ url: string; headers: Record<string, string>; init: RequestInit }> = [];
   const fn = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
-    calls.push({ url, headers: Object.fromEntries(Object.entries(init?.headers ?? {})) });
+    calls.push({ url, headers: Object.fromEntries(Object.entries(init?.headers ?? {})), init: init ?? {} });
     for (const [suffix, make] of Object.entries(routes)) {
       if (url.includes(suffix)) return make();
     }
@@ -395,24 +395,21 @@ describe("graphqlUrl", () => {
 
 describe("listMetaTree", () => {
   it("returns only .meta blobs with the truncated flag", async () => {
-    const fetchFn = vi.fn(
-      async (..._args: Parameters<typeof fetch>) =>
-        new Response(
-          JSON.stringify({
-            truncated: false,
-            tree: [
-              { path: "Assets/S.cs.meta", type: "blob", sha: "sha1" },
-              { path: "Assets/S.cs", type: "blob", sha: "sha2" }, // non-.meta is excluded
-              { path: "Assets/Dir.meta", type: "blob", sha: "sha3" },
-              { path: "Assets", type: "tree", sha: "sha4" }, // tree nodes are excluded
-            ],
-          }),
-          { status: 200 },
-        ),
-    );
-    const client = new GithubClient("https://api.github.com", "tok", fetchFn);
+    const { fn, calls } = fakeFetch({
+      "/git/trees/H": () =>
+        json({
+          truncated: false,
+          tree: [
+            { path: "Assets/S.cs.meta", type: "blob", sha: "sha1" },
+            { path: "Assets/S.cs", type: "blob", sha: "sha2" }, // non-.meta is excluded
+            { path: "Assets/Dir.meta", type: "blob", sha: "sha3" },
+            { path: "Assets", type: "tree", sha: "sha4" }, // tree nodes are excluded
+          ],
+        }),
+    });
+    const client = new GithubClient("https://api.github.com", "tok", fn);
     const res = await client.listMetaTree("o", "r", "H");
-    expect(fetchFn.mock.calls[0]?.[0]).toBe("https://api.github.com/repos/o/r/git/trees/H?recursive=1");
+    expect(calls[0]?.url).toBe("https://api.github.com/repos/o/r/git/trees/H?recursive=1");
     expect(res).toEqual(
       ok({
         truncated: false,
@@ -427,23 +424,20 @@ describe("listMetaTree", () => {
 
 describe("listBlobShas", () => {
   it("maps every blob path to its sha with the truncated flag", async () => {
-    const fetchFn = vi.fn(
-      async (..._args: Parameters<typeof fetch>) =>
-        new Response(
-          JSON.stringify({
-            truncated: false,
-            tree: [
-              { path: "Assets/Foo.prefab", type: "blob", sha: "sha1" },
-              { path: "Assets/S.cs.meta", type: "blob", sha: "sha2" },
-              { path: "Assets", type: "tree", sha: "sha3" }, // tree nodes are excluded
-            ],
-          }),
-          { status: 200 },
-        ),
-    );
-    const client = new GithubClient("https://api.github.com", "tok", fetchFn);
+    const { fn, calls } = fakeFetch({
+      "/git/trees/merge-base": () =>
+        json({
+          truncated: false,
+          tree: [
+            { path: "Assets/Foo.prefab", type: "blob", sha: "sha1" },
+            { path: "Assets/S.cs.meta", type: "blob", sha: "sha2" },
+            { path: "Assets", type: "tree", sha: "sha3" }, // tree nodes are excluded
+          ],
+        }),
+    });
+    const client = new GithubClient("https://api.github.com", "tok", fn);
     const res = await client.listBlobShas("o", "r", "merge-base");
-    expect(fetchFn.mock.calls[0]?.[0]).toBe("https://api.github.com/repos/o/r/git/trees/merge-base?recursive=1");
+    expect(calls[0]?.url).toBe("https://api.github.com/repos/o/r/git/trees/merge-base?recursive=1");
     expect(res.ok).toBe(true);
     if (!res.ok) return;
     expect(res.value.truncated).toBe(false);
@@ -455,16 +449,13 @@ describe("listBlobShas", () => {
 
 describe("batchBlobTexts", () => {
   it("posts an aliased graphql query and maps oids to texts", async () => {
-    const fetchFn = vi.fn(
-      async (..._args: Parameters<typeof fetch>) =>
-        new Response(JSON.stringify({ data: { repository: { b0: { text: "guid: g1\n" }, b1: null } } }), {
-          status: 200,
-        }),
-    );
-    const client = new GithubClient("https://api.github.com", "tok", fetchFn);
+    const { fn, calls } = fakeFetch({
+      "/graphql": () => json({ data: { repository: { b0: { text: "guid: g1\n" }, b1: null } } }),
+    });
+    const client = new GithubClient("https://api.github.com", "tok", fn);
     const res = await client.batchBlobTexts("o", "r", ["sha1", "sha2"]);
-    expect(fetchFn.mock.calls[0]?.[0]).toBe("https://api.github.com/graphql");
-    const init = fetchFn.mock.calls[0]?.[1] as RequestInit;
+    expect(calls[0]?.url).toBe("https://api.github.com/graphql");
+    const init = must(calls[0]).init;
     expect(init.method).toBe("POST");
     const body = JSON.parse(init.body as string) as { query: string };
     expect(body.query).toContain('b0: object(oid: "sha1")');
@@ -474,16 +465,16 @@ describe("batchBlobTexts", () => {
 
   it("maps graphql RATE_LIMITED errors to rate-limited", async () => {
     // GraphQL can return an errors array with HTTP 200: missing this silently empties the index
-    const fetchFn = vi.fn(
-      async () => new Response(JSON.stringify({ errors: [{ type: "RATE_LIMITED" }] }), { status: 200 }),
-    );
-    const client = new GithubClient("https://api.github.com", "tok", fetchFn);
+    const { fn } = fakeFetch({ "/graphql": () => json({ errors: [{ type: "RATE_LIMITED" }] }) });
+    const client = new GithubClient("https://api.github.com", "tok", fn);
     await expect(client.batchBlobTexts("o", "r", ["sha1"])).resolves.toSatisfy((r) => !r.ok && isRateLimited(r.error));
   });
 
   it("maps http 403 with retry-after to rate-limited (shared classification)", async () => {
-    const fetchFn = vi.fn(async () => new Response("slow down", { status: 403, headers: { "retry-after": "60" } }));
-    const client = new GithubClient("https://api.github.com", "tok", fetchFn);
+    const { fn } = fakeFetch({
+      "/graphql": () => new Response("slow down", { status: 403, headers: { "retry-after": "60" } }),
+    });
+    const client = new GithubClient("https://api.github.com", "tok", fn);
     await expect(client.batchBlobTexts("o", "r", ["sha1"])).resolves.toSatisfy((r) => !r.ok && isRateLimited(r.error));
   });
 });

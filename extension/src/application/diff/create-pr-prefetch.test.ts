@@ -15,7 +15,7 @@ describe("prefetch", () => {
       repo: "r",
       prNumber: 1,
     });
-    expect(calls.searchMetaByGuid).toEqual([]); // prefetch doesn't touch the 10 req/min Code Search
+    expect(calls.searchMetaByGuid).toEqual([]); // prefetch does not touch the 10 req/min Code Search
     const fetchesAfterPrefetch = calls.getFileAtRef.length;
     const res = await resolveFully(
       tokenStore,
@@ -97,7 +97,7 @@ describe("prefetch", () => {
   });
 
   it("aborts silently on rate limit instead of surfacing an error", async () => {
-    // 12 unity files: ignoring the rate limit would fetch all of them
+    // 12 unity files: a prefetch that ignores the rate limit fetches all of them
     const files: ChangedFile[] = Array.from({ length: 12 }, (_, i) => ({
       path: `Assets/F${i}.prefab`,
       status: "modified",
@@ -112,7 +112,7 @@ describe("prefetch", () => {
         prNumber: 1,
       }),
     ).resolves.toBeUndefined();
-    // The abort is observable: nothing was cached and only the first chunk was attempted
+    // The abort is observable: nothing landed in the cache, and the prefetch attempted only the first chunk
     expect(diffStore.saves).toEqual([]);
     const attempted = new Set(calls.getFileAtRef.map((c) => c[2]));
     expect(attempted.size).toBeLessThanOrEqual(4); // PREFETCH_CONCURRENCY

@@ -10,7 +10,7 @@ export type DeviceCode = {
 
 export type DeviceFlowFailure = { kind: "device-flow-failed"; message: string };
 
-// "failed" covers HTTP errors and unexpected poll responses: expected outcomes, not throws
+// "failed" covers HTTP errors and unexpected poll responses: expected outcomes, not thrown errors
 export type PollResult =
   | { status: "ok"; token: string }
   | { status: "denied" }

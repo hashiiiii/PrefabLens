@@ -33,7 +33,7 @@ export function createChromeDiffRepository(area: Area): DiffRepository {
   };
 }
 
-// Wipe only diff: keys (leaves unrelated session keys alone)
+// Wipe only diff: keys (unrelated session keys stay)
 async function flushDiffs(area: Area): Promise<void> {
   const all = await area.get(null).catch(() => ({}));
   const keys = Object.keys(all).filter((k) => k.startsWith(PREFIX));

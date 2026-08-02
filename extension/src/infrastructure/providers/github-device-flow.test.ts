@@ -58,7 +58,7 @@ describe("requestDeviceCode", () => {
   });
 
   it("returns a device-flow failure on a non-OK response", async () => {
-    // An HTTP failure is an expected outcome: it travels as a Result, not a throw
+    // An HTTP failure is an expected outcome: it travels as a Result, not a thrown error
     const { fn } = fakeFetch([json({}, 500)]);
     await expect(requestDeviceCode(fn)).resolves.toEqual(
       err({ kind: "device-flow-failed", message: "device code request failed (HTTP 500)" }),

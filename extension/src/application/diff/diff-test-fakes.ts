@@ -1,7 +1,7 @@
-// Shared test harness for the semantic-diff pipeline. Used by
-// get-semantic-diff.test.ts and create-pr-prefetch.test.ts, which exercise the
-// same production pipeline from two entry points. Not a *.test.ts file, so
-// Vitest does not collect it; it must only be imported from tests.
+// Shared test harness for the semantic-diff pipeline. get-semantic-diff.test.ts
+// and create-pr-prefetch.test.ts use it to exercise the same production pipeline
+// from two entry points. This is not a *.test.ts file, so Vitest does not
+// collect it. Import it only from tests.
 import { expect, vi } from "vitest";
 import type { TokenRepository } from "../../domain/auth/token-repository";
 import type { DiffRepository } from "../../domain/diff/diff-repository";
@@ -20,10 +20,11 @@ type MakeClient = (base: string, token: string, lane: "user" | "prefetch") => Gi
 type GetDiffer = () => Promise<DifferPort>;
 
 type GithubResult<K extends keyof GithubPort> = Awaited<ReturnType<GithubPort[K]>>;
-/** Argument tuples recorded per client method, in call order. */
+/** Argument tuples recorded for each client method, in call order. */
 export type GithubCalls = { [K in keyof GithubPort]: Array<Parameters<GithubPort[K]>> };
-/** Canned answers consulted before the state-derived default: an array is a once-queue
- *  (shifted per call; once drained, calls fall through), a single value answers every call. */
+/** Canned answers, consulted before the state-derived default. An array is a
+ *  once-queue: each call shifts one entry, and a drained array falls through.
+ *  A single value answers every call. */
 export type GithubResults = { [K in keyof GithubPort]?: GithubResult<K> | Array<GithubResult<K>> };
 /** Replacement behaviors, consulted after `results` and before the state-derived default. */
 export type GithubImpls = {
@@ -43,7 +44,7 @@ export const DIFF: DiffV2 = { schema: "prefablens.diff.v2", unresolvedGuids: ["g
 export function makeFakes(overrides?: {
   files?: ChangedFile[];
   contents?: Record<string, string>; // `${path}@${ref}` → text
-  blobs?: Record<string, string>; // blob sha → text (getBlobRaw; absent sha = 404 → null)
+  blobs?: Record<string, string>; // blob sha → text (getBlobRaw, absent sha = 404 → null)
   baseShas?: Record<string, string>; // path → blob sha at the merge base (listBlobShas)
   diff?: DifferPort["diff"];
   diffWithAssets?: DifferPort["diffWithAssets"];
@@ -145,7 +146,7 @@ export function makeFakes(overrides?: {
       diffStoreData[key] = json;
     },
   };
-  // Mirrors the RepoIndexStore interface (loadGuids/saveGuids/loadIndex/saveIndex). Starts empty per test.
+  // Mirrors the RepoIndexStore interface (loadGuids/saveGuids/loadIndex/saveIndex). It starts empty for each test.
   const guidsData: Record<string, GuidMap> = {};
   const indexData: Record<string, RepoGuidIndex> = {};
   const savedGuids: Array<[string, GuidMap]> = [];
@@ -176,9 +177,10 @@ export function makeFakes(overrides?: {
   return { tokenStore, makeClient, getDiffer, guidCache, diffStore, repoIndexStore, client, calls, results, impls };
 }
 
-/** Drives semanticDiff to completion — the immediate response plus every push — and returns the
- *  fully-resolved response. Errors and fully-in-PR-resolved diffs pass through unchanged; a pending
- *  diff resolves to the final push's json, i.e. what the pipeline ultimately produces. */
+/** Drives semanticDiff to completion (the immediate response plus every push) and
+ *  returns the fully-resolved response. Errors and diffs that resolve fully in the
+ *  PR return unchanged. A pending diff resolves to the json of the final push,
+ *  that is, the final output of the pipeline. */
 export async function resolveFully(
   tokenStore: TokenRepository,
   makeClient: MakeClient,

@@ -34,7 +34,7 @@ export async function signIn(
       ui.showFailure(FAILURE_TEXT.failed);
       return;
     }
-    // Written before the verification tab opens; /login/device reads it to pre-fill
+    // Save the pending sign-in before the verification tab opens. /login/device reads it to pre-fill the code.
     await tokenStore.savePendingSignIn({
       userCode: code.value.userCode,
       expiresAt: now() + code.value.expiresIn * 1000,
@@ -47,7 +47,7 @@ export async function signIn(
     else ui.showFailure(FAILURE_TEXT[result.status]);
     await tokenStore.clearPendingSignIn();
   } catch {
-    // Unexpected rejections only (storage); expected failures arrive as values above
+    // Only unexpected rejections (storage) land here. Expected failures arrive as values above.
     ui.showFailure(FAILURE_TEXT.failed);
     await tokenStore.clearPendingSignIn().catch(() => {});
   } finally {

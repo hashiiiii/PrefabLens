@@ -80,12 +80,12 @@ it("keeps the first-pass diff when a source path is unresolved or missing", asyn
     diff: () => ok(NEEDS),
   });
   const res = await getLocalDiff(differ, index, fetchBytes, fetchSource, "b.prefab", "a.prefab");
-  // gX is not in the index and fixtures have no source: degrade, don't fail
+  // gX is not in the index, and the fixtures have no source: degrade, do not fail
   expect(res.ok && res.value.neededSources).toEqual(NEEDS.neededSources);
 });
 
 it("returns the differ failure as a result instead of throwing", async () => {
-  // Expected failures travel as Result (docs/extension.md); the demo branches on ok
+  // Expected failures travel as Result (docs/extension.md). The demo branches on ok.
   const { differ, index, fetchBytes, fetchSource } = makeFakes({
     files: { "b.prefab": "b", "a.prefab": "a" },
     diff: () => err({ kind: "diff-failed", message: "bad yaml" }),

@@ -4,8 +4,8 @@ import { createDiffSession } from "./create-diff-session";
 
 describe("createDiffSession blob cache", () => {
   // A 100-file prefetch pushes ~200 blobs through the 32-slot cache. Without
-  // LRU promotion, eviction is insertion order, so the blob the user is about
-  // to read gets evicted and re-downloaded on the next toggle.
+  // LRU promotion, eviction follows insertion order. The cache then evicts the
+  // blob that the user is about to read, and the next toggle downloads it again.
   it("keeps a recently used blob when the cache overflows", async () => {
     const session = createDiffSession();
     const computes: string[] = [];

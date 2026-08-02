@@ -12,8 +12,9 @@ function adviceMs(headers: Headers): number | undefined {
   return undefined;
 }
 
-// Single owner of GitHub's rate-limit shape: 429, or 403 with the telltale
-// headers/body (secondary limits sometimes advise only in the body, like octokit).
+// Single owner of GitHub's rate-limit shape: a 429, or a 403 whose headers or
+// body show a rate limit. Secondary limits sometimes advise only in the body
+// (octokit checks the body too).
 export async function rateLimitFailure(
   res: Response,
 ): Promise<Extract<GithubFailure, { kind: "rate-limited" }> | null> {
@@ -30,8 +31,8 @@ export async function rateLimitFailure(
   return limited ? { kind: "rate-limited", retryAfterMs: adviceMs(res.headers) } : null;
 }
 
-// Queue-aware fetch: rate-limited responses become classified rejections so the
-// queue's backoff/retry machinery (fetch-queue.ts) actually sees them.
+// Queue-aware fetch: rate-limited responses become classified rejections, so the
+// backoff and retry logic of the queue (fetch-queue.ts) sees them.
 export function createQueuedFetch(queue: Queue, front: boolean): typeof fetch {
   return (input, init) =>
     queue(
@@ -74,7 +75,7 @@ export class GithubClient {
     try {
       res = await this.fetchFn(url, init);
     } catch (e) {
-      // The queued fetch rejects with the classified failure once its retries are exhausted
+      // The queued fetch rejects with the classified failure after it exhausts its retries
       return isRateLimited(e) ? err(e) : FETCH_FAILED;
     }
     if (res.status === 403 || res.status === 429) {

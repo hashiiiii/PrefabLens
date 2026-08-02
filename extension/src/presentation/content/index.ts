@@ -104,8 +104,9 @@ function attach(viewState: ViewStateData): void {
     currentPage = key;
     clearOverrides(viewState);
   }
-  // React virtualizes and discards off-screen DOM; prune both registries every scan
-  // (drops the DiffV2 + shadow root a dead view pins; also plugs the classic soft leak)
+  // React virtualizes and discards off-screen DOM, so prune both registries on every
+  // scan. This drops the DiffV2 and shadow root that a dead view pins, and it also
+  // plugs the classic soft leak.
   pruneDisconnectedViews(views);
   for (const a of [...appliers]) if (!a.header.isConnected) appliers.delete(a);
   const entries = scanUnityFiles(document);

@@ -172,8 +172,8 @@ describe("semanticDiff", () => {
   });
 
   it("rejects a file whose content is not UnityYAML on either side", async () => {
-    // Real sniff behavior lives in wasm-differ.test.ts; here the fake reproduces its
-    // contract so the outcome plumbing (computeDiff -> response) is what's tested.
+    // Real sniff behavior lives in wasm-differ.test.ts. Here the fake reproduces its
+    // contract, so the test covers only the outcome plumbing (computeDiff -> response).
     const diffCalls: Array<Parameters<DifferPort["diff"]>> = [];
     const diff: DifferPort["diff"] = (...args) => {
       diffCalls.push(args);
@@ -383,7 +383,7 @@ describe("semanticDiff", () => {
     await resolveFully(tokenStore, makeClient, getDiffer, guidCache, diffStore, repoIndexStore, session, REQ);
     await resolveFully(tokenStore, makeClient, getDiffer, guidCache, diffStore, repoIndexStore, session, REQ);
     const fooFetches = calls.getFileAtRef.filter((c) => c[2] === "Assets/Foo.prefab");
-    expect(fooFetches).toHaveLength(2); // only twice, base + head (the second handle doesn't re-fetch)
+    expect(fooFetches).toHaveLength(2); // only twice, base + head (the second handle does not re-fetch)
   });
 
   it("prefers the in-PR meta index over code search", async () => {
@@ -1398,7 +1398,7 @@ describe("semanticDiff with push (two-stage)", () => {
       (m) => pushes.push(m),
     );
     expect(res.ok && res.pending).toBe(true);
-    expect(diffWithAssetsCalls).toEqual([]); // the immediate response doesn't merge (it takes priority)
+    expect(diffWithAssetsCalls).toEqual([]); // the immediate response does not merge (it takes priority)
     await vi.waitFor(() => expect(diffWithAssetsCalls).toHaveLength(1));
     await vi.waitFor(() => expect(pushes.at(-1)?.done).toBe(true));
     expect(pushes.at(-1)?.json).toMatchObject({ resolved: { src1: "Assets/Src.prefab" } });

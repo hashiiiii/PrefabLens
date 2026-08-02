@@ -325,9 +325,9 @@ describe("GithubClient", () => {
 });
 
 describe("createQueuedFetch", () => {
-  // Production regression this pins: bare fetch resolves on 429/403, so the queue's
-  // rate-limit backoff never saw a rejection and never ran. The wrapper converts
-  // rate-limited responses into classified rejections the queue retries.
+  // The production regression that this suite pins: bare fetch resolved on 429/403,
+  // so the queue's rate-limit backoff never saw a rejection and never ran. The wrapper
+  // converts rate-limited responses into classified rejections that the queue retries.
   const swapFetch = async (impl: typeof fetch, run: () => Promise<void>) => {
     const realFetch = globalThis.fetch;
     globalThis.fetch = impl;
@@ -339,7 +339,7 @@ describe("createQueuedFetch", () => {
   };
 
   it("retries a rate-limited response through the queue", async () => {
-    const queue = createQueue(1, async () => {}); // instant sleep: backoff fires without waiting
+    const queue = createQueue(1, async () => {}); // instant sleep: the backoff fires immediately
     let calls = 0;
     await swapFetch(
       (async () => {

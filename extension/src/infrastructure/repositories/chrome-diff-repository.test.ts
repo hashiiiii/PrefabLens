@@ -5,7 +5,7 @@ import { createChromeDiffRepository } from "./chrome-diff-repository";
 const DIFF: DiffV2 = { schema: "prefablens.diff.v2", unresolvedGuids: [], roots: [], loose: [] };
 
 // A fake that mimics only the needed subset of chrome.storage.session with a Map.
-// set reproduces quota overflow via failWhen; calls land in plain arrays, not spies.
+// set reproduces quota overflow via failWhen. Calls land in plain arrays, not spies.
 function fakeArea(failWhen?: () => boolean) {
   const data = new Map<string, unknown>();
   const sets: Array<Record<string, unknown>> = [];
@@ -68,7 +68,7 @@ describe("createChromeDiffRepository", () => {
     area.data.set("viewMode", "semantic"); // don't delete anything but diff:
     const store = createChromeDiffRepository(area);
 
-    // The first set overflows → flush → retry succeeds
+    // The first set overflows, the flush runs, and the retry succeeds
     await store.save("new", DIFF);
 
     expect(area.removes).toEqual([["diff:old1", "diff:old2"]]); // wipe only diff:

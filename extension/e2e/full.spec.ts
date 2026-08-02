@@ -27,7 +27,7 @@ const AFTER = BEFORE.replace("0.5", "0.8");
 const BIG = `%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n${"x".repeat(26 * 1024 * 1024)}`;
 
 function startServer(): Promise<Server> {
-  // One-shot 429 for the backoff test: reset with each server instance
+  // One-shot 429 for the backoff test: a new server instance resets it
   let servedRateLimit = false;
   const server = createServer((req, res) => {
     const url = new URL(req.url ?? "/", "http://127.0.0.1");
@@ -70,7 +70,7 @@ function startServer(): Promise<Server> {
         });
       case "/repos/o/r/commits/topic":
         return send("HT\n", "application/vnd.github.sha");
-      // Backoff commit: no prefetch on commit pages, so the toggle's own attempt eats the 429
+      // Backoff commit: commit pages have no prefetch, so the toggle's own attempt receives the 429
       case "/o/r/commit/e2e4290":
         return send(fixture, "text/html");
       case "/repos/o/r/commits/e2e4290":
@@ -213,10 +213,10 @@ test("rejects a binary .asset through the real wasm sniff", async () => {
 });
 
 test("recovers from a 429 through the real queue backoff", async () => {
-  // The wiring regression this pins: bare fetch resolves on 429, so the queue's
-  // backoff never saw it and the panel surfaced the rate-limit error instead.
-  // The server 429s the head blob once (retry-after: 1); the shipped pipeline
-  // (background → container → createQueuedFetch → queue) must pause and retry.
+  // The wiring regression that this test pins: bare fetch resolved on a 429.
+  // The queue's backoff never ran, and the panel showed the rate-limit error.
+  // The server returns one 429 for the head blob (retry-after: 1). The shipped
+  // pipeline (background → container → createQueuedFetch → queue) must pause and retry.
   const page = await context.newPage();
   await page.goto(`http://127.0.0.1:${PORT}/o/r/commit/e2e4290`);
 

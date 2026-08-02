@@ -66,7 +66,7 @@ Do not use other axes.
 3. If the symbol is a domain vocabulary type (including repository interfaces
    and `Result`), put it in `domain/<area>/` (outside `fn/`).
    Do not put function bodies in these files.
-   Types that one layer owns stay next to that layer's code
+   Keep types that one layer owns next to the code of that layer
    (port types, use-case state records, view models).
 4. If a helper is not a domain query or transform, and two or more production callers
    (or presentation) share it, put it directly under `application/`.
@@ -116,7 +116,7 @@ It cannot import `infrastructure/` or `presentation/`.
 **Naming and ownership.**
 
 - Prefer CRUD names for use-case verbs: `create`, `get`, `update`, `delete`.
-  When a CRUD name hides the intent, you can use a domain verb like `sign-in`.
+  When a CRUD name hides the intent, you can use a domain verb, for example `sign-in`.
 - Put one use case in each file.
   Shared helper modules directly under `application/` (rule 4) can export
   several sibling verbs.

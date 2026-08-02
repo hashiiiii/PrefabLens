@@ -21,8 +21,9 @@ function makeFakes(overrides?: {
     batchBlobTexts: [] as Array<Parameters<Client["batchBlobTexts"]>>,
     loadIndex: [] as string[],
   };
-  // Canned listMetaTree answers consulted before the state-derived default: an array is a
-  // once-queue (shifted per call; once drained, calls fall through), a single value answers every call.
+  // Canned listMetaTree answers, consulted before the state-derived default. An array is a
+  // once-queue: each call shifts one entry, and a drained array falls through. A single
+  // value answers every call.
   const results: {
     listMetaTree?: Awaited<ReturnType<Client["listMetaTree"]>> | Array<Awaited<ReturnType<Client["listMetaTree"]>>>;
   } = {};

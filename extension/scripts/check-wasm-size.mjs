@@ -1,9 +1,12 @@
+import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { gzipSync } from "node:zlib";
 
 const TARGET_KB = 80; // WASM bundle size budget in KB
 const LIMIT_KB = 150; // CI fails if exceeded
 
+const wasmBuild = spawnSync("zig", ["build", "wasm"], { cwd: "..", stdio: "inherit" });
+if (wasmBuild.status !== 0) process.exit(wasmBuild.status ?? 1);
 const wasmUrl = new URL("../../zig-out/bin/prefablens.wasm", import.meta.url);
 const gz = gzipSync(readFileSync(wasmUrl), { level: 9 }).length;
 const kb = (gz / 1024).toFixed(1);

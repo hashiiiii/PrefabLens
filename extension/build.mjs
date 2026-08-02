@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { copyFileSync, cpSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { build } from "esbuild";
 
@@ -43,6 +44,8 @@ if (e2e) {
 writeFileSync("dist/manifest.json", JSON.stringify(manifest, null, 2));
 
 // realpath so a worktree symlink to the main checkout wasm still copies a real file
+const wasmBuild = spawnSync("zig", ["build", "wasm"], { cwd: "..", stdio: "inherit" });
+if (wasmBuild.status !== 0) process.exit(wasmBuild.status ?? 1);
 copyFileSync(realpathSync("../zig-out/bin/prefablens.wasm"), "dist/prefablens.wasm");
 mkdirSync("dist/images", { recursive: true });
 for (const size of [16, 32, 48, 128]) cpSync(`images/icon${size}.png`, `dist/images/icon${size}.png`);

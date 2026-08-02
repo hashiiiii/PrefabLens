@@ -152,12 +152,11 @@ It cannot import application use cases.
 - `repositories/`: implementations of domain repository interfaces
   (chrome.storage-backed).
   `merge-store.ts` is an internal helper for those implementations.
-  `session-diff-store.ts` keeps its historical name.
-  New repository implementations use the `chrome-<noun>-repository.ts` pattern.
+  Repository implementations use the `chrome-<noun>-repository.ts` pattern.
 - `container.ts` is the only DI file.
   It exports individual `createX()` factories that return ports and repositories
-  (and lifetime-managed loaders, for example the demo fixture loader
-  `loadFixtureGuidIndex`).
+  (and lifetime-managed loaders, for example `createDifferLoader` and
+  `createFixtureGuidIndexLoader`).
 
 **Notes.**
 

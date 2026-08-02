@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { DiffV2 } from "../../domain/diff/types";
-import { createSessionDiffStore } from "./session-diff-store";
+import { createChromeDiffRepository } from "./chrome-diff-repository";
 
 const DIFF: DiffV2 = { schema: "prefablens.diff.v2", unresolvedGuids: [], roots: [], loose: [] };
 
@@ -34,24 +34,24 @@ function fakeArea(failWhen?: () => boolean) {
   return area;
 }
 
-describe("createSessionDiffStore", () => {
+describe("createChromeDiffRepository", () => {
   it("round-trips a diff under the diff: prefix", async () => {
     const area = fakeArea();
-    const store = createSessionDiffStore(area);
+    const store = createChromeDiffRepository(area);
     await store.save("base:head:Assets/Foo.prefab", DIFF);
     expect(area.data.get("diff:base:head:Assets/Foo.prefab")).toEqual(DIFF);
     expect(await store.load("base:head:Assets/Foo.prefab")).toEqual(DIFF);
   });
 
   it("returns undefined for a missing key", async () => {
-    const store = createSessionDiffStore(fakeArea());
+    const store = createChromeDiffRepository(fakeArea());
     expect(await store.load("nope")).toBeUndefined();
   });
 
   it("skips diffs larger than the session budget without touching storage", async () => {
     // Leave large ones to the memory cache only (session is only 10MB)
     const area = fakeArea();
-    const store = createSessionDiffStore(area);
+    const store = createChromeDiffRepository(area);
     const big: DiffV2 = { ...DIFF, unresolvedGuids: [" ".repeat(600 * 1024)] };
     await store.save("k", big);
     expect(area.sets).toEqual([]);
@@ -66,7 +66,7 @@ describe("createSessionDiffStore", () => {
     area.data.set("diff:old1", DIFF);
     area.data.set("diff:old2", DIFF);
     area.data.set("viewMode", "semantic"); // don't delete anything but diff:
-    const store = createSessionDiffStore(area);
+    const store = createChromeDiffRepository(area);
 
     // The first set overflows → flush → retry succeeds
     await store.save("new", DIFF);
@@ -80,7 +80,7 @@ describe("createSessionDiffStore", () => {
   it("gives up quietly if the retry also fails", async () => {
     // Still unwritable after flush (a single diff over quota): continue with the memory cache, don't throw
     const area = fakeArea(() => true); // always overflows
-    const store = createSessionDiffStore(area);
+    const store = createChromeDiffRepository(area);
     await expect(store.save("k", DIFF)).resolves.toBeUndefined();
   });
 });

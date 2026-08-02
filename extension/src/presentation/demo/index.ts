@@ -8,7 +8,7 @@ import {
   createDemoDiffer,
   createDemoFetchBytes,
   createDemoFetchSource,
-  loadFixtureGuidIndex,
+  createFixtureGuidIndexLoader,
 } from "../../infrastructure/container";
 import { must } from "../../must";
 import type { View } from "../content/overlay/view-mode";
@@ -25,7 +25,7 @@ import { render, renderError, renderLoading } from "../renderer/render";
 
 type DemoLocals = {
   differ: Awaited<ReturnType<typeof createDemoDiffer>>;
-  index: Awaited<ReturnType<typeof loadFixtureGuidIndex>>;
+  index: Awaited<ReturnType<ReturnType<typeof createFixtureGuidIndexLoader>>>;
   fetchBytes: ReturnType<typeof createDemoFetchBytes>;
   fetchSource: ReturnType<typeof createDemoFetchSource>;
 };
@@ -83,7 +83,7 @@ async function main(): Promise<void> {
   if (!headers.length) return;
 
   const differ = await createDemoDiffer();
-  const index = await loadFixtureGuidIndex();
+  const index = await createFixtureGuidIndexLoader()();
   const fetchBytes = createDemoFetchBytes();
   const fetchSource = createDemoFetchSource();
   const locals: DemoLocals = { differ, index, fetchBytes, fetchSource };

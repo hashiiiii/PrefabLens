@@ -13,7 +13,7 @@ type Area = {
 
 // Raw diffs in storage.session under a sha key across SW restarts.
 // Quota overflow → wipe diffs and rewrite once; without this every SW restart recomputes forever.
-export function createSessionDiffStore(area: Area): DiffRepository {
+export function createChromeDiffRepository(area: Area): DiffRepository {
   return {
     async load(key) {
       const stored = await area.get(PREFIX + key);

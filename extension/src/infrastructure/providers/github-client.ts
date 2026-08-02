@@ -56,7 +56,7 @@ const toChangedFile = (f: DiffEntry): ChangedFile => ({
 
 const FETCH_FAILED = err({ kind: "fetch-failed" as const });
 
-export function graphqlUrl(restBase: string): string {
+function graphqlUrl(restBase: string): string {
   return `${restBase}/graphql`;
 }
 

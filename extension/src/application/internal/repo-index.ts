@@ -1,11 +1,11 @@
-import { parseGuidFromMeta } from "../domain/diff/fn/parse-guid-from-meta";
-import type { RepoIndexRepository } from "../domain/guid/repo-index-repository";
-import { ok, type Result } from "../domain/result";
-import type { DiffSession } from "./create-diff-session";
-import type { GithubFailure, GithubPort } from "./port/github";
-import { isRateLimited } from "./port/github";
+import { parseGuidFromMeta } from "../../domain/diff/fn/parse-guid-from-meta";
+import type { RepoIndexRepository } from "../../domain/guid/repo-index-repository";
+import { ok, type Result } from "../../domain/result";
+import type { DiffSession } from "../diff/create-diff-session";
+import type { GithubFailure, GithubGateway } from "../gateway/github";
+import { isRateLimited } from "../gateway/github";
 
-type SearchClient = Pick<GithubPort, "listMetaTree" | "batchBlobTexts">;
+type SearchClient = Pick<GithubGateway, "listMetaTree" | "batchBlobTexts">;
 
 const INDEX_MAX_METAS = 50_000; // above this, give up on the index to protect the storage quota
 const GRAPHQL_BATCH = 100;

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { DiffV2, SemanticDiffResponse } from "../../../domain/diff/types";
-import { must } from "../../../must";
+import { must } from "../../../internal/must";
 import {
   emptyFileView,
   type FileResult,

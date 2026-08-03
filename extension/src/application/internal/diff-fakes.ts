@@ -11,24 +11,24 @@ import type { GuidRepository } from "../../domain/guid/guid-repository";
 import type { RepoGuidIndex } from "../../domain/guid/repo-guid-index";
 import type { RepoIndexRepository } from "../../domain/guid/repo-index-repository";
 import { ok } from "../../domain/result";
-import type { DiffSession } from "../create-diff-session";
-import type { DifferPort } from "../port/differ";
-import type { ChangedFile, GithubPort } from "../port/github";
-import { getSemanticDiff } from "./get-semantic-diff";
+import type { DiffSession } from "../diff/create-diff-session";
+import { getSemanticDiff } from "../diff/get-semantic-diff";
+import type { DifferGateway } from "../gateway/differ";
+import type { ChangedFile, GithubGateway } from "../gateway/github";
 
-type MakeClient = (base: string, token: string, lane: "user" | "prefetch") => GithubPort;
-type GetDiffer = () => Promise<DifferPort>;
+type MakeClient = (base: string, token: string, lane: "user" | "prefetch") => GithubGateway;
+type GetDiffer = () => Promise<DifferGateway>;
 
-type GithubResult<K extends keyof GithubPort> = Awaited<ReturnType<GithubPort[K]>>;
+type GithubResult<K extends keyof GithubGateway> = Awaited<ReturnType<GithubGateway[K]>>;
 /** Argument tuples recorded for each client method, in call order. */
-export type GithubCalls = { [K in keyof GithubPort]: Array<Parameters<GithubPort[K]>> };
+export type GithubCalls = { [K in keyof GithubGateway]: Array<Parameters<GithubGateway[K]>> };
 /** Canned answers, consulted before the state-derived default. An array is a
  *  once-queue: each call shifts one entry, and a drained array falls through.
  *  A single value answers every call. */
-export type GithubResults = { [K in keyof GithubPort]?: GithubResult<K> | Array<GithubResult<K>> };
+export type GithubResults = { [K in keyof GithubGateway]?: GithubResult<K> | Array<GithubResult<K>> };
 /** Replacement behaviors, consulted after `results` and before the state-derived default. */
 export type GithubImpls = {
-  [K in keyof GithubPort]?: (...args: Parameters<GithubPort[K]>) => Promise<GithubResult<K>>;
+  [K in keyof GithubGateway]?: (...args: Parameters<GithubGateway[K]>) => Promise<GithubResult<K>>;
 };
 
 export const REQ: SemanticDiffRequest = {
@@ -46,9 +46,9 @@ export function makeFakes(overrides?: {
   contents?: Record<string, string>; // `${path}@${ref}` → text
   blobs?: Record<string, string>; // blob sha → text (getBlobRaw, absent sha = 404 → null)
   baseShas?: Record<string, string>; // path → blob sha at the merge base (listBlobShas)
-  diff?: DifferPort["diff"];
-  diffWithAssets?: DifferPort["diffWithAssets"];
-  isUnityYaml?: DifferPort["isUnityYaml"];
+  diff?: DifferGateway["diff"];
+  diffWithAssets?: DifferGateway["diffWithAssets"];
+  isUnityYaml?: DifferGateway["isUnityYaml"];
   accessToken?: string | undefined;
   search?: Record<string, string | null>; // guid → asset path (null = no hit)
   cached?: Record<string, string>; // initial contents of guidCache
@@ -73,8 +73,11 @@ export function makeFakes(overrides?: {
   // Records the argument tuple, then answers from `results` (canned), `impls`
   // (replacement behavior), or the constructor state tables, in that order.
   const method =
-    <K extends keyof GithubPort>(key: K, fromState: (...args: Parameters<GithubPort[K]>) => Promise<GithubResult<K>>) =>
-    async (...args: Parameters<GithubPort[K]>): Promise<GithubResult<K>> => {
+    <K extends keyof GithubGateway>(
+      key: K,
+      fromState: (...args: Parameters<GithubGateway[K]>) => Promise<GithubResult<K>>,
+    ) =>
+    async (...args: Parameters<GithubGateway[K]>): Promise<GithubResult<K>> => {
       calls[key].push(args);
       const queued: GithubResult<K> | Array<GithubResult<K>> | undefined = results[key];
       if (Array.isArray(queued)) {
@@ -87,7 +90,7 @@ export function makeFakes(overrides?: {
       if (impl) return impl(...args);
       return fromState(...args);
     };
-  const client: GithubPort = {
+  const client: GithubGateway = {
     getPrRefs: method("getPrRefs", async () => ok({ baseSha: "base-sha", headSha: "head-sha" })),
     listPrFiles: method("listPrFiles", async () => ok(files)),
     // Commit/compare fakes mirror the PR refs so the same contents table serves every target kind
@@ -117,7 +120,7 @@ export function makeFakes(overrides?: {
     ),
     batchBlobTexts: method("batchBlobTexts", async () => ok({})),
   };
-  const differ: DifferPort = {
+  const differ: DifferGateway = {
     diff: overrides?.diff ?? (() => ok(DIFF)),
     diffWithAssets: overrides?.diffWithAssets ?? (() => ok(DIFF)),
     // Fixture contents are shorthand strings, not real UnityYAML: accept by default.

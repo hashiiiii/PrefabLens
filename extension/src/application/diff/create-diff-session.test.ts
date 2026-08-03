@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ok } from "../domain/result";
+import { ok } from "../../domain/result";
 import { createDiffSession } from "./create-diff-session";
 
 describe("createDiffSession blob cache", () => {

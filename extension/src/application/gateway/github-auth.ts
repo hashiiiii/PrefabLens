@@ -17,7 +17,7 @@ export type PollResult =
   | { status: "expired" }
   | { status: "failed" };
 
-export type GithubAuthPort = {
+export type GithubAuthGateway = {
   requestDeviceCode(fetchFn: typeof fetch): Promise<Result<DeviceCode, DeviceFlowFailure>>;
   pollForToken(fetchFn: typeof fetch, sleep: (ms: number) => Promise<void>, code: DeviceCode): Promise<PollResult>;
 };

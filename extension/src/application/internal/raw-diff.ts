@@ -1,17 +1,23 @@
-import type { DiffRepository } from "../domain/diff/diff-repository";
-import { parseGuidFromMeta } from "../domain/diff/fn/parse-guid-from-meta";
-import { targetKey } from "../domain/diff/fn/target-key";
-import type { DiffTarget } from "../domain/diff/types";
-import { err, ok, type Result } from "../domain/result";
-import type { DiffContext, DiffOutcome, DiffSession } from "./create-diff-session";
-import type { DifferPort } from "./port/differ";
-import { type ChangedFile, type GithubFailure, type GithubPort, isRateLimited, type RefPair } from "./port/github";
+import type { DiffRepository } from "../../domain/diff/diff-repository";
+import { parseGuidFromMeta } from "../../domain/diff/fn/parse-guid-from-meta";
+import { targetKey } from "../../domain/diff/fn/target-key";
+import type { DiffTarget } from "../../domain/diff/types";
+import { err, ok, type Result } from "../../domain/result";
+import type { DiffContext, DiffOutcome, DiffSession } from "../diff/create-diff-session";
+import type { DifferGateway } from "../gateway/differ";
+import {
+  type ChangedFile,
+  type GithubFailure,
+  type GithubGateway,
+  isRateLimited,
+  type RefPair,
+} from "../gateway/github";
 
 const EMPTY = new Uint8Array(0);
 const TOO_LARGE_BYTES = 25 * 1024 * 1024; // over 25MB renders on click
 const MAX_CONCURRENT_META_FETCHES = 8;
 
-type BlobClient = Pick<GithubPort, "getBlobRaw" | "getFileAtRef">;
+type BlobClient = Pick<GithubGateway, "getBlobRaw" | "getFileAtRef">;
 type MetaFetcher = (path: string, side: "base" | "head") => Promise<Result<string | null, GithubFailure>>;
 
 // Prefer blob-sha when known (#110); 404 (force push) falls back to path+ref
@@ -108,7 +114,7 @@ async function createGuidIndex(
 
 // Per-kind: refs + changed-file discovery; everything downstream is target-agnostic
 async function loadRefsAndFiles(
-  client: GithubPort,
+  client: GithubGateway,
   owner: string,
   repo: string,
   target: DiffTarget,
@@ -143,7 +149,7 @@ async function loadRefsAndFiles(
 
 export function getContext(
   session: DiffSession,
-  client: GithubPort,
+  client: GithubGateway,
   owner: string,
   repo: string,
   target: DiffTarget,
@@ -184,9 +190,9 @@ export function getContext(
 
 // Raw sha-keyed diff only; resolution/source merge stay out (Code Search improves later)
 async function computeDiff(
-  getDiffer: () => Promise<DifferPort>,
+  getDiffer: () => Promise<DifferGateway>,
   session: DiffSession,
-  client: GithubPort,
+  client: GithubGateway,
   ctx: DiffContext,
   owner: string,
   repo: string,
@@ -212,10 +218,10 @@ async function computeDiff(
 
 // Sha-keyed: a push produces a new key (no invalidation)
 export function getDiff(
-  getDiffer: () => Promise<DifferPort>,
+  getDiffer: () => Promise<DifferGateway>,
   diffStore: DiffRepository,
   session: DiffSession,
-  client: GithubPort,
+  client: GithubGateway,
   ctx: DiffContext,
   owner: string,
   repo: string,

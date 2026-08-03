@@ -15,7 +15,7 @@ export function isAuthFailed(e: unknown): e is Extract<GithubFailure, { kind: "a
 export type ChangedFile = { path: string; status: string; previousPath?: string; sha?: string };
 export type RefPair = { baseSha: string; headSha: string };
 
-export type GithubPort = {
+export type GithubGateway = {
   getPrRefs(owner: string, repo: string, prNumber: number): Promise<Result<RefPair, GithubFailure>>;
   listPrFiles(owner: string, repo: string, prNumber: number): Promise<Result<ChangedFile[], GithubFailure>>;
   getCommit(

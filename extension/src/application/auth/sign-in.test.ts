@@ -2,8 +2,8 @@ import { describe, expect, it } from "vitest";
 import type { PendingSignIn } from "../../domain/auth/token";
 import type { TokenRepository } from "../../domain/auth/token-repository";
 import { err, ok } from "../../domain/result";
-import type { DeviceCode, GithubAuthPort, PollResult } from "../port/github-auth";
-import { emptySignInState, type SignInUi, signIn } from "./sign-in";
+import type { DeviceCode, GithubAuthGateway, PollResult } from "../gateway/github-auth";
+import { signIn } from "./sign-in";
 
 const CODE: DeviceCode = {
   deviceCode: "dc1",
@@ -19,7 +19,7 @@ function fakeDeps(poll: () => Promise<PollResult>) {
   const pendings: PendingSignIn[] = [];
   const tokens: string[] = [];
   const urls: string[] = [];
-  const auth: GithubAuthPort = {
+  const auth: GithubAuthGateway = {
     async requestDeviceCode() {
       calls.push("request");
       return ok(CODE);
@@ -61,9 +61,9 @@ function fakeDeps(poll: () => Promise<PollResult>) {
 function fakeUi() {
   const pending: Array<{ userCode: string; verificationUri: string }> = [];
   const failures: string[] = [];
-  const ui: SignInUi = {
-    showPending: (userCode, verificationUri) => void pending.push({ userCode, verificationUri }),
-    showFailure: (message) => void failures.push(message),
+  const ui = {
+    showPending: (userCode: string, verificationUri: string) => void pending.push({ userCode, verificationUri }),
+    showFailure: (message: string) => void failures.push(message),
   };
   return { ui, pending, failures };
 }
@@ -75,7 +75,7 @@ describe("signIn", () => {
       token: "tok123",
     }));
     const { ui, pending, failures } = fakeUi();
-    const state = emptySignInState();
+    const state = { inFlight: false };
     await signIn(auth, tokenStore, fetchFn, sleep, openTab, now, state, ui);
     // expiresAt derives from the injected now(): 1000 + 900s in ms.
     expect(pendings).toEqual([{ userCode: "ABCD-1234", expiresAt: 901_000 }]);
@@ -93,7 +93,7 @@ describe("signIn", () => {
       status: "denied",
     }));
     const { ui, failures } = fakeUi();
-    const state = emptySignInState();
+    const state = { inFlight: false };
     await signIn(auth, tokenStore, fetchFn, sleep, openTab, now, state, ui);
     expect(failures).toEqual(["Authorization denied — try again."]);
     expect(tokens).toEqual([]);
@@ -103,7 +103,7 @@ describe("signIn", () => {
   it("maps expired to its failure copy", async () => {
     const { auth, tokenStore, fetchFn, sleep, openTab, now } = fakeDeps(async () => ({ status: "expired" }));
     const { ui, failures } = fakeUi();
-    const state = emptySignInState();
+    const state = { inFlight: false };
     await signIn(auth, tokenStore, fetchFn, sleep, openTab, now, state, ui);
     expect(failures).toEqual(["Code expired — try again."]);
   });
@@ -115,7 +115,7 @@ describe("signIn", () => {
     }));
     auth.requestDeviceCode = async () => err({ kind: "device-flow-failed", message: "network down" });
     const { ui, failures } = fakeUi();
-    const state = emptySignInState();
+    const state = { inFlight: false };
     await signIn(auth, tokenStore, fetchFn, sleep, openTab, now, state, ui);
     expect(failures).toEqual(["Sign-in failed — try again."]);
     expect(calls).not.toContain("openTab");
@@ -127,7 +127,7 @@ describe("signIn", () => {
       () => new Promise<PollResult>((resolve) => (resolvePoll = resolve)),
     );
     const { ui } = fakeUi();
-    const state = emptySignInState();
+    const state = { inFlight: false };
     const first = signIn(auth, tokenStore, fetchFn, sleep, openTab, now, state, ui);
     await signIn(auth, tokenStore, fetchFn, sleep, openTab, now, state, ui); // resolves immediately: the guard rejects re-entry
     expect(calls.filter((c) => c === "request")).toHaveLength(1);

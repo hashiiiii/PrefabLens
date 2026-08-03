@@ -1,4 +1,4 @@
-import type { DifferPort, DiffFailure } from "../../application/port/differ";
+import type { DifferGateway, DiffFailure } from "../../application/gateway/differ";
 import type { DiffErrorV1, DiffV2 } from "../../domain/diff/types";
 import { err, ok, type Result } from "../../domain/result";
 
@@ -34,7 +34,7 @@ function encodeAssets(assets: Map<string, Uint8Array>): Uint8Array {
   return out;
 }
 
-export async function createDiffer(wasmBytes: BufferSource): Promise<DifferPort> {
+export async function createDiffer(wasmBytes: BufferSource): Promise<DifferGateway> {
   const { instance } = await WebAssembly.instantiate(wasmBytes);
   const exp = instance.exports as unknown as Exports;
 

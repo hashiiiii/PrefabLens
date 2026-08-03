@@ -1,9 +1,9 @@
-import { emptySignInState, signIn } from "../../application/auth/sign-in";
+import { signIn } from "../../application/auth/sign-in";
+import { createGithubAuth, createMessenger, createTokenStore } from "../../container";
 import { targetKey } from "../../domain/diff/fn/target-key";
 import { unresolvedRemaining } from "../../domain/diff/fn/unresolved-remaining";
 import type { BackgroundError, GuidResolvedPush } from "../../domain/diff/types";
-import { createGithubAuth, createMessenger, createTokenStore } from "../../infrastructure/container";
-import { must } from "../../must";
+import { must } from "../../internal/must";
 import {
   render,
   renderError,
@@ -11,7 +11,7 @@ import {
   renderSignIn,
   renderSignInPending,
   renderTooLarge,
-} from "../renderer/render";
+} from "../internal/render";
 import { type DiffPage, type FileEntry, parseDiffUrl, parsePrPage, scanUnityFiles } from "./detect";
 import { fillDeviceCode } from "./device-page";
 import { addAuthRetry, emptyAuthRetries, flushAuthRetries } from "./overlay/auth-retries";
@@ -67,7 +67,7 @@ const authRetries = emptyAuthRetries();
 const messenger = createMessenger();
 const tokenStore = createTokenStore();
 const auth = createGithubAuth();
-const signInState = emptySignInState();
+const signInState = { inFlight: false };
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 const openTab = (url: string) => void window.open(url, "_blank", "noopener");
 const now = () => Date.now();

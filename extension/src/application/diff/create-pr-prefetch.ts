@@ -4,11 +4,11 @@ import { repoKey } from "../../domain/diff/fn/repo-key";
 import type { PrefetchRequest } from "../../domain/diff/types";
 import type { RepoIndexRepository } from "../../domain/guid/repo-index-repository";
 import { isUnityPath } from "../../domain/unity/fn/is-unity-path";
-import type { DiffSession } from "../create-diff-session";
-import { getContext, getDiff } from "../get-raw-diff";
-import { getRepoIndex } from "../get-repo-index";
-import type { DifferPort } from "../port/differ";
-import type { GithubPort } from "../port/github";
+import type { DifferGateway } from "../gateway/differ";
+import type { GithubGateway } from "../gateway/github";
+import { getContext, getDiff } from "../internal/raw-diff";
+import { getRepoIndex } from "../internal/repo-index";
+import type { DiffSession } from "./create-diff-session";
 
 const PREFETCH_MAX = 100; // bounds API usage per PR
 const PREFETCH_CONCURRENCY = 4;
@@ -17,8 +17,8 @@ const API_BASE = __API_BASE__;
 // Raw diff only — leave Code Search / source merge to serve time (10 req/min)
 export async function createPrPrefetch(
   tokenStore: TokenRepository,
-  makeClient: (base: string, token: string, lane: "user" | "prefetch") => GithubPort,
-  getDiffer: () => Promise<DifferPort>,
+  makeClient: (base: string, token: string, lane: "user" | "prefetch") => GithubGateway,
+  getDiffer: () => Promise<DifferGateway>,
   diffStore: DiffRepository,
   repoIndexStore: RepoIndexRepository,
   session: DiffSession,

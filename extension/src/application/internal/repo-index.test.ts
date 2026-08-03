@@ -1,13 +1,13 @@
 import { describe, expect, it } from "vitest";
-import type { RepoIndexRepository } from "../domain/guid/repo-index-repository";
-import { err, ok } from "../domain/result";
-import { createDiffSession } from "./create-diff-session";
-import { getRepoIndex } from "./get-repo-index";
-import type { GithubPort } from "./port/github";
+import type { RepoIndexRepository } from "../../domain/guid/repo-index-repository";
+import { err, ok } from "../../domain/result";
+import { createDiffSession } from "../diff/create-diff-session";
+import type { GithubGateway } from "../gateway/github";
+import { getRepoIndex } from "./repo-index";
 
 const REPO_KEY = "repoKey";
 
-type Client = Pick<GithubPort, "listMetaTree" | "batchBlobTexts">;
+type Client = Pick<GithubGateway, "listMetaTree" | "batchBlobTexts">;
 
 function makeFakes(overrides?: {
   metas?: Array<{ path: string; sha: string }>;

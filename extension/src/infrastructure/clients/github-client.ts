@@ -1,6 +1,6 @@
-import { type ChangedFile, type GithubFailure, isRateLimited, type RefPair } from "../../application/port/github";
+import { type ChangedFile, type GithubFailure, isRateLimited, type RefPair } from "../../application/gateway/github";
 import { err, ok, type Result } from "../../domain/result";
-import type { Queue } from "./fetch-queue";
+import type { Queue } from "./fetch-queue-client";
 
 // retry-after (seconds) wins; else x-ratelimit-reset (epoch seconds) relative to now.
 // Number(null) is 0 and Number("") is NaN, so absent headers fail the > 0 guards.

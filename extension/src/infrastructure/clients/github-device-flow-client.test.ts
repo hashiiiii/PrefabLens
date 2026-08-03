@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
-import type { DeviceCode } from "../../application/port/github-auth";
+import type { DeviceCode } from "../../application/gateway/github-auth";
 import { err, ok } from "../../domain/result";
-import { must } from "../../must";
-import { CLIENT_ID, pollForToken, requestDeviceCode } from "./github-device-flow";
+import { must } from "../../internal/must";
+import { CLIENT_ID, pollForToken, requestDeviceCode } from "./github-device-flow-client";
 
 // Queue-based fetch fake: each call shifts the next canned Response and records the request.
 function fakeFetch(responses: Response[]) {

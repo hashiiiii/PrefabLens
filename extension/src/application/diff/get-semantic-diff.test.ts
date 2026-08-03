@@ -5,16 +5,16 @@ import type { DiffV2, GuidResolvedPush, SemanticDiffRequest, SemanticDiffRespons
 import type { GuidRepository } from "../../domain/guid/guid-repository";
 import type { RepoIndexRepository } from "../../domain/guid/repo-index-repository";
 import { err, ok } from "../../domain/result";
-import { must } from "../../must";
-import { createDiffSession, type DiffSession } from "../create-diff-session";
-import type { DifferPort } from "../port/differ";
-import type { GithubPort } from "../port/github";
+import { must } from "../../internal/must";
+import type { DifferGateway } from "../gateway/differ";
+import type { GithubGateway } from "../gateway/github";
+import { DIFF, makeFakes, REQ, resolveFully } from "../internal/diff-fakes";
+import { createDiffSession, type DiffSession } from "./create-diff-session";
 import { createPrPrefetch } from "./create-pr-prefetch";
-import { DIFF, makeFakes, REQ, resolveFully } from "./diff-test-fakes";
 import { getSemanticDiff } from "./get-semantic-diff";
 
-type MakeClient = (base: string, token: string, lane: "user" | "prefetch") => GithubPort;
-type GetDiffer = () => Promise<DifferPort>;
+type MakeClient = (base: string, token: string, lane: "user" | "prefetch") => GithubGateway;
+type GetDiffer = () => Promise<DifferGateway>;
 
 /** Cleanup for a pending response: wait until the done push arrives before asserting. */
 async function serveAndResolve(
@@ -122,8 +122,8 @@ describe("semanticDiff", () => {
   });
 
   it("uses an empty before for added files without fetching the base side", async () => {
-    const diffCalls: Array<Parameters<DifferPort["diff"]>> = [];
-    const diff: DifferPort["diff"] = (...args) => {
+    const diffCalls: Array<Parameters<DifferGateway["diff"]>> = [];
+    const diff: DifferGateway["diff"] = (...args) => {
       diffCalls.push(args);
       return ok(DIFF);
     };
@@ -147,8 +147,8 @@ describe("semanticDiff", () => {
   });
 
   it("uses an empty after for removed files without fetching the head side", async () => {
-    const diffCalls: Array<Parameters<DifferPort["diff"]>> = [];
-    const diff: DifferPort["diff"] = (...args) => {
+    const diffCalls: Array<Parameters<DifferGateway["diff"]>> = [];
+    const diff: DifferGateway["diff"] = (...args) => {
       diffCalls.push(args);
       return ok(DIFF);
     };
@@ -174,8 +174,8 @@ describe("semanticDiff", () => {
   it("rejects a file whose content is not UnityYAML on either side", async () => {
     // Real sniff behavior lives in wasm-differ.test.ts. Here the fake reproduces its
     // contract, so the test covers only the outcome plumbing (computeDiff -> response).
-    const diffCalls: Array<Parameters<DifferPort["diff"]>> = [];
-    const diff: DifferPort["diff"] = (...args) => {
+    const diffCalls: Array<Parameters<DifferGateway["diff"]>> = [];
+    const diff: DifferGateway["diff"] = (...args) => {
       diffCalls.push(args);
       return ok(DIFF);
     };
@@ -204,7 +204,7 @@ describe("semanticDiff", () => {
     // deterministic for a given blob pair, so a second toggle must serve the
     // cached outcome instead of re-fetching and re-sniffing.
     let sniffCount = 0;
-    const isUnityYaml: DifferPort["isUnityYaml"] = () => {
+    const isUnityYaml: DifferGateway["isUnityYaml"] = () => {
       sniffCount += 1;
       return false;
     };
@@ -628,8 +628,8 @@ describe("semanticDiff", () => {
 
   it("returns too-large above 25MB unless forced", async () => {
     const big = new Uint8Array(13 * 1024 * 1024); // 26MB across base+head
-    const diffCalls: Array<Parameters<DifferPort["diff"]>> = [];
-    const diff: DifferPort["diff"] = (...args) => {
+    const diffCalls: Array<Parameters<DifferGateway["diff"]>> = [];
+    const diff: DifferGateway["diff"] = (...args) => {
       diffCalls.push(args);
       return ok(DIFF);
     };
@@ -707,8 +707,8 @@ describe("semanticDiff", () => {
     });
 
     it("uses the files-api sha for the base side of removed files", async () => {
-      const diffCalls: Array<Parameters<DifferPort["diff"]>> = [];
-      const diff: DifferPort["diff"] = (...args) => {
+      const diffCalls: Array<Parameters<DifferGateway["diff"]>> = [];
+      const diff: DifferGateway["diff"] = (...args) => {
         diffCalls.push(args);
         return ok(DIFF);
       };
@@ -872,8 +872,8 @@ describe("semanticDiff", () => {
     const MERGED: DiffV2 = { schema: "prefablens.diff.v2", unresolvedGuids: ["src1"], roots: [], loose: [] };
 
     it("fetches the resolved source at head and re-diffs with assets", async () => {
-      const diffWithAssetsCalls: Array<Parameters<DifferPort["diffWithAssets"]>> = [];
-      const diffWithAssets: DifferPort["diffWithAssets"] = (...args) => {
+      const diffWithAssetsCalls: Array<Parameters<DifferGateway["diffWithAssets"]>> = [];
+      const diffWithAssets: DifferGateway["diffWithAssets"] = (...args) => {
         diffWithAssetsCalls.push(args);
         return ok(MERGED);
       };
@@ -906,7 +906,7 @@ describe("semanticDiff", () => {
     });
 
     it("fetches removed-instance sources from the base side", async () => {
-      const diffWithAssets: DifferPort["diffWithAssets"] = () => ok(MERGED);
+      const diffWithAssets: DifferGateway["diffWithAssets"] = () => ok(MERGED);
       const { tokenStore, makeClient, getDiffer, guidCache, diffStore, repoIndexStore, calls } = makeFakes({
         diff: () => ok({ ...NEEDS, neededSources: [{ guid: "src1", side: "before" }] }),
         diffWithAssets,
@@ -931,7 +931,7 @@ describe("semanticDiff", () => {
     });
 
     it("fetches a before-side source riding the base-tree blob sha", async () => {
-      const diffWithAssets: DifferPort["diffWithAssets"] = () => ok(MERGED);
+      const diffWithAssets: DifferGateway["diffWithAssets"] = () => ok(MERGED);
       const { tokenStore, makeClient, getDiffer, guidCache, diffStore, repoIndexStore, calls } = makeFakes({
         diff: () => ok({ ...NEEDS, neededSources: [{ guid: "src1", side: "before" }] }),
         diffWithAssets,
@@ -959,8 +959,8 @@ describe("semanticDiff", () => {
     });
 
     it("skips binary-serialized sources without counting them as progress", async () => {
-      const diffWithAssetsCalls: Array<Parameters<DifferPort["diffWithAssets"]>> = [];
-      const diffWithAssets: DifferPort["diffWithAssets"] = (...args) => {
+      const diffWithAssetsCalls: Array<Parameters<DifferGateway["diffWithAssets"]>> = [];
+      const diffWithAssets: DifferGateway["diffWithAssets"] = (...args) => {
         diffWithAssetsCalls.push(args);
         return ok(MERGED);
       };
@@ -995,8 +995,8 @@ describe("semanticDiff", () => {
       // Each merge output requests the next source, which always resolves: without the cap
       // a deep source chain would keep re-diffing forever.
       let round = 0;
-      const diffWithAssetsCalls: Array<Parameters<DifferPort["diffWithAssets"]>> = [];
-      const diffWithAssets: DifferPort["diffWithAssets"] = (...args) => {
+      const diffWithAssetsCalls: Array<Parameters<DifferGateway["diffWithAssets"]>> = [];
+      const diffWithAssets: DifferGateway["diffWithAssets"] = (...args) => {
         diffWithAssetsCalls.push(args);
         round += 1;
         return ok({
@@ -1038,8 +1038,8 @@ describe("semanticDiff", () => {
     });
 
     it("keeps the first-pass diff when the source path cannot be resolved", async () => {
-      const diffWithAssetsCalls: Array<Parameters<DifferPort["diffWithAssets"]>> = [];
-      const diffWithAssets: DifferPort["diffWithAssets"] = (...args) => {
+      const diffWithAssetsCalls: Array<Parameters<DifferGateway["diffWithAssets"]>> = [];
+      const diffWithAssets: DifferGateway["diffWithAssets"] = (...args) => {
         diffWithAssetsCalls.push(args);
         return ok(MERGED);
       };
@@ -1064,8 +1064,8 @@ describe("semanticDiff", () => {
 
     it("does not loop when the merged output still needs the same source", async () => {
       // If supplying still leaves it degraded (a broken source, etc.), don't loop forever on the same guid.
-      const diffWithAssetsCalls: Array<Parameters<DifferPort["diffWithAssets"]>> = [];
-      const diffWithAssets: DifferPort["diffWithAssets"] = (...args) => {
+      const diffWithAssetsCalls: Array<Parameters<DifferGateway["diffWithAssets"]>> = [];
+      const diffWithAssets: DifferGateway["diffWithAssets"] = (...args) => {
         diffWithAssetsCalls.push(args);
         return ok(NEEDS);
       };
@@ -1101,8 +1101,8 @@ describe("semanticDiff", () => {
         neededSources: [{ guid: "src1", side: "after" }],
       };
       const merged: DiffV2 = { ...DIFF, unresolvedGuids: ["src1"] };
-      const diffWithAssetsCalls: Array<Parameters<DifferPort["diffWithAssets"]>> = [];
-      const diffWithAssets: DifferPort["diffWithAssets"] = (...args) => {
+      const diffWithAssetsCalls: Array<Parameters<DifferGateway["diffWithAssets"]>> = [];
+      const diffWithAssets: DifferGateway["diffWithAssets"] = (...args) => {
         diffWithAssetsCalls.push(args);
         return ok(merged);
       };
@@ -1266,8 +1266,8 @@ describe("semanticDiff with push (two-stage)", () => {
     // The first index build can take tens of seconds and cannot help: no guid names are missing.
     // Resolve the source guid via the in-PR .meta index so remaining is empty but neededSources remains.
     const merged: DiffV2 = { ...DIFF, unresolvedGuids: [] };
-    const diffWithAssetsCalls: Array<Parameters<DifferPort["diffWithAssets"]>> = [];
-    const diffWithAssets: DifferPort["diffWithAssets"] = (...args) => {
+    const diffWithAssetsCalls: Array<Parameters<DifferGateway["diffWithAssets"]>> = [];
+    const diffWithAssets: DifferGateway["diffWithAssets"] = (...args) => {
       diffWithAssetsCalls.push(args);
       return ok(merged);
     };
@@ -1363,8 +1363,8 @@ describe("semanticDiff with push (two-stage)", () => {
     // and once the repo index resolves the source guid, the re-merged json arrives in the final push
     const withSource: DiffV2 = { ...DIFF, unresolvedGuids: ["src1"], neededSources: [{ guid: "src1", side: "after" }] };
     const merged: DiffV2 = { ...DIFF, unresolvedGuids: ["src1"], resolved: { src1: "Assets/Src.prefab" } };
-    const diffWithAssetsCalls: Array<Parameters<DifferPort["diffWithAssets"]>> = [];
-    const diffWithAssets: DifferPort["diffWithAssets"] = (...args) => {
+    const diffWithAssetsCalls: Array<Parameters<DifferGateway["diffWithAssets"]>> = [];
+    const diffWithAssets: DifferGateway["diffWithAssets"] = (...args) => {
       diffWithAssetsCalls.push(args);
       return ok(merged);
     };

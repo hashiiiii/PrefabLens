@@ -9,8 +9,8 @@ import {
   createDemoFetchBytes,
   createDemoFetchSource,
   createFixtureGuidIndexLoader,
-} from "../../infrastructure/container";
-import { must } from "../../must";
+} from "../../container";
+import { must } from "../../internal/must";
 import type { View } from "../content/overlay/view-mode";
 import {
   defaultView,
@@ -21,7 +21,7 @@ import {
   setOverride,
 } from "../content/overlay/view-state";
 import { injectPageStyles, mountToggle } from "../content/toggle";
-import { render, renderError, renderLoading } from "../renderer/render";
+import { render, renderError, renderLoading } from "../internal/render";
 
 type DemoLocals = {
   differ: Awaited<ReturnType<typeof createDemoDiffer>>;

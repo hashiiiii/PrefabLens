@@ -1,19 +1,19 @@
 import { expect, it } from "vitest";
 import type { DiffV2 } from "../../domain/diff/types";
 import { err, ok } from "../../domain/result";
-import type { DifferPort } from "../port/differ";
+import type { DifferGateway } from "../gateway/differ";
 import { getLocalDiff } from "./get-local-diff";
 
 const DIFF: DiffV2 = { schema: "prefablens.diff.v2", unresolvedGuids: ["g1"], roots: [], loose: [] };
 const enc = (s: string) => new TextEncoder().encode(s) as Uint8Array<ArrayBuffer>;
 
 function makeFakes(overrides?: {
-  diff?: DifferPort["diff"];
-  diffWithAssets?: DifferPort["diffWithAssets"];
+  diff?: DifferGateway["diff"];
+  diffWithAssets?: DifferGateway["diffWithAssets"];
   files?: Record<string, string>; // url → text
   sources?: Record<string, string>; // `${side}/${path}` → text
 }) {
-  const differ: DifferPort = {
+  const differ: DifferGateway = {
     diff: overrides?.diff ?? (() => ok(DIFF)),
     diffWithAssets: overrides?.diffWithAssets ?? (() => ok(DIFF)),
     isUnityYaml: () => true,

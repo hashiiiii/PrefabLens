@@ -1,26 +1,26 @@
-import type { DifferPort } from "../application/port/differ";
-import type { GithubPort } from "../application/port/github";
-import type { GithubAuthPort } from "../application/port/github-auth";
-import type { MessengerPort } from "../application/port/messenger";
-import type { TokenRepository } from "../domain/auth/token-repository";
-import type { DiffRepository } from "../domain/diff/diff-repository";
-import type { GuidRepository } from "../domain/guid/guid-repository";
-import type { RepoIndexRepository } from "../domain/guid/repo-index-repository";
-import { createChromeMessenger } from "./providers/chrome-messenger";
-import { createQueue, type Queue } from "./providers/fetch-queue";
-import { createQueuedFetch, GithubClient } from "./providers/github-client";
-import { pollForToken, requestDeviceCode } from "./providers/github-device-flow";
-import { createDiffer } from "./providers/wasm-differ";
-import { createChromeDiffRepository } from "./repositories/chrome-diff-repository";
-import { createChromeGuidRepository } from "./repositories/chrome-guid-repository";
-import { createChromeRepoIndexRepository } from "./repositories/chrome-repo-index-repository";
-import { createChromeTokenRepository } from "./repositories/chrome-token-repository";
+import type { DifferGateway } from "./application/gateway/differ";
+import type { GithubGateway } from "./application/gateway/github";
+import type { GithubAuthGateway } from "./application/gateway/github-auth";
+import type { MessengerGateway } from "./application/gateway/messenger";
+import type { TokenRepository } from "./domain/auth/token-repository";
+import type { DiffRepository } from "./domain/diff/diff-repository";
+import type { GuidRepository } from "./domain/guid/guid-repository";
+import type { RepoIndexRepository } from "./domain/guid/repo-index-repository";
+import { createChromeMessenger } from "./infrastructure/clients/chrome-messenger-client";
+import { createQueue, type Queue } from "./infrastructure/clients/fetch-queue-client";
+import { createQueuedFetch, GithubClient } from "./infrastructure/clients/github-client";
+import { pollForToken, requestDeviceCode } from "./infrastructure/clients/github-device-flow-client";
+import { createDiffer } from "./infrastructure/clients/wasm-differ-client";
+import { createChromeDiffRepository } from "./infrastructure/repositories/chrome-diff-repository";
+import { createChromeGuidRepository } from "./infrastructure/repositories/chrome-guid-repository";
+import { createChromeRepoIndexRepository } from "./infrastructure/repositories/chrome-repo-index-repository";
+import { createChromeTokenRepository } from "./infrastructure/repositories/chrome-token-repository";
 
 export function createTokenStore(): TokenRepository {
   return createChromeTokenRepository(chrome.storage.local);
 }
 
-export function createMessenger(): MessengerPort {
+export function createMessenger(): MessengerGateway {
   return createChromeMessenger();
 }
 
@@ -36,11 +36,11 @@ export function createRepoIndexStore(): RepoIndexRepository {
   return createChromeRepoIndexRepository(chrome.storage.local);
 }
 
-export function createGithubAuth(): GithubAuthPort {
+export function createGithubAuth(): GithubAuthGateway {
   return { requestDeviceCode, pollForToken };
 }
 
-export function createGithubClient(base: string, token: string, fetchFn: typeof fetch): GithubPort {
+export function createGithubClient(base: string, token: string, fetchFn: typeof fetch): GithubGateway {
   return new GithubClient(base, token, fetchFn);
 }
 
@@ -52,8 +52,8 @@ export function createGithubFetch(queue: Queue, lane: "user" | "prefetch"): type
   return createQueuedFetch(queue, lane === "user");
 }
 
-export function createDifferLoader(): () => Promise<DifferPort> {
-  let differ: Promise<DifferPort> | undefined;
+export function createDifferLoader(): () => Promise<DifferGateway> {
+  let differ: Promise<DifferGateway> | undefined;
   return () => {
     // Lazy singleton; SW restart → re-fetch
     differ ??= fetch(chrome.runtime.getURL("prefablens.wasm"))
@@ -63,7 +63,7 @@ export function createDifferLoader(): () => Promise<DifferPort> {
   };
 }
 
-export async function createDemoDiffer(): Promise<DifferPort> {
+export async function createDemoDiffer(): Promise<DifferGateway> {
   const bytes = await createDemoFetchBytes()("prefablens.wasm");
   return createDiffer(bytes);
 }

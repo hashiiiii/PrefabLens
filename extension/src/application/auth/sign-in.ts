@@ -1,14 +1,5 @@
 import type { TokenRepository } from "../../domain/auth/token-repository";
-import type { GithubAuthPort } from "../port/github-auth";
-
-export type SignInState = { inFlight: boolean };
-
-export const emptySignInState = (): SignInState => ({ inFlight: false });
-
-export type SignInUi = {
-  showPending(userCode: string, verificationUri: string): void;
-  showFailure(message: string): void;
-};
+import type { GithubAuthGateway } from "../gateway/github-auth";
 
 const FAILURE_TEXT = {
   denied: "Authorization denied — try again.",
@@ -17,14 +8,17 @@ const FAILURE_TEXT = {
 } as const;
 
 export async function signIn(
-  auth: GithubAuthPort,
+  auth: GithubAuthGateway,
   tokenStore: TokenRepository,
   fetchFn: typeof fetch,
   sleep: (ms: number) => Promise<void>,
   openTab: (url: string) => void,
   now: () => number,
-  state: SignInState,
-  ui: SignInUi,
+  state: { inFlight: boolean },
+  ui: {
+    showPending(userCode: string, verificationUri: string): void;
+    showFailure(message: string): void;
+  },
 ): Promise<void> {
   if (state.inFlight) return;
   state.inFlight = true;

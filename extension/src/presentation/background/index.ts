@@ -1,7 +1,6 @@
-import { createDiffSession } from "../../application/create-diff-session";
+import { createDiffSession } from "../../application/diff/create-diff-session";
 import { createPrPrefetch } from "../../application/diff/create-pr-prefetch";
 import { getSemanticDiff } from "../../application/diff/get-semantic-diff";
-import type { BackgroundRequest, GuidResolvedPush } from "../../domain/diff/types";
 import {
   createDifferLoader,
   createDiffStore,
@@ -11,7 +10,8 @@ import {
   createGuidCache,
   createRepoIndexStore,
   createTokenStore,
-} from "../../infrastructure/container";
+} from "../../container";
+import type { BackgroundRequest, GuidResolvedPush } from "../../domain/diff/types";
 
 const tokenStore = createTokenStore();
 const guidCache = createGuidCache();

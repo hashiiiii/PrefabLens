@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { isAuthFailed, isRateLimited } from "../../application/port/github";
+import { isAuthFailed, isRateLimited } from "../../application/gateway/github";
 import { err, ok } from "../../domain/result";
-import { must } from "../../must";
-import { createQueue } from "./fetch-queue";
+import { must } from "../../internal/must";
+import { createQueue } from "./fetch-queue-client";
 import { createQueuedFetch, GithubClient } from "./github-client";
 
 // fetch fake that returns a fixed path→response table. It also records calls.

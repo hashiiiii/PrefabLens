@@ -12,18 +12,18 @@ import type {
 } from "../../domain/diff/types";
 import type { GuidRepository } from "../../domain/guid/guid-repository";
 import type { RepoIndexRepository } from "../../domain/guid/repo-index-repository";
-import type { DiffContext, DiffSession } from "../create-diff-session";
-import { getBlob, getContext, getDiff, getPair } from "../get-raw-diff";
-import { getRepoIndex } from "../get-repo-index";
-import type { DifferPort } from "../port/differ";
-import { type GithubPort, isRateLimited } from "../port/github";
+import type { DifferGateway } from "../gateway/differ";
+import { type GithubGateway, isRateLimited } from "../gateway/github";
+import { getBlob, getContext, getDiff, getPair } from "../internal/raw-diff";
+import { getRepoIndex } from "../internal/repo-index";
+import type { DiffContext, DiffSession } from "./create-diff-session";
 
 const API_BASE = __API_BASE__;
 const MAX_SEARCHES = 10; // Code Search is authenticated 10 req/min — don't burn it all in one response
 const MAX_SOURCE_ROUNDS = 3; // re-diff cap for nested sources (independent of core's depth cap of 8)
 
-type SearchClient = Pick<GithubPort, "searchMetaByGuid" | "listMetaTree" | "batchBlobTexts">;
-type ResolutionClient = SearchClient & Pick<GithubPort, "getBlobRaw" | "getFileAtRef">;
+type SearchClient = Pick<GithubGateway, "searchMetaByGuid" | "listMetaTree" | "batchBlobTexts">;
+type ResolutionClient = SearchClient & Pick<GithubGateway, "getBlobRaw" | "getFileAtRef">;
 
 // cache → Code Search; failures (incl. rate limits) don't drop the diff — return what resolved
 async function getGuids(
@@ -89,7 +89,7 @@ async function updateSources(
   guidCache: GuidRepository,
   session: DiffSession,
   first: DiffV2,
-  differ: DifferPort,
+  differ: DifferGateway,
   before: Uint8Array,
   after: Uint8Array,
   ctx: DiffContext,
@@ -154,7 +154,7 @@ function combine(a: ResolutionStatus, b: ResolutionStatus): ResolutionStatus {
 async function updateRemaining(
   guidCache: GuidRepository,
   repoIndexStore: RepoIndexRepository,
-  getDiffer: () => Promise<DifferPort>,
+  getDiffer: () => Promise<DifferGateway>,
   session: DiffSession,
   first: DiffV2,
   remaining: string[],
@@ -238,8 +238,8 @@ async function updateRemaining(
 
 export async function getSemanticDiff(
   tokenStore: TokenRepository,
-  makeClient: (base: string, token: string, lane: "user" | "prefetch") => GithubPort,
-  getDiffer: () => Promise<DifferPort>,
+  makeClient: (base: string, token: string, lane: "user" | "prefetch") => GithubGateway,
+  getDiffer: () => Promise<DifferGateway>,
   guidCache: GuidRepository,
   diffStore: DiffRepository,
   repoIndexStore: RepoIndexRepository,

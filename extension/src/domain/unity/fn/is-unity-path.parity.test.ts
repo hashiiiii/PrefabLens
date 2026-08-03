@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { expect, it } from "vitest";
-import { must } from "../../../must";
+import { must } from "../../../internal/must";
 
 // The UnityYAML extension prefilter is hand-copied in two places: the CLI's
 // git-side gate (unity_path.zig) and the extension's path check (is-unity-path.ts).

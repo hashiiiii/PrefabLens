@@ -1,5 +1,5 @@
-import type { Result } from "../domain/result";
-import type { ChangedFile, GithubFailure, RefPair } from "./port/github";
+import type { Result } from "../../domain/result";
+import type { ChangedFile, GithubFailure, RefPair } from "../gateway/github";
 
 const CONTEXT_TTL_MS = 60_000;
 const BLOB_CACHE_MAX = 32;
@@ -56,7 +56,7 @@ export type DiffContext = {
 };
 
 export type DiffOutcome =
-  | { ok: true; json: import("../domain/diff/types").DiffV2 }
+  | { ok: true; json: import("../../domain/diff/types").DiffV2 }
   | { ok: false; error: "too-large"; bytes: number }
   | { ok: false; error: "not-unity-yaml" | "diff-failed" | "auth-failed" | "rate-limited" | "fetch-failed" };
 

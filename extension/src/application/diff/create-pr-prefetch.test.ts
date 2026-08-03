@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { err, ok } from "../../domain/result";
-import { createDiffSession } from "../create-diff-session";
-import type { ChangedFile } from "../port/github";
+import type { ChangedFile } from "../gateway/github";
+import { DIFF, makeFakes, REQ, resolveFully } from "../internal/diff-fakes";
+import { createDiffSession } from "./create-diff-session";
 import { createPrPrefetch } from "./create-pr-prefetch";
-import { DIFF, makeFakes, REQ, resolveFully } from "./diff-test-fakes";
 
 describe("prefetch", () => {
   it("precomputes diffs so a later toggle serves without new blob fetches", async () => {

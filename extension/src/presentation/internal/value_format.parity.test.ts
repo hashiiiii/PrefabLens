@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { expect, it } from "vitest";
-import { must } from "../../must";
+import { must } from "../../internal/must";
 
 // The diff.v2 value display rules are hand-copied across languages: the
 // extension's formatValue (render.ts), the Unity editor's ValueFormat.cs, and

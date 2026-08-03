@@ -1,6 +1,6 @@
 import { unresolvedRemaining } from "../../../domain/diff/fn/unresolved-remaining";
 import type { BackgroundError, DiffV2, SemanticDiffResponse } from "../../../domain/diff/types";
-import { must } from "../../../must";
+import { must } from "../../../internal/must";
 import type { View } from "./view-mode";
 
 // Per-file raw/semantic state machine (host + fetch latch); unit-testable without a browser.

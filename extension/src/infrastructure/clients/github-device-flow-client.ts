@@ -1,4 +1,4 @@
-import type { DeviceCode, DeviceFlowFailure, PollResult } from "../../application/port/github-auth";
+import type { DeviceCode, DeviceFlowFailure, PollResult } from "../../application/gateway/github-auth";
 import { err, ok, type Result } from "../../domain/result";
 
 // Public client id of the GitHub OAuth App (device flow enabled).

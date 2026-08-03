@@ -1,5 +1,5 @@
-import { isRateLimited } from "../../application/port/github";
-import { must } from "../../must";
+import { isRateLimited } from "../../application/gateway/github";
+import { must } from "../../internal/must";
 
 type Job = {
   run: () => Promise<unknown>;

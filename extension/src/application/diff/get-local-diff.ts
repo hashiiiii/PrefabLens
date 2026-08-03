@@ -1,14 +1,14 @@
 import { applyResolved } from "../../domain/diff/fn/apply-resolved";
 import type { DiffV2 } from "../../domain/diff/types";
 import { ok, type Result } from "../../domain/result";
-import type { DifferPort, DiffFailure } from "../port/differ";
+import type { DifferGateway, DiffFailure } from "../gateway/differ";
 
 const MAX_SOURCE_ROUNDS = 3; // same cap as the background pipeline
 
 // Guid resolution like the background pipeline: applyResolved + source re-merge
 // loop, but source prefabs come from fixture URLs instead of the GitHub API.
 export async function getLocalDiff(
-  differ: DifferPort,
+  differ: DifferGateway,
   index: Map<string, string>,
   fetchBytes: (url: string) => Promise<Uint8Array<ArrayBuffer>>,
   fetchSource: (side: "before" | "after", path: string) => Promise<Uint8Array>,

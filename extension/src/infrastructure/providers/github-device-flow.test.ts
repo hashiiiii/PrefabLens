@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { DeviceCode } from "../../application/port/github-auth";
 import { err, ok } from "../../domain/result";
+import { must } from "../../must";
 import { CLIENT_ID, pollForToken, requestDeviceCode } from "./github-device-flow";
 
 // Queue-based fetch fake: each call shifts the next canned Response and records the request.
@@ -51,7 +52,7 @@ describe("requestDeviceCode", () => {
     expect(result).toEqual(ok(code));
     expect(calls[0]?.url).toBe("https://github.com/login/device/code");
     expect(calls[0]?.init.method).toBe("POST");
-    expect((calls[0]?.init.headers as Record<string, string>).accept).toBe("application/json");
+    expect((must(calls[0]).init.headers as Record<string, string>).accept).toBe("application/json");
     expect(String(calls[0]?.init.body)).toBe(`client_id=${CLIENT_ID}&scope=repo`);
     // Cookie-less like a CLI: the content-script call is same-origin on github.com and must not carry session state.
     expect(calls[0]?.init.credentials).toBe("omit");
@@ -79,7 +80,7 @@ describe("pollForToken", () => {
     expect(result).toEqual({ status: "ok", token: "tok123" });
     expect(delays).toEqual([5000]); // sleep(interval * 1000) runs before every poll, including the first
     expect(calls[0]?.url).toBe("https://github.com/login/oauth/access_token");
-    expect((calls[0]?.init.headers as Record<string, string>).accept).toBe("application/json");
+    expect((must(calls[0]).init.headers as Record<string, string>).accept).toBe("application/json");
     expect(String(calls[0]?.init.body)).toBe(
       `client_id=${CLIENT_ID}&device_code=dc1&grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Adevice_code`,
     );

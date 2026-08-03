@@ -33,6 +33,13 @@
       "allowedVersions": "24"
     },
     {
+      "description": "Cap NUnit below v4: the editor tests compile inside Unity with C# 9, and NUnit 4 classic asserts need C# 14 extension members",
+      "matchPackageNames": [
+        "NUnit"
+      ],
+      "allowedVersions": "<4"
+    },
+    {
       "description": "Keep GitHub Actions on tag references (no SHA pinning) and update them together",
       "matchManagers": [
         "github-actions"

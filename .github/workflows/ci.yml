@@ -60,7 +60,7 @@ jobs:
           echo "version=$version" >> "$GITHUB_OUTPUT"
       - name: Restore Playwright browser cache
         id: playwright-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cache/ms-playwright
           key: ${{ runner.os }}-playwright-${{ steps.playwright-version.outputs.version }}
@@ -99,7 +99,7 @@ jobs:
       - name: Install tools
         uses: jdx/mise-action@v4
       - name: Restore NuGet package cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.nuget/packages
           key: ${{ runner.os }}-nuget-${{ hashFiles('editor/**/*.csproj', 'editor/.config/dotnet-tools.json') }}

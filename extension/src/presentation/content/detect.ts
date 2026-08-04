@@ -54,7 +54,7 @@ export function parsePrPage(pathname: string): { owner: string; repo: string; pr
 function scanClassic(root: ParentNode): FileEntry[] {
   const out: FileEntry[] = [];
   for (const header of root.querySelectorAll<HTMLElement>(".file-header[data-path]")) {
-    // Marked = already wired; its appliers keep serving it, so skip the rebuild
+    // Marked means already wired. Its appliers continue to serve it, so the scan skips the rebuild.
     if (header.hasAttribute("data-prefablens")) continue;
     const path = header.dataset.path;
     if (!path || !isUnityPath(path)) continue;
@@ -106,8 +106,8 @@ function scanReact(root: ParentNode): FileEntry[] {
   const out: FileEntry[] = [];
   for (const region of root.querySelectorAll<HTMLElement>('div[role="region"][id^="diff-"]')) {
     const header = region.querySelector<HTMLElement>('[class*="diff-file-header"]');
-    // Marked = already wired: skip before the header text walk — this loop runs
-    // on every mutation tick over every diff region, Unity or not
+    // Marked means already wired. The scan skips before the header text walk
+    // because this loop runs on every mutation tick over every diff region, Unity or not.
     if (!header || header.hasAttribute("data-prefablens")) continue;
     const path = filePathFromReactHeader(header);
     if (!path || !isUnityPath(path)) continue;
@@ -129,8 +129,8 @@ function scanReact(root: ParentNode): FileEntry[] {
       setRawHidden(hidden) {
         region.toggleAttribute("data-prefablens-raw-hidden", hidden);
         if (hidden) ensureReactRawHideStyle(region.ownerDocument);
-        // Inline fallback for markup the CSS rule misses. Resolve the block once
-        // per call (not per child) — React can reparent between calls, not during one.
+        // An inline fallback for markup that the CSS rule misses. The code resolves the block
+        // one time per call (not per child) because React can reparent between calls, not during one.
         const block = headerBlock();
         for (const child of region.children) {
           if (child === block || child.hasAttribute("data-prefablens-view")) continue;
@@ -151,9 +151,10 @@ function scanReact(root: ParentNode): FileEntry[] {
   return out;
 }
 
-// Always run both: one matches, the other yields []; no layout probe (survives A/B flips).
-// Returns only headers not yet marked data-prefablens — attached files stay served
-// by their existing appliers.
+// The function always runs both scans: one matches, and the other yields [].
+// There is no layout probe, so A/B flips do not break detection. The function
+// returns only headers without the data-prefablens mark. Attached files keep
+// their existing appliers.
 export function scanUnityFiles(root: ParentNode): FileEntry[] {
   return [...scanClassic(root), ...scanReact(root)];
 }

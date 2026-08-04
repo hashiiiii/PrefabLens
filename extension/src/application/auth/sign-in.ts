@@ -1,7 +1,7 @@
 import type { TokenRepository } from "../../domain/auth/token-repository";
 import type { GithubAuthGateway, PollResult } from "../gateway/github-auth";
 
-// Application reports only the outcome kind; presentation owns the copy
+// Application reports only the outcome kind. Presentation owns the user-visible text.
 export type SignInFailure = Exclude<PollResult["status"], "ok">;
 
 export async function signIn(

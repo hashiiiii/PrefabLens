@@ -140,8 +140,8 @@ describe("semanticDiff", () => {
   });
 
   it("rejects a file whose content is not UnityYAML on either side", async () => {
-    // Real sniff behavior lives in wasm-differ-client.test.ts. Here the fake reproduces its
-    // contract, so the test covers only the outcome plumbing (computeDiff -> response).
+    // The real sniff behavior is in wasm-differ-client.test.ts. Here the fake reproduces
+    // its contract, so the test covers only the outcome path (computeDiff -> response).
     const diffCalls: Array<Parameters<DifferGateway["diff"]>> = [];
     const diff: DifferGateway["diff"] = (...args) => {
       diffCalls.push(args);
@@ -255,7 +255,7 @@ describe("semanticDiff", () => {
 
   it("reads renamed files from previousPath on the base side", async () => {
     const { tokenStore, makeClient, getDiffer, guidCache, diffStore, repoIndexStore, calls } = makeFakes({
-      // The client folds GitHub's "renamed" into "modified"; previousPath carries the rename
+      // The client folds the GitHub status "renamed" into "modified". previousPath keeps the rename.
       files: [{ path: "Assets/Foo.prefab", status: "modified", previousPath: "Assets/Old.prefab" }],
       contents: { "Assets/Old.prefab@base-sha": "b", "Assets/Foo.prefab@head-sha": "a" },
     });
@@ -415,7 +415,7 @@ describe("semanticDiff", () => {
     const session = createDiffSession();
     await resolveFully(tokenStore, makeClient, getDiffer, guidCache, diffStore, repoIndexStore, session, REQ);
     expect(calls.searchMetaByGuid).toHaveLength(1);
-    guidCache.data[repoKey(API_BASE, "o", "r")] = { g1: "Assets/Later.cs" }; // as if an index resolution wrote it later
+    guidCache.data[repoKey(API_BASE, "o", "r")] = { g1: "Assets/Later.cs" }; // The seed simulates a later write by an index resolution.
     const res = await resolveFully(
       tokenStore,
       makeClient,

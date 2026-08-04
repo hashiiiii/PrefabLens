@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { gzipSync } from "node:zlib";
 
-const TARGET_KB = 80; // soft target for the gzipped wasm; only LIMIT_KB fails the build
+const TARGET_KB = 80; // Soft target for the gzipped wasm. Only LIMIT_KB fails the build.
 const LIMIT_KB = 150; // CI fails if exceeded
 
 const wasmBuild = spawnSync("zig", ["build", "wasm"], { cwd: "..", stdio: "inherit" });

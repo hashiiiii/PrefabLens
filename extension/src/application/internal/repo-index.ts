@@ -23,7 +23,7 @@ async function updateRepoIndex(
 ): Promise<Result<Record<string, string> | null, GithubFailure>> {
   const existing = await store.loadIndex(repoKey);
   if (existing?.treeSha === ref) return ok(existing.guids);
-  // The stored sha→guid map is independent of the tree fetch; overlap them
+  // The stored sha→guid map is independent of the tree fetch. The two loads run in parallel.
   const [tree, known] = await Promise.all([client.listMetaTree(owner, repo, ref), store.loadGuids(repoKey)]);
   if (!tree.ok) return tree;
   if (tree.value.truncated || tree.value.metas.length > INDEX_MAX_METAS) return ok(null);
@@ -48,7 +48,7 @@ async function updateRepoIndex(
   if (Object.keys(fetched).length) await store.saveGuids(repoKey, fetched);
   const guids: Record<string, string> = {};
   for (const m of tree.value.metas) {
-    // sha keys are hex, so plain lookup cannot hit Object.prototype
+    // The sha keys are hex, so a plain lookup cannot hit Object.prototype.
     const guid = fetched[m.sha] ?? known[m.sha];
     if (guid) guids[guid] = assetPathFromMeta(m.path);
   }

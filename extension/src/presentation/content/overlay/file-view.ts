@@ -20,7 +20,7 @@ export type FilePanel = {
   error(error: BackgroundError): void;
 };
 
-// Floor of 1: show the spinner even when every name resolved but source merging continues
+// When every name is resolved but the source merge continues, the floor of 1 keeps the spinner visible.
 export function resolvingCount(json: DiffV2): number {
   return Math.max(unresolvedRemaining(json).length, 1);
 }
@@ -38,7 +38,7 @@ export type FileResult = { json: DiffV2; retry(): void };
 export type FileViewDeps = {
   file: { setRawHidden(hidden: boolean): void; collapsed(): boolean };
   createHost(): FileHost;
-  requestDiff(force?: boolean): Promise<SemanticDiffResponse>; // never rejects: the messenger client maps channel loss to fetch-failed
+  requestDiff(force?: boolean): Promise<SemanticDiffResponse>; // This call never rejects: the messenger client maps channel loss to fetch-failed.
   results: { set(result: FileResult): void; get(): FileResult | undefined; armWatchdog(): void };
   onAuthRetry(retry: () => void): void;
   effectiveView(): View;

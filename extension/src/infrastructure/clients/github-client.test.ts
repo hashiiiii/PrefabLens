@@ -69,10 +69,10 @@ describe("GithubClient", () => {
     expect(files.ok).toBe(true);
     if (!files.ok) return;
     expect(files.value).toHaveLength(101);
-    // sha is the head-side blob (base-side for removed files) — getPair fetches by it instead of path+ref
+    // The sha is the head blob (the base blob for removed files). getPair fetches by sha, not by path+ref.
     expect(files.value[100]).toEqual({
       path: "Assets/Foo.prefab",
-      // GitHub reports "renamed"; the client folds it into "modified" (previousPath keeps the rename)
+      // GitHub reports "renamed". The client folds it into "modified", and previousPath keeps the rename.
       status: "modified",
       previousPath: "Assets/Old.prefab",
       sha: "blob-head",

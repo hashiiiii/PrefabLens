@@ -56,8 +56,8 @@ export type DiffContext = {
   baseShas: Map<string, string> | null;
 };
 
-// SemanticDiffResponse minus the states only getSemanticDiff can produce
-// (access-token-missing, pending): a new BackgroundError member flows in here.
+// SemanticDiffResponse minus the states that only getSemanticDiff can produce
+// (access-token-missing, pending). A new BackgroundError member flows in here.
 export type DiffOutcome =
   | { ok: true; json: DiffV2 }
   | { ok: false; error: Exclude<BackgroundError, "access-token-missing"> }

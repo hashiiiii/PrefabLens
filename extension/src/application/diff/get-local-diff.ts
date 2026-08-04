@@ -4,9 +4,9 @@ import { ok, type Result } from "../../domain/result";
 import type { DifferGateway, DiffFailure } from "../gateway/differ";
 import { mergeSourceRounds } from "../internal/source-rounds";
 
-// Guid resolution like the background pipeline: applyResolved + the shared
-// source re-merge loop, but source prefabs come from fixture URLs instead of
-// the GitHub API.
+// Guid resolution works like the background pipeline: applyResolved and the
+// shared source re-merge loop. But the source prefabs come from fixture URLs,
+// not from the GitHub API.
 export async function getLocalDiff(
   differ: DifferGateway,
   index: Map<string, string>,

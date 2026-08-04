@@ -70,8 +70,9 @@ export function mountToggle(onSelect: (view: View) => void, initial: View = "raw
   return { element: wrap, set: select };
 }
 
-// The bar DOM matches the [data-prefablens-global] page styles this module owns;
-// the content script and demo must build it identically. Callers position the element.
+// The bar DOM matches the [data-prefablens-global] page styles that this module
+// owns. The content script and the demo must build the bar in the same way.
+// Callers position the element.
 export function mountGlobalBar(
   onSelect: (view: View) => void,
   initial: View,

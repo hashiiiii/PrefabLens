@@ -38,10 +38,13 @@ Dependencies always point inward (toward `domain/`):
 Presentation -> Application -> Domain <- Infrastructure
 ```
 
-`src/layering.test.ts` enforces the import direction, the domain isolation,
-the ban on infrastructure imports of application public functions, the
-presentation ban on `application/internal/`, and the rule that only
-presentation entry points import `src/container.ts`.
+`src/layering.test.ts` enforces these rules:
+
+- the import direction
+- the domain isolation
+- infrastructure does not import application public functions
+- presentation does not import `application/internal/`
+- only presentation entry points import `src/container.ts`
 
 Two modules sit outside the four layers:
 

@@ -10,20 +10,20 @@ export function isRateLimited(e: unknown): e is Extract<GithubFailure, { kind: "
   return typeof e === "object" && e !== null && (e as { kind?: string }).kind === "rate-limited";
 }
 
-// GithubFailure kinds are spelled to be valid BackgroundError members; the
-// intersection return type makes the compiler check that contract here.
+// GithubFailure kinds are spelled to be valid BackgroundError members. The
+// intersection return type lets the compiler enforce that contract here.
 export function toBackgroundError(e: GithubFailure): GithubFailure["kind"] & BackgroundError {
   return e.kind;
 }
 
-// The pipeline only branches on added/removed; the client folds GitHub's other
-// statuses (renamed, copied, changed, unchanged) into "modified".
+// The pipeline branches only on added/removed. The client folds the other
+// GitHub statuses (renamed, copied, changed, unchanged) into "modified".
 export type ChangedFileStatus = "added" | "removed" | "modified";
 // sha is the blob at head (at base for removed files) — the files API provides it for every status.
 export type ChangedFile = { path: string; status: ChangedFileStatus; previousPath?: string; sha?: string };
 export type RefPair = { baseSha: string; headSha: string };
 
-// user lane jumps the queue ahead of prefetch traffic
+// The user lane has priority over the prefetch traffic.
 export type Lane = "user" | "prefetch";
 export type MakeGithubClient = (base: string, token: string, lane: Lane) => GithubGateway;
 

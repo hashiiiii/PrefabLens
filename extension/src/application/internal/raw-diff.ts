@@ -66,7 +66,7 @@ export async function getPair(
       return ok([EMPTY, after.value]);
     }
     case "removed": {
-      // files API sha is head blob, except removed where it is the base blob
+      // The files API sha is the head blob. For removed files, it is the base blob.
       const before = await fetchSide(beforePath, ctx.refs.baseSha, file?.sha);
       if (!before.ok) return before;
       return ok([before.value, EMPTY]);
@@ -109,7 +109,7 @@ async function createGuidIndex(
   for (let i = 0; i < metas.length; i += MAX_CONCURRENT_META_FETCHES) {
     const chunk = metas.slice(i, i + MAX_CONCURRENT_META_FETCHES);
     const failures = await Promise.all(chunk.map(indexOne));
-    // indexOne swallows every non-rate-limit failure, so any non-null entry is a rate limit
+    // indexOne discards every failure that is not a rate limit, so each non-null entry is a rate limit.
     const rateLimited = failures.find((f): f is GithubFailure => f !== null);
     if (rateLimited) return err(rateLimited);
   }
@@ -204,9 +204,9 @@ async function computeDiff(
   path: string,
   force: boolean,
 ): Promise<DiffOutcome> {
-  // Memoized wasm load compiles while the blobs download instead of after them
+  // The memoized wasm load compiles while the blobs download, not after them.
   const differPromise = getDiffer();
-  differPromise.catch(() => {}); // early returns below leave it floating; the await still surfaces the error
+  differPromise.catch(() => {}); // Early returns below skip the await. The later await still surfaces the error.
   // Missing from listing (files API caps at 3000) → treat as modified; 404 side → EMPTY
   const pair = await getPair(session, client, ctx, owner, repo, path);
   if (!pair.ok) return { ok: false, error: toBackgroundError(pair.error) };

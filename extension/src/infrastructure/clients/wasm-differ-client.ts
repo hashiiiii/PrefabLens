@@ -36,7 +36,7 @@ function encodeAssets(assets: Map<string, Uint8Array>): Uint8Array {
   return out;
 }
 
-// Lazy singleton; SW restart → re-fetch. The wasm url is bound by the composition root.
+// A lazy singleton. An SW restart causes a re-fetch. The composition root binds the wasm url.
 export function createDifferLoader(wasmUrl: string): () => Promise<DifferGateway> {
   let differ: Promise<DifferGateway> | undefined;
   return () => {

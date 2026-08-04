@@ -49,7 +49,7 @@ const SIGN_IN_FAILURE_TEXT: Record<SignInFailure, string> = {
 // path → render target for guidResolved pushes
 const views: ViewRegistry = new Map();
 
-// Prefetch-time writes and push-time reads must build the same key
+// Prefetch-time writes and push-time reads must build the same key.
 const viewKey = (owner: string, repo: string, target: DiffTarget, path: string): string =>
   `${targetKey(owner, repo, target)}:${path}`;
 
@@ -71,7 +71,7 @@ let globalToggle: Toggle | undefined;
 let currentPage = ""; // drop overrides when leaving this diff page
 let prefetchedPr = ""; // prefetch once per PR across conversation + files tabs
 
-// SPA navigation may have killed the DOM behind an applier
+// SPA navigation can remove the DOM behind an applier.
 function liveAppliers(): Set<Applier> {
   for (const a of appliers) if (!a.header.isConnected) appliers.delete(a);
   return appliers;

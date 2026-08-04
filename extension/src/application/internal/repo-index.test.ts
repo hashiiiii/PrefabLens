@@ -6,9 +6,9 @@ import { getRepoIndex } from "./repo-index";
 
 const REPO_KEY = "repoKey";
 
-// Reuses the shared harness: the dispatcher (calls/results/impls) and the
-// repoIndexStore fake come from diff-fakes; only the state-derived defaults
-// for listMetaTree/batchBlobTexts are bound here.
+// This suite reuses the shared harness. The dispatcher (calls/results/impls)
+// and the repoIndexStore fake come from diff-fakes. Only the state-derived
+// defaults for listMetaTree/batchBlobTexts are bound here.
 function fakes(overrides?: {
   metas?: Array<{ path: string; sha: string }>;
   truncated?: boolean;

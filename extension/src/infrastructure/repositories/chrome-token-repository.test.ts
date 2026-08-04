@@ -3,7 +3,7 @@ import { createChromeTokenRepository, readAccessToken, type SettingsStorage } fr
 
 function mem(initial: Record<string, unknown> = {}): SettingsStorage & { data: Record<string, unknown> } {
   const data = { ...initial };
-  // The token repository only reads by key array; normalize anyway to satisfy StorageArea
+  // The token repository reads only by key array. The fake normalizes anyway to satisfy StorageArea.
   const asArray = (keys: string | string[] | null): string[] =>
     keys === null ? Object.keys(data) : Array.isArray(keys) ? keys : [keys];
   return {

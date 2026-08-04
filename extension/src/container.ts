@@ -48,7 +48,7 @@ export function createGithubAuth(): GithubAuthGateway {
   return { requestDeviceCode, pollForToken };
 }
 
-// One shared queue per factory: the user lane jumps ahead of prefetch traffic
+// One shared queue per factory: the user lane has priority over the prefetch traffic.
 export function createClientFactory(concurrency: number): MakeGithubClient {
   const queue = createQueue(concurrency);
   return (base, token, lane) => new GithubClient(base, token, createQueuedFetch(queue, lane === "user"));

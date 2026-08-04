@@ -1,9 +1,9 @@
 import type { MessengerGateway } from "../../application/gateway/messenger";
 import type { PrefetchRequest, SemanticDiffRequest, SemanticDiffResponse } from "../../domain/diff/types";
 
-// chrome.runtime relay to the background service worker. sendMessage rejects on
-// channel loss (SW restart, teardown); this is the one place that maps it to a
-// failure response so callers never see a rejection.
+// The chrome.runtime relay to the background service worker. sendMessage
+// rejects on channel loss (SW restart, teardown). This is the one place that
+// maps channel loss to a failure response, so callers never see a rejection.
 export function createChromeMessenger(): MessengerGateway {
   return {
     semanticDiff: (req: SemanticDiffRequest) =>

@@ -1,5 +1,5 @@
 // Shared test harness for the semantic-diff pipeline. get-semantic-diff.test.ts
-// and prefetch-pr.test.ts use it to exercise the same production pipeline
+// and prefetch-pr.test.ts use it to run the same production pipeline
 // from two entry points. This is not a *.test.ts file, so Vitest does not
 // collect it. Import it only from tests.
 import { expect, vi } from "vitest";
@@ -156,8 +156,8 @@ export function makeFakes(overrides?: {
       diffStoreData[key] = json;
     },
   };
-  // Mirrors the RepoIndexRepository interface (loadGuids/saveGuids/loadIndex/saveIndex).
-  // Starts empty; tests seed guidsData/indexData directly.
+  // This fake mirrors the RepoIndexRepository interface (loadGuids/saveGuids/loadIndex/saveIndex).
+  // It starts empty. Tests seed guidsData/indexData directly.
   const guidsData: Record<string, GuidMap> = {};
   const indexData: Record<string, RepoGuidIndex> = {};
   const savedGuids: Array<[string, GuidMap]> = [];

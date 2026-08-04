@@ -61,8 +61,8 @@ export type DiffV2 = {
   loose: ComponentDiff[];
 };
 
-// Canonical empty diff. The schema literal is a wire contract with core/src/json.zig;
-// fixtures spread this instead of restating it.
+// The canonical empty diff. The schema literal is a wire contract with
+// core/src/json.zig. Fixtures spread this object and do not restate it.
 export function emptyDiff(): DiffV2 {
   return { schema: "prefablens.diff.v2", unresolvedGuids: [], roots: [], loose: [] };
 }
@@ -97,7 +97,7 @@ export type BackgroundError =
   | "diff-failed"
   | "not-unity-yaml";
 
-// Errors a completed sign-in can clear; everything else renders a plain error card.
+// Errors that a completed sign-in can clear. Everything else renders a plain error card.
 export type AuthError = Extract<BackgroundError, "access-token-missing" | "auth-failed">;
 
 export function isAuthError(error: BackgroundError): error is AuthError {
@@ -120,7 +120,7 @@ export type GuidResolvedPush = {
   target: DiffTarget;
   path: string;
   resolved: Record<string, string>;
-  json?: DiffV2; // final push may carry a restructured diff after updateSources
+  json?: DiffV2; // The final push can carry a restructured diff after updateSources.
   done: boolean; // resolution finished (even with empty resolved — turns off the indicator)
   status?: ResolutionStatus; // on every done push; keep indicator unless "complete"
 };

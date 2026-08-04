@@ -1,15 +1,16 @@
 import type { DiffV2, NeededSource, ResolutionStatus } from "../../domain/diff/types";
 import type { DifferGateway } from "../gateway/differ";
 
-export const MAX_SOURCE_ROUNDS = 3; // re-diff cap for nested sources (independent of core's depth cap of 8)
+export const MAX_SOURCE_ROUNDS = 3; // Re-diff cap for nested sources. Core has a separate depth cap of 8.
 
-// skip: this source cannot be fetched now — degrade without it.
-// abort: stop all rounds and report why (rate limit / hard failure).
+// skip: this source cannot be fetched now. The loop degrades without it.
+// abort: the loop stops all rounds and reports the cause (rate limit or hard failure).
 export type FetchedSource = { bytes: Uint8Array } | { skip: true } | { abort: ResolutionStatus };
 
-// Fetch neededSources via resolved path and re-diff with assets; failure
-// degrades to the current diff instead of dropping it. One loop for the
-// background pipeline and the site demo — only the fetch and re-resolve differ.
+// The loop fetches neededSources through the resolved path and re-diffs with
+// the assets. A failure degrades to the current diff and does not drop it.
+// The background pipeline and the site demo share this one loop. Only the
+// fetch and the re-resolve differ.
 export async function mergeSourceRounds(
   differ: DifferGateway,
   before: Uint8Array,
@@ -31,15 +32,15 @@ export async function mergeSourceRounds(
       const fetched = await fetchSource(s, path);
       if ("abort" in fetched) return { json: current, status: fetched.abort };
       if ("skip" in fetched) continue;
-      // Binary-serialized sources are a no-op re-diff — don't count as progress
+      // Binary-serialized sources make the re-diff a no-op, so they do not count as progress.
       if (!differ.isUnityYaml(fetched.bytes)) continue;
       assets.set(s.guid, fetched.bytes);
       progressed = true;
     }
     if (!progressed) break;
     const mergedResult = differ.diffWithAssets(before, after, assets);
-    if (!mergedResult.ok) return { json: current, status: "failed" }; // merge failure degrades to current result
-    // Merging surfaces new external refs inside the source, so resolve again
+    if (!mergedResult.ok) return { json: current, status: "failed" }; // A merge failure degrades to the current diff.
+    // New external refs appear after the merge, so the loop resolves again.
     const next = await reResolve(mergedResult.value);
     rateLimited ||= next.rateLimited;
     current = next.json;

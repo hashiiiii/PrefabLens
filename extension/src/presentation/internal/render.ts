@@ -13,8 +13,8 @@ export function detectTheme(doc: Document): "light" | "dark" {
   return doc.defaultView?.matchMedia?.("(prefers-color-scheme: dark)").matches ? "dark" : "light";
 }
 
-// data-prefablens-view marks semantic hosts: detect.ts skips them when hiding
-// raw children, and the content script and demo must agree on the attribute.
+// data-prefablens-view marks semantic hosts. detect.ts skips them when it hides
+// raw children. The content script and the demo must agree on the attribute.
 export function createViewHost(): { host: HTMLDivElement; root: ShadowRoot } {
   const host = document.createElement("div");
   host.setAttribute("data-prefablens-view", "");

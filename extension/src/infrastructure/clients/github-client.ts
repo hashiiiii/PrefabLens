@@ -49,7 +49,7 @@ export function createQueuedFetch(queue: Queue, front: boolean): typeof fetch {
 type DiffEntry = { filename: string; status: string; previous_filename?: string; sha?: string };
 const toChangedFile = (f: DiffEntry): ChangedFile => ({
   path: f.filename,
-  // renamed/copied/changed/unchanged all diff like a modified file
+  // The renamed/copied/changed/unchanged statuses all diff like a modified file.
   status: f.status === "added" || f.status === "removed" ? f.status : "modified",
   previousPath: f.previous_filename,
   sha: f.sha,
@@ -57,7 +57,7 @@ const toChangedFile = (f: DiffEntry): ChangedFile => ({
 
 const FETCH_FAILED = err({ kind: "fetch-failed" as const });
 
-// Body reads reject when the stream dies mid-transfer; treat like any other fetch failure
+// Body reads reject when the stream fails mid-transfer. The code treats this like any other fetch failure.
 async function readOr<T>(read: () => Promise<T>): Promise<Result<T, GithubFailure>> {
   try {
     return ok(await read());
@@ -109,7 +109,7 @@ export class GithubClient {
     return readOr(() => res.value.json() as Promise<T>);
   }
 
-  // Shared body of getFileAtRef / getBlobRaw: raw media type, 404 → null
+  // The shared body of getFileAtRef and getBlobRaw. It uses the raw media type and maps 404 to null.
   private async rawBytes(path: string): Promise<Result<Uint8Array | null, GithubFailure>> {
     const res = await this.request(path, "application/vnd.github.raw+json");
     if (!res.ok) return res;

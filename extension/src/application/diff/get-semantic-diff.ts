@@ -25,7 +25,7 @@ const MAX_SEARCHES = 10; // Code Search is authenticated 10 req/min — don't bu
 type SearchClient = Pick<GithubGateway, "searchMetaByGuid" | "listMetaTree" | "batchBlobTexts">;
 type ResolutionClient = SearchClient & Pick<GithubGateway, "getBlobRaw" | "getFileAtRef">;
 
-// Everything guid resolution threads through unchanged; built once per request
+// Everything that guid resolution threads through unchanged. Built one time per request.
 type ResolveDeps = {
   guidCache: GuidRepository;
   session: DiffSession;
@@ -98,7 +98,7 @@ function updateSources(
       // Sources aren't PR files: only base tree can supply a sha; head keeps path fallback
       const blobSha = s.side === "before" ? ctx.baseShas?.get(path) : undefined;
       const bytes = await getBlob(deps.session, deps.client, deps.owner, deps.repo, path, sha, blobSha);
-      // Degrade to the diff so far, but tell the caller why (#194)
+      // The loop degrades to the diff so far but reports the cause (#194).
       if (!bytes.ok) return { abort: isRateLimited(bytes.error) ? "rateLimited" : "failed" };
       if (!bytes.value) return { skip: true };
       return { bytes: bytes.value };
@@ -153,8 +153,8 @@ async function updateRemaining(
     let status: ResolutionStatus = search.rateLimited ? "rateLimited" : "complete";
     let json: DiffV2 = { ...first, resolved: { ...first.resolved, ...fromIndex, ...search.resolved } };
     if (json.neededSources?.length) {
-      // Resolution advanced — redo source merging (source guid may have resolved this time).
-      // getDiffer is memoized, so starting it beside the blob fetch costs nothing when loaded.
+      // Resolution advanced, so the source merge runs again: a source guid can be resolved now.
+      // getDiffer is memoized. When the wasm is already loaded, an early start costs nothing.
       const [differ, pair] = await Promise.all([
         getDiffer(),
         getPair(deps.session, deps.client, ctx, req.owner, req.repo, req.path),
@@ -172,7 +172,7 @@ async function updateRemaining(
       const [before, after] = pair.value;
       const merged = await updateSources(deps, differ, json, before, after, ctx);
       json = merged.json;
-      // rateLimited wins: most likely to succeed on manual retry
+      // rateLimited wins: this kind has the best chance to succeed on a manual retry.
       if (status !== "rateLimited") status = merged.status;
     }
     push({ type: "guidResolved", ...at, resolved: {}, json, done: true, status }); // final push replaces json

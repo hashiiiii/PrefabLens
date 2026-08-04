@@ -1,7 +1,7 @@
 // see: https://codeberg.org/ziglang/zig/src/branch/master/doc/build.zig.zon.md
 .{
     .name = .prefablens,
-    .version = "0.8.0",
+    .version = "0.8.1",
     .fingerprint = 0x963f0eb06ee0745d,
     .minimum_zig_version = "0.16.0",
     .dependencies = .{},

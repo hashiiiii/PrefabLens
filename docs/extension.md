@@ -58,7 +58,7 @@ Each JS context has its own entry point and its own container wiring:
 | Content script | `presentation/content/index.ts` |
 | Site demo | `presentation/demo/index.ts` |
 
-### Folder structure
+### Layout
 
 `<area>` matches an existing concept folder (`diff`, `guid`, `auth`, …).
 Add a new area only when a new concept appears.

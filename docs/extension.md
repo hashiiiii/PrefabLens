@@ -1,7 +1,7 @@
 # Chrome extension
 
 This page is for people who change `extension/`.
-For install steps and the product overview, see the [README](../README.md).
+For install steps and product overview, see the [README](../README.md).
 For the contribution process, see [CONTRIBUTING.md](../CONTRIBUTING.md).
 
 ## Why
@@ -9,7 +9,7 @@ For the contribution process, see [CONTRIBUTING.md](../CONTRIBUTING.md).
 The extension uses the same Zig diff engine as the CLI.
 The build compiles that engine to WASM.
 The extension does not send asset contents to a PrefabLens server.
-GitHub API access uses the device flow from the PR panel.
+GitHub API access uses the GitHub Device Flow from the PR panel.
 
 ## Tech stack
 
@@ -30,13 +30,6 @@ The live demo site uses a `--demo` bundle from the same build script.
 
 ## Design
 
-This section describes the layer structure and the dependency rules for
-`extension/src/`.
-The design is a layered architecture for a Chrome Manifest V3 extension.
-`src/layering.test.ts` enforces the import direction, the domain isolation,
-the ban on infrastructure imports of application public functions, and the
-presentation ban on `application/internal/`.
-
 ### Overview
 
 Dependencies always point inward (toward `domain/`):
@@ -44,6 +37,10 @@ Dependencies always point inward (toward `domain/`):
 ```
 Presentation -> Application -> Domain <- Infrastructure
 ```
+
+`src/layering.test.ts` enforces the import direction, the domain isolation,
+the ban on infrastructure imports of application public functions, and the
+presentation ban on `application/internal/`.
 
 Two modules sit outside the four layers:
 
@@ -53,7 +50,7 @@ Two modules sit outside the four layers:
 | `src/internal/` | Shared helpers that no layer owns (for example `must`) |
 
 The extension has three JS contexts.
-Each context has its own entry point and its own container wiring:
+Each JS context has its own entry point and its own container wiring:
 
 | Context | Entry point |
 |---|---|
@@ -63,7 +60,7 @@ Each context has its own entry point and its own container wiring:
 
 ### Folder structure
 
-`<area>` matches an existing concept folder (`diff`, `guid`, `auth`, and more).
+`<area>` matches an existing concept folder (`diff`, `guid`, `auth`, …).
 Add a new area only when a new concept appears.
 
 #### Domain (`src/domain/`)
@@ -78,15 +75,17 @@ domain/
 
 - If the symbol is a domain type (including `Result`), put it in
   `domain/<area>/` (outside `fn/`).
-  Do not put function bodies in these files.
+  Type files hold types plus constructors and type guards only
+  (for example `ok` / `err` next to `Result`).
+  Put queries and transforms under `fn/`.
 - If the symbol is a repository interface for domain-model persistence, put it in
   `domain/<area>/<noun>-repository.ts`.
-  Use cases depend on these interfaces.
+  Public functions depend on these interfaces.
   Infrastructure supplies the implementations.
 - If the symbol is a pure function that reads or builds a domain type, put it in
   `domain/<area>/fn/<name>.ts`.
 - If a helper is not a domain type, keep it out of `domain/`.
-  Put cross-layer helpers in `src/internal/` (for example `must`).
+  Put cross-layer helpers in `src/internal/` (see Overview).
 
 #### Application (`src/application/`)
 
@@ -105,9 +104,12 @@ application/
   Export one function per file.
   If a helper serves one public function only, keep it non-exported in that file.
 - If two or more application callers share work that is not a public function,
-  put it in `application/internal/<noun>.ts`.
-  Examples: `raw-diff.ts`, `repo-index.ts`, `diff-fakes.ts`.
-- Gateway types that application owns live in `application/gateway/<name>.ts`.
+  put it in `application/internal/<noun>.ts`
+  (for example `raw-diff.ts`, `repo-index.ts`).
+- Gateway types that application owns live in `application/gateway/<name>.ts`
+  as `XxxGateway`:
+  `GithubGateway`, `DifferGateway` (WASM), `MessengerGateway` (chrome.runtime),
+  `GithubAuthGateway` (Device Flow).
 
 #### Infrastructure (`src/infrastructure/`)
 
@@ -120,6 +122,7 @@ infrastructure/
 - Put gateway implementations in `clients/` as `*-client.ts`.
 - Put repository implementations in `repositories/`
   (`chrome-<noun>-repository.ts`).
+  `merge-store.ts` is an internal helper for those implementations.
 
 #### Presentation (`src/presentation/`)
 
@@ -138,14 +141,6 @@ presentation/
 - If two or more presentation contexts share render helpers, put them in
   `presentation/internal/`.
 
-#### Outside the layers
-
-- `src/container.ts` is the only DI file.
-  Entry points import it to construct gateways and repositories.
-- `src/internal/` holds helpers that no layer owns.
-  Example: `must` is a runtime check that throws.
-  It is not domain vocabulary, so it does not live under `domain/`.
-
 #### Tests
 
 - Keep test-only helpers in test files when one file uses them.
@@ -161,24 +156,13 @@ presentation/
 
 **Imports.** This layer imports nothing outside `domain/`.
 
-**Naming and ownership.**
-
-- Repository interfaces for domain-model persistence live in
-  `domain/<area>/<noun>-repository.ts`.
-  Use cases depend on these interfaces.
-  Infrastructure supplies the implementations.
-- Constructors and type guards can live in the same file as their type
-  (for example `ok` / `err` next to `Result`).
-- Queries and transforms always go under `fn/`
-  (for example `unresolvedRemaining`, `applyResolved`, `targetKey`).
-
 **Notes.**
 
 - Expected failures travel as tagged unions via `Result<T, E>` from `domain/result.ts`.
 - Expected failures do not use `Error` subclasses.
 - Expected failures do not use `throw`.
 - Infrastructure adapters can reject for unexpected failures.
-  The nearest use case converts them to `Result` at the boundary.
+  The nearest public function converts them to `Result` at the boundary.
 
 #### Application (`src/application/`)
 
@@ -188,21 +172,14 @@ A public function is a use case or a state factory.
 **Imports.** This layer can import `domain/`.
 It cannot import `infrastructure/` or `presentation/`.
 
-**Naming and ownership.**
-
-- Prefer CRUD names for use-case verbs: `create`, `get`, `update`, `delete`.
-  When a CRUD name hides the intent, you can use a domain verb, for example `sign-in`.
-- Name each public-function file `<verb>-<noun>.ts`.
-  Export a plain verb function `<verb>(gateways…, [state,] input)`.
-- Name each internal module `<noun>.ts`.
-  Those modules can export several sibling functions.
-- Send and receive domain models through repository interfaces in `domain/`.
-- Talk to outside systems that do not load or save domain models through gateways.
-  Gateway types live in `application/gateway/<name>.ts` as `XxxGateway`
-  (GitHub API, WASM differ, chrome.runtime messaging, device-flow helpers).
-
 **Notes.**
 
+- Use CRUD names for use-case verbs: `create`, `get`, `update`, `delete`.
+  If a CRUD name hides the intent, use a domain verb (for example `sign-in`).
+- Export a plain verb function `<verb>(gateways…, [state,] input)`.
+- Internal modules can export several sibling functions.
+- Send and receive domain models through repository interfaces in `domain/`.
+- Talk to outside systems that do not load or save domain models through gateways.
 - A single-function dependency is a plain parameter
   (for example `fetchBytes`, `makeClient`, `getDiffer`).
 - A multi-method outside capability lives in `application/gateway/`.
@@ -213,7 +190,7 @@ It cannot import `infrastructure/` or `presentation/`.
   state factory (for example `createDiffSession`).
   When construction is only a literal, presentation builds that value itself.
 - Data that must cross JS contexts is not in-memory working memory.
-  That data goes through a repository or a messenger gateway.
+  That data goes through a repository or a gateway.
 
 #### Infrastructure (`src/infrastructure/`)
 
@@ -222,54 +199,38 @@ It cannot import `infrastructure/` or `presentation/`.
 **Imports.** This layer can import `domain/` and `application/gateway/`.
 It cannot import application public functions.
 
-**Naming and ownership.**
-
-- `clients/`: implementations of `application/gateway` contracts
-  (`*-client.ts`: GitHub client, WASM differ, chrome.runtime messaging, device-flow helpers).
-- `repositories/`: implementations of domain repository interfaces
-  (chrome.storage-backed).
-  `merge-store.ts` is an internal helper for those implementations.
-  Repository implementations use the `chrome-<noun>-repository.ts` pattern.
-
 **Notes.**
 
 - Infrastructure does not own the composition root.
-  `src/container.ts` wires clients and repositories.
+  Entry points import `src/container.ts` to wire clients and repositories.
 
 #### Presentation (`src/presentation/`)
 
-**Role.** This layer receives outside input.
-Then it decides whether to call an application public function or a gateway.
-It also holds non-persistent working memory for its JS context.
+**Role.** This layer receives outside input, holds non-persistent working memory
+for its JS context, and calls application public functions for multi-step work.
+Transport-only work can call a gateway or repository method directly.
 
 **Imports.**
 
-- This layer can import application public functions (and their types),
+- Can import: application public functions (and their types),
   `application/gateway`, domain types, `domain/<area>/fn` pure functions,
   other presentation files, `src/container.ts`, and `src/internal/`.
-- It cannot import `application/internal/`.
-- It cannot import any infrastructure file.
+- Cannot import: `application/internal/` or any infrastructure file.
   Entry points import `src/container.ts` to construct gateways and repositories.
 
-**Naming and ownership.**
+**Notes.**
 
-- UI view models and named UI callback types are presentation-owned
-  (`content/overlay/`: view state, view registry, per-file state machine, auth retries).
-- Shared render helpers live in `presentation/internal/`.
+- Outbound transport-only work can call a gateway or repository method
+  directly (content → background messaging, thin repository reads for UI pre-fill).
+- Multi-step business work stays in application public functions
+  (Device Flow sign-in, semantic diff pipeline, PR prefetch).
+  Presentation passes gateways, repositories, and working memory into those verbs.
+- Inbound transport events are presentation work, like HTTP routes
+  (`chrome.runtime.onMessage`, `chrome.storage.onChanged`, DOM events).
 - The `viewMode` storage key is a UI preference.
   Presentation reads and writes it directly.
 - The `accessToken` / `signin` keys belong to the token repository.
   Presentation only observes their change events.
-
-**Notes.**
-
-- Outbound work that is only transport can call a gateway or repository method
-  directly (content → background messaging, thin repository reads for UI pre-fill).
-- Multi-step business work stays in application public functions
-  (device-flow sign-in, semantic diff pipeline, PR prefetch).
-  Presentation passes gateways, repositories, and working memory into those verbs.
-- Inbound transport events are presentation work, like HTTP routes
-  (`chrome.runtime.onMessage`, `chrome.storage.onChanged`, DOM events).
 
 ### Startup
 
@@ -341,6 +302,7 @@ Then the `publish-extension` job downloads that zip.
 The job uploads the zip to the Chrome Web Store and submits it for review.
 The store publishes the extension after approval.
 
+If a submission is still in review, a re-run of `publish-extension` fails
+until the store finishes.
 If no Chrome Web Store submission is pending, you can re-run
 `publish-extension` alone.
-If a submission is still in review, that re-run fails until the store finishes.

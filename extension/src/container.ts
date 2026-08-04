@@ -1,4 +1,5 @@
 import type { DifferGateway } from "./application/gateway/differ";
+import type { FixturesGateway } from "./application/gateway/fixtures";
 import type { MakeGithubClient } from "./application/gateway/github";
 import type { GithubAuthGateway } from "./application/gateway/github-auth";
 import type { MessengerGateway } from "./application/gateway/messenger";
@@ -11,18 +12,13 @@ import { createChromeGuidClient } from "./infrastructure/clients/chrome-guid-cli
 import { createChromeMessenger } from "./infrastructure/clients/chrome-messenger-client";
 import { createChromeRepoIndexClient } from "./infrastructure/clients/chrome-repo-index-client";
 import { createChromeTokenClient } from "./infrastructure/clients/chrome-token-client";
-import { createQueuedFetch, GithubClient } from "./infrastructure/clients/github-client";
+import { createFixtureClient } from "./infrastructure/clients/fixture-client";
+import { createGithubClientFactory } from "./infrastructure/clients/github-client";
 import { pollForToken, requestDeviceCode } from "./infrastructure/clients/github-device-flow-client";
 import {
   createDiffer,
   createDifferLoader as createWasmDifferLoader,
 } from "./infrastructure/clients/wasm-differ-client";
-import { createQueue } from "./infrastructure/internal/fetch-queue";
-import {
-  createFixtureFetchBytes,
-  createFixtureSourceFetch,
-  loadFixtureGuidIndex,
-} from "./infrastructure/internal/fixtures";
 
 export function createTokenStore(): TokenRepository {
   return createChromeTokenClient(chrome.storage.local);
@@ -48,10 +44,8 @@ export function createGithubAuth(): GithubAuthGateway {
   return { requestDeviceCode, pollForToken };
 }
 
-// One shared queue per factory: the user lane has priority over the prefetch traffic.
 export function createClientFactory(concurrency: number): MakeGithubClient {
-  const queue = createQueue(concurrency);
-  return (base, token, lane) => new GithubClient(base, token, createQueuedFetch(queue, lane === "user"));
+  return createGithubClientFactory(concurrency);
 }
 
 export function createDifferLoader(): () => Promise<DifferGateway> {
@@ -59,17 +53,9 @@ export function createDifferLoader(): () => Promise<DifferGateway> {
 }
 
 export async function createDemoDiffer(): Promise<DifferGateway> {
-  return createDiffer(await createDemoFetchBytes()("prefablens.wasm"));
+  return createDiffer(await createFixtureClient().fetchBytes("prefablens.wasm"));
 }
 
-export function createFixtureGuidIndexLoader(): () => Promise<Map<string, string>> {
-  return loadFixtureGuidIndex;
-}
-
-export function createDemoFetchBytes(): (url: string) => Promise<Uint8Array<ArrayBuffer>> {
-  return createFixtureFetchBytes();
-}
-
-export function createDemoFetchSource(): (side: "before" | "after", path: string) => Promise<Uint8Array> {
-  return createFixtureSourceFetch(createFixtureFetchBytes());
+export function createFixtures(): FixturesGateway {
+  return createFixtureClient();
 }

@@ -1,7 +1,13 @@
-import { type ChangedFile, type GithubFailure, isRateLimited, type RefPair } from "../../application/gateway/github";
+import {
+  type ChangedFile,
+  type GithubFailure,
+  isRateLimited,
+  type MakeGithubClient,
+  type RefPair,
+} from "../../application/gateway/github";
 import { assetPathFromMeta } from "../../domain/diff/fn/asset-path-from-meta";
 import { err, ok, type Result } from "../../domain/result";
-import type { Queue } from "../internal/fetch-queue";
+import { createQueue, type Queue } from "../internal/fetch-queue";
 
 // retry-after (seconds) wins. Else x-ratelimit-reset (epoch seconds) applies, relative to now.
 // Number(null) is 0 and Number("") is NaN, so absent headers fail the > 0 guards.
@@ -300,4 +306,10 @@ export class GithubClient {
     if (!blobs) return FETCH_FAILED;
     return ok(Object.fromEntries(oids.map((oid, i) => [oid, blobs[`b${i}`]?.text ?? null])));
   }
+}
+
+// One shared queue per factory: the user lane has priority over the prefetch traffic.
+export function createGithubClientFactory(concurrency: number): MakeGithubClient {
+  const queue = createQueue(concurrency);
+  return (base, token, lane) => new GithubClient(base, token, createQueuedFetch(queue, lane === "user"));
 }

@@ -1,6 +1,6 @@
 import { globSync, readFileSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
-import { expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 
 const SRC = import.meta.dirname;
 const SEPARATOR = /[\\/]/;
@@ -8,7 +8,6 @@ const TS_FILES = globSync("**/*.ts", { cwd: SRC }).map((f) => join(SRC, f));
 
 type Layer = "domain" | "application" | "infrastructure" | "presentation";
 
-// Allowed import targets per layer
 const ALLOWED: Record<Layer, Layer[]> = {
   domain: [],
   application: ["domain"],
@@ -18,7 +17,7 @@ const ALLOWED: Record<Layer, Layer[]> = {
 
 function layerOf(file: string): Layer | null {
   const top = relative(SRC, file).split(SEPARATOR)[0];
-  return top === "domain" || top === "application" || top === "infrastructure" || top === "presentation" ? top : null; // globals.d.ts, container.ts, internal/, this test
+  return top === "domain" || top === "application" || top === "infrastructure" || top === "presentation" ? top : null;
 }
 
 function* relativeImports(file: string): Generator<{ spec: string; target: string }> {
@@ -29,103 +28,99 @@ function* relativeImports(file: string): Generator<{ spec: string; target: strin
   }
 }
 
-it("keeps imports pointing inward across layers", () => {
-  const violations: string[] = [];
-  for (const file of TS_FILES) {
-    const from = layerOf(file);
-    if (from === null) continue;
-    for (const { spec, target } of relativeImports(file)) {
-      const to = layerOf(target);
-      if (to === null || to === from) continue;
-      if (!ALLOWED[from].includes(to)) violations.push(`${relative(SRC, file)} -> ${spec}`);
+describe("layer imports", () => {
+  it("each layer imports only allowed layers", () => {
+    const violations: string[] = [];
+    for (const file of TS_FILES) {
+      const from = layerOf(file);
+      if (from === null) continue;
+      for (const { spec, target } of relativeImports(file)) {
+        const to = layerOf(target);
+        if (to === null || to === from) continue;
+        if (!ALLOWED[from].includes(to)) violations.push(`${relative(SRC, file)} -> ${spec}`);
+      }
     }
-  }
-  expect(violations).toEqual([]);
+    expect(violations).toEqual([]);
+  });
+
+  it("domain production files import only from domain/", () => {
+    const violations: string[] = [];
+    for (const file of TS_FILES) {
+      if (layerOf(file) !== "domain" || file.endsWith(".test.ts")) continue;
+      for (const match of readFileSync(file, "utf8").matchAll(/(?:from\s*|import\s*\(?\s*)"([^"]+)"/g)) {
+        const spec = match[1];
+        if (spec === undefined) continue;
+        const inside = spec.startsWith(".") && layerOf(`${resolve(dirname(file), spec)}.ts`) === "domain";
+        if (!inside) violations.push(`${relative(SRC, file)} -> ${spec}`);
+      }
+    }
+    expect(violations).toEqual([]);
+  });
 });
 
-it("keeps infrastructure off application public functions", () => {
-  const violations: string[] = [];
-  for (const file of TS_FILES) {
-    const from = layerOf(file);
-    if (from === null) continue;
-    for (const { spec, target } of relativeImports(file)) {
-      const to = layerOf(target);
-      if (from !== "infrastructure") continue;
-      // Clients can import gateways to implement them.
-      // Public functions and internal helpers are the violation.
-      if (to !== "application" || /application[\\/]gateway[\\/]/.test(relative(SRC, target))) continue;
-      violations.push(`${relative(SRC, file)} -> ${spec}`);
+describe("application gateway", () => {
+  it("infrastructure imports application only through gateway/", () => {
+    const violations: string[] = [];
+    for (const file of TS_FILES) {
+      if (layerOf(file) !== "infrastructure") continue;
+      for (const { spec, target } of relativeImports(file)) {
+        if (layerOf(target) !== "application") continue;
+        if (/application[\\/]gateway[\\/]/.test(relative(SRC, target))) continue;
+        violations.push(`${relative(SRC, file)} -> ${spec}`);
+      }
     }
-  }
-  expect(violations).toEqual([]);
+    expect(violations).toEqual([]);
+  });
 });
 
-it("keeps internal directories private to their parent", () => {
-  // Go rule for internal packages: only files under the parent of an
-  // internal/ directory can import from it. src/internal/ sits at the root,
-  // so every file can use it.
-  const violations: string[] = [];
-  for (const file of TS_FILES) {
-    const fileRel = relative(SRC, file).split(SEPARATOR).join("/");
-    for (const { spec, target } of relativeImports(file)) {
-      const parts = relative(SRC, target).split(SEPARATOR);
-      const index = parts.indexOf("internal");
-      if (index < 1) continue;
-      const parent = parts.slice(0, index).join("/");
-      if (!fileRel.startsWith(`${parent}/`)) violations.push(`${fileRel} -> ${spec}`);
+describe("internal/ access", () => {
+  it("a file imports internal/ only under its parent", () => {
+    const violations: string[] = [];
+    for (const file of TS_FILES) {
+      const fileRel = relative(SRC, file).split(SEPARATOR).join("/");
+      for (const { spec, target } of relativeImports(file)) {
+        const parts = relative(SRC, target).split(SEPARATOR);
+        const index = parts.indexOf("internal");
+        if (index < 1) continue;
+        const parent = parts.slice(0, index).join("/");
+        if (!fileRel.startsWith(`${parent}/`)) violations.push(`${fileRel} -> ${spec}`);
+      }
     }
-  }
-  expect(violations).toEqual([]);
+    expect(violations).toEqual([]);
+  });
 });
 
-it("keeps container.ts reachable only from presentation entry points", () => {
-  // The composition root imports infrastructure. Any other importer leaks
-  // infrastructure into its own layer.
-  const violations: string[] = [];
-  for (const file of TS_FILES) {
-    const rel = relative(SRC, file);
-    if (/^presentation[\\/][^\\/]+[\\/]index\.ts$/.test(rel)) continue;
-    for (const { spec, target } of relativeImports(file)) {
-      if (target === join(SRC, "container.ts")) violations.push(`${rel} -> ${spec}`);
+describe("composition root", () => {
+  it("only presentation entry points import container.ts", () => {
+    const violations: string[] = [];
+    for (const file of TS_FILES) {
+      const rel = relative(SRC, file);
+      if (/^presentation[\\/][^\\/]+[\\/]index\.ts$/.test(rel)) continue;
+      for (const { spec, target } of relativeImports(file)) {
+        if (target === join(SRC, "container.ts")) violations.push(`${rel} -> ${spec}`);
+      }
     }
-  }
-  expect(violations).toEqual([]);
+    expect(violations).toEqual([]);
+  });
 });
 
-it("keeps infrastructure/clients to interface implementations", () => {
-  // A client is a `*-client.ts` file that implements a repository interface
-  // from domain/ or a gateway type from application/gateway/. Helpers that
-  // implement no interface go in infrastructure/internal/.
-  const violations: string[] = [];
-  for (const file of TS_FILES) {
-    const rel = relative(SRC, file);
-    if (!/^infrastructure[\\/]clients[\\/]/.test(rel)) continue;
-    if (!/-client(\.test)?\.ts$/.test(rel)) {
-      violations.push(rel);
-      continue;
+describe("infrastructure clients", () => {
+  it("each file in infrastructure/clients implements a gateway or a repository", () => {
+    const violations: string[] = [];
+    for (const file of TS_FILES) {
+      const rel = relative(SRC, file);
+      if (!/^infrastructure[\\/]clients[\\/]/.test(rel)) continue;
+      if (!/-client(\.test)?\.ts$/.test(rel)) {
+        violations.push(rel);
+        continue;
+      }
+      if (rel.endsWith(".test.ts")) continue;
+      const targets = [...relativeImports(file)].map(({ target }) => relative(SRC, target));
+      const implementsInterface = targets.some(
+        (t) => /^application[\\/]gateway[\\/]/.test(t) || /^domain[\\/].*-repository\.ts$/.test(t),
+      );
+      if (!implementsInterface) violations.push(rel);
     }
-    if (rel.endsWith(".test.ts")) continue;
-    const targets = [...relativeImports(file)].map(({ target }) => relative(SRC, target));
-    const implementsInterface = targets.some(
-      (t) => /^application[\\/]gateway[\\/]/.test(t) || /^domain[\\/].*-repository\.ts$/.test(t),
-    );
-    if (!implementsInterface) violations.push(rel);
-  }
-  expect(violations).toEqual([]);
-});
-
-it("keeps production domain files inside domain", () => {
-  // Doc rule: "This layer imports nothing outside domain/." Tests are exempt
-  // (parity tests read sources via node:fs and use must).
-  const violations: string[] = [];
-  for (const file of TS_FILES) {
-    if (layerOf(file) !== "domain" || file.endsWith(".test.ts")) continue;
-    for (const match of readFileSync(file, "utf8").matchAll(/(?:from\s*|import\s*\(?\s*)"([^"]+)"/g)) {
-      const spec = match[1];
-      if (spec === undefined) continue;
-      const inside = spec.startsWith(".") && layerOf(`${resolve(dirname(file), spec)}.ts`) === "domain";
-      if (!inside) violations.push(`${relative(SRC, file)} -> ${spec}`);
-    }
-  }
-  expect(violations).toEqual([]);
+    expect(violations).toEqual([]);
+  });
 });

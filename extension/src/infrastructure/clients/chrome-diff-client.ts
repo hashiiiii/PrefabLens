@@ -7,7 +7,7 @@ const MAX_BYTES = 512 * 1024; // storage.session is 10MB: large diffs stay in th
 
 // Raw diffs in storage.session under a sha key across SW restarts.
 // On quota overflow, wipe the diffs and rewrite once. Without this, every SW restart recomputes forever.
-export function createChromeDiffRepository(area: StorageAreaWithRemove): DiffRepository {
+export function createChromeDiffClient(area: StorageAreaWithRemove): DiffRepository {
   return {
     async load(key) {
       const stored = await area.get(PREFIX + key);

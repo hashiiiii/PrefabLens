@@ -6,7 +6,11 @@ import type { TokenRepository } from "./domain/auth/token-repository";
 import type { DiffRepository } from "./domain/diff/diff-repository";
 import type { GuidRepository } from "./domain/guid/guid-repository";
 import type { RepoIndexRepository } from "./domain/guid/repo-index-repository";
+import { createChromeDiffClient } from "./infrastructure/clients/chrome-diff-client";
+import { createChromeGuidClient } from "./infrastructure/clients/chrome-guid-client";
 import { createChromeMessenger } from "./infrastructure/clients/chrome-messenger-client";
+import { createChromeRepoIndexClient } from "./infrastructure/clients/chrome-repo-index-client";
+import { createChromeTokenClient } from "./infrastructure/clients/chrome-token-client";
 import { createQueue } from "./infrastructure/clients/fetch-queue-client";
 import {
   createFixtureFetchBytes,
@@ -19,13 +23,9 @@ import {
   createDiffer,
   createDifferLoader as createWasmDifferLoader,
 } from "./infrastructure/clients/wasm-differ-client";
-import { createChromeDiffRepository } from "./infrastructure/repositories/chrome-diff-repository";
-import { createChromeGuidRepository } from "./infrastructure/repositories/chrome-guid-repository";
-import { createChromeRepoIndexRepository } from "./infrastructure/repositories/chrome-repo-index-repository";
-import { createChromeTokenRepository } from "./infrastructure/repositories/chrome-token-repository";
 
 export function createTokenStore(): TokenRepository {
-  return createChromeTokenRepository(chrome.storage.local);
+  return createChromeTokenClient(chrome.storage.local);
 }
 
 export function createMessenger(): MessengerGateway {
@@ -33,15 +33,15 @@ export function createMessenger(): MessengerGateway {
 }
 
 export function createDiffStore(): DiffRepository {
-  return createChromeDiffRepository(chrome.storage.session);
+  return createChromeDiffClient(chrome.storage.session);
 }
 
 export function createGuidCache(): GuidRepository {
-  return createChromeGuidRepository(chrome.storage.local);
+  return createChromeGuidClient(chrome.storage.local);
 }
 
 export function createRepoIndexStore(): RepoIndexRepository {
-  return createChromeRepoIndexRepository(chrome.storage.local);
+  return createChromeRepoIndexClient(chrome.storage.local);
 }
 
 export function createGithubAuth(): GithubAuthGateway {

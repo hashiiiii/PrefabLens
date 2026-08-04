@@ -14,7 +14,7 @@ export async function readAccessToken(storage: SettingsStorage): Promise<string 
   return stored.pat;
 }
 
-export function createChromeTokenRepository(storage: SettingsStorage): TokenRepository {
+export function createChromeTokenClient(storage: SettingsStorage): TokenRepository {
   return {
     readAccessToken: () => readAccessToken(storage),
     saveAccessToken: (token) => storage.set({ accessToken: token }),

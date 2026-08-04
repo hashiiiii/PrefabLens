@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createChromeTokenRepository, readAccessToken, type SettingsStorage } from "./chrome-token-repository";
+import { createChromeTokenClient, readAccessToken, type SettingsStorage } from "./chrome-token-client";
 
 function mem(initial: Record<string, unknown> = {}): SettingsStorage & { data: Record<string, unknown> } {
   const data = { ...initial };
@@ -45,7 +45,7 @@ describe("readAccessToken", () => {
 });
 
 it("round-trips the pending sign-in", async () => {
-  const store = createChromeTokenRepository(mem());
+  const store = createChromeTokenClient(mem());
   expect(await store.readPendingSignIn()).toBeUndefined();
   await store.savePendingSignIn({ userCode: "ABCD-1234", expiresAt: 99 });
   expect(await store.readPendingSignIn()).toEqual({ userCode: "ABCD-1234", expiresAt: 99 });

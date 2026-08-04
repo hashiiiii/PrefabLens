@@ -5,4 +5,4 @@ minimumReleaseAge: 4320
 # miniflare pins undici to a version with known vulnerabilities.
 # Remove this override when miniflare requires undici >= 7.29.0.
 overrides:
-  undici: ^7.29.0
+  undici: ^8.0.0

@@ -11,11 +11,13 @@ type Exports = {
   is_unity_yaml(p: number, l: number): number;
 };
 
+const utf8 = new TextDecoder();
+const utf8Encoder = new TextEncoder();
+
 // assets TLV (LE): [u32 count] repeat{ [u32 guid_len][guid][u32 data_len][data] }.
 // 1:1 with parseAssets in core/src/wasm.zig.
 function encodeAssets(assets: Map<string, Uint8Array>): Uint8Array {
-  const enc = new TextEncoder();
-  const entries = [...assets].map(([guid, data]) => ({ guid: enc.encode(guid), data }));
+  const entries = [...assets].map(([guid, data]) => ({ guid: utf8Encoder.encode(guid), data }));
   let total = 4;
   for (const { guid, data } of entries) total += 8 + guid.length + data.length;
   const out = new Uint8Array(total);
@@ -32,6 +34,17 @@ function encodeAssets(assets: Map<string, Uint8Array>): Uint8Array {
     off += 4 + data.length;
   }
   return out;
+}
+
+// Lazy singleton; SW restart → re-fetch. The wasm url is bound by the composition root.
+export function createDifferLoader(wasmUrl: string): () => Promise<DifferGateway> {
+  let differ: Promise<DifferGateway> | undefined;
+  return () => {
+    differ ??= fetch(wasmUrl)
+      .then((r) => r.arrayBuffer())
+      .then(createDiffer);
+    return differ;
+  };
 }
 
 export async function createDiffer(wasmBytes: BufferSource): Promise<DifferGateway> {
@@ -57,7 +70,7 @@ export async function createDiffer(wasmBytes: BufferSource): Promise<DifferGatew
     try {
       if (rp === 0) return err({ kind: "diff-failed", message: "OutOfMemory" });
       const len = new DataView(exp.memory.buffer).getUint32(rp, true);
-      const text = new TextDecoder().decode(new Uint8Array(exp.memory.buffer, rp + 4, len));
+      const text = utf8.decode(new Uint8Array(exp.memory.buffer, rp + 4, len));
       exp.free(rp, 4 + len);
       const parsed = JSON.parse(text) as DiffV2 | DiffErrorV1;
       if (parsed.schema !== "prefablens.diff.v2") {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isAuthFailed, isRateLimited } from "../../application/gateway/github";
+import { isRateLimited } from "../../application/gateway/github";
 import { err, ok } from "../../domain/result";
 import { must } from "../../internal/must";
 import { createQueue } from "./fetch-queue-client";
@@ -69,10 +69,11 @@ describe("GithubClient", () => {
     expect(files.ok).toBe(true);
     if (!files.ok) return;
     expect(files.value).toHaveLength(101);
-    // sha is the head-side blob (base-side for removed files) — fetchPair fetches by it instead of path+ref
+    // sha is the head-side blob (base-side for removed files) — getPair fetches by it instead of path+ref
     expect(files.value[100]).toEqual({
       path: "Assets/Foo.prefab",
-      status: "renamed",
+      // GitHub reports "renamed"; the client folds it into "modified" (previousPath keeps the rename)
+      status: "modified",
       previousPath: "Assets/Old.prefab",
       sha: "blob-head",
     });
@@ -192,7 +193,7 @@ describe("GithubClient", () => {
         { "x-ratelimit-remaining": "4999" },
         '{"message":"Resource not accessible by personal access token"}',
       ).getPrRefs("o", "r", 1),
-    ).resolves.toSatisfy((r) => !r.ok && isAuthFailed(r.error));
+    ).resolves.toSatisfy((r) => !r.ok && r.error.kind === "auth-failed");
   });
 
   it("getCommit returns the first parent as base and maps files", async () => {

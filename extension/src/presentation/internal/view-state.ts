@@ -11,10 +11,6 @@ export function emptyViewState(initial: View): ViewStateData {
   return { def: initial, overrides: new Map(), listeners: [] };
 }
 
-export function defaultView(state: ViewStateData): View {
-  return state.def;
-}
-
 export function effectiveView(state: ViewStateData, path: string): View {
   return state.overrides.get(path) ?? state.def;
 }

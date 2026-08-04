@@ -136,7 +136,6 @@ describe("scanUnityFiles", () => {
     expect(content.style.display).toBe("");
     // Classic collapse is handled by Primer's Details CSS, not by us
     expect(entry.collapsed()).toBe(false);
-    // The global bar anchors on the .file container
     expect(entry.globalAnchor()).toBe(document.querySelector(".file"));
     // The host lands right after the content and opts into the Details collapse CSS
     const host = document.createElement("div");

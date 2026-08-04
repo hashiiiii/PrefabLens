@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
-import type { DiffV2 } from "../../domain/diff/types";
+import { type DiffV2, emptyDiff } from "../../domain/diff/types";
 import { createChromeDiffRepository } from "./chrome-diff-repository";
 
-const DIFF: DiffV2 = { schema: "prefablens.diff.v2", unresolvedGuids: [], roots: [], loose: [] };
+const DIFF: DiffV2 = emptyDiff();
 
 // A fake that mimics only the needed subset of chrome.storage.session with a Map.
 // set reproduces quota overflow via failWhen. Calls land in plain arrays, not spies.

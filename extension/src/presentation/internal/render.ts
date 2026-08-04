@@ -1,5 +1,5 @@
 import type { ComponentDiff, DiffV2, FieldValue, NodeDiff, OverrideDiff, Status } from "../../domain/diff/types";
-import { builtinName } from "./builtin_refs";
+import { builtinName } from "./builtin-refs";
 import { ALERT, CHECK, CHEVRON, CUBE, GEAR } from "./icons";
 import { STYLES } from "./styles";
 
@@ -11,6 +11,14 @@ export function detectTheme(doc: Document): "light" | "dark" {
   if (mode === "dark") return "dark";
   if (mode === "light") return "light";
   return doc.defaultView?.matchMedia?.("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+}
+
+// data-prefablens-view marks semantic hosts: detect.ts skips them when hiding
+// raw children, and the content script and demo must agree on the attribute.
+export function createViewHost(): { host: HTMLDivElement; root: ShadowRoot } {
+  const host = document.createElement("div");
+  host.setAttribute("data-prefablens-view", "");
+  return { host, root: host.attachShadow({ mode: "open" }) };
 }
 
 export function render(
@@ -29,12 +37,7 @@ export function render(
   } else if (opts?.incomplete) {
     // Resolution gave up (rate limit or error): say so instead of pretending it finished (#194).
     const bar = note("pl-resolving", "Some references were not resolved (GitHub rate limit or error).", ALERT);
-    const retry = document.createElement("button");
-    retry.type = "button";
-    retry.className = "pl-render";
-    retry.textContent = "Retry";
-    retry.addEventListener("click", opts.incomplete.onRetry);
-    bar.append(retry);
+    bar.append(actionButton("Retry", opts.incomplete.onRetry));
     container.append(bar);
   }
   for (const node of diff.roots) container.append(renderNode(node, diff));
@@ -82,23 +85,16 @@ export function renderLoading(root: ShadowRoot): void {
 // Over-25MB guard: no auto-render; waits for an explicit click.
 export function renderTooLarge(root: ShadowRoot, bytes: number, onRender: () => void): void {
   const container = mount(root);
-  const button = document.createElement("button");
-  button.type = "button";
-  button.className = "pl-render";
-  button.textContent = "Render anyway";
-  button.addEventListener("click", onRender);
-  container.append(note("pl-empty", `Large file (${Math.round(bytes / (1024 * 1024))} MB).`, ALERT), button);
+  container.append(
+    note("pl-empty", `Large file (${Math.round(bytes / (1024 * 1024))} MB).`, ALERT),
+    actionButton("Render anyway", onRender),
+  );
 }
 
 // Auth-error panel: message + in-place device-flow button.
 export function renderSignIn(root: ShadowRoot, message: string, onSignIn: () => void): void {
   const container = mount(root);
-  const button = document.createElement("button");
-  button.type = "button";
-  button.className = "pl-render";
-  button.textContent = "Sign in with GitHub";
-  button.addEventListener("click", onSignIn);
-  container.append(note("pl-error", message, ALERT), button);
+  container.append(note("pl-error", message, ALERT), actionButton("Sign in with GitHub", onSignIn));
 }
 
 // Device-flow pending: keep the user code visible while authorizing on GitHub.
@@ -113,11 +109,7 @@ export function renderSignInPending(
   const code = document.createElement("code");
   code.className = "pl-user-code";
   code.textContent = userCode;
-  const copy = document.createElement("button");
-  copy.type = "button";
-  copy.className = "pl-render";
-  copy.textContent = "Copy code";
-  copy.addEventListener("click", onCopy);
+  const copy = actionButton("Copy code", onCopy);
   const link = document.createElement("a");
   link.className = "pl-render";
   link.href = verificationUri;
@@ -159,6 +151,15 @@ function glyph(markup: string, className: string): HTMLElement {
   return span;
 }
 
+function actionButton(label: string, onClick: () => void): HTMLButtonElement {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "pl-render";
+  button.textContent = label;
+  button.addEventListener("click", onClick);
+  return button;
+}
+
 function summaryRow(status: Status, icon: string, iconClass: string, name: string, meta?: string): HTMLElement {
   const summary = document.createElement("summary");
   summary.className = "pl-row";
@@ -182,7 +183,6 @@ function summaryRow(status: Status, icon: string, iconClass: string, name: strin
   return summary;
 }
 
-// Append kids, or mark the summary as a leaf when empty.
 function finish(details: HTMLDetailsElement, summary: HTMLElement, kids: HTMLElement): HTMLDetailsElement {
   details.append(summary);
   if (kids.childElementCount) details.append(kids);
@@ -263,7 +263,6 @@ function renderOverrideGroups(overrides: OverrideDiff[], diff: DiffV2): HTMLElem
     else groups.push({ name: ov.group, rows: [ov] });
   }
   return groups.map(({ name, rows }) => {
-    // The heading status: that status if uniform within the group, else modified.
     const [first] = rows;
     const status = first && rows.every((r) => r.status === first.status) ? first.status : "modified";
     const el = openDetails("pl-comp", status);

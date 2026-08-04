@@ -61,6 +61,12 @@ export type DiffV2 = {
   loose: ComponentDiff[];
 };
 
+// Canonical empty diff. The schema literal is a wire contract with core/src/json.zig;
+// fixtures spread this instead of restating it.
+export function emptyDiff(): DiffV2 {
+  return { schema: "prefablens.diff.v2", unresolvedGuids: [], roots: [], loose: [] };
+}
+
 export type DiffErrorV1 = { schema: "prefablens.error.v1"; error: string };
 
 // Which diff page a request is for. Every kind shares the blob/diff pipeline; only
@@ -91,6 +97,13 @@ export type BackgroundError =
   | "diff-failed"
   | "not-unity-yaml";
 
+// Errors a completed sign-in can clear; everything else renders a plain error card.
+export type AuthError = Extract<BackgroundError, "access-token-missing" | "auth-failed">;
+
+export function isAuthError(error: BackgroundError): error is AuthError {
+  return error === "access-token-missing" || error === "auth-failed";
+}
+
 export type SemanticDiffResponse =
   | { ok: true; json: DiffV2; pending?: boolean }
   | { ok: false; error: BackgroundError }
@@ -107,7 +120,7 @@ export type GuidResolvedPush = {
   target: DiffTarget;
   path: string;
   resolved: Record<string, string>;
-  json?: DiffV2; // final push may carry a restructured diff after mergeSources
+  json?: DiffV2; // final push may carry a restructured diff after updateSources
   done: boolean; // resolution finished (even with empty resolved — turns off the indicator)
   status?: ResolutionStatus; // on every done push; keep indicator unless "complete"
 };

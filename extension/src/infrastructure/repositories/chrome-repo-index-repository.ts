@@ -1,24 +1,20 @@
 import type { RepoGuidIndex } from "../../domain/guid/repo-guid-index";
 import type { RepoIndexRepository } from "../../domain/guid/repo-index-repository";
 import { createMergeStore } from "./merge-store";
+import type { StorageArea } from "./storage-area";
 
-type Area = {
-  get(keys: string[]): Promise<Record<string, unknown>>;
-  set(items: Record<string, unknown>): Promise<void>;
-};
-
-export function createChromeRepoIndexRepository(area: Area): RepoIndexRepository {
+export function createChromeRepoIndexRepository(area: StorageArea): RepoIndexRepository {
   const metaGuids = createMergeStore(area, "metaGuids");
+  const indexKey = (repo: string): string => `guidIndex:${repo}`;
   return {
     loadGuids: (repo) => metaGuids.load(repo),
     saveGuids: (repo, entries) => metaGuids.save(repo, entries).catch(() => {}),
     async loadIndex(repo) {
-      const key = `guidIndex:${repo}`;
-      const stored = await area.get([key]);
-      return stored[key] as RepoGuidIndex | undefined;
+      const stored = await area.get([indexKey(repo)]);
+      return stored[indexKey(repo)] as RepoGuidIndex | undefined;
     },
     async saveIndex(repo, index) {
-      await area.set({ [`guidIndex:${repo}`]: index }).catch(() => {});
+      await area.set({ [indexKey(repo)]: index }).catch(() => {});
     },
   };
 }

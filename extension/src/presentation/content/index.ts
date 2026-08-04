@@ -1,10 +1,11 @@
-import { signIn } from "../../application/auth/sign-in";
+import { type SignInFailure, signIn } from "../../application/auth/sign-in";
 import { createGithubAuth, createMessenger, createTokenStore } from "../../container";
+import { mergeResolvedPush } from "../../domain/diff/fn/merge-resolved-push";
 import { targetKey } from "../../domain/diff/fn/target-key";
-import { unresolvedRemaining } from "../../domain/diff/fn/unresolved-remaining";
-import type { BackgroundError, GuidResolvedPush } from "../../domain/diff/types";
+import type { BackgroundError, DiffTarget, GuidResolvedPush } from "../../domain/diff/types";
 import { must } from "../../internal/must";
 import {
+  createViewHost,
   render,
   renderError,
   renderLoading,
@@ -12,24 +13,23 @@ import {
   renderSignInPending,
   renderTooLarge,
 } from "../internal/render";
-import { type DiffPage, type FileEntry, parseDiffUrl, parsePrPage, scanUnityFiles } from "./detect";
-import { fillDeviceCode } from "./device-page";
-import { addAuthRetry, emptyAuthRetries, flushAuthRetries } from "./overlay/auth-retries";
-import { emptyFileView, type FileViewDeps, showFileView, syncFileView } from "./overlay/file-view";
-import type { View } from "./overlay/view-mode";
+import { mountGlobalBar, mountToggle, type Toggle } from "../internal/toggle";
+import type { View } from "../internal/view-mode";
 import {
   applyExternal,
   clearOverrides,
-  defaultView,
   effectiveView,
   emptyViewState,
   onDefaultChange,
   setDefault,
   setOverride,
   type ViewStateData,
-} from "./overlay/view-state";
-import { emptyViewRegistry, getView, pruneDisconnectedViews, setView, type ViewEntry } from "./overlay/views";
-import { mountToggle, type Toggle } from "./toggle";
+} from "../internal/view-state";
+import { type DiffPage, type FileEntry, parseDiffUrl, parsePrPage, scanUnityFiles } from "./detect";
+import { fillDeviceCode } from "./device-page";
+import { flushAuthRetries } from "./overlay/auth-retries";
+import { emptyFileView, type FileViewDeps, resolvingCount, showFileView, syncFileView } from "./overlay/file-view";
+import { pruneDisconnectedViews, type ViewEntry, type ViewRegistry } from "./overlay/views";
 
 const ERROR_TEXT: Record<BackgroundError, string> = {
   "access-token-missing": "Sign in with GitHub to view semantic diffs.",
@@ -40,8 +40,18 @@ const ERROR_TEXT: Record<BackgroundError, string> = {
   "not-unity-yaml": "This file is not a text-serialized Unity asset.",
 };
 
+const SIGN_IN_FAILURE_TEXT: Record<SignInFailure, string> = {
+  denied: "Authorization denied — try again.",
+  expired: "Code expired — try again.",
+  failed: "Sign-in failed — try again.",
+};
+
 // path → render target for guidResolved pushes
-const views = emptyViewRegistry();
+const views: ViewRegistry = new Map();
+
+// Prefetch-time writes and push-time reads must build the same key
+const viewKey = (owner: string, repo: string, target: DiffTarget, path: string): string =>
+  `${targetKey(owner, repo, target)}:${path}`;
 
 // Lost final push → flip to retryable incomplete instead of spinning forever
 const WATCHDOG_MS = 120_000;
@@ -61,8 +71,14 @@ let globalToggle: Toggle | undefined;
 let currentPage = ""; // drop overrides when leaving this diff page
 let prefetchedPr = ""; // prefetch once per PR across conversation + files tabs
 
+// SPA navigation may have killed the DOM behind an applier
+function liveAppliers(): Set<Applier> {
+  for (const a of appliers) if (!a.header.isConnected) appliers.delete(a);
+  return appliers;
+}
+
 // Auth-blocked panels: retry all when a token lands
-const authRetries = emptyAuthRetries();
+const authRetries = new Set<() => void>();
 
 const messenger = createMessenger();
 const tokenStore = createTokenStore();
@@ -82,7 +98,7 @@ function signInPanel(root: ShadowRoot, message: string): void {
     void signIn(auth, tokenStore, fetch, sleep, openTab, now, signInState, {
       showPending: (userCode, verificationUri) =>
         renderSignInPending(root, userCode, verificationUri, () => void navigator.clipboard.writeText(userCode)),
-      showFailure: (text) => signInPanel(root, text),
+      showFailure: (reason) => signInPanel(root, SIGN_IN_FAILURE_TEXT[reason]),
     });
   });
 }
@@ -94,7 +110,7 @@ function attach(viewState: ViewStateData): void {
     if (prKey !== prefetchedPr) {
       prefetchedPr = prKey;
       // Fire-and-forget; manual toggle stays available if prefetch fails
-      void messenger.prefetch({ type: "prefetch", ...prPage }).catch(() => {});
+      void messenger.prefetch({ type: "prefetch", ...prPage });
     }
   }
   const page = parseDiffUrl(location.pathname);
@@ -108,13 +124,13 @@ function attach(viewState: ViewStateData): void {
   // scan. This drops the DiffV2 and shadow root that a dead view pins, and it also
   // plugs the classic soft leak.
   pruneDisconnectedViews(views);
-  for (const a of [...appliers]) if (!a.header.isConnected) appliers.delete(a);
+  const live = liveAppliers();
   const entries = scanUnityFiles(document);
   const first = entries[0];
   if (first) ensureGlobalToggle(viewState, first);
   for (const entry of entries) attachToggle(viewState, page, entry);
   // React remounts can undo inline hide under still-marked headers; sync is idempotent/fetch-free
-  for (const a of appliers) a.sync();
+  for (const a of live) a.sync();
 }
 
 // Global bar must sit outside recycled react list items (classic: before .file; react: list root)
@@ -122,21 +138,15 @@ function ensureGlobalToggle(viewState: ViewStateData, first: FileEntry): void {
   if (globalToggle?.element.closest("[data-prefablens-global]")?.isConnected) return;
   const anchor = first.globalAnchor();
   if (!anchor?.parentElement) return;
-  const bar = document.createElement("div");
-  bar.setAttribute("data-prefablens-global", "");
-  const label = document.createElement("span");
-  label.className = "prefablens-eyebrow";
-  label.textContent = "PrefabLens";
-  const toggle = mountToggle((view) => setDefault(viewState, view, persistView), defaultView(viewState));
-  bar.append(label, toggle.element);
-  anchor.before(bar);
-  globalToggle = toggle;
+  const bar = mountGlobalBar((view) => setDefault(viewState, view, persistView), viewState.def);
+  anchor.before(bar.element);
+  globalToggle = bar.toggle;
 }
 
 function attachToggle(viewState: ViewStateData, page: DiffPage, entry: FileEntry): void {
   if (entry.header.hasAttribute("data-prefablens")) return;
   entry.header.setAttribute("data-prefablens", "");
-  const viewKey = `${targetKey(page.owner, page.repo, page.target)}:${entry.path}`;
+  const key = viewKey(page.owner, page.repo, page.target, entry.path);
 
   // Set by createHost before results.set so the push listener always has a real shadow root
   let shadow: ShadowRoot | undefined;
@@ -146,9 +156,7 @@ function attachToggle(viewState: ViewStateData, page: DiffPage, entry: FileEntry
   const fileDeps: FileViewDeps = {
     file: entry,
     createHost() {
-      const host = document.createElement("div");
-      host.setAttribute("data-prefablens-view", "");
-      const root = host.attachShadow({ mode: "open" });
+      const { host, root } = createViewHost();
       shadow = root;
       return {
         attach: () => entry.attachHost(host),
@@ -166,30 +174,27 @@ function attachToggle(viewState: ViewStateData, page: DiffPage, entry: FileEntry
         },
       };
     },
-    // Channel loss (SW restart, teardown) → fetch-failed; callers never see a rejection
     requestDiff: (force) =>
-      messenger
-        .semanticDiff({
-          type: "semanticDiff",
-          owner: page.owner,
-          repo: page.repo,
-          target: page.target,
-          path: entry.path,
-          force,
-        })
-        .catch(() => ({ ok: false as const, error: "fetch-failed" as const })),
+      messenger.semanticDiff({
+        type: "semanticDiff",
+        owner: page.owner,
+        repo: page.repo,
+        target: page.target,
+        path: entry.path,
+        force,
+      }),
     results: {
-      set: ({ json, retry }) => setView(views, viewKey, { root: must(shadow), json, retry }),
-      get: () => getView(views, viewKey),
-      armWatchdog: () => armWatchdog(must(getView(views, viewKey))),
+      set: ({ json, retry }) => views.set(key, { root: must(shadow), json, retry }),
+      get: () => views.get(key),
+      armWatchdog: () => armWatchdog(must(views.get(key))),
     },
-    onAuthRetry: (retry) => addAuthRetry(authRetries, retry),
+    onAuthRetry: (retry) => authRetries.add(retry),
     effectiveView: () => effectiveView(viewState, entry.path),
   };
 
   const toggle = mountToggle(
     (view) => {
-      setOverride(viewState, entry.path, view); // per-file override
+      setOverride(viewState, entry.path, view);
       showFileView(fileState, fileDeps, view);
     },
     effectiveView(viewState, entry.path),
@@ -222,13 +227,7 @@ async function init(): Promise<void> {
   const viewState = emptyViewState(initial);
   onDefaultChange(viewState, (view) => {
     globalToggle?.set(view);
-    for (const a of [...appliers]) {
-      if (!a.header.isConnected) {
-        appliers.delete(a); // SPA navigation may have killed the DOM
-        continue;
-      }
-      a.apply(view);
-    }
+    for (const a of liveAppliers()) a.apply(view);
   });
   // Cross-tab default sync; applyExternal ignores the originating tab's echo
   chrome.storage.onChanged.addListener((changes, area) => {
@@ -244,18 +243,17 @@ async function init(): Promise<void> {
   // guidResolved: second-stage push from background; re-render if this view still exists
   chrome.runtime.onMessage.addListener((msg: GuidResolvedPush) => {
     if (msg?.type !== "guidResolved") return;
-    const view = getView(views, `${targetKey(msg.owner, msg.repo, msg.target)}:${msg.path}`);
+    const view = views.get(viewKey(msg.owner, msg.repo, msg.target, msg.path));
     if (!view) return; // navigated away: drop silently
     clearTimeout(view.watchdog);
-    // Final push replaces json (mergeSources can reshape); intermediate merges resolved
-    view.json = msg.json ?? { ...view.json, resolved: { ...view.json.resolved, ...msg.resolved } };
+    view.json = mergeResolvedPush(view.json, msg);
     if (msg.done && msg.status !== undefined && msg.status !== "complete") {
       // Gave up: keep arrived names, offer manual retry (#194)
       render(view.root, view.json, { incomplete: { onRetry: view.retry } });
       return;
     }
     if (!msg.done) armWatchdog(view);
-    render(view.root, view.json, { resolving: msg.done ? 0 : Math.max(unresolvedRemaining(view.json).length, 1) });
+    render(view.root, view.json, { resolving: msg.done ? 0 : resolvingCount(view.json) });
   });
 
   // SPA: MutationObserver + 50ms debounce follows lazy loads without feeling sluggish

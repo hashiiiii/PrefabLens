@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
-import type { View } from "./overlay/view-mode";
 import { mountToggle } from "./toggle";
+import type { View } from "./view-mode";
 
 // Selection sink: a real array, not a spy
 function sink() {

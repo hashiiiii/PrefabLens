@@ -1,3 +1,4 @@
+import { assetPathFromMeta } from "../../domain/diff/fn/asset-path-from-meta";
 import { parseGuidFromMeta } from "../../domain/diff/fn/parse-guid-from-meta";
 import type { RepoIndexRepository } from "../../domain/guid/repo-index-repository";
 import { ok, type Result } from "../../domain/result";
@@ -22,10 +23,10 @@ async function updateRepoIndex(
 ): Promise<Result<Record<string, string> | null, GithubFailure>> {
   const existing = await store.loadIndex(repoKey);
   if (existing?.treeSha === ref) return ok(existing.guids);
-  const tree = await client.listMetaTree(owner, repo, ref);
+  // The stored sha→guid map is independent of the tree fetch; overlap them
+  const [tree, known] = await Promise.all([client.listMetaTree(owner, repo, ref), store.loadGuids(repoKey)]);
   if (!tree.ok) return tree;
   if (tree.value.truncated || tree.value.metas.length > INDEX_MAX_METAS) return ok(null);
-  const known = await store.loadGuids(repoKey);
   // hasOwn: like the guid cache, avoids false prototype hits
   const missing = tree.value.metas.filter((m) => !Object.hasOwn(known, m.sha));
   const fetched: Record<string, string> = {};
@@ -45,11 +46,11 @@ async function updateRepoIndex(
     }
   }
   if (Object.keys(fetched).length) await store.saveGuids(repoKey, fetched);
-  const merged = { ...known, ...fetched };
   const guids: Record<string, string> = {};
   for (const m of tree.value.metas) {
-    const guid = merged[m.sha];
-    if (guid) guids[guid] = m.path.slice(0, -".meta".length);
+    // sha keys are hex, so plain lookup cannot hit Object.prototype
+    const guid = fetched[m.sha] ?? known[m.sha];
+    if (guid) guids[guid] = assetPathFromMeta(m.path);
   }
   await store.saveIndex(repoKey, { treeSha: ref, guids });
   return ok(guids);

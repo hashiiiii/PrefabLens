@@ -3,12 +3,20 @@ import { createChromeTokenRepository, readAccessToken, type SettingsStorage } fr
 
 function mem(initial: Record<string, unknown> = {}): SettingsStorage & { data: Record<string, unknown> } {
   const data = { ...initial };
+  // The token repository only reads by key array; normalize anyway to satisfy StorageArea
+  const asArray = (keys: string | string[] | null): string[] =>
+    keys === null ? Object.keys(data) : Array.isArray(keys) ? keys : [keys];
   return {
     data,
-    get: async (keys) => Object.fromEntries(keys.filter((k) => k in data).map((k) => [k, data[k]])),
+    get: async (keys) =>
+      Object.fromEntries(
+        asArray(keys)
+          .filter((k) => k in data)
+          .map((k) => [k, data[k]]),
+      ),
     set: async (items) => void Object.assign(data, items),
     remove: async (keys) => {
-      for (const k of Array.isArray(keys) ? keys : [keys]) delete data[k];
+      for (const k of asArray(keys)) delete data[k];
     },
   };
 }
@@ -37,15 +45,7 @@ describe("readAccessToken", () => {
 });
 
 it("round-trips the pending sign-in", async () => {
-  // In-memory SettingsStorage fake, same shape as the other tests in this file
-  const data: Record<string, unknown> = {};
-  const store = createChromeTokenRepository({
-    get: async (keys) => Object.fromEntries(keys.filter((k) => k in data).map((k) => [k, data[k]])),
-    set: async (items) => void Object.assign(data, items),
-    remove: async (keys) => {
-      for (const k of Array.isArray(keys) ? keys : [keys]) delete data[k];
-    },
-  });
+  const store = createChromeTokenRepository(mem());
   expect(await store.readPendingSignIn()).toBeUndefined();
   await store.savePendingSignIn({ userCode: "ABCD-1234", expiresAt: 99 });
   expect(await store.readPendingSignIn()).toEqual({ userCode: "ABCD-1234", expiresAt: 99 });

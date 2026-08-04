@@ -1,4 +1,4 @@
-import type { View } from "./overlay/view-mode";
+import type { View } from "./view-mode";
 
 export type Toggle = { element: HTMLElement; set(view: View): void };
 
@@ -33,12 +33,12 @@ const PAGE_STYLES = `
 `;
 
 // Toggle lives in GitHub's DOM (not a shadow root)
-export function injectPageStyles(doc: Document = document): void {
-  if (doc.head.querySelector("style[data-prefablens-style]")) return;
-  const style = doc.createElement("style");
+export function injectPageStyles(): void {
+  if (document.head.querySelector("style[data-prefablens-style]")) return;
+  const style = document.createElement("style");
   style.setAttribute("data-prefablens-style", "");
   style.textContent = PAGE_STYLES;
-  doc.head.append(style);
+  document.head.append(style);
 }
 
 export function mountToggle(onSelect: (view: View) => void, initial: View = "raw"): Toggle {
@@ -68,4 +68,20 @@ export function mountToggle(onSelect: (view: View) => void, initial: View = "raw
   wrap.append(make("raw", "Raw"), make("semantic", "Semantic"));
   select(initial);
   return { element: wrap, set: select };
+}
+
+// The bar DOM matches the [data-prefablens-global] page styles this module owns;
+// the content script and demo must build it identically. Callers position the element.
+export function mountGlobalBar(
+  onSelect: (view: View) => void,
+  initial: View,
+): { element: HTMLElement; toggle: Toggle } {
+  const bar = document.createElement("div");
+  bar.setAttribute("data-prefablens-global", "");
+  const label = document.createElement("span");
+  label.className = "prefablens-eyebrow";
+  label.textContent = "PrefabLens";
+  const toggle = mountToggle(onSelect, initial);
+  bar.append(label, toggle.element);
+  return { element: bar, toggle };
 }

@@ -1,11 +1,7 @@
 import type { GuidRepository } from "../../domain/guid/guid-repository";
 import { createMergeStore } from "./merge-store";
+import type { StorageArea } from "./storage-area";
 
-type Area = {
-  get(keys: string[]): Promise<Record<string, unknown>>;
-  set(items: Record<string, unknown>): Promise<void>;
-};
-
-export function createChromeGuidRepository(area: Area): GuidRepository {
+export function createChromeGuidRepository(area: StorageArea): GuidRepository {
   return createMergeStore(area, "guids");
 }

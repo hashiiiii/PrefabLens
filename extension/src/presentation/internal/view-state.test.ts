@@ -3,7 +3,6 @@ import type { View } from "./view-mode";
 import {
   applyExternal,
   clearOverrides,
-  defaultView,
   effectiveView,
   emptyViewState,
   onDefaultChange,
@@ -75,7 +74,7 @@ describe("view state", () => {
     setOverride(state, "a.prefab", "raw");
     applyExternal(state, "semantic");
     expect(effectiveView(state, "a.prefab")).toBe("semantic"); // a switch from another tab still lines up every file
-    expect(defaultView(state)).toBe("semantic");
+    expect(state.def).toBe("semantic");
     expect(persisted).toEqual([]);
     expect(notified).toEqual(["semantic"]);
     notified.length = 0;
@@ -88,6 +87,6 @@ describe("view state", () => {
     setOverride(state, "a.prefab", "raw");
     clearOverrides(state);
     expect(effectiveView(state, "a.prefab")).toBe("semantic");
-    expect(defaultView(state)).toBe("semantic");
+    expect(state.def).toBe("semantic");
   });
 });

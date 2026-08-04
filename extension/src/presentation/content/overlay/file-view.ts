@@ -1,7 +1,13 @@
 import { unresolvedRemaining } from "../../../domain/diff/fn/unresolved-remaining";
-import type { BackgroundError, DiffV2, SemanticDiffResponse } from "../../../domain/diff/types";
+import {
+  type AuthError,
+  type BackgroundError,
+  type DiffV2,
+  isAuthError,
+  type SemanticDiffResponse,
+} from "../../../domain/diff/types";
 import { must } from "../../../internal/must";
-import type { View } from "./view-mode";
+import type { View } from "../../internal/view-mode";
 
 // Per-file raw/semantic state machine (host + fetch latch); unit-testable without a browser.
 
@@ -10,9 +16,14 @@ export type FilePanel = {
   diff(json: DiffV2, resolving: number): void;
   incomplete(json: DiffV2, onRetry: () => void): void;
   tooLarge(bytes: number, onForce: () => void): void;
-  authError(error: "access-token-missing" | "auth-failed"): void;
+  authError(error: AuthError): void;
   error(error: BackgroundError): void;
 };
+
+// Floor of 1: show the spinner even when every name resolved but source merging continues
+export function resolvingCount(json: DiffV2): number {
+  return Math.max(unresolvedRemaining(json).length, 1);
+}
 
 export type FileHost = {
   attach(): void;
@@ -27,7 +38,7 @@ export type FileResult = { json: DiffV2; retry(): void };
 export type FileViewDeps = {
   file: { setRawHidden(hidden: boolean): void; collapsed(): boolean };
   createHost(): FileHost;
-  requestDiff(force?: boolean): Promise<SemanticDiffResponse>; // must never reject: callers map channel loss to fetch-failed
+  requestDiff(force?: boolean): Promise<SemanticDiffResponse>; // never rejects: the messenger client maps channel loss to fetch-failed
   results: { set(result: FileResult): void; get(): FileResult | undefined; armWatchdog(): void };
   onAuthRetry(retry: () => void): void;
   effectiveView(): View;
@@ -71,8 +82,7 @@ function request(state: FileViewState, deps: FileViewDeps, force?: boolean): voi
         },
       });
       if (res.pending) deps.results.armWatchdog();
-      // Show while pending even if names are resolved (source merging may remain)
-      panel.diff(res.json, res.pending ? Math.max(unresolvedRemaining(res.json).length, 1) : 0);
+      panel.diff(res.json, res.pending ? resolvingCount(res.json) : 0);
       return;
     }
     state.requested = false; // don't cache errors: next toggle re-fetches
@@ -83,7 +93,7 @@ function request(state: FileViewState, deps: FileViewDeps, force?: boolean): voi
       return;
     }
     if (res.error === "too-large") panel.tooLarge(res.bytes, () => request(state, deps, true));
-    else if (res.error === "access-token-missing" || res.error === "auth-failed") {
+    else if (isAuthError(res.error)) {
       deps.onAuthRetry(() => {
         // First retry sets requested; duplicate registrations no-op
         if (!state.requested && deps.effectiveView() === "semantic") request(state, deps);

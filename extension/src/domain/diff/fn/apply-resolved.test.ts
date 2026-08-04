@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
-import type { DiffV2 } from "../types";
+import { type DiffV2, emptyDiff } from "../types";
 import { applyResolved } from "./apply-resolved";
 
 describe("applyResolved", () => {
   const diff: DiffV2 = {
-    schema: "prefablens.diff.v2",
+    ...emptyDiff(),
     unresolvedGuids: ["aaa", "bbb"],
     roots: [],
     loose: [],

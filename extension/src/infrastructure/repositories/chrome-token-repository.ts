@@ -1,11 +1,8 @@
 import type { PendingSignIn } from "../../domain/auth/token";
 import type { TokenRepository } from "../../domain/auth/token-repository";
+import type { StorageAreaWithRemove } from "./storage-area";
 
-export type SettingsStorage = {
-  get(keys: string[]): Promise<Record<string, unknown>>;
-  set(items: Record<string, unknown>): Promise<void>;
-  remove(keys: string | string[]): Promise<void>;
-};
+export type SettingsStorage = StorageAreaWithRemove;
 
 // Prefer accessToken; one-shot move of legacy pat for existing installs.
 export async function readAccessToken(storage: SettingsStorage): Promise<string | undefined> {

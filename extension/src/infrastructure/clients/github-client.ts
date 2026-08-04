@@ -1,4 +1,5 @@
 import { type ChangedFile, type GithubFailure, isRateLimited, type RefPair } from "../../application/gateway/github";
+import { assetPathFromMeta } from "../../domain/diff/fn/asset-path-from-meta";
 import { err, ok, type Result } from "../../domain/result";
 import type { Queue } from "./fetch-queue-client";
 
@@ -15,9 +16,7 @@ function adviceMs(headers: Headers): number | undefined {
 // Single owner of GitHub's rate-limit shape: a 429, or a 403 whose headers or
 // body show a rate limit. Secondary limits sometimes advise only in the body
 // (octokit checks the body too).
-export async function rateLimitFailure(
-  res: Response,
-): Promise<Extract<GithubFailure, { kind: "rate-limited" }> | null> {
+async function rateLimitFailure(res: Response): Promise<Extract<GithubFailure, { kind: "rate-limited" }> | null> {
   if (res.status !== 403 && res.status !== 429) return null;
   const body = await res
     .clone()
@@ -32,7 +31,7 @@ export async function rateLimitFailure(
 }
 
 // Queue-aware fetch: rate-limited responses become classified rejections, so the
-// backoff and retry logic of the queue (fetch-queue.ts) sees them.
+// backoff and retry logic of the queue (fetch-queue-client.ts) sees them.
 export function createQueuedFetch(queue: Queue, front: boolean): typeof fetch {
   return (input, init) =>
     queue(
@@ -50,15 +49,21 @@ export function createQueuedFetch(queue: Queue, front: boolean): typeof fetch {
 type DiffEntry = { filename: string; status: string; previous_filename?: string; sha?: string };
 const toChangedFile = (f: DiffEntry): ChangedFile => ({
   path: f.filename,
-  status: f.status,
+  // renamed/copied/changed/unchanged all diff like a modified file
+  status: f.status === "added" || f.status === "removed" ? f.status : "modified",
   previousPath: f.previous_filename,
   sha: f.sha,
 });
 
 const FETCH_FAILED = err({ kind: "fetch-failed" as const });
 
-function graphqlUrl(restBase: string): string {
-  return `${restBase}/graphql`;
+// Body reads reject when the stream dies mid-transfer; treat like any other fetch failure
+async function readOr<T>(read: () => Promise<T>): Promise<Result<T, GithubFailure>> {
+  try {
+    return ok(await read());
+  } catch {
+    return FETCH_FAILED;
+  }
 }
 
 export class GithubClient {
@@ -101,11 +106,16 @@ export class GithubClient {
     const res = await this.request(path, "application/vnd.github+json");
     if (!res.ok) return res;
     if (!res.value.ok) return FETCH_FAILED;
-    try {
-      return ok((await res.value.json()) as T);
-    } catch {
-      return FETCH_FAILED;
-    }
+    return readOr(() => res.value.json() as Promise<T>);
+  }
+
+  // Shared body of getFileAtRef / getBlobRaw: raw media type, 404 → null
+  private async rawBytes(path: string): Promise<Result<Uint8Array | null, GithubFailure>> {
+    const res = await this.request(path, "application/vnd.github.raw+json");
+    if (!res.ok) return res;
+    if (res.value.status === 404) return ok(null);
+    if (!res.value.ok) return FETCH_FAILED;
+    return readOr(async () => new Uint8Array(await res.value.arrayBuffer()));
   }
 
   // before = merge-base (GitHub's PR diff), not the base branch tip
@@ -185,11 +195,7 @@ export class GithubClient {
     );
     if (!res.ok) return res;
     if (!res.value.ok) return FETCH_FAILED;
-    try {
-      return ok((await res.value.text()).trim());
-    } catch {
-      return FETCH_FAILED;
-    }
+    return readOr(async () => (await res.value.text()).trim());
   }
 
   // guid → asset path via Code Search (.meta stripped). No hit / not indexed (422) → null.
@@ -199,13 +205,11 @@ export class GithubClient {
     const res = await this.request(`/search/code?q=${q}&per_page=1`, "application/vnd.github+json");
     if (!res.ok) return res;
     if (!res.value.ok) return ok(null);
-    try {
+    return readOr(async () => {
       const body = (await res.value.json()) as { items?: Array<{ path?: string }> };
       const path = body.items?.[0]?.path;
-      return ok(path?.endsWith(".meta") ? path.slice(0, -".meta".length) : null);
-    } catch {
-      return FETCH_FAILED;
-    }
+      return path?.endsWith(".meta") ? assetPathFromMeta(path) : null;
+    });
   }
 
   // Raw bytes at ref; null if absent. Prefer getBlobRaw when sha known (#110 TTFB).
@@ -216,32 +220,13 @@ export class GithubClient {
     ref: string,
   ): Promise<Result<Uint8Array | null, GithubFailure>> {
     const encoded = path.split("/").map(encodeURIComponent).join("/");
-    const res = await this.request(
-      `/repos/${owner}/${repo}/contents/${encoded}?ref=${ref}`,
-      "application/vnd.github.raw+json",
-    );
-    if (!res.ok) return res;
-    if (res.value.status === 404) return ok(null);
-    if (!res.value.ok) return FETCH_FAILED;
-    try {
-      return ok(new Uint8Array(await res.value.arrayBuffer()));
-    } catch {
-      return FETCH_FAILED;
-    }
+    return this.rawBytes(`/repos/${owner}/${repo}/contents/${encoded}?ref=${ref}`);
   }
 
   // Content-addressed blob bytes; latency stays flat where contents-by-path stalls.
   // null on 404 (sha can vanish after force push + gc).
   async getBlobRaw(owner: string, repo: string, sha: string): Promise<Result<Uint8Array | null, GithubFailure>> {
-    const res = await this.request(`/repos/${owner}/${repo}/git/blobs/${sha}`, "application/vnd.github.raw+json");
-    if (!res.ok) return res;
-    if (res.value.status === 404) return ok(null);
-    if (!res.value.ok) return FETCH_FAILED;
-    try {
-      return ok(new Uint8Array(await res.value.arrayBuffer()));
-    } catch {
-      return FETCH_FAILED;
-    }
+    return this.rawBytes(`/repos/${owner}/${repo}/git/blobs/${sha}`);
   }
 
   private async tree(
@@ -289,7 +274,7 @@ export class GithubClient {
       .map((oid, i) => `b${i}: object(oid: ${JSON.stringify(oid)}) { ... on Blob { text } }`)
       .join("\n");
     const query = `query { repository(owner: ${JSON.stringify(owner)}, name: ${JSON.stringify(repo)}) {\n${aliases}\n} }`;
-    const res = await this.rawRequest(graphqlUrl(this.base), {
+    const res = await this.rawRequest(`${this.base}/graphql`, {
       method: "POST",
       headers: {
         accept: "application/json",
@@ -300,15 +285,13 @@ export class GithubClient {
     });
     if (!res.ok) return res;
     if (!res.value.ok) return FETCH_FAILED;
-    let body: {
+    type GraphqlBody = {
       data?: { repository?: Record<string, { text?: string | null } | null> } | null;
       errors?: Array<{ type?: string }>;
     };
-    try {
-      body = (await res.value.json()) as typeof body;
-    } catch {
-      return FETCH_FAILED;
-    }
+    const parsed = await readOr(() => res.value.json() as Promise<GraphqlBody>);
+    if (!parsed.ok) return parsed;
+    const body = parsed.value;
     // GraphQL can be HTTP 200 with RATE_LIMITED in errors[]
     if (body.errors?.some((e) => e.type === "RATE_LIMITED"))
       return err({ kind: "rate-limited", retryAfterMs: adviceMs(res.value.headers) });

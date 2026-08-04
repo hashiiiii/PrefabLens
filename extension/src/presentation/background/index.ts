@@ -1,12 +1,10 @@
 import { createDiffSession } from "../../application/diff/create-diff-session";
-import { createPrPrefetch } from "../../application/diff/create-pr-prefetch";
 import { getSemanticDiff } from "../../application/diff/get-semantic-diff";
+import { prefetchPr } from "../../application/diff/prefetch-pr";
 import {
+  createClientFactory,
   createDifferLoader,
   createDiffStore,
-  createFetchQueue,
-  createGithubClient,
-  createGithubFetch,
   createGuidCache,
   createRepoIndexStore,
   createTokenStore,
@@ -18,9 +16,7 @@ const guidCache = createGuidCache();
 const diffStore = createDiffStore();
 const repoIndexStore = createRepoIndexStore();
 const getDiffer = createDifferLoader();
-const queue = createFetchQueue(6);
-const makeClient = (base: string, token: string, lane: "user" | "prefetch") =>
-  createGithubClient(base, token, createGithubFetch(queue, lane));
+const makeClient = createClientFactory(6);
 const session = createDiffSession();
 
 function makeGuidPush(tabId: number | undefined): (m: GuidResolvedPush) => void {
@@ -54,7 +50,7 @@ chrome.runtime.onMessage.addListener((msg: BackgroundRequest, sender, sendRespon
       return true; // async response
     }
     case "prefetch":
-      void createPrPrefetch(tokenStore, makeClient, getDiffer, diffStore, repoIndexStore, session, msg);
+      void prefetchPr(tokenStore, makeClient, getDiffer, diffStore, repoIndexStore, session, msg);
       return undefined; // prefetch is fire-and-forget
   }
 });

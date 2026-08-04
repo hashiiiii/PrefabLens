@@ -54,6 +54,8 @@ export function parsePrPage(pathname: string): { owner: string; repo: string; pr
 function scanClassic(root: ParentNode): FileEntry[] {
   const out: FileEntry[] = [];
   for (const header of root.querySelectorAll<HTMLElement>(".file-header[data-path]")) {
+    // Marked = already wired; its appliers keep serving it, so skip the rebuild
+    if (header.hasAttribute("data-prefablens")) continue;
     const path = header.dataset.path;
     if (!path || !isUnityPath(path)) continue;
     const container = header.closest(".file");
@@ -104,7 +106,9 @@ function scanReact(root: ParentNode): FileEntry[] {
   const out: FileEntry[] = [];
   for (const region of root.querySelectorAll<HTMLElement>('div[role="region"][id^="diff-"]')) {
     const header = region.querySelector<HTMLElement>('[class*="diff-file-header"]');
-    if (!header) continue;
+    // Marked = already wired: skip before the header text walk — this loop runs
+    // on every mutation tick over every diff region, Unity or not
+    if (!header || header.hasAttribute("data-prefablens")) continue;
     const path = filePathFromReactHeader(header);
     if (!path || !isUnityPath(path)) continue;
     // Region child that contains the header (normally diffHeaderWrapper)
@@ -125,23 +129,31 @@ function scanReact(root: ParentNode): FileEntry[] {
       setRawHidden(hidden) {
         region.toggleAttribute("data-prefablens-raw-hidden", hidden);
         if (hidden) ensureReactRawHideStyle(region.ownerDocument);
-        // Inline fallback for markup the CSS rule misses
+        // Inline fallback for markup the CSS rule misses. Resolve the block once
+        // per call (not per child) — React can reparent between calls, not during one.
+        const block = headerBlock();
         for (const child of region.children) {
-          if (child === headerBlock() || child.hasAttribute("data-prefablens-view")) continue;
+          if (child === block || child.hasAttribute("data-prefablens-view")) continue;
           (child as HTMLElement).style.display = hidden ? "none" : "";
         }
       },
       // Chevron octicon swap + DiffFileHeader-module__collapsed class
-      collapsed: () =>
-        headerBlock().querySelector(".octicon-chevron-right") !== null ||
-        headerBlock().querySelector('[class*="DiffFileHeader-module__collapsed"]') !== null,
+      collapsed: () => {
+        const block = headerBlock();
+        return (
+          block.querySelector(".octicon-chevron-right") !== null ||
+          block.querySelector('[class*="DiffFileHeader-module__collapsed"]') !== null
+        );
+      },
       globalAnchor: () => region.closest('[data-testid="progressive-diffs-list"]') ?? region.parentElement,
     });
   }
   return out;
 }
 
-// Always run both: one matches, the other yields []; no layout probe (survives A/B flips)
+// Always run both: one matches, the other yields []; no layout probe (survives A/B flips).
+// Returns only headers not yet marked data-prefablens — attached files stay served
+// by their existing appliers.
 export function scanUnityFiles(root: ParentNode): FileEntry[] {
   return [...scanClassic(root), ...scanReact(root)];
 }

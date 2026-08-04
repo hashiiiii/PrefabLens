@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
-import type { DiffV2, SemanticDiffResponse } from "../../../domain/diff/types";
+import { type DiffV2, emptyDiff, type SemanticDiffResponse } from "../../../domain/diff/types";
 import { must } from "../../../internal/must";
+import type { View } from "../../internal/view-mode";
 import {
   emptyFileView,
   type FileResult,
@@ -9,9 +10,8 @@ import {
   showFileView,
   syncFileView,
 } from "./file-view";
-import type { View } from "./view-mode";
 
-const DIFF: DiffV2 = { schema: "prefablens.diff.v2", unresolvedGuids: [], roots: [], loose: [] };
+const DIFF: DiffV2 = emptyDiff();
 
 /** What the panel last drew, as plain data (a real sink, not a spy). */
 type Screen =

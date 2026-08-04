@@ -25,6 +25,11 @@ export function createQueue(
   let active = 0;
   let paused = false;
 
+  const enqueue = (job: Job): void => {
+    if (job.front) pending.unshift(job);
+    else pending.push(job);
+  };
+
   const pauseFor = (ms: number): void => {
     if (paused) return; // concurrent failures share the first backoff; later ones just requeue
     paused = true;
@@ -51,8 +56,7 @@ export function createQueue(
             active--;
             if (isRateLimited(e) && job.retries < MAX_RATE_LIMIT_RETRIES) {
               job.retries++;
-              if (job.front) pending.unshift(job);
-              else pending.push(job);
+              enqueue(job);
               pauseFor(Math.min(e.retryAfterMs ?? BACKOFF_FALLBACK_MS, BACKOFF_CAP_MS));
             } else {
               job.reject(e);
@@ -65,15 +69,13 @@ export function createQueue(
 
   return <T>(task: () => Promise<T>, opts?: { front?: boolean }) =>
     new Promise<T>((resolve, reject) => {
-      const job: Job = {
+      enqueue({
         run: task,
         resolve: resolve as (v: unknown) => void,
         reject,
         front: opts?.front === true,
         retries: 0,
-      };
-      if (job.front) pending.unshift(job);
-      else pending.push(job);
+      });
       pump();
     });
 }

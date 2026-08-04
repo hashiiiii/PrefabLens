@@ -73,6 +73,20 @@ it("keeps presentation off application/internal", () => {
   expect(violations).toEqual([]);
 });
 
+it("keeps container.ts reachable only from presentation entry points", () => {
+  // The composition root pulls in infrastructure: any other importer would smuggle
+  // infrastructure into its layer through the back door.
+  const violations: string[] = [];
+  for (const file of TS_FILES) {
+    const rel = relative(SRC, file);
+    if (/^presentation[\\/][^\\/]+[\\/]index\.ts$/.test(rel)) continue;
+    for (const { spec, target } of relativeImports(file)) {
+      if (target === join(SRC, "container.ts")) violations.push(`${rel} -> ${spec}`);
+    }
+  }
+  expect(violations).toEqual([]);
+});
+
 it("keeps production domain files inside domain", () => {
   // Doc rule: "This layer imports nothing outside domain/." Tests are exempt
   // (parity tests read sources via node:fs and use must).

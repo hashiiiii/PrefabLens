@@ -1,4 +1,5 @@
 import type { DiffRepository } from "../../domain/diff/diff-repository";
+import { assetPathFromMeta } from "../../domain/diff/fn/asset-path-from-meta";
 import { parseGuidFromMeta } from "../../domain/diff/fn/parse-guid-from-meta";
 import { targetKey } from "../../domain/diff/fn/target-key";
 import type { DiffTarget } from "../../domain/diff/types";
@@ -11,11 +12,13 @@ import {
   type GithubGateway,
   isRateLimited,
   type RefPair,
+  toBackgroundError,
 } from "../gateway/github";
 
 const EMPTY = new Uint8Array(0);
 const TOO_LARGE_BYTES = 25 * 1024 * 1024; // over 25MB renders on click
 const MAX_CONCURRENT_META_FETCHES = 8;
+const utf8 = new TextDecoder();
 
 type BlobClient = Pick<GithubGateway, "getBlobRaw" | "getFileAtRef">;
 type MetaFetcher = (path: string, side: "base" | "head") => Promise<Result<string | null, GithubFailure>>;
@@ -50,33 +53,34 @@ export async function getPair(
   path: string,
 ): Promise<Result<[Uint8Array, Uint8Array], GithubFailure>> {
   const file = ctx.files.find((f) => f.path === path);
-  const status = file?.status ?? "modified";
   const beforePath = file?.previousPath ?? path;
-  // files API sha is head blob, except removed where it is the base blob
-  const beforeBlob = status === "removed" ? file?.sha : ctx.baseShas?.get(beforePath);
-  const afterBlob = status === "removed" ? undefined : file?.sha;
   const fetchSide = async (p: string, ref: string, blob?: string): Promise<Result<Uint8Array, GithubFailure>> => {
     const bytes = await getBlob(session, client, owner, repo, p, ref, blob);
     if (!bytes.ok) return bytes;
     return ok(bytes.value ?? EMPTY);
   };
-  if (status === "added") {
-    const after = await fetchSide(path, ctx.refs.headSha, afterBlob);
-    if (!after.ok) return after;
-    return ok([EMPTY, after.value]);
+  switch (file?.status ?? "modified") {
+    case "added": {
+      const after = await fetchSide(path, ctx.refs.headSha, file?.sha);
+      if (!after.ok) return after;
+      return ok([EMPTY, after.value]);
+    }
+    case "removed": {
+      // files API sha is head blob, except removed where it is the base blob
+      const before = await fetchSide(beforePath, ctx.refs.baseSha, file?.sha);
+      if (!before.ok) return before;
+      return ok([before.value, EMPTY]);
+    }
+    default: {
+      const [before, after] = await Promise.all([
+        fetchSide(beforePath, ctx.refs.baseSha, ctx.baseShas?.get(beforePath)),
+        fetchSide(path, ctx.refs.headSha, file?.sha),
+      ]);
+      if (!before.ok) return before;
+      if (!after.ok) return after;
+      return ok([before.value, after.value]);
+    }
   }
-  if (status === "removed") {
-    const before = await fetchSide(beforePath, ctx.refs.baseSha, beforeBlob);
-    if (!before.ok) return before;
-    return ok([before.value, EMPTY]);
-  }
-  const [before, after] = await Promise.all([
-    fetchSide(beforePath, ctx.refs.baseSha, beforeBlob),
-    fetchSide(path, ctx.refs.headSha, afterBlob),
-  ]);
-  if (!before.ok) return before;
-  if (!after.ok) return after;
-  return ok([before.value, after.value]);
 }
 
 // guid→path from .meta files changed in the PR (removed → base side).
@@ -98,14 +102,15 @@ async function createGuidIndex(
     }
     if (!text.value) return null;
     const guid = parseGuidFromMeta(text.value);
-    if (guid) index.set(guid, f.path.slice(0, -".meta".length));
+    if (guid) index.set(guid, assetPathFromMeta(f.path));
     return null;
   };
 
   for (let i = 0; i < metas.length; i += MAX_CONCURRENT_META_FETCHES) {
     const chunk = metas.slice(i, i + MAX_CONCURRENT_META_FETCHES);
     const failures = await Promise.all(chunk.map(indexOne));
-    const rateLimited = failures.find((f): f is GithubFailure => f !== null && isRateLimited(f));
+    // indexOne swallows every non-rate-limit failure, so any non-null entry is a rate limit
+    const rateLimited = failures.find((f): f is GithubFailure => f !== null);
     if (rateLimited) return err(rateLimited);
   }
 
@@ -172,7 +177,7 @@ export function getContext(
           bySha.get(path),
         );
         if (!bytes.ok) return bytes;
-        return ok(bytes.value ? new TextDecoder().decode(bytes.value) : null);
+        return ok(bytes.value ? utf8.decode(bytes.value) : null);
       }),
       // Only rate limits propagate; anything else → null → contents-api fallback
       client.listBlobShas(owner, repo, refs.baseSha),
@@ -199,14 +204,17 @@ async function computeDiff(
   path: string,
   force: boolean,
 ): Promise<DiffOutcome> {
+  // Memoized wasm load compiles while the blobs download instead of after them
+  const differPromise = getDiffer();
+  differPromise.catch(() => {}); // early returns below leave it floating; the await still surfaces the error
   // Missing from listing (files API caps at 3000) → treat as modified; 404 side → EMPTY
   const pair = await getPair(session, client, ctx, owner, repo, path);
-  if (!pair.ok) return { ok: false, error: pair.error.kind };
+  if (!pair.ok) return { ok: false, error: toBackgroundError(pair.error) };
   const [before, after] = pair.value;
   if (!force && before.length + after.length > TOO_LARGE_BYTES) {
     return { ok: false, error: "too-large", bytes: before.length + after.length };
   }
-  const differ = await getDiffer();
+  const differ = await differPromise;
   // Prefilter passed, but some .asset files are binary regardless of ForceText
   if (!differ.isUnityYaml(before) && !differ.isUnityYaml(after)) {
     return { ok: false, error: "not-unity-yaml" };

@@ -39,8 +39,9 @@ Presentation -> Application -> Domain <- Infrastructure
 ```
 
 `src/layering.test.ts` enforces the import direction, the domain isolation,
-the ban on infrastructure imports of application public functions, and the
-presentation ban on `application/internal/`.
+the ban on infrastructure imports of application public functions, the
+presentation ban on `application/internal/`, and the rule that only
+presentation entry points import `src/container.ts`.
 
 Two modules sit outside the four layers:
 
@@ -62,13 +63,15 @@ Each JS context has its own entry point and its own container wiring:
 
 `<area>` matches an existing concept folder (`diff`, `guid`, `auth`, …).
 Add a new area only when a new concept appears.
+Use kebab-case file names.
 
 #### Domain (`src/domain/`)
 
 ```
 domain/
+  result.ts                   # Result plus the ok / err constructors
   <area>/
-    <type>.ts                 # domain types, Result
+    <type>.ts                 # domain types
     <noun>-repository.ts      # repository interfaces
     fn/<name>.ts              # pure functions that read or build domain types
 ```
@@ -110,6 +113,8 @@ application/
   as `XxxGateway`:
   `GithubGateway`, `DifferGateway` (WASM), `MessengerGateway` (chrome.runtime),
   `GithubAuthGateway` (Device Flow).
+  A gateway file holds types plus small type guards and converters for its
+  failure union (for example `isRateLimited`, `toBackgroundError`).
 
 #### Infrastructure (`src/infrastructure/`)
 
@@ -120,9 +125,12 @@ infrastructure/
 ```
 
 - Put gateway implementations in `clients/` as `*-client.ts`.
+  `clients/` also holds transport helpers that serve those implementations
+  (for example `fetch-queue-client.ts`, `fixture-client.ts`).
 - Put repository implementations in `repositories/`
   (`chrome-<noun>-repository.ts`).
-  `merge-store.ts` is an internal helper for those implementations.
+  `merge-store.ts` and `storage-area.ts` are internal helpers for those
+  implementations.
 
 #### Presentation (`src/presentation/`)
 
@@ -132,14 +140,14 @@ presentation/
   content/
     overlay/           # view models, view registry, file view state
   demo/                # site demo entry
-  internal/            # shared render helpers for two or more JS contexts
+  internal/            # helpers shared by two or more JS contexts
 ```
 
 - Each JS context has its own entry under its folder (`*/index.ts`).
 - View models and named UI callback types live next to the presentation code
   that owns them (for example under `content/overlay/`).
-- If two or more presentation contexts share render helpers, put them in
-  `presentation/internal/`.
+- If two or more presentation contexts share a helper (render, the toggle,
+  the view state), put it in `presentation/internal/`.
 
 #### Tests
 
@@ -154,7 +162,8 @@ presentation/
 
 **Role.** Domain vocabulary only.
 
-**Imports.** This layer imports nothing outside `domain/`.
+**Imports.** Production files in this layer import nothing outside `domain/`.
+Test files can also import the test runner, `node:` modules, and `src/internal/`.
 
 **Notes.**
 
@@ -175,8 +184,9 @@ It cannot import `infrastructure/` or `presentation/`.
 **Notes.**
 
 - Use CRUD names for use-case verbs: `create`, `get`, `update`, `delete`.
-  If a CRUD name hides the intent, use a domain verb (for example `sign-in`).
-- Export a plain verb function `<verb>(gateways…, [state,] input)`.
+  If a CRUD name hides the intent, use a domain verb
+  (for example `sign-in`, `prefetch-pr`).
+- Export a plain verb function `<verb>(gateways…, [state,] input, [callbacks])`.
 - Internal modules can export several sibling functions.
 - Send and receive domain models through repository interfaces in `domain/`.
 - Talk to outside systems that do not load or save domain models through gateways.
@@ -197,7 +207,7 @@ It cannot import `infrastructure/` or `presentation/`.
 **Role.** This layer implements gateways and repositories.
 
 **Imports.** This layer can import `domain/` and `application/gateway/`.
-It cannot import application public functions.
+It cannot import anything else under `application/`.
 
 **Notes.**
 

@@ -1,15 +1,13 @@
 // Live demo for site/extension.html: real renderer + toggle, wired like the
-// content script but through createDemo* factories (fixtures instead of GitHub).
-// Bundled as dist/demo.js via `node build.mjs --demo`. Fixtures come via
-// data-before/data-after URLs (an empty side follows the CLI empty-side semantics).
+// content script but through the demo container factories (fixtures instead
+// of GitHub). Bundled as dist/demo.js via `node build.mjs --demo`. Fixtures
+// come via data-before/data-after URLs (an empty side follows the CLI
+// empty-side semantics).
 
 import { getLocalDiff } from "../../application/diff/get-local-diff";
-import {
-  createDemoDiffer,
-  createDemoFetchBytes,
-  createDemoFetchSource,
-  createFixtureGuidIndexLoader,
-} from "../../container";
+import type { DifferGateway } from "../../application/gateway/differ";
+import type { FixturesGateway } from "../../application/gateway/fixtures";
+import { createDemoDiffer, createFixtures } from "../../container";
 import { must } from "../../internal/must";
 import { createViewHost, render, renderError, renderLoading } from "../internal/render";
 import { injectPageStyles, mountGlobalBar, mountToggle } from "../internal/toggle";
@@ -17,10 +15,9 @@ import type { View } from "../internal/view-mode";
 import { effectiveView, emptyViewState, onDefaultChange, setDefault, setOverride } from "../internal/view-state";
 
 type DemoLocals = {
-  differ: Awaited<ReturnType<typeof createDemoDiffer>>;
-  index: Awaited<ReturnType<ReturnType<typeof createFixtureGuidIndexLoader>>>;
-  fetchBytes: ReturnType<typeof createDemoFetchBytes>;
-  fetchSource: ReturnType<typeof createDemoFetchSource>;
+  differ: DifferGateway;
+  index: Map<string, string>;
+  fixtures: FixturesGateway;
 };
 
 function attachFile(header: HTMLElement, locals: DemoLocals, initial: View): (view: View) => void {
@@ -49,8 +46,8 @@ function attachFile(header: HTMLElement, locals: DemoLocals, initial: View): (vi
     rendered = true;
     const target = root;
     renderLoading(target);
-    const { differ, index, fetchBytes, fetchSource } = locals;
-    getLocalDiff(differ, index, fetchBytes, fetchSource, header.dataset.before, header.dataset.after)
+    const { differ, index, fixtures } = locals;
+    getLocalDiff(differ, index, fixtures.fetchBytes, fixtures.fetchSource, header.dataset.before, header.dataset.after)
       .then((res) => (res.ok ? render(target, res.value) : renderError(target, res.error.message)))
       .catch((err) => renderError(target, String(err))); // unexpected rejections (missing fixture)
   };
@@ -63,11 +60,10 @@ async function main(): Promise<void> {
   const headers = [...document.querySelectorAll<HTMLElement>(".file-header[data-before]")];
   if (!headers.length) return;
 
+  const fixtures = createFixtures();
   const differ = await createDemoDiffer();
-  const index = await createFixtureGuidIndexLoader()();
-  const fetchBytes = createDemoFetchBytes();
-  const fetchSource = createDemoFetchSource();
-  const locals: DemoLocals = { differ, index, fetchBytes, fetchSource };
+  const index = await fixtures.loadGuidIndex();
+  const locals: DemoLocals = { differ, index, fixtures };
 
   injectPageStyles();
   // The collapse chevrons work on every file, Unity or not (GitHub behavior).

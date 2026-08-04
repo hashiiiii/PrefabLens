@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { isRateLimited } from "../../application/gateway/github";
 import { err, ok } from "../../domain/result";
 import { must } from "../../internal/must";
-import { createQueue } from "./fetch-queue-client";
+import { createQueue } from "../internal/fetch-queue";
 import { createQueuedFetch, GithubClient } from "./github-client";
 
 // fetch fake that returns a fixed path→response table. It also records calls.

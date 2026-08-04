@@ -60,14 +60,19 @@ it("keeps infrastructure off application public functions", () => {
   expect(violations).toEqual([]);
 });
 
-it("keeps presentation off application/internal", () => {
+it("keeps internal directories private to their parent", () => {
+  // Go rule for internal packages: only files under the parent of an
+  // internal/ directory can import from it. src/internal/ sits at the root,
+  // so every file can use it.
   const violations: string[] = [];
   for (const file of TS_FILES) {
-    if (layerOf(file) !== "presentation") continue;
+    const fileRel = relative(SRC, file).split(SEPARATOR).join("/");
     for (const { spec, target } of relativeImports(file)) {
-      if (/application[\\/]internal[\\/]/.test(relative(SRC, target))) {
-        violations.push(`${relative(SRC, file)} -> ${spec}`);
-      }
+      const parts = relative(SRC, target).split(SEPARATOR);
+      const index = parts.indexOf("internal");
+      if (index < 1) continue;
+      const parent = parts.slice(0, index).join("/");
+      if (!fileRel.startsWith(`${parent}/`)) violations.push(`${fileRel} -> ${spec}`);
     }
   }
   expect(violations).toEqual([]);
@@ -83,6 +88,28 @@ it("keeps container.ts reachable only from presentation entry points", () => {
     for (const { spec, target } of relativeImports(file)) {
       if (target === join(SRC, "container.ts")) violations.push(`${rel} -> ${spec}`);
     }
+  }
+  expect(violations).toEqual([]);
+});
+
+it("keeps infrastructure/clients to interface implementations", () => {
+  // A client is a `*-client.ts` file that implements a repository interface
+  // from domain/ or a gateway type from application/gateway/. Helpers that
+  // implement no interface go in infrastructure/internal/.
+  const violations: string[] = [];
+  for (const file of TS_FILES) {
+    const rel = relative(SRC, file);
+    if (!/^infrastructure[\\/]clients[\\/]/.test(rel)) continue;
+    if (!/-client(\.test)?\.ts$/.test(rel)) {
+      violations.push(rel);
+      continue;
+    }
+    if (rel.endsWith(".test.ts")) continue;
+    const targets = [...relativeImports(file)].map(({ target }) => relative(SRC, target));
+    const implementsInterface = targets.some(
+      (t) => /^application[\\/]gateway[\\/]/.test(t) || /^domain[\\/].*-repository\.ts$/.test(t),
+    );
+    if (!implementsInterface) violations.push(rel);
   }
   expect(violations).toEqual([]);
 });

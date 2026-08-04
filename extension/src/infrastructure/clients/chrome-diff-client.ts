@@ -1,6 +1,6 @@
 import type { DiffRepository } from "../../domain/diff/diff-repository";
 import type { DiffV2 } from "../../domain/diff/types";
-import type { StorageAreaWithRemove } from "./storage-area";
+import type { StorageAreaWithRemove } from "../internal/storage-area";
 
 const PREFIX = "diff:";
 const MAX_BYTES = 512 * 1024; // storage.session is 10MB: large diffs stay in the memory cache only.

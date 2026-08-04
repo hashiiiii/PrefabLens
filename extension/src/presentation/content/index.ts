@@ -53,7 +53,7 @@ const views: ViewRegistry = new Map();
 const viewKey = (owner: string, repo: string, target: DiffTarget, path: string): string =>
   `${targetKey(owner, repo, target)}:${path}`;
 
-// Lost final push → flip to retryable incomplete instead of spinning forever
+// A lost final push flips to retryable incomplete instead of an endless spinner.
 const WATCHDOG_MS = 120_000;
 
 function armWatchdog(view: ViewEntry): void {
@@ -92,7 +92,7 @@ const persistView = (view: View): void => {
   void chrome.storage.local.set({ viewMode: view }).catch(() => {});
 };
 
-// Auth-error panel: device flow; failures land back here for retry
+// Auth-error panel: device flow. Failures land back here for retry.
 function signInPanel(root: ShadowRoot, message: string): void {
   renderSignIn(root, message, () => {
     void signIn(auth, tokenStore, fetch, sleep, openTab, now, signInState, {
@@ -109,7 +109,7 @@ function attach(viewState: ViewStateData): void {
     const prKey = targetKey(prPage.owner, prPage.repo, { kind: "pull", prNumber: prPage.prNumber });
     if (prKey !== prefetchedPr) {
       prefetchedPr = prKey;
-      // Fire-and-forget; manual toggle stays available if prefetch fails
+      // Fire-and-forget. If prefetch fails, the manual toggle stays available.
       void messenger.prefetch({ type: "prefetch", ...prPage });
     }
   }
@@ -129,11 +129,11 @@ function attach(viewState: ViewStateData): void {
   const first = entries[0];
   if (first) ensureGlobalToggle(viewState, first);
   for (const entry of entries) attachToggle(viewState, page, entry);
-  // React remounts can undo inline hide under still-marked headers; sync is idempotent/fetch-free
+  // React remounts can undo the inline hide under still-marked headers. sync is idempotent and fetch-free.
   for (const a of live) a.sync();
 }
 
-// Global bar must sit outside recycled react list items (classic: before .file; react: list root)
+// Global bar must sit outside recycled react list items (classic: before .file, react: list root)
 function ensureGlobalToggle(viewState: ViewStateData, first: FileEntry): void {
   if (globalToggle?.element.closest("[data-prefablens-global]")?.isConnected) return;
   const anchor = first.globalAnchor();
@@ -151,7 +151,7 @@ function attachToggle(viewState: ViewStateData, page: DiffPage, entry: FileEntry
   // Set by createHost before results.set so the push listener always has a real shadow root
   let shadow: ShadowRoot | undefined;
 
-  // Transitions live in file-view.ts; here we bind them to DOM, runtime, and registries
+  // Transitions are in file-view.ts. Here the code binds them to DOM, runtime, and registries.
   const fileState = emptyFileView();
   const fileDeps: FileViewDeps = {
     file: entry,
@@ -214,8 +214,8 @@ function attachToggle(viewState: ViewStateData, page: DiffPage, entry: FileEntry
 }
 
 async function init(): Promise<void> {
-  // Device-page pre-fill: only the code this browser's PR page issued; storage
-  // failure degrades to no pre-fill (the user pastes the code instead)
+  // Device-page pre-fill: only the code that the PR page of this browser issued.
+  // A storage failure degrades to no pre-fill (the user pastes the code instead).
   if (location.pathname === "/login/device") {
     const pending = await tokenStore.readPendingSignIn().catch(() => undefined);
     if (pending) fillDeviceCode(document, pending, Date.now());
@@ -229,7 +229,7 @@ async function init(): Promise<void> {
     globalToggle?.set(view);
     for (const a of liveAppliers()) a.apply(view);
   });
-  // Cross-tab default sync; applyExternal ignores the originating tab's echo
+  // Cross-tab default sync. applyExternal ignores the originating tab's echo.
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== "local") return;
     const next = changes.viewMode?.newValue;
@@ -240,7 +240,7 @@ async function init(): Promise<void> {
     }
   });
 
-  // guidResolved: second-stage push from background; re-render if this view still exists
+  // guidResolved: the second-stage push from background. If this view still exists, re-render.
   chrome.runtime.onMessage.addListener((msg: GuidResolvedPush) => {
     if (msg?.type !== "guidResolved") return;
     const view = views.get(viewKey(msg.owner, msg.repo, msg.target, msg.path));
@@ -256,8 +256,8 @@ async function init(): Promise<void> {
     render(view.root, view.json, { resolving: msg.done ? 0 : resolvingCount(view.json) });
   });
 
-  // SPA: MutationObserver + 50ms debounce follows lazy loads without feeling sluggish
-  // (~100ms threshold); scans are fetch-free/~0.75ms so storms stay cheap.
+  // SPA: MutationObserver + 50ms debounce follows lazy loads and stays under the
+  // ~100ms sluggish threshold. Scans are fetch-free (~0.75ms), so storms stay cheap.
   attach(viewState);
   let scheduled = false;
   new MutationObserver(() => {

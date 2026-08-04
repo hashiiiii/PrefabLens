@@ -6,7 +6,7 @@ export type ViewStateData = {
   listeners: Array<(view: View) => void>;
 };
 
-// Persistent default + per-file overrides; a global switch always clears overrides
+// The persistent default plus per-file overrides. A global switch always clears overrides.
 export function emptyViewState(initial: View): ViewStateData {
   return { def: initial, overrides: new Map(), listeners: [] };
 }
@@ -31,7 +31,7 @@ function change(state: ViewStateData, view: View): void {
 
 export function setDefault(state: ViewStateData, view: View, persist: (view: View) => void): void {
   if (view === state.def) {
-    // Same-value click still realigns: clear overrides and re-apply, but don't persist
+    // A same-value click still realigns: clear overrides and re-apply, but do not persist
     if (state.overrides.size) change(state, view);
     return;
   }
@@ -39,7 +39,7 @@ export function setDefault(state: ViewStateData, view: View, persist: (view: Vie
   persist(view);
 }
 
-// storage.onChanged also fires on the originating tab; ignore same value, don't persist
+// storage.onChanged also fires on the originating tab. Ignore the same value and do not persist.
 export function applyExternal(state: ViewStateData, view: View): void {
   if (view !== state.def) change(state, view);
 }

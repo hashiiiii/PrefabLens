@@ -16,14 +16,14 @@ import {
 } from "../gateway/github";
 
 const EMPTY = new Uint8Array(0);
-const TOO_LARGE_BYTES = 25 * 1024 * 1024; // over 25MB renders on click
+const TOO_LARGE_BYTES = 25 * 1024 * 1024; // Files over 25MB render only on click.
 const MAX_CONCURRENT_META_FETCHES = 8;
 const utf8 = new TextDecoder();
 
 type BlobClient = Pick<GithubGateway, "getBlobRaw" | "getFileAtRef">;
 type MetaFetcher = (path: string, side: "base" | "head") => Promise<Result<string | null, GithubFailure>>;
 
-// Prefer blob-sha when known (#110); 404 (force push) falls back to path+ref
+// The blob sha wins when it is known (#110). On 404 (force push), the fetch uses path+ref instead.
 export function getBlob(
   session: DiffSession,
   client: BlobClient,
@@ -43,7 +43,7 @@ export function getBlob(
   });
 }
 
-// Before/after blobs; status/previousPath follow the files API
+// Before/after blobs. status/previousPath follow the files API.
 export async function getPair(
   session: DiffSession,
   client: BlobClient,
@@ -94,11 +94,11 @@ async function createGuidIndex(
 
   const indexOne = async (f: ChangedFile): Promise<GithubFailure | null> => {
     const side = f.status === "removed" ? "base" : "head";
-    // Only rate limits propagate: swallowing them would cache a degraded index for the SW's lifetime
+    // Only rate limits propagate: a hidden rate limit caches a degraded index for the SW lifetime
     const text = await fetchMeta(f.path, side);
     if (!text.ok) {
       if (isRateLimited(text.error)) return text.error;
-      return null; // non-rate-limit → skip this meta
+      return null; // A non-rate-limit failure skips this meta.
     }
     if (!text.value) return null;
     const guid = parseGuidFromMeta(text.value);
@@ -117,7 +117,7 @@ async function createGuidIndex(
   return ok(index);
 }
 
-// Per-kind: refs + changed-file discovery; everything downstream is target-agnostic
+// Per-kind: refs and changed-file discovery. Everything downstream is target-agnostic.
 async function loadRefsAndFiles(
   client: GithubGateway,
   owner: string,
@@ -136,7 +136,7 @@ async function loadRefsAndFiles(
   if (target.kind === "commit") {
     const commit = await client.getCommit(owner, repo, target.sha);
     if (!commit.ok) return commit;
-    // Root commit: before side is never fetched; own sha as baseSha keeps tree lookups harmless
+    // Root commit: the before side is never fetched. Its own sha as baseSha keeps tree lookups harmless.
     return ok({
       refs: { baseSha: commit.value.parentSha ?? commit.value.sha, headSha: commit.value.sha },
       files: commit.value.files,
@@ -144,7 +144,7 @@ async function loadRefsAndFiles(
   }
   const [cmp, headSha] = await Promise.all([
     client.compareRefs(owner, repo, target.base, target.head),
-    // Cache keys need an immutable sha; compare commits truncate at 250 so last ≠ always head
+    // Cache keys need an immutable sha. Compare commits truncate at 250, so the last one is not always the head.
     client.resolveRefSha(owner, repo, target.head),
   ]);
   if (!cmp.ok) return cmp;
@@ -179,7 +179,7 @@ export function getContext(
         if (!bytes.ok) return bytes;
         return ok(bytes.value ? utf8.decode(bytes.value) : null);
       }),
-      // Only rate limits propagate; anything else → null → contents-api fallback
+      // Only rate limits propagate. Anything else becomes null, and the contents API applies instead.
       client.listBlobShas(owner, repo, refs.baseSha),
     ]);
     if (!guidIndex.ok) return guidIndex;
@@ -193,7 +193,7 @@ export function getContext(
   });
 }
 
-// Raw sha-keyed diff only; resolution/source merge stay out (Code Search improves later)
+// Raw sha-keyed diff only. Resolution and the source merge stay out (Code Search improves later).
 async function computeDiff(
   getDiffer: () => Promise<DifferGateway>,
   session: DiffSession,
@@ -207,7 +207,7 @@ async function computeDiff(
   // The memoized wasm load compiles while the blobs download, not after them.
   const differPromise = getDiffer();
   differPromise.catch(() => {}); // Early returns below skip the await. The later await still surfaces the error.
-  // Missing from listing (files API caps at 3000) → treat as modified; 404 side → EMPTY
+  // A file missing from the listing (the files API caps at 3000) is treated as modified. A 404 side becomes EMPTY.
   const pair = await getPair(session, client, ctx, owner, repo, path);
   if (!pair.ok) return { ok: false, error: toBackgroundError(pair.error) };
   const [before, after] = pair.value;

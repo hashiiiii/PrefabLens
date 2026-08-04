@@ -3,7 +3,7 @@ import { assetPathFromMeta } from "../../domain/diff/fn/asset-path-from-meta";
 import { err, ok, type Result } from "../../domain/result";
 import type { Queue } from "./fetch-queue-client";
 
-// retry-after (seconds) wins; else x-ratelimit-reset (epoch seconds) relative to now.
+// retry-after (seconds) wins. Else x-ratelimit-reset (epoch seconds) applies, relative to now.
 // Number(null) is 0 and Number("") is NaN, so absent headers fail the > 0 guards.
 function adviceMs(headers: Headers): number | undefined {
   const retryAfter = Number(headers.get("retry-after"));
@@ -70,7 +70,7 @@ export class GithubClient {
   constructor(
     private readonly base: string,
     private readonly token: string,
-    // Defaulting to bare `fetch` makes `this` in `this.fetchFn(...)` the instance,
+    // A bare `fetch` default makes `this` in `this.fetchFn(...)` the instance,
     // which fails with Illegal invocation on Chrome (Node's fetch ignores this).
     private readonly fetchFn: typeof fetch = (input, init) => fetch(input, init),
   ) {}
@@ -141,8 +141,8 @@ export class GithubClient {
     }
   }
 
-  // Commit vs first parent (GitHub's commit page). Files: 300/page, 3,000-file cap;
-  // response sha is full-length even when the request ref is abbreviated.
+  // Commit vs first parent (GitHub's commit page). Files: 300/page, 3,000-file cap.
+  // The response sha is full-length even when the request ref is abbreviated.
   async getCommit(
     owner: string,
     repo: string,
@@ -151,7 +151,7 @@ export class GithubClient {
     const files: ChangedFile[] = [];
     let sha = "";
     let parentSha: string | null = null;
-    // 10×300 bounds the loop even if paging params stop being honored
+    // 10×300 bounds the loop even if the API ignores the paging params
     for (let page = 1; page <= 10; page++) {
       const body = await this.json<{ sha: string; parents: Array<{ sha: string }>; files?: DiffEntry[] }>(
         `/repos/${owner}/${repo}/commits/${encodeURIComponent(ref)}?per_page=300&page=${page}`,
@@ -169,7 +169,8 @@ export class GithubClient {
   }
 
   // Three-dot compare (GitHub's compare page): merge base + files.
-  // Files only on first page, capped at 300 — unlisted degrade to treat-as-modified / 404→EMPTY.
+  // Files come only on the first page, capped at 300. Unlisted files degrade
+  // to treat-as-modified, and a 404 side becomes EMPTY.
   async compareRefs(
     owner: string,
     repo: string,
@@ -198,8 +199,8 @@ export class GithubClient {
     return readOr(async () => (await res.value.text()).trim());
   }
 
-  // guid → asset path via Code Search (.meta stripped). No hit / not indexed (422) → null.
-  // Default branch only; authenticated 10 req/min.
+  // guid → asset path via Code Search (.meta stripped). No hit or a not-indexed repo (422) returns null.
+  // Default branch only. Authenticated at 10 req/min.
   async searchMetaByGuid(owner: string, repo: string, guid: string): Promise<Result<string | null, GithubFailure>> {
     const q = encodeURIComponent(`"${guid}" repo:${owner}/${repo} extension:meta`);
     const res = await this.request(`/search/code?q=${q}&per_page=1`, "application/vnd.github+json");
@@ -212,7 +213,7 @@ export class GithubClient {
     });
   }
 
-  // Raw bytes at ref; null if absent. Prefer getBlobRaw when sha known (#110 TTFB).
+  // Raw bytes at ref, or null if absent. Prefer getBlobRaw when the sha is known (#110 TTFB).
   async getFileAtRef(
     owner: string,
     repo: string,
@@ -223,7 +224,7 @@ export class GithubClient {
     return this.rawBytes(`/repos/${owner}/${repo}/contents/${encoded}?ref=${ref}`);
   }
 
-  // Content-addressed blob bytes; latency stays flat where contents-by-path stalls.
+  // Content-addressed blob bytes. Latency stays flat where contents-by-path stalls.
   // null on 404 (sha can vanish after force push + gc).
   async getBlobRaw(owner: string, repo: string, sha: string): Promise<Result<Uint8Array | null, GithubFailure>> {
     return this.rawBytes(`/repos/${owner}/${repo}/git/blobs/${sha}`);
@@ -237,7 +238,7 @@ export class GithubClient {
     return this.json(`/repos/${owner}/${repo}/git/trees/${ref}?recursive=1`);
   }
 
-  // Every .meta path + blob sha at ref. truncated → listing cut past 100k entries.
+  // Every .meta path + blob sha at ref. truncated means the listing was cut past 100k entries.
   async listMetaTree(
     owner: string,
     repo: string,

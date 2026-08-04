@@ -57,7 +57,7 @@ describe("view state", () => {
   });
 
   it("same-value setDefault with no overrides is a pure no-op", () => {
-    // With no overrides, no notification is needed either: don't wastefully re-apply all appliers
+    // With no overrides, no notification is needed either: a re-apply of every applier is wasted work
     const { persisted, notified, persist, listener } = sinks();
     const state = emptyViewState("semantic");
     onDefaultChange(state, listener);
@@ -67,7 +67,7 @@ describe("view state", () => {
   });
 
   it("applyExternal updates without persisting (storage.onChanged echo)", () => {
-    // storage.onChanged fires even on the tab that did the set: re-persisting would cause an infinite loop
+    // storage.onChanged fires even on the tab that did the set: a re-persist causes an infinite loop
     const { persisted, notified, listener } = sinks();
     const state = emptyViewState("raw");
     onDefaultChange(state, listener);

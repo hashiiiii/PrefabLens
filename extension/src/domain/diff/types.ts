@@ -48,7 +48,7 @@ export type PrefabInstanceDiff = {
 
 export type NodeDiff = GameObjectDiff | PrefabInstanceDiff;
 
-// Source prefab whose content core asks to be supplied. side is the ref to fetch
+// A source prefab whose content core requests. side is the ref to fetch
 // (added instance -> after/head, removed instance -> before/base).
 export type NeededSource = { guid: string; side: "before" | "after" };
 
@@ -69,7 +69,7 @@ export function emptyDiff(): DiffV2 {
 
 export type DiffErrorV1 = { schema: "prefablens.error.v1"; error: string };
 
-// Which diff page a request is for. Every kind shares the blob/diff pipeline; only
+// Which diff page a request is for. Every kind shares the blob/diff pipeline. Only
 // the refs + changed-file discovery differs (PR API / commit API / compare API).
 export type DiffTarget =
   | { kind: "pull"; prNumber: number }
@@ -109,7 +109,7 @@ export type SemanticDiffResponse =
   | { ok: false; error: BackgroundError }
   | { ok: false; error: "too-large"; bytes: number };
 
-// Background resolution outcome. Anything but "complete" means a manual retry may help.
+// Background resolution outcome. Anything but "complete" means a manual retry can help.
 export type ResolutionStatus = "complete" | "rateLimited" | "failed";
 
 // Async push background → content (stage 2 of the two-stage response).
@@ -121,6 +121,6 @@ export type GuidResolvedPush = {
   path: string;
   resolved: Record<string, string>;
   json?: DiffV2; // The final push can carry a restructured diff after updateSources.
-  done: boolean; // resolution finished (even with empty resolved — turns off the indicator)
-  status?: ResolutionStatus; // on every done push; keep indicator unless "complete"
+  done: boolean; // Resolution finished. Even with empty resolved, done stops the indicator.
+  status?: ResolutionStatus; // On every done push. Keep the indicator unless "complete".
 };

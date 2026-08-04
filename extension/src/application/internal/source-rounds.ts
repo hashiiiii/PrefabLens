@@ -7,7 +7,7 @@ export const MAX_SOURCE_ROUNDS = 3; // Re-diff cap for nested sources. Core has 
 // abort: the loop stops all rounds and reports the cause (rate limit or hard failure).
 export type FetchedSource = { bytes: Uint8Array } | { skip: true } | { abort: ResolutionStatus };
 
-// The loop fetches neededSources through the resolved path and re-diffs with
+// The loop fetches neededSources via the resolved path and re-diffs with
 // the assets. A failure degrades to the current diff and does not drop it.
 // The background pipeline and the site demo share this one loop. Only the
 // fetch and the re-resolve differ.

@@ -6,14 +6,14 @@ export type FileEntry = {
   path: string;
   header: HTMLElement; // toggle mount + data-prefablens marker
   attachHost(host: HTMLElement): void; // insert semantic host at the layout's spot
-  setRawHidden(hidden: boolean): void; // idempotent; re-resolves live DOM each call
+  setRawHidden(hidden: boolean): void; // idempotent: re-resolves the live DOM on each call
   collapsed(): boolean; // github file collapse (react chevron)
   globalAnchor(): Element | null; // element the global bar inserts before
 };
 
 export type DiffPage = { owner: string; repo: string; target: DiffTarget };
 
-// Tolerate bare % in pathnames — throwing here would kill the whole page scan
+// Tolerate a bare % in pathnames: a throw here stops the whole page scan
 function decodeRef(s: string): string {
   try {
     return decodeURIComponent(s);
@@ -30,7 +30,7 @@ export function parseDiffUrl(pathname: string): DiffPage | null {
       pathname,
     );
   if (pr) return { owner: must(pr[1]), repo: must(pr[2]), target: { kind: "pull", prNumber: Number(must(pr[3])) } };
-  // /commit/SHA, classic /commits/SHA, react /changes/SHA — one commit vs parent
+  // /commit/SHA, classic /commits/SHA, react /changes/SHA: one commit vs parent
   const commit = /^\/([^/]+)\/([^/]+)\/(?:pull\/\d+\/(?:commits|changes)|commit)\/([\da-f]{7,40})\/?$/.exec(pathname);
   if (commit)
     return { owner: must(commit[1]), repo: must(commit[2]), target: { kind: "commit", sha: must(commit[3]) } };
@@ -44,13 +44,13 @@ export function parseDiffUrl(pathname: string): DiffPage | null {
   return null;
 }
 
-// Any PR tab (prefetch trigger); unlike parseDiffUrl this is not diff-page-only
+// Any PR tab (prefetch trigger). Unlike parseDiffUrl, this is not diff-page-only.
 export function parsePrPage(pathname: string): { owner: string; repo: string; prNumber: number } | null {
   const m = /^\/([^/]+)\/([^/]+)\/pull\/(\d+)(\/|$)/.exec(pathname);
   return m ? { owner: must(m[1]), repo: must(m[2]), prNumber: Number(must(m[3])) } : null;
 }
 
-// Classic Files changed DOM; no match → empty array
+// Classic Files changed DOM. When nothing matches, the scan returns an empty array.
 function scanClassic(root: ParentNode): FileEntry[] {
   const out: FileEntry[] = [];
   for (const header of root.querySelectorAll<HTMLElement>(".file-header[data-path]")) {
@@ -81,7 +81,7 @@ function scanClassic(root: ParentNode): FileEntry[] {
 
 const BIDI_MARKS = /[‎‏]/g;
 
-// React has no path attribute: header text (+ LRM marks); renames hide "OLD renamed to NEW"
+// React has no path attribute: the path is header text (+ LRM marks). Renames hide "OLD renamed to NEW".
 function filePathFromReactHeader(header: HTMLElement): string | null {
   const code = header.querySelector('[class*="file-name"] code');
   if (!code) return null;
@@ -90,7 +90,7 @@ function filePathFromReactHeader(header: HTMLElement): string | null {
   return text || null;
 }
 
-// React remounts strip inline styles; debounced rescan is ~200ms late and flashes raw.
+// React remounts strip inline styles. The debounced rescan is ~200ms late and flashes raw.
 // Document rule keyed on setRawHidden's marker hides a fresh body before first paint.
 // Targets the body's own classes, not "everything but the header": drift degrades to a flash, never a hidden header.
 function ensureReactRawHideStyle(doc: Document): void {
@@ -101,7 +101,7 @@ function ensureReactRawHideStyle(doc: Document): void {
   doc.head.append(style);
 }
 
-// React diff UI: hashed CSS modules → role/id + class-prefix anchors; body class is unstable
+// React diff UI: hashed CSS modules force role/id and class-prefix anchors. The body class is unstable.
 function scanReact(root: ParentNode): FileEntry[] {
   const out: FileEntry[] = [];
   for (const region of root.querySelectorAll<HTMLElement>('div[role="region"][id^="diff-"]')) {
@@ -121,7 +121,7 @@ function scanReact(root: ParentNode): FileEntry[] {
       path,
       header,
       attachHost(host) {
-        // Card frame lives on the body here; recreate chrome on the host when body is hidden
+        // The card frame is on the body here. Recreate the chrome on the host when the body is hidden.
         host.style.cssText =
           "border: 1px solid var(--borderColor-default, #d1d9e0); border-radius: 0 0 6px 6px; background: var(--bgColor-default, #ffffff);";
         headerBlock().after(host);

@@ -6,7 +6,7 @@ export type MergeStore = {
 };
 
 // `prefix:id` slot: save merges into stored instead of replacing (writers only add keys).
-// Failures propagate — each call site decides if a lost write is fatal or quota to continue past.
+// Failures propagate. Each call site decides if a lost write is fatal or if the code continues past it.
 export function createMergeStore(area: StorageArea, prefix: string): MergeStore {
   const keyOf = (id: string): string => `${prefix}:${id}`;
   return {

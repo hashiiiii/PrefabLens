@@ -11,7 +11,7 @@ export type ViewEntry = {
 // path-keyed render targets for guidResolved pushes
 export type ViewRegistry = Map<string, ViewEntry>;
 
-// SPA navigation: drop refs so late pushes can't revive dead views
+// SPA navigation: drop refs so late pushes cannot revive dead views
 export function pruneDisconnectedViews(views: ViewRegistry): void {
   for (const [key, view] of views) {
     if (view.root.host.isConnected) continue;

@@ -27,7 +27,7 @@ export function render(
   opts?: { resolving?: number; incomplete?: { onRetry(): void } },
 ): void {
   const container = mount(root);
-  // Resolving indicator: the diff body is correct from the start, only reference names fill in later
+  // The resolving indicator: the diff body is correct from the start. Only reference names arrive later.
   if (opts?.resolving) {
     const busy = note("pl-resolving", `Resolving ${opts.resolving} reference(s)…`);
     const spin = document.createElement("span");
@@ -82,7 +82,7 @@ export function renderLoading(root: ShadowRoot): void {
   mount(root).append(box);
 }
 
-// Over-25MB guard: no auto-render; waits for an explicit click.
+// The over-25MB guard: no auto-render. It waits for an explicit click.
 export function renderTooLarge(root: ShadowRoot, bytes: number, onRender: () => void): void {
   const container = mount(root);
   container.append(
@@ -266,7 +266,7 @@ function renderOverrideGroups(overrides: OverrideDiff[], diff: DiffV2): HTMLElem
     const [first] = rows;
     const status = first && rows.every((r) => r.status === first.status) ? first.status : "modified";
     const el = openDetails("pl-comp", status);
-    el.open = true; // override cards stay expanded (summary is just a light grouping)
+    el.open = true; // override cards stay expanded (summary is only a light grouping)
     const kids = kidsBox();
     for (const r of rows) kids.append(fieldRow(r.label, r.status, r.before, r.after, diff));
     return finish(el, summaryRow(status, GEAR, "pl-icon", name), kids);

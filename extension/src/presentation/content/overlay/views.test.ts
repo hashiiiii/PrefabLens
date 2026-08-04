@@ -14,8 +14,8 @@ function makeRoot(connected: boolean): ShadowRoot {
 
 describe("view registry", () => {
   it("prunes views whose host left the DOM and keeps live ones", () => {
-    // An SPA navigation swaps the diff DOM out from under us: pruning both ignores
-    // late pushes aimed at the dead view and cuts the reference so it can be collected.
+    // An SPA navigation replaces the diff DOM behind the views. The prune ignores
+    // late pushes at the dead view and cuts the reference so GC can collect it.
     const views: ViewRegistry = new Map();
     const live = { root: makeRoot(true), json: DIFF, retry: () => {} };
     const dead = { root: makeRoot(false), json: DIFF, retry: () => {} };

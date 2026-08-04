@@ -1,7 +1,7 @@
 // Live demo for site/extension.html: real renderer + toggle, wired like the
 // content script but through createDemo* factories (fixtures instead of GitHub).
-// Bundled as dist/demo.js via `node build.mjs --demo`; fixtures via
-// data-before/data-after URLs (empty side = CLI empty-side semantics).
+// Bundled as dist/demo.js via `node build.mjs --demo`. Fixtures come via
+// data-before/data-after URLs (an empty side follows the CLI empty-side semantics).
 
 import { getLocalDiff } from "../../application/diff/get-local-diff";
 import {
@@ -78,7 +78,7 @@ async function main(): Promise<void> {
     });
   }
 
-  // Semantic by default, like the extension once the user has picked it; the
+  // Semantic by default, like the extension after the user picks it. The
   // demo has no chrome.storage, so persistence is a no-op.
   const state = emptyViewState("semantic");
   const persist = (): void => {};

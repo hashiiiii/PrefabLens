@@ -7,7 +7,7 @@ import { createQueuedFetch, GithubClient } from "./github-client";
 
 // fetch fake that returns a fixed path→response table. It also records calls.
 // Matching is url.includes(key), so keys must be unique substrings
-// (e.g. 'page=1' also matches 'per_page=100' — use '&page=1').
+// (for example 'page=1' also matches 'per_page=100', so use '&page=1').
 function fakeFetch(routes: Record<string, () => Response>) {
   const calls: Array<{ url: string; headers: Record<string, string>; init: RequestInit }> = [];
   const fn = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -144,7 +144,7 @@ describe("GithubClient", () => {
       fakeFetch({ "/search/code": () => json({ items: [{ path: "README.md" }] }) }).fn,
     );
     expect(await odd.searchMetaByGuid("o", "r", "g")).toEqual(ok(null));
-    // 422: repository not indexed, etc. Treated as "unresolved" rather than a fetch-failed
+    // 422 means the repository is not indexed, or similar. The client treats it as "unresolved", not as fetch-failed.
     const unindexed = new GithubClient(
       "https://api.github.com",
       "tok",
@@ -165,7 +165,7 @@ describe("GithubClient", () => {
   it("maps rate-limit responses to rate-limited, not auth-failed", async () => {
     // GitHub rate limits: primary is 403 + x-ratelimit-remaining: 0,
     // secondary is 403 + retry-after, and newer APIs use 429.
-    // secondary sometimes has no header (only the body message) — octokit also decides by the message.
+    // A secondary limit sometimes has no header (only the body message). octokit also decides by the message.
     const at = (status: number, headers: Record<string, string>, body = "") =>
       new GithubClient(
         "https://api.github.com",
@@ -207,7 +207,7 @@ describe("GithubClient", () => {
     });
     const client = new GithubClient("https://api.github.com", "tok", fn);
     const commit = await client.getCommit("o", "r", "abc1234");
-    // GitHub's commit page diffs against the first parent; so do we
+    // GitHub's commit page diffs against the first parent, and so does the client
     expect(commit).toEqual(
       ok({
         sha: "abc1234full",
@@ -248,7 +248,7 @@ describe("GithubClient", () => {
         files: [{ path: "Assets/Foo.prefab", status: "removed", previousPath: undefined, sha: "blob-base" }],
       }),
     );
-    // refs are encoded per side so branch slashes can't be misread as path segments
+    // refs are encoded per side so branch slashes cannot be misread as path segments
     expect(calls[0]?.url).toContain("/compare/feat%2Fx...main");
   });
 
@@ -269,7 +269,7 @@ describe("GithubClient", () => {
     if (result.ok) return;
     expect(isRateLimited(result.error)).toBe(true);
     if (!isRateLimited(result.error)) return;
-    // retry-after is seconds; the queue consumes milliseconds
+    // retry-after is seconds. The queue consumes milliseconds.
     expect(result.error.retryAfterMs).toBe(12_000);
   });
 

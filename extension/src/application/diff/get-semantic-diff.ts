@@ -20,7 +20,7 @@ import { getRepoIndex } from "../internal/repo-index";
 import { mergeSourceRounds } from "../internal/source-rounds";
 import type { DiffContext, DiffSession } from "./create-diff-session";
 
-const MAX_SEARCHES = 10; // Code Search is authenticated 10 req/min — don't burn it all in one response
+const MAX_SEARCHES = 10; // Code Search is authenticated at 10 req/min. Do not spend it all in one response.
 
 type SearchClient = Pick<GithubGateway, "searchMetaByGuid" | "listMetaTree" | "batchBlobTexts">;
 type ResolutionClient = SearchClient & Pick<GithubGateway, "getBlobRaw" | "getFileAtRef">;
@@ -35,14 +35,14 @@ type ResolveDeps = {
   repoKey: string;
 };
 
-// cache → Code Search; failures (incl. rate limits) don't drop the diff — return what resolved
+// Cache first, then Code Search. Failures (rate limits included) do not drop the diff: the run returns what resolved.
 async function getGuids(
   deps: ResolveDeps,
   guids: string[],
 ): Promise<{ resolved: Record<string, string>; rateLimited: boolean }> {
   if (!guids.length) return { resolved: {}, rateLimited: false };
   const { guidCache, session, client, owner, repo } = deps;
-  // hasOwn: guids are arbitrary strings, so 'constructor' etc. don't hit Object.prototype
+  // hasOwn: guids are arbitrary strings, so keys like 'constructor' do not hit Object.prototype
   // Index hits also land in guidCache, so emit cached names even when listed in misses
   const cached = await guidCache.load(deps.repoKey);
   const resolved: Record<string, string> = {};
@@ -74,7 +74,7 @@ async function getGuids(
   return { resolved, rateLimited };
 }
 
-// Unresolved-by-in-PR-.meta → cache → Code Search; rateLimited folds into updateSources status
+// The order is: unresolved by in-PR .meta, then cache, then Code Search. rateLimited carries into the updateSources status.
 async function getUnresolved(deps: ResolveDeps, json: DiffV2): Promise<{ json: DiffV2; rateLimited: boolean }> {
   const found = await getGuids(deps, unresolvedRemaining(json));
   return { json: { ...json, resolved: { ...json.resolved, ...found.resolved } }, rateLimited: found.rateLimited };
@@ -95,7 +95,7 @@ function updateSources(
     first,
     async (s, path) => {
       const sha = s.side === "before" ? ctx.refs.baseSha : ctx.refs.headSha;
-      // Sources aren't PR files: only base tree can supply a sha; head keeps path fallback
+      // Sources are not PR files: only the base tree can supply a sha. The head side keeps the path fallback.
       const blobSha = s.side === "before" ? ctx.baseShas?.get(path) : undefined;
       const bytes = await getBlob(deps.session, deps.client, deps.owner, deps.repo, path, sha, blobSha);
       // The loop degrades to the diff so far but reports the cause (#194).
@@ -107,7 +107,7 @@ function updateSources(
   );
 }
 
-// Background index → Code Search + source re-merge via push; catch still emits done to release waiters
+// Background: the index, then Code Search, then the source re-merge via push. The catch still emits done to release waiters.
 async function updateRemaining(
   deps: ResolveDeps,
   repoIndexStore: RepoIndexRepository,
@@ -120,7 +120,7 @@ async function updateRemaining(
 ): Promise<void> {
   const at = { owner: req.owner, repo: req.repo, target: req.target, path: req.path };
   try {
-    // Empty remaining (source re-merge only): skip index — first build can take tens of seconds
+    // Empty remaining (source re-merge only) skips the index: the first build can take tens of seconds
     const index = remaining.length
       ? await getRepoIndex(
           repoIndexStore,
@@ -142,9 +142,9 @@ async function updateRemaining(
         else leftover.push(g);
       }
       if (Object.keys(fromIndex).length) {
-        // Land in guidCache: updateSources rebuilds via applyResolved; without this, index hits vanish
+        // The hits land in guidCache: updateSources rebuilds via applyResolved. Without this save, index hits vanish.
         await deps.guidCache.save(deps.repoKey, fromIndex);
-        // Deliver available names first; structure finalized by the later final push
+        // Deliver the available names first. The later final push makes the structure final.
         push({ type: "guidResolved", ...at, resolved: fromIndex, done: false });
       }
     }
@@ -219,7 +219,7 @@ export async function getSemanticDiff(
   if (!outcome.ok) return outcome;
   const withPr = applyResolved(outcome.json, ctx.guidIndex);
 
-  // Return immediately; resolution + source merge continue via push
+  // Return immediately. Resolution and the source merge continue via push.
   const remaining = unresolvedRemaining(withPr);
   if (!remaining.length && !withPr.neededSources?.length) return { ok: true, json: withPr };
   const deps: ResolveDeps = {

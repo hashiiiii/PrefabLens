@@ -33,7 +33,7 @@ export async function signIn(
     ui.showPending(code.value.userCode, code.value.verificationUri);
     openTab(code.value.verificationUri);
     const result = await auth.pollForToken(fetchFn, sleep, code.value);
-    // Success: saveToken → storage.onChanged in index.ts retries auth-blocked panels
+    // Success: saveToken fires storage.onChanged, and index.ts retries auth-blocked panels
     if (result.status === "ok") await tokenStore.saveAccessToken(result.token);
     else ui.showFailure(result.status);
     await tokenStore.clearPendingSignIn();

@@ -135,7 +135,7 @@ describe("signIn", () => {
     for (let i = 0; i < 10 && !calls.includes("poll"); i++) await Promise.resolve();
     resolvePoll({ status: "ok", token: "tok" });
     await first;
-    // With the first flow settled, a new one may start (its poll stays pending; only the guard matters here).
+    // With the first flow settled, a new one can start (its poll stays pending). Only the guard matters here.
     void signIn(auth, tokenStore, fetchFn, sleep, openTab, now, state, ui);
     expect(calls.filter((c) => c === "request")).toHaveLength(2);
   });

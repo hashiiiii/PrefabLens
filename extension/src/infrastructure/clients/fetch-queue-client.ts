@@ -13,9 +13,9 @@ export type Queue = <T>(task: () => Promise<T>, opts?: { front?: boolean }) => P
 
 const MAX_RATE_LIMIT_RETRIES = 2; // per job, on top of the initial attempt
 const BACKOFF_CAP_MS = 60_000; // primary-limit reset can be an hour: fail into the manual message instead
-const BACKOFF_FALLBACK_MS = 30_000; // secondary limits sometimes advise nothing; clear within a minute
+const BACKOFF_FALLBACK_MS = 30_000; // Secondary limits sometimes advise nothing. They clear within a minute.
 
-// Throttles REST concurrency. front jumps the prefetch queue for user actions.
+// Throttles REST concurrency. front gives user actions priority over prefetch entries.
 // rate-limited pauses the whole queue and re-enqueues by lane so prefetch never starves front.
 export function createQueue(
   limit: number,
@@ -31,7 +31,7 @@ export function createQueue(
   };
 
   const pauseFor = (ms: number): void => {
-    if (paused) return; // concurrent failures share the first backoff; later ones just requeue
+    if (paused) return; // Concurrent failures share the first backoff. Later ones only requeue.
     paused = true;
     void sleep(ms).then(() => {
       paused = false;

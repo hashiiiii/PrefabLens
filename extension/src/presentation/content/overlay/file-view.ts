@@ -9,7 +9,7 @@ import {
 import { must } from "../../../internal/must";
 import type { View } from "../../internal/view-mode";
 
-// Per-file raw/semantic state machine (host + fetch latch); unit-testable without a browser.
+// The per-file raw/semantic state machine (host + fetch latch). It is unit-testable without a browser.
 
 export type FilePanel = {
   loading(): void;
@@ -63,7 +63,7 @@ export function syncFileView(state: FileViewState, deps: FileViewDeps, view: Vie
   if (!state.host) return; // semantic never rendered here: leave the raw diff alone
   deps.file.setRawHidden(true);
   if (!state.host.attached()) state.host.attach(); // react remount can drop the host with the old body
-  // Follow github collapse (react); classic uses Details CSS in attachHost instead
+  // Follow github collapse (react). Classic uses Details CSS in attachHost instead.
   state.host.setVisible(!deps.file.collapsed());
 }
 
@@ -75,7 +75,7 @@ function request(state: FileViewState, deps: FileViewDeps, force?: boolean): voi
     if (res.ok) {
       deps.results.set({
         json: res.json,
-        // Retry re-enters background resolution; reset latch or request() no-ops
+        // Retry re-enters background resolution. Without a latch reset, request() no-ops.
         retry: () => {
           state.requested = false;
           request(state, deps, force);
@@ -85,7 +85,7 @@ function request(state: FileViewState, deps: FileViewDeps, force?: boolean): voi
       panel.diff(res.json, res.pending ? resolvingCount(res.json) : 0);
       return;
     }
-    state.requested = false; // don't cache errors: next toggle re-fetches
+    state.requested = false; // Do not cache errors: the next toggle re-fetches.
     const prior = deps.results.get();
     if (prior) {
       // Failed retry must not wipe the diff the user is reading
@@ -95,7 +95,7 @@ function request(state: FileViewState, deps: FileViewDeps, force?: boolean): voi
     if (res.error === "too-large") panel.tooLarge(res.bytes, () => request(state, deps, true));
     else if (isAuthError(res.error)) {
       deps.onAuthRetry(() => {
-        // First retry sets requested; duplicate registrations no-op
+        // The first retry sets requested. Duplicate registrations no-op.
         if (!state.requested && deps.effectiveView() === "semantic") request(state, deps);
       });
       panel.authError(res.error);
@@ -113,6 +113,6 @@ export function showFileView(state: FileViewState, deps: FileViewDeps, view: Vie
     state.host.attach();
   }
   syncFileView(state, deps, view);
-  if (state.requested) return; // cache only successful results (re-toggle doesn't re-fetch)
+  if (state.requested) return; // Cache only successful results (a re-toggle does not re-fetch).
   request(state, deps);
 }

@@ -15,7 +15,7 @@ export async function getLocalDiff(
   beforeUrl: string | undefined,
   afterUrl: string | undefined,
 ): Promise<Result<DiffV2, DiffFailure>> {
-  // Empty side = CLI empty-side semantics (added/removed fixtures)
+  // An empty side follows the CLI empty-side semantics (added/removed fixtures)
   const side = (url: string | undefined): Promise<Uint8Array> =>
     url ? fetchBytes(url) : Promise.resolve(new Uint8Array());
   const [before, after] = await Promise.all([side(beforeUrl), side(afterUrl)]);

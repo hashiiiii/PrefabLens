@@ -22,7 +22,7 @@ it("CLI stylesheet keeps the same pl-* class set as the extension renderer", () 
 });
 
 // Without color-scheme: dark, Chromium keeps a light scrollbar track even when
-// body uses the dark background — visible in the site's hero-report iframe.
+// body uses the dark background. This is visible in the site's hero-report iframe.
 it("standalone page opts into dark color-scheme for native chrome", () => {
   const cssPath = fileURLToPath(new URL("../../../../cli/src/semantic_view.css", import.meta.url));
   const standalone = readFileSync(cssPath, "utf8").split("Delta 3: standalone-page")[1] ?? "";

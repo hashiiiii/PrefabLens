@@ -14,7 +14,7 @@ import type { DiffSession } from "./create-diff-session";
 const PREFETCH_MAX = 100; // bounds API usage per PR
 const PREFETCH_CONCURRENCY = 4;
 
-// Raw diff only — leave Code Search / source merge to serve time (10 req/min)
+// Raw diff only. Code Search and the source merge stay at serve time (10 req/min).
 export async function prefetchPr(
   tokenStore: TokenRepository,
   makeClient: MakeGithubClient,
@@ -50,14 +50,14 @@ export async function prefetchPr(
       const outcomes = await Promise.all(
         chunk.map((f) => getDiff(getDiffer, diffStore, session, client, ctx, req.owner, req.repo, f.path, false)),
       );
-      // Only rate limit stops the whole thing; other per-file failures are shown again on manual toggle
+      // Only a rate limit stops the whole run. Other per-file failures appear again on a manual toggle.
       if (outcomes.some((o) => !o.ok && o.error === "rate-limited")) {
         console.debug("prefablens: prefetch aborted", { kind: "rate-limited" });
         return;
       }
     }
   } catch (err) {
-    // Prefetch gives up quietly; only the user-action path surfaces error UI
+    // Prefetch stops quietly. Only the user-action path shows error UI.
     console.debug("prefablens: prefetch aborted", err);
   }
 }

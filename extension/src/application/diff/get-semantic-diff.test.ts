@@ -85,7 +85,7 @@ describe("semanticDiff", () => {
     );
     expect(res).toEqual({ ok: true, json: { ...DIFF, resolved: {} } });
     expect(calls.compareRefs).toContainEqual(["o", "r", "main", "feature"]);
-    // Cache keys need an immutable sha, not a branch name that a push would silently move
+    // Cache keys need an immutable sha, not a branch name that a push can silently move
     expect(calls.resolveRefSha).toContainEqual(["o", "r", "feature"]);
   });
 
@@ -209,7 +209,7 @@ describe("semanticDiff", () => {
   });
 
   it("diffs a file missing from the PR list as modified (files API caps at 3000)", async () => {
-    // In a PR with over 3000 files, the listing API is truncated, so a file present in the UI may be absent from the listing
+    // In a PR with over 3000 files, the listing API is truncated, so a file present in the UI can be absent from the listing
     const { tokenStore, makeClient, getDiffer, guidCache, diffStore, repoIndexStore, calls } = makeFakes({
       files: [{ path: "Assets/Other.prefab", status: "modified" }],
     });
@@ -290,7 +290,7 @@ describe("semanticDiff", () => {
     try {
       const { tokenStore, makeClient, getDiffer, guidCache, diffStore, repoIndexStore, calls } = makeFakes();
       const session = createDiffSession();
-      // Fake timers make resolveFully's vi.waitFor hang; this test only needs the immediate response.
+      // Fake timers make resolveFully's vi.waitFor hang. This test only needs the immediate response.
       await getSemanticDiff(
         tokenStore,
         makeClient,
@@ -334,7 +334,7 @@ describe("semanticDiff", () => {
   });
 
   it("retries the PR context after a failed load instead of caching the failure", async () => {
-    // If a transient network failure lands in the 60s cache, re-toggling would no longer fix it
+    // If a transient network failure lands in the 60s cache, a re-toggle can no longer fix it
     const { tokenStore, makeClient, getDiffer, guidCache, diffStore, repoIndexStore, results } = makeFakes();
     results.listPrFiles = [err({ kind: "fetch-failed" as const })];
     const session = createDiffSession();
@@ -410,8 +410,8 @@ describe("semanticDiff", () => {
 
   it("serves cached names even for guids that once missed in code search", async () => {
     // Since index resolutions now land in guidCache, a guid recorded as a miss can genuinely appear in the cache.
-    // misses is the gatekeeper for "don't re-search", not for "don't emit the name"
-    const { tokenStore, makeClient, getDiffer, guidCache, diffStore, repoIndexStore, calls } = makeFakes(); // search misses → g1 goes into misses
+    // misses is the gatekeeper for "do not re-search", not for "do not emit the name"
+    const { tokenStore, makeClient, getDiffer, guidCache, diffStore, repoIndexStore, calls } = makeFakes(); // The search misses, so g1 goes into misses.
     const session = createDiffSession();
     await resolveFully(tokenStore, makeClient, getDiffer, guidCache, diffStore, repoIndexStore, session, REQ);
     expect(calls.searchMetaByGuid).toHaveLength(1);
@@ -431,7 +431,7 @@ describe("semanticDiff", () => {
   });
 
   it("dedupes concurrent code searches for the same guid", async () => {
-    // With the semantic default, multiple files run resolution concurrently: searches for the same guid fold into one
+    // With the semantic default, multiple files run resolution concurrently: searches for the same guid share one request
     const { tokenStore, makeClient, getDiffer, guidCache, diffStore, repoIndexStore, calls, impls } = makeFakes({
       search: { g1: "Assets/S.cs" },
     });
@@ -922,7 +922,7 @@ describe("semanticDiff", () => {
         createDiffSession(),
         REQ,
       );
-      // blob-sha miss falls back to path+ref; both seams are exercised
+      // A blob-sha miss uses path+ref instead. Both seams are exercised.
       expect(calls.getBlobRaw).toContainEqual(["o", "r", "cyl-base"]);
       expect(calls.getFileAtRef).toContainEqual(["o", "r", "Assets/Cyl.prefab", "base-sha"]);
     });
@@ -936,7 +936,7 @@ describe("semanticDiff", () => {
       const { tokenStore, makeClient, getDiffer, guidCache, diffStore, repoIndexStore } = makeFakes({
         diff: () => ok(NEEDS),
         diffWithAssets,
-        // Main prefab sides stay YAML; only the fetched source is treated as binary.
+        // Main prefab sides stay YAML. Only the fetched source is treated as binary.
         isUnityYaml: (bytes) => !new TextDecoder().decode(bytes).includes("\x00"),
         search: { src1: "Assets/Cyl.prefab" },
         contents: {
@@ -955,14 +955,14 @@ describe("semanticDiff", () => {
         createDiffSession(),
         REQ,
       );
-      // Merging a binary source would be a no-op re-diff: give up and keep the first pass.
+      // A binary-source merge is a no-op re-diff: give up and keep the first pass.
       expect(diffWithAssetsCalls).toEqual([]);
       expect(res).toEqual({ ok: true, json: { ...NEEDS, resolved: { src1: "Assets/Cyl.prefab" } } });
     });
 
     it("caps source re-diff rounds at 3 even while progressing", async () => {
-      // Each merge output requests the next source, which always resolves: without the cap
-      // a deep source chain would keep re-diffing forever.
+      // Each merge output requests the next source, which always resolves: without the cap,
+      // a deep source chain re-diffs forever.
       let round = 0;
       const diffWithAssetsCalls: Array<Parameters<DifferGateway["diffWithAssets"]>> = [];
       const diffWithAssets: DifferGateway["diffWithAssets"] = (...args) => {
@@ -975,7 +975,7 @@ describe("semanticDiff", () => {
         });
       };
       const { tokenStore, makeClient, getDiffer, guidCache, diffStore, repoIndexStore } = makeFakes({
-        // applyResolved rebuilds `resolved` from the PR index only — seed names via guidCache.
+        // applyResolved rebuilds `resolved` from the PR index only. Seed names via guidCache.
         diff: () =>
           ok({
             ...DIFF,
@@ -1032,7 +1032,7 @@ describe("semanticDiff", () => {
     });
 
     it("does not loop when the merged output still needs the same source", async () => {
-      // If supplying still leaves it degraded (a broken source, etc.), don't loop forever on the same guid.
+      // If the supply still leaves the diff degraded (for example a broken source), the loop must not repeat forever on the same guid.
       const diffWithAssetsCalls: Array<Parameters<DifferGateway["diffWithAssets"]>> = [];
       const diffWithAssets: DifferGateway["diffWithAssets"] = (...args) => {
         diffWithAssetsCalls.push(args);
@@ -1114,7 +1114,7 @@ describe("semanticDiff", () => {
 });
 
 it("dedupes a concurrent user toggle against an in-flight prefetch compute", async () => {
-  // Even if the user clicks during prefetch, diff computation and blob fetches don't double up
+  // Even if the user clicks during prefetch, the diff computation and the blob fetches do not run twice
   const { tokenStore, makeClient, getDiffer, guidCache, diffStore, repoIndexStore, calls } = makeFakes();
   const session = createDiffSession();
   const [, res] = await Promise.all([
@@ -1177,7 +1177,7 @@ describe("semanticDiff with push (two-stage)", () => {
       REQ,
     );
     expect(res).toEqual({ ok: true, json: { ...DIFF, resolved: { g1: "Assets/S.cs" } } });
-    expect(pushes).toEqual([]); // if everything is resolved and no source merge is needed, there's no push
+    expect(pushes).toEqual([]); // If everything is resolved and no source merge is needed, there is no push.
   });
 
   it("resolves via the repo index and only searches the leftover", async () => {
@@ -1291,7 +1291,7 @@ describe("semanticDiff with push (two-stage)", () => {
   });
 
   it("still emits the done push, marked failed, when source fetch fails during re-merge", async () => {
-    // Waiters key off done: a crash that swallowed it would leave the indicator spinning forever.
+    // Waiters key on done: a crash that drops it leaves the indicator spinning forever.
     const { tokenStore, makeClient, getDiffer, guidCache, diffStore, repoIndexStore, impls } = makeFakes({
       diff: () =>
         ok({
@@ -1351,9 +1351,9 @@ describe("semanticDiff with push (two-stage)", () => {
       metas: [{ path: "Assets/Src.prefab.meta", sha: "sha1" }],
     });
     results.batchBlobTexts = ok({ sha1: "guid: src1\n" });
-    // Note: serveAndResolve waits for the done push, so by that point diffWithAssets has always been called
-    // (done:true is only emitted after updateSources completes). Asserting "not yet called" must be done
-    // right after the immediate response (before waiting for the push to finish), so this one is assembled manually.
+    // Note: serveAndResolve waits for the done push, and by that point diffWithAssets always ran
+    // (done:true is only emitted after updateSources completes). A "not yet called" assertion must
+    // run right after the immediate response (before the push finishes), so this one is assembled manually.
     const pushes: GuidResolvedPush[] = [];
     const res = await getSemanticDiff(
       tokenStore,

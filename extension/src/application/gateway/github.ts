@@ -19,7 +19,7 @@ export function toBackgroundError(e: GithubFailure): GithubFailure["kind"] & Bac
 // The pipeline branches only on added/removed. The client folds the other
 // GitHub statuses (renamed, copied, changed, unchanged) into "modified".
 export type ChangedFileStatus = "added" | "removed" | "modified";
-// sha is the blob at head (at base for removed files) — the files API provides it for every status.
+// sha is the blob at head (at base for removed files). The files API provides it for every status.
 export type ChangedFile = { path: string; status: ChangedFileStatus; previousPath?: string; sha?: string };
 export type RefPair = { baseSha: string; headSha: string };
 

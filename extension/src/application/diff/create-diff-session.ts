@@ -18,7 +18,7 @@ type PromiseCacheOptions<V> = {
   retain?: (value: V) => boolean;
 };
 
-// Keyed async memoization: storing the Promise folds concurrent gets; rejections always drop for retry.
+// Keyed async memoization: concurrent gets share the stored Promise. Rejections always drop, so a retry stays possible.
 function createPromiseCache<V>(options: PromiseCacheOptions<V> = {}): PromiseCache<V> {
   const { ttlMs, max, retain } = options;
   const entries = new Map<string, { at: number; promise: Promise<V> }>();
@@ -48,7 +48,7 @@ function createPromiseCache<V>(options: PromiseCacheOptions<V> = {}): PromiseCac
   };
 }
 
-// baseShas: path → blob sha at base. null = tree unavailable → contents-api fallback
+// baseShas: path → blob sha at base. null means the tree is unavailable, and the contents API applies instead.
 export type DiffContext = {
   refs: RefPair;
   files: ChangedFile[];

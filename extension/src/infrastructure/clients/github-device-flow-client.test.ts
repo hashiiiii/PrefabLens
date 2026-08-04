@@ -110,7 +110,7 @@ describe("pollForToken", () => {
     const { fn } = fakeFetch([json({ error: "slow_down", interval: 8 }), json({ access_token: "tok123" })]);
     const { fn: sleep, delays } = fakeSleep();
     await pollForToken(fn, sleep, code);
-    // If the +5 fallback fired unconditionally this would be 10000 (5+5); 8000 proves the
+    // An unconditional +5 fallback gives 10000 (5+5). The 8000 proves that the
     // response's own interval wins when the server supplies one.
     expect(delays).toEqual([5000, 8000]);
   });

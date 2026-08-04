@@ -8,11 +8,12 @@ import { isRateLimited } from "../gateway/github";
 
 type SearchClient = Pick<GithubGateway, "listMetaTree" | "batchBlobTexts">;
 
-const INDEX_MAX_METAS = 50_000; // above this, give up on the index to protect the storage quota
+const INDEX_MAX_METAS = 50_000; // Above this count, the code skips the index to protect the storage quota.
 const GRAPHQL_BATCH = 100;
 
-// Whole-repo guid→asset path. Truncated / over cap → null (defer to Code Search).
-// blobSha→guid is content-derived (cache forever); after a push only changed .meta are fetched.
+// The whole-repo guid→asset path map. A truncated or over-cap listing returns
+// null, and Code Search applies instead. blobSha→guid is content-derived (a
+// permanent cache). After a push, only changed .meta files are fetched.
 async function updateRepoIndex(
   client: SearchClient,
   store: RepoIndexRepository,
@@ -56,7 +57,7 @@ async function updateRepoIndex(
   return ok(guids);
 }
 
-// Memoized whole-repo index; rate-limited repos stay on fallback for the SW lifetime
+// The memoized whole-repo index. Rate-limited repos stay on the fallback for the SW lifetime.
 export async function getRepoIndex(
   repoIndexStore: RepoIndexRepository,
   session: DiffSession,

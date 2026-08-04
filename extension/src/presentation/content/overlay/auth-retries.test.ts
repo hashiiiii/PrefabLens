@@ -3,8 +3,8 @@ import { flushAuthRetries } from "./auth-retries";
 
 describe("auth retries", () => {
   it("runs every registered retry once on flush and empties the queue", () => {
-    // Several files can sit on auth-error panels at once; one token landing retries them all,
-    // and a second storage event (echo or unrelated accessToken rewrite) must not retry again.
+    // Several files can sit on auth-error panels at once. One token that lands retries them
+    // all, and a second storage event (echo or unrelated accessToken rewrite) must not retry again.
     const retries = new Set<() => void>();
     let a = 0;
     let b = 0;

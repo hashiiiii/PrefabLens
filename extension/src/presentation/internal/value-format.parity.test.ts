@@ -8,8 +8,8 @@ import { must } from "../../internal/must";
 // the CLI, where the guid resolution ladder lives once in display.zig's
 // refDisplay (issue #155) while the output literals stay in writeValueText
 // (render_tree.zig) / writeValue (render_html.zig). Each parser below pulls
-// the output literal of every branch out of one implementation's source; the
-// tests compare those records against the extension's, so changing e.g.
+// the output literal of every branch out of one implementation's source. The
+// tests compare those records against the extension's, so a change to
 // "None" in one place fails until all four move together (issue #152). The
 // guid resolution order (resolved path, then built-in name, then raw guid) is
 // checked via source positions, and each CLI renderer is pinned to
@@ -77,7 +77,7 @@ function csRules(): Rules {
 
 function zigTreeRules(): Rules {
   const fn = fnSlice(read("../../../../cli/src/render_tree.zig"), "fn writeValueText");
-  // The renderer must decorate the shared ladder, not re-fork it; the ladder
+  // The renderer must decorate the shared ladder, not re-fork it. The ladder
   // order itself is checked once against display.zig below.
   expect(fn, "writeValueText goes through display.refDisplay").toContain("display.refDisplay(");
   return {

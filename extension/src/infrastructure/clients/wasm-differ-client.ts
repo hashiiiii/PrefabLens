@@ -86,7 +86,7 @@ export async function createDiffer(wasmBytes: BufferSource): Promise<DifferGatew
 
   function isUnityYaml(bytes: Uint8Array): boolean {
     // The Zig sniff reads at most 512 bytes: never marshal a whole blob
-    // (wasm memory only grows) just to inspect its head.
+    // (wasm memory only grows) to inspect its head.
     const head = bytes.subarray(0, 512);
     const ptr = head.length ? exp.alloc(head.length) : 0;
     new Uint8Array(exp.memory.buffer, ptr, head.length).set(head);

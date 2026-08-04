@@ -4,7 +4,7 @@ export type Toggle = { element: HTMLElement; set(view: View): void };
 
 const FONT = `-apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif`;
 
-// Primer variables on github.com; fallbacks cover the e2e fixture
+// Primer variables on github.com. Fallbacks cover the e2e fixture.
 const PAGE_STYLES = `
   [data-prefablens-global] { display: flex; align-items: center; gap: 8px; margin: 0 0 8px; }
   [data-prefablens-global] .prefablens-seg { margin-left: 0; }
@@ -48,7 +48,7 @@ export function mountToggle(onSelect: (view: View) => void, initial: View = "raw
   wrap.className = "prefablens-seg";
 
   const buttons: HTMLButtonElement[] = [];
-  // set updates display only — avoids onSelect (re-fetch) during a global apply
+  // set updates display only. It avoids onSelect (re-fetch) during a global apply.
   const select = (view: View): void => {
     for (const b of buttons) b.setAttribute("aria-pressed", String(b.dataset.view === view));
   };

@@ -159,7 +159,7 @@ describe("render", () => {
               path: "m_Mesh",
               status: "modified",
               // Both refs point into "unity default resources": 10202 is the
-              // built-in Cube; 424242 is unknown (e.g. a future Unity object).
+              // built-in Cube. 424242 is unknown (for example a future Unity object).
               before: { ref: { fileId: "10202", guid: "0000000000000000e000000000000000", type: 0 } },
               after: { ref: { fileId: "424242", guid: "0000000000000000e000000000000000", type: 0 } },
             },
@@ -394,7 +394,7 @@ describe("render", () => {
     render(root, diff);
     const cards = [...root.querySelectorAll(".pl-components .pl-kids > details")] as HTMLDetailsElement[];
     expect(cards).toHaveLength(2);
-    // Closing added would look asymmetric ("only Cylinder1 collapsed"), so always open regardless of status
+    // A closed added card looks asymmetric ("only Cylinder1 collapsed"), so every status stays open
     expect(cards[0]?.open).toBe(true); // added Cylinder1 is open too
     expect(cards[0]?.textContent).toContain("Cylinder1"); // className fallback
     expect(cards[1]?.open).toBe(true); // modified Transform is open
@@ -484,7 +484,7 @@ describe("render", () => {
   it("renders the components group as an open collapsible with chevron and count", () => {
     const root = freshRoot();
     render(root, DIFF);
-    // The group folds independently of the GameObject row, so the hierarchy can be
+    // The group collapses independently of the GameObject row, so the hierarchy can be
     // scanned with all component noise collapsed.
     const group = root.querySelector<HTMLDetailsElement>("details.pl-components");
     expect(group).not.toBeNull();
@@ -598,7 +598,7 @@ describe("detectTheme", () => {
   it("follows the OS scheme via matchMedia when data-color-mode is auto", () => {
     // GitHub's default is auto: a value that is neither dark nor light defers to matchMedia
     document.documentElement.setAttribute("data-color-mode", "auto");
-    expect(detectTheme(document)).toBe("light"); // jsdom has no matchMedia → fall back to light
+    expect(detectTheme(document)).toBe("light"); // jsdom has no matchMedia, so light is the fallback
     const win = must(document.defaultView);
     win.matchMedia = ((query: string) => ({
       matches: query === "(prefers-color-scheme: dark)",

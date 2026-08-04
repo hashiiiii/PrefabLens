@@ -22,8 +22,8 @@ MonoBehaviour:
   volume: 0.5
 `;
 const AFTER = BEFORE.replace("0.5", "0.8");
-// 26MB with a UnityYAML head but no documents trips the 25MB guard; after
-// force, the content sniff passes and it finishes cheaply with an empty diff
+// 26MB with a UnityYAML head but no documents trips the 25MB guard. After
+// force, the content sniff passes and it finishes cheaply with an empty diff.
 const BIG = `%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n${"x".repeat(26 * 1024 * 1024)}`;
 
 function startServer(): Promise<Server> {
@@ -36,7 +36,7 @@ function startServer(): Promise<Server> {
       res.end(body);
     };
     const json = (body: unknown): void => send(JSON.stringify(body), "application/json");
-    // Every ref pair shares one empty tree: blob fetches then fall back to the contents API below
+    // Every ref pair shares one empty tree: blob fetches then use the contents API below instead
     if (url.pathname.startsWith("/repos/o/r/git/trees/")) return json({ truncated: false, tree: [] });
     switch (url.pathname) {
       case "/o/r/pull/1/files":
@@ -91,8 +91,8 @@ function startServer(): Promise<Server> {
       }
       case "/repos/o/r/contents/Assets/Big.unity":
         return send(BIG, "application/vnd.github.raw+json");
-      // A binary-serialized .asset (LightingDataAsset etc.): passes the path
-      // prefilter, must be rejected by the real wasm content sniff.
+      // A binary-serialized .asset (for example LightingDataAsset): it passes the
+      // path prefilter, and the real wasm content sniff must reject it.
       case "/repos/o/r/contents/Assets/Baked.asset":
         return send("\x00\x01PK-binary-payload", "application/vnd.github.raw+json");
       case "/search/code":
@@ -108,7 +108,7 @@ function startServer(): Promise<Server> {
           expires_in: 900,
         });
       case "/login/oauth/access_token":
-        // First poll succeeds: no human Authorize step; extension still runs full poll loop.
+        // The first poll succeeds: no human Authorize step. The extension still runs the full poll loop.
         return json({ access_token: "e2e-token" });
       case "/login/device":
         return send("<!doctype html><title>device</title>", "text/html");

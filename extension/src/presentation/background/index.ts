@@ -23,7 +23,7 @@ function makeGuidPush(tabId: number | undefined): (m: GuidResolvedPush) => void 
   return (m) => {
     if (tabId === undefined) return;
     // Final push releases the indicator: retry a dropped tab message before giving up.
-    // Intermediate pushes stay fire-and-forget — losing one only delays names until final.
+    // Intermediate pushes stay fire-and-forget. A lost one only delays names until the final push.
     const attempt = (left: number): void => {
       void chrome.tabs.sendMessage(tabId, m).catch(() => {
         if (m.done && left > 0) setTimeout(() => attempt(left - 1), 1000);

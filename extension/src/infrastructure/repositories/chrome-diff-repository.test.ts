@@ -58,14 +58,14 @@ describe("createChromeDiffRepository", () => {
   });
 
   it("flushes stale diff entries and retries once when the quota overflows", async () => {
-    // Prevents the permanent degradation where, once full, every SW restart recomputes everything:
-    // on overflow, wipe the accumulated diffs and rewrite once
+    // This pins the fix for the permanent degradation: once full, every SW restart recomputes
+    // everything. On overflow, the store wipes the accumulated diffs and rewrites once.
     let setCalls = 0;
     const area = fakeArea(() => ++setCalls === 1); // only the first set overflows
     // Seed existing diff entries and one unrelated key
     area.data.set("diff:old1", DIFF);
     area.data.set("diff:old2", DIFF);
-    area.data.set("viewMode", "semantic"); // don't delete anything but diff:
+    area.data.set("viewMode", "semantic"); // The flush must not delete keys outside diff:
     const store = createChromeDiffRepository(area);
 
     // The first set overflows, the flush runs, and the retry succeeds
@@ -78,7 +78,7 @@ describe("createChromeDiffRepository", () => {
   });
 
   it("gives up quietly if the retry also fails", async () => {
-    // Still unwritable after flush (a single diff over quota): continue with the memory cache, don't throw
+    // Still unwritable after the flush (a single diff over quota): the store continues with the memory cache and does not throw
     const area = fakeArea(() => true); // always overflows
     const store = createChromeDiffRepository(area);
     await expect(store.save("k", DIFF)).resolves.toBeUndefined();

@@ -45,7 +45,7 @@ describe("getRepoIndex", () => {
   });
 
   it("returns the stored index without any api call when the tree sha is unchanged", async () => {
-    // Without a push, neither the tree nor blobs are re-fetched (repeat visits are zero-cost)
+    // Without a push, neither the tree nor the blobs are re-fetched (repeat visits are zero-cost)
     const stored = { treeSha: "H", guids: { g1: "Assets/S.cs" } };
     const { client, store, calls, session } = fakes({ storedIndex: stored });
     expect(await getRepoIndex(store, session, client, "o", "r", REPO_KEY, "H")).toEqual(stored.guids);
@@ -109,7 +109,7 @@ describe("getRepoIndex", () => {
     const first = await getRepoIndex(store, session, client, "o", "r", REPO_KEY, "head-sha");
     expect(first).toEqual({ g1: "Assets/S.cs" });
     await getRepoIndex(store, session, client, "o", "r", REPO_KEY, "head-sha");
-    // The second call folds on the cached promise: not even the store is consulted again.
+    // The second call shares the cached promise: not even the store is consulted again.
     expect(store.loadIndexCalls).toHaveLength(1);
     expect(calls.listMetaTree).toHaveLength(1);
   });

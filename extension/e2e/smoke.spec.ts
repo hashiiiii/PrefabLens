@@ -159,7 +159,7 @@ test("recovers after an error response", async ({ page }) => {
     (window as unknown as Record<string, unknown>).chrome = {
       runtime: {
         // Exclude prefetch from the count: attach() always sends one on pull-page arrival, so
-        // a naive count-everything would offset the first semanticDiff and break the error→success check
+        // a naive count-everything offsets the first semanticDiff and breaks the error→success check
         sendMessage: (msg: { type?: string }) => {
           if (msg?.type !== "semanticDiff") return Promise.resolve();
           const w = window as unknown as Record<string, number>;

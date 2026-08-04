@@ -43,9 +43,9 @@ describe("prefetch", () => {
   });
 
   it("serves a diff persisted by a previous worker from the store", async () => {
-    // The SW dies after 30 seconds: a result prefetched in a prior life must be recoverable via storage.session
+    // The SW stops after 30 seconds: a result prefetched in a prior life must be recoverable via storage.session
     const { tokenStore, makeClient, getDiffer, guidCache, diffStore, repoIndexStore, calls } = makeFakes();
-    diffStore.data["base-sha:head-sha:Assets/Foo.prefab"] = DIFF; // seeded as if saved by a prior SW life
+    diffStore.data["base-sha:head-sha:Assets/Foo.prefab"] = DIFF; // Seeded as if a prior SW life saved it.
     const res = await resolveFully(
       tokenStore,
       makeClient,

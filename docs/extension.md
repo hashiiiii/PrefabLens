@@ -87,7 +87,7 @@ domain/
 - If the symbol is a repository interface for domain-model persistence, put it in
   `domain/<area>/<noun>-repository.ts`.
   Public functions depend on these interfaces.
-  Infrastructure supplies the implementations.
+  Clients in `infrastructure/` supply the implementations.
 - If the symbol is a pure function that reads or builds a domain type, put it in
   `domain/<area>/fn/<name>.ts`.
 - If a helper is not a domain type, keep it out of `domain/`.
@@ -123,17 +123,16 @@ application/
 
 ```
 infrastructure/
-  clients/             # implementations of application/gateway contracts
-  repositories/        # implementations of domain repository interfaces
+  clients/             # clients that implement the domain and application contracts
 ```
 
-- Put gateway implementations in `clients/` as `*-client.ts`.
-  `clients/` also holds transport helpers that serve those implementations
-  (for example `fetch-queue-client.ts`, `fixture-client.ts`).
-- Put repository implementations in `repositories/`
-  (`chrome-<noun>-repository.ts`).
-  `merge-store.ts` and `storage-area.ts` are internal helpers for those
-  implementations.
+- A client implements a repository interface from `domain/` or a gateway type
+  from `application/gateway/`.
+- Put clients in `clients/` as `*-client.ts`
+  (for example `github-client.ts`, `chrome-token-client.ts`).
+- `clients/` also holds internal helpers that serve those clients
+  (for example `fetch-queue-client.ts`, `fixture-client.ts`,
+  `merge-store.ts`, `storage-area.ts`).
 
 #### Presentation (`src/presentation/`)
 
@@ -207,7 +206,7 @@ It cannot import `infrastructure/` or `presentation/`.
 
 #### Infrastructure (`src/infrastructure/`)
 
-**Role.** This layer implements gateways and repositories.
+**Role.** Clients that implement the repository interfaces and the gateway types.
 
 **Imports.** This layer can import `domain/` and `application/gateway/`.
 It cannot import anything else under `application/`.
@@ -215,7 +214,7 @@ It cannot import anything else under `application/`.
 **Notes.**
 
 - Infrastructure does not own the composition root.
-  Entry points import `src/container.ts` to wire clients and repositories.
+  Entry points import `src/container.ts` to construct the clients.
 
 #### Presentation (`src/presentation/`)
 
@@ -229,7 +228,7 @@ Transport-only work can call a gateway or repository method directly.
   `application/gateway`, domain types, `domain/<area>/fn` pure functions,
   other presentation files, `src/container.ts`, and `src/internal/`.
 - Cannot import: `application/internal/` or any infrastructure file.
-  Entry points import `src/container.ts` to construct gateways and repositories.
+  Entry points import `src/container.ts` to construct the clients.
 
 **Notes.**
 

@@ -1,7 +1,7 @@
 import { type ChangedFile, type GithubFailure, isRateLimited, type RefPair } from "../../application/gateway/github";
 import { assetPathFromMeta } from "../../domain/diff/fn/asset-path-from-meta";
 import { err, ok, type Result } from "../../domain/result";
-import type { Queue } from "./fetch-queue-client";
+import type { Queue } from "../internal/fetch-queue";
 
 // retry-after (seconds) wins. Else x-ratelimit-reset (epoch seconds) applies, relative to now.
 // Number(null) is 0 and Number("") is NaN, so absent headers fail the > 0 guards.
@@ -31,7 +31,7 @@ async function rateLimitFailure(res: Response): Promise<Extract<GithubFailure, {
 }
 
 // Queue-aware fetch: rate-limited responses become classified rejections, so the
-// backoff and retry logic of the queue (fetch-queue-client.ts) sees them.
+// backoff and retry logic of the queue (fetch-queue.ts) sees them.
 export function createQueuedFetch(queue: Queue, front: boolean): typeof fetch {
   return (input, init) =>
     queue(

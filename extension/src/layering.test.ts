@@ -87,6 +87,28 @@ it("keeps container.ts reachable only from presentation entry points", () => {
   expect(violations).toEqual([]);
 });
 
+it("keeps infrastructure/clients to interface implementations", () => {
+  // A client is a `*-client.ts` file that implements a repository interface
+  // from domain/ or a gateway type from application/gateway/. Helpers that
+  // implement no interface go in infrastructure/internal/.
+  const violations: string[] = [];
+  for (const file of TS_FILES) {
+    const rel = relative(SRC, file);
+    if (!/^infrastructure[\\/]clients[\\/]/.test(rel)) continue;
+    if (!/-client(\.test)?\.ts$/.test(rel)) {
+      violations.push(rel);
+      continue;
+    }
+    if (rel.endsWith(".test.ts")) continue;
+    const targets = [...relativeImports(file)].map(({ target }) => relative(SRC, target));
+    const implementsInterface = targets.some(
+      (t) => /^application[\\/]gateway[\\/]/.test(t) || /^domain[\\/].*-repository\.ts$/.test(t),
+    );
+    if (!implementsInterface) violations.push(rel);
+  }
+  expect(violations).toEqual([]);
+});
+
 it("keeps production domain files inside domain", () => {
   // Doc rule: "This layer imports nothing outside domain/." Tests are exempt
   // (parity tests read sources via node:fs and use must).

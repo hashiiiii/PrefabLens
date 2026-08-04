@@ -1,6 +1,6 @@
 import type { PendingSignIn } from "../../domain/auth/token";
 import type { TokenRepository } from "../../domain/auth/token-repository";
-import type { StorageAreaWithRemove } from "./storage-area";
+import type { StorageAreaWithRemove } from "../internal/storage-area";
 
 export type SettingsStorage = StorageAreaWithRemove;
 

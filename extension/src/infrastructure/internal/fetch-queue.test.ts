@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { isRateLimited } from "../../application/gateway/github";
 import { must } from "../../internal/must";
-import { createQueue } from "./fetch-queue-client";
+import { createQueue } from "./fetch-queue";
 
 // Line up manually-resolvable deferreds to observe execution order and concurrency
 function deferred(): { promise: Promise<void>; resolve: () => void } {

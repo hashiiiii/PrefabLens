@@ -11,18 +11,18 @@ import { createChromeGuidClient } from "./infrastructure/clients/chrome-guid-cli
 import { createChromeMessenger } from "./infrastructure/clients/chrome-messenger-client";
 import { createChromeRepoIndexClient } from "./infrastructure/clients/chrome-repo-index-client";
 import { createChromeTokenClient } from "./infrastructure/clients/chrome-token-client";
-import { createQueue } from "./infrastructure/clients/fetch-queue-client";
-import {
-  createFixtureFetchBytes,
-  createFixtureSourceFetch,
-  loadFixtureGuidIndex,
-} from "./infrastructure/clients/fixture-client";
 import { createQueuedFetch, GithubClient } from "./infrastructure/clients/github-client";
 import { pollForToken, requestDeviceCode } from "./infrastructure/clients/github-device-flow-client";
 import {
   createDiffer,
   createDifferLoader as createWasmDifferLoader,
 } from "./infrastructure/clients/wasm-differ-client";
+import { createQueue } from "./infrastructure/internal/fetch-queue";
+import {
+  createFixtureFetchBytes,
+  createFixtureSourceFetch,
+  loadFixtureGuidIndex,
+} from "./infrastructure/internal/fixtures";
 
 export function createTokenStore(): TokenRepository {
   return createChromeTokenClient(chrome.storage.local);

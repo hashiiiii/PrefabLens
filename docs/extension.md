@@ -50,6 +50,7 @@ Presentation -> Application -> Domain
 - infrastructure does not import application public functions
 - presentation does not import `application/internal/`
 - only presentation entry points import `src/container.ts`
+- `infrastructure/clients/` holds only `*-client.ts` interface implementations
 
 Two modules sit outside the four layers:
 
@@ -129,15 +130,17 @@ application/
 ```
 infrastructure/
   clients/             # implementations of the repository interfaces and the gateway types
+  internal/            # helpers that implement no interface
 ```
 
 - A client implements a repository interface from `domain/` or a gateway type
   from `application/gateway/`.
 - Put each client in `clients/` as `*-client.ts`
   (for example `github-client.ts`, `chrome-token-client.ts`).
-- `clients/` also holds internal helpers that serve those clients
-  (for example `fetch-queue-client.ts`, `fixture-client.ts`,
+- Put helpers that implement no interface in `internal/`
+  (for example `fetch-queue.ts`, `fixtures.ts`,
   `merge-store.ts`, `storage-area.ts`).
+- Only infrastructure files and `src/container.ts` import `internal/`.
 
 #### Presentation (`src/presentation/`)
 
@@ -220,6 +223,8 @@ It cannot import anything else under `application/`.
 
 - Infrastructure does not own the composition root.
   Entry points import `src/container.ts` to create the clients.
+- Helpers that implement no interface go in `infrastructure/internal/`.
+  The layer rules already keep other layers out of these helpers.
 
 #### Presentation (`src/presentation/`)
 

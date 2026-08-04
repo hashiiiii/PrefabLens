@@ -87,7 +87,7 @@ domain/
 - If the symbol is a repository interface for domain-model persistence, put it in
   `domain/<area>/<noun>-repository.ts`.
   Public functions depend on these interfaces.
-  Clients in `infrastructure/` supply the implementations.
+  Clients in `infrastructure/` implement these interfaces.
 - If the symbol is a pure function that reads or builds a domain type, put it in
   `domain/<area>/fn/<name>.ts`.
 - If a helper is not a domain type, keep it out of `domain/`.
@@ -123,12 +123,12 @@ application/
 
 ```
 infrastructure/
-  clients/             # clients that implement the domain and application contracts
+  clients/             # implementations of the repository interfaces and the gateway types
 ```
 
 - A client implements a repository interface from `domain/` or a gateway type
   from `application/gateway/`.
-- Put clients in `clients/` as `*-client.ts`
+- Put each client in `clients/` as `*-client.ts`
   (for example `github-client.ts`, `chrome-token-client.ts`).
 - `clients/` also holds internal helpers that serve those clients
   (for example `fetch-queue-client.ts`, `fixture-client.ts`,
@@ -214,7 +214,7 @@ It cannot import anything else under `application/`.
 **Notes.**
 
 - Infrastructure does not own the composition root.
-  Entry points import `src/container.ts` to construct the clients.
+  Entry points import `src/container.ts` to create the clients.
 
 #### Presentation (`src/presentation/`)
 
@@ -228,7 +228,7 @@ Transport-only work can call a gateway or repository method directly.
   `application/gateway`, domain types, `domain/<area>/fn` pure functions,
   other presentation files, `src/container.ts`, and `src/internal/`.
 - Cannot import: `application/internal/` or any infrastructure file.
-  Entry points import `src/container.ts` to construct the clients.
+  Entry points import `src/container.ts` to create the clients.
 
 **Notes.**
 

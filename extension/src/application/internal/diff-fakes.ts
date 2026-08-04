@@ -27,13 +27,13 @@ import { API_BASE } from "./api-base";
 type GetDiffer = () => Promise<DifferGateway>;
 
 type GithubResult<K extends keyof GithubGateway> = Awaited<ReturnType<GithubGateway[K]>>;
-/** Argument tuples recorded for each client method, in call order. */
+// Argument tuples recorded for each client method, in call order.
 export type GithubCalls = { [K in keyof GithubGateway]: Array<Parameters<GithubGateway[K]>> };
-/** Canned answers, consulted before the state-derived default. An array is a
- *  once-queue: each call shifts one entry, and a drained array falls through.
- *  A single value answers every call. */
+// Canned answers, consulted before the state-derived default. An array is a
+// once-queue: each call shifts one entry, and a drained array falls through.
+// A single value answers every call.
 export type GithubResults = { [K in keyof GithubGateway]?: GithubResult<K> | Array<GithubResult<K>> };
-/** Replacement behaviors, consulted after `results` and before the state-derived default. */
+// Replacement behaviors, consulted after `results` and before the state-derived default.
 export type GithubImpls = {
   [K in keyof GithubGateway]?: (...args: Parameters<GithubGateway[K]>) => Promise<GithubResult<K>>;
 };
@@ -195,8 +195,8 @@ export function makeFakes(overrides?: {
   return { tokenStore, makeClient, getDiffer, guidCache, diffStore, repoIndexStore, client, calls, results, impls };
 }
 
-/** Serves the request and, when the response is pending, waits for the done push
- *  before returning. Callers assert on the immediate response and the push list. */
+// Serves the request and, when the response is pending, waits for the done push
+// before it returns. Callers assert on the immediate response and the push list.
 export async function serveAndResolve(
   tokenStore: TokenRepository,
   makeClient: MakeGithubClient,
@@ -223,10 +223,10 @@ export async function serveAndResolve(
   return { res, pushes };
 }
 
-/** Drives semanticDiff to completion (the immediate response plus every push) and
- *  returns the fully-resolved response. Errors and diffs that resolve fully in the
- *  PR return unchanged. A pending diff resolves to the json of the final push,
- *  that is, the final output of the pipeline. */
+// Drives semanticDiff to completion (the immediate response plus every push) and
+// returns the fully-resolved response. Errors and diffs that resolve fully in the
+// PR return unchanged. A pending diff resolves to the json of the final push,
+// that is, the final output of the pipeline.
 export async function resolveFully(
   tokenStore: TokenRepository,
   makeClient: MakeGithubClient,

@@ -5,7 +5,7 @@ import { pruneDisconnectedViews, type ViewRegistry } from "./views";
 
 const DIFF = emptyDiff();
 
-/** Builds a shadow root the way attachToggle does; connected controls whether the host is in the DOM. */
+// Builds a shadow root the way attachToggle does. connected controls whether the host is in the DOM.
 function makeRoot(connected: boolean): ShadowRoot {
   const host = document.createElement("div");
   if (connected) document.body.append(host);

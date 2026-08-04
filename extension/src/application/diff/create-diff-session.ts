@@ -10,11 +10,11 @@ type PromiseCache<V> = {
 };
 
 type PromiseCacheOptions<V> = {
-  /** Entries older than this recompute on the next get (the stale promise is overwritten in place). */
+  // Entries older than this recompute on the next get (the stale promise is overwritten in place).
   ttlMs?: number;
-  /** Beyond this many entries the oldest-inserted key is evicted. */
+  // Beyond this many entries the oldest-inserted key is evicted.
   max?: number;
-  /** Decides whether a settled value stays cached; entries whose value it rejects are dropped. Default keeps everything. */
+  // Decides whether a settled value stays cached. Entries whose value it rejects are dropped. The default keeps everything.
   retain?: (value: V) => boolean;
 };
 

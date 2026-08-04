@@ -13,7 +13,7 @@ import {
 
 const DIFF: DiffV2 = emptyDiff();
 
-/** What the panel last drew, as plain data (a real sink, not a spy). */
+// What the panel last drew, as plain data (a real sink, not a spy).
 type Screen =
   | { kind: "loading" }
   | { kind: "diff"; json: DiffV2; resolving: number }
@@ -22,11 +22,11 @@ type Screen =
   | { kind: "authError"; error: string }
   | { kind: "error"; error: string };
 
-/** requestDiff resolves on the microtask queue; a macrotask flushes every chained then. */
+// requestDiff resolves on the microtask queue. A macrotask flushes every chained then.
 const flush = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
 
-/** In-memory implementations of every FileViewDeps interface: each object really stores
- *  the state the machine drives, so assertions read state instead of call recordings. */
+// In-memory implementations of every FileViewDeps interface: each object really stores
+// the state the machine drives, so assertions read state instead of call recordings.
 function makeHarness() {
   const file = {
     rawHidden: false,

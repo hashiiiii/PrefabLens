@@ -32,10 +32,15 @@ The live demo site uses a `--demo` bundle from the same build script.
 
 ### Overview
 
-Dependencies always point inward (toward `domain/`):
+Dependencies point inward. Infrastructure also depends on
+`application/gateway/` to implement gateways:
 
 ```
-Presentation -> Application -> Domain <- Infrastructure
+Presentation -> Application -> Domain
+                     ^              ^
+                     |              |
+              Infrastructure -------+
+              (implements gateway + repository)
 ```
 
 `src/layering.test.ts` enforces these rules:

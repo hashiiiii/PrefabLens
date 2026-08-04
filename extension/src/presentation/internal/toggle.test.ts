@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
-import type { View } from "./overlay/view-mode";
 import { mountToggle } from "./toggle";
+import type { View } from "./view-mode";
 
 // Selection sink: a real array, not a spy
 function sink() {
@@ -34,7 +34,7 @@ describe("mountToggle", () => {
   });
 
   it("updates visuals via set() without firing onSelect", () => {
-    // Bulk apply from the global toggle: only the per-file toggle's look follows along, without triggering onSelect's side effect (re-fetch)
+    // Bulk apply from the global toggle: only the look of the per-file toggle follows, and onSelect's side effect (re-fetch) does not fire
     const { selected, onSelect } = sink();
     const toggle = mountToggle(onSelect);
     document.body.append(toggle.element);
@@ -53,7 +53,7 @@ describe("mountToggle", () => {
   it("renders as a segmented control styled via aria-pressed", () => {
     const toggle = mountToggle(sink().onSelect);
     expect(toggle.element.classList.contains("prefablens-seg")).toBe(true);
-    // No inline style juggling: the selected look is keyed off aria-pressed in CSS
+    // No inline style changes: CSS keys the selected look on aria-pressed
     const [raw] = [...toggle.element.querySelectorAll("button")];
     expect(raw?.getAttribute("style")).toBeNull();
   });

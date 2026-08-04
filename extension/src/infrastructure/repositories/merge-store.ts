@@ -1,8 +1,4 @@
-// Needed subset of chrome.storage.local (tests swap in a fake)
-type Area = {
-  get(keys: string[]): Promise<Record<string, unknown>>;
-  set(items: Record<string, unknown>): Promise<void>;
-};
+import type { StorageArea } from "./storage-area";
 
 export type MergeStore = {
   load(id: string): Promise<Record<string, string>>;
@@ -10,8 +6,8 @@ export type MergeStore = {
 };
 
 // `prefix:id` slot: save merges into stored instead of replacing (writers only add keys).
-// Failures propagate — each call site decides if a lost write is fatal or quota to continue past.
-export function createMergeStore(area: Area, prefix: string): MergeStore {
+// Failures propagate. Each call site decides if a lost write is fatal or if the code continues past it.
+export function createMergeStore(area: StorageArea, prefix: string): MergeStore {
   const keyOf = (id: string): string => `${prefix}:${id}`;
   return {
     async load(id) {

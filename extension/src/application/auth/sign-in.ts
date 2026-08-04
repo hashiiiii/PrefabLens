@@ -1,11 +1,8 @@
 import type { TokenRepository } from "../../domain/auth/token-repository";
-import type { GithubAuthGateway } from "../gateway/github-auth";
+import type { GithubAuthGateway, PollResult } from "../gateway/github-auth";
 
-const FAILURE_TEXT = {
-  denied: "Authorization denied — try again.",
-  expired: "Code expired — try again.",
-  failed: "Sign-in failed — try again.",
-} as const;
+// Application reports only the outcome kind. Presentation owns the user-visible text.
+export type SignInFailure = Exclude<PollResult["status"], "ok">;
 
 export async function signIn(
   auth: GithubAuthGateway,
@@ -17,7 +14,7 @@ export async function signIn(
   state: { inFlight: boolean },
   ui: {
     showPending(userCode: string, verificationUri: string): void;
-    showFailure(message: string): void;
+    showFailure(reason: SignInFailure): void;
   },
 ): Promise<void> {
   if (state.inFlight) return;
@@ -25,7 +22,7 @@ export async function signIn(
   try {
     const code = await auth.requestDeviceCode(fetchFn);
     if (!code.ok) {
-      ui.showFailure(FAILURE_TEXT.failed);
+      ui.showFailure("failed");
       return;
     }
     // Save the pending sign-in before the verification tab opens. /login/device reads it to pre-fill the code.
@@ -36,13 +33,13 @@ export async function signIn(
     ui.showPending(code.value.userCode, code.value.verificationUri);
     openTab(code.value.verificationUri);
     const result = await auth.pollForToken(fetchFn, sleep, code.value);
-    // Success: saveToken → storage.onChanged in index.ts retries auth-blocked panels
+    // Success: saveToken fires storage.onChanged, and index.ts retries auth-blocked panels
     if (result.status === "ok") await tokenStore.saveAccessToken(result.token);
-    else ui.showFailure(FAILURE_TEXT[result.status]);
+    else ui.showFailure(result.status);
     await tokenStore.clearPendingSignIn();
   } catch {
     // Only unexpected rejections (storage) land here. Expected failures arrive as values above.
-    ui.showFailure(FAILURE_TEXT.failed);
+    ui.showFailure("failed");
     await tokenStore.clearPendingSignIn().catch(() => {});
   } finally {
     state.inFlight = false;

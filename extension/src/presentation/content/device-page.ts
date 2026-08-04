@@ -1,6 +1,6 @@
 import type { PendingSignIn } from "../../domain/auth/token";
 
-// Autofill Device Activation boxes (js-user-code-field). Markup drift → no-op; user pastes instead.
+// Autofill the Device Activation boxes (js-user-code-field). On markup drift it is a no-op, and the user pastes instead.
 export function fillDeviceCode(doc: Document, pending: PendingSignIn, now: number): boolean {
   if (now > pending.expiresAt) return false;
   const boxes = [...doc.querySelectorAll<HTMLInputElement>("input.js-user-code-field")];

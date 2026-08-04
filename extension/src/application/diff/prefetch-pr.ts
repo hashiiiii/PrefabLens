@@ -5,19 +5,19 @@ import type { PrefetchRequest } from "../../domain/diff/types";
 import type { RepoIndexRepository } from "../../domain/guid/repo-index-repository";
 import { isUnityPath } from "../../domain/unity/fn/is-unity-path";
 import type { DifferGateway } from "../gateway/differ";
-import type { GithubGateway } from "../gateway/github";
+import type { MakeGithubClient } from "../gateway/github";
+import { API_BASE } from "../internal/api-base";
 import { getContext, getDiff } from "../internal/raw-diff";
 import { getRepoIndex } from "../internal/repo-index";
 import type { DiffSession } from "./create-diff-session";
 
 const PREFETCH_MAX = 100; // bounds API usage per PR
 const PREFETCH_CONCURRENCY = 4;
-const API_BASE = __API_BASE__;
 
-// Raw diff only — leave Code Search / source merge to serve time (10 req/min)
-export async function createPrPrefetch(
+// Raw diff only. Code Search and the source merge stay at serve time (10 req/min).
+export async function prefetchPr(
   tokenStore: TokenRepository,
-  makeClient: (base: string, token: string, lane: "user" | "prefetch") => GithubGateway,
+  makeClient: MakeGithubClient,
   getDiffer: () => Promise<DifferGateway>,
   diffStore: DiffRepository,
   repoIndexStore: RepoIndexRepository,
@@ -50,14 +50,14 @@ export async function createPrPrefetch(
       const outcomes = await Promise.all(
         chunk.map((f) => getDiff(getDiffer, diffStore, session, client, ctx, req.owner, req.repo, f.path, false)),
       );
-      // Only rate limit stops the whole thing; other per-file failures are shown again on manual toggle
+      // Only a rate limit stops the whole run. Other per-file failures appear again on a manual toggle.
       if (outcomes.some((o) => !o.ok && o.error === "rate-limited")) {
         console.debug("prefablens: prefetch aborted", { kind: "rate-limited" });
         return;
       }
     }
   } catch (err) {
-    // Prefetch gives up quietly; only the user-action path surfaces error UI
+    // Prefetch stops quietly. Only the user-action path shows error UI.
     console.debug("prefablens: prefetch aborted", err);
   }
 }

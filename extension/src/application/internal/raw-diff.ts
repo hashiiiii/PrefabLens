@@ -1,4 +1,5 @@
 import type { DiffRepository } from "../../domain/diff/diff-repository";
+import { assetPathFromMeta } from "../../domain/diff/fn/asset-path-from-meta";
 import { parseGuidFromMeta } from "../../domain/diff/fn/parse-guid-from-meta";
 import { targetKey } from "../../domain/diff/fn/target-key";
 import type { DiffTarget } from "../../domain/diff/types";
@@ -11,16 +12,18 @@ import {
   type GithubGateway,
   isRateLimited,
   type RefPair,
+  toBackgroundError,
 } from "../gateway/github";
 
 const EMPTY = new Uint8Array(0);
-const TOO_LARGE_BYTES = 25 * 1024 * 1024; // over 25MB renders on click
+const TOO_LARGE_BYTES = 25 * 1024 * 1024; // Files over 25MB render only on click.
 const MAX_CONCURRENT_META_FETCHES = 8;
+const utf8 = new TextDecoder();
 
 type BlobClient = Pick<GithubGateway, "getBlobRaw" | "getFileAtRef">;
 type MetaFetcher = (path: string, side: "base" | "head") => Promise<Result<string | null, GithubFailure>>;
 
-// Prefer blob-sha when known (#110); 404 (force push) falls back to path+ref
+// The blob sha wins when it is known (#110). On 404 (force push), the fetch uses path+ref instead.
 export function getBlob(
   session: DiffSession,
   client: BlobClient,
@@ -40,7 +43,7 @@ export function getBlob(
   });
 }
 
-// Before/after blobs; status/previousPath follow the files API
+// Before/after blobs. status/previousPath follow the files API.
 export async function getPair(
   session: DiffSession,
   client: BlobClient,
@@ -50,33 +53,34 @@ export async function getPair(
   path: string,
 ): Promise<Result<[Uint8Array, Uint8Array], GithubFailure>> {
   const file = ctx.files.find((f) => f.path === path);
-  const status = file?.status ?? "modified";
   const beforePath = file?.previousPath ?? path;
-  // files API sha is head blob, except removed where it is the base blob
-  const beforeBlob = status === "removed" ? file?.sha : ctx.baseShas?.get(beforePath);
-  const afterBlob = status === "removed" ? undefined : file?.sha;
   const fetchSide = async (p: string, ref: string, blob?: string): Promise<Result<Uint8Array, GithubFailure>> => {
     const bytes = await getBlob(session, client, owner, repo, p, ref, blob);
     if (!bytes.ok) return bytes;
     return ok(bytes.value ?? EMPTY);
   };
-  if (status === "added") {
-    const after = await fetchSide(path, ctx.refs.headSha, afterBlob);
-    if (!after.ok) return after;
-    return ok([EMPTY, after.value]);
+  switch (file?.status ?? "modified") {
+    case "added": {
+      const after = await fetchSide(path, ctx.refs.headSha, file?.sha);
+      if (!after.ok) return after;
+      return ok([EMPTY, after.value]);
+    }
+    case "removed": {
+      // The files API sha is the head blob. For removed files, it is the base blob.
+      const before = await fetchSide(beforePath, ctx.refs.baseSha, file?.sha);
+      if (!before.ok) return before;
+      return ok([before.value, EMPTY]);
+    }
+    default: {
+      const [before, after] = await Promise.all([
+        fetchSide(beforePath, ctx.refs.baseSha, ctx.baseShas?.get(beforePath)),
+        fetchSide(path, ctx.refs.headSha, file?.sha),
+      ]);
+      if (!before.ok) return before;
+      if (!after.ok) return after;
+      return ok([before.value, after.value]);
+    }
   }
-  if (status === "removed") {
-    const before = await fetchSide(beforePath, ctx.refs.baseSha, beforeBlob);
-    if (!before.ok) return before;
-    return ok([before.value, EMPTY]);
-  }
-  const [before, after] = await Promise.all([
-    fetchSide(beforePath, ctx.refs.baseSha, beforeBlob),
-    fetchSide(path, ctx.refs.headSha, afterBlob),
-  ]);
-  if (!before.ok) return before;
-  if (!after.ok) return after;
-  return ok([before.value, after.value]);
 }
 
 // guid→path from .meta files changed in the PR (removed → base side).
@@ -90,29 +94,30 @@ async function createGuidIndex(
 
   const indexOne = async (f: ChangedFile): Promise<GithubFailure | null> => {
     const side = f.status === "removed" ? "base" : "head";
-    // Only rate limits propagate: swallowing them would cache a degraded index for the SW's lifetime
+    // Only rate limits propagate: a hidden rate limit caches a degraded index for the SW lifetime
     const text = await fetchMeta(f.path, side);
     if (!text.ok) {
       if (isRateLimited(text.error)) return text.error;
-      return null; // non-rate-limit → skip this meta
+      return null; // A non-rate-limit failure skips this meta.
     }
     if (!text.value) return null;
     const guid = parseGuidFromMeta(text.value);
-    if (guid) index.set(guid, f.path.slice(0, -".meta".length));
+    if (guid) index.set(guid, assetPathFromMeta(f.path));
     return null;
   };
 
   for (let i = 0; i < metas.length; i += MAX_CONCURRENT_META_FETCHES) {
     const chunk = metas.slice(i, i + MAX_CONCURRENT_META_FETCHES);
     const failures = await Promise.all(chunk.map(indexOne));
-    const rateLimited = failures.find((f): f is GithubFailure => f !== null && isRateLimited(f));
+    // indexOne discards every failure that is not a rate limit, so each non-null entry is a rate limit.
+    const rateLimited = failures.find((f): f is GithubFailure => f !== null);
     if (rateLimited) return err(rateLimited);
   }
 
   return ok(index);
 }
 
-// Per-kind: refs + changed-file discovery; everything downstream is target-agnostic
+// Per-kind: refs and changed-file discovery. Everything downstream is target-agnostic.
 async function loadRefsAndFiles(
   client: GithubGateway,
   owner: string,
@@ -131,7 +136,7 @@ async function loadRefsAndFiles(
   if (target.kind === "commit") {
     const commit = await client.getCommit(owner, repo, target.sha);
     if (!commit.ok) return commit;
-    // Root commit: before side is never fetched; own sha as baseSha keeps tree lookups harmless
+    // Root commit: the before side is never fetched. Its own sha as baseSha keeps tree lookups harmless.
     return ok({
       refs: { baseSha: commit.value.parentSha ?? commit.value.sha, headSha: commit.value.sha },
       files: commit.value.files,
@@ -139,7 +144,7 @@ async function loadRefsAndFiles(
   }
   const [cmp, headSha] = await Promise.all([
     client.compareRefs(owner, repo, target.base, target.head),
-    // Cache keys need an immutable sha; compare commits truncate at 250 so last ≠ always head
+    // Cache keys need an immutable sha. Compare commits truncate at 250, so the last one is not always the head.
     client.resolveRefSha(owner, repo, target.head),
   ]);
   if (!cmp.ok) return cmp;
@@ -172,9 +177,9 @@ export function getContext(
           bySha.get(path),
         );
         if (!bytes.ok) return bytes;
-        return ok(bytes.value ? new TextDecoder().decode(bytes.value) : null);
+        return ok(bytes.value ? utf8.decode(bytes.value) : null);
       }),
-      // Only rate limits propagate; anything else → null → contents-api fallback
+      // Only rate limits propagate. Anything else becomes null, and the contents API applies instead.
       client.listBlobShas(owner, repo, refs.baseSha),
     ]);
     if (!guidIndex.ok) return guidIndex;
@@ -188,7 +193,7 @@ export function getContext(
   });
 }
 
-// Raw sha-keyed diff only; resolution/source merge stay out (Code Search improves later)
+// Raw sha-keyed diff only. Resolution and the source merge stay out (Code Search improves later).
 async function computeDiff(
   getDiffer: () => Promise<DifferGateway>,
   session: DiffSession,
@@ -199,14 +204,17 @@ async function computeDiff(
   path: string,
   force: boolean,
 ): Promise<DiffOutcome> {
-  // Missing from listing (files API caps at 3000) → treat as modified; 404 side → EMPTY
+  // The memoized wasm load compiles while the blobs download, not after them.
+  const differPromise = getDiffer();
+  differPromise.catch(() => {}); // Early returns below skip the await. The later await still surfaces the error.
+  // A file missing from the listing (the files API caps at 3000) is treated as modified. A 404 side becomes EMPTY.
   const pair = await getPair(session, client, ctx, owner, repo, path);
-  if (!pair.ok) return { ok: false, error: pair.error.kind };
+  if (!pair.ok) return { ok: false, error: toBackgroundError(pair.error) };
   const [before, after] = pair.value;
   if (!force && before.length + after.length > TOO_LARGE_BYTES) {
     return { ok: false, error: "too-large", bytes: before.length + after.length };
   }
-  const differ = await getDiffer();
+  const differ = await differPromise;
   // Prefilter passed, but some .asset files are binary regardless of ForceText
   if (!differ.isUnityYaml(before) && !differ.isUnityYaml(after)) {
     return { ok: false, error: "not-unity-yaml" };

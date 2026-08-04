@@ -1,6 +1,6 @@
 import type { DiffTarget } from "../types";
 
-// Stable identity within a repo — context caches and view keys derive from it.
+// A stable identity within a repo. Context caches and view keys derive from it.
 export function targetKey(owner: string, repo: string, target: DiffTarget): string {
   const suffix =
     target.kind === "pull"

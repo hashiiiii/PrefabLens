@@ -86,8 +86,8 @@ test("the semantic host recreates github's card frame in place of the hidden bod
   const view = page.locator("#diff-aaa111 [data-prefablens-view]");
   await expect(view).toContainText("MonoBehaviour");
 
-  // :host{all:initial} resets display to its spec initial value (inline), which
-  // would collapse the border into a line-box fragment — the host must be a block
+  // :host{all:initial} resets display to its spec initial value (inline). That
+  // value collapses the border into a line-box fragment, so the host must be a block.
   await expect(view).toHaveCSS("display", "block");
   // The frame github draws on the body it replaces: border + bottom-rounded corners
   await expect(view).toHaveCSS("border-bottom-width", "1px");

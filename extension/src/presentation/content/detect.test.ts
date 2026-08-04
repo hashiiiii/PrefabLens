@@ -41,7 +41,7 @@ describe("parseDiffUrl", () => {
     });
   });
   it("maps single-commit views inside a PR to a commit target", () => {
-    // react ui: /changes/SHA, classic: /commits/SHA — both show one commit against its parent
+    // react ui: /changes/SHA, classic: /commits/SHA. Both show one commit against its parent.
     expect(parseDiffUrl("/owner/repo/pull/42/changes/1e27d7998afdd3608d9fc3bf95ccf27fa5010641")?.target).toEqual({
       kind: "commit",
       sha: "1e27d7998afdd3608d9fc3bf95ccf27fa5010641",
@@ -63,7 +63,7 @@ describe("parseDiffUrl", () => {
       repo: "repo",
       target: { kind: "compare", base: "main", head: "feature" },
     });
-    // branch names keep their slashes; encoded characters are decoded per side
+    // branch names keep their slashes. Encoded characters are decoded per side.
     expect(parseDiffUrl("/owner/repo/compare/feat/a...feat/b")?.target).toEqual({
       kind: "compare",
       base: "feat/a",
@@ -74,7 +74,7 @@ describe("parseDiffUrl", () => {
       base: "v1.0",
       head: "main",
     });
-    // A manually typed trailing slash must not leak into the head ref (git refs can't end with /)
+    // A manually typed trailing slash must not leak into the head ref (git refs cannot end with /)
     expect(parseDiffUrl("/owner/repo/compare/main...topic/")?.target).toEqual({
       kind: "compare",
       base: "main",
@@ -83,8 +83,8 @@ describe("parseDiffUrl", () => {
   });
 
   it("survives malformed percent escapes instead of throwing", () => {
-    // Browsers pass invalid %-sequences through pathname verbatim; decodeURIComponent would
-    // throw URIError and attach() runs this unguarded before the MutationObserver is installed
+    // Browsers pass invalid %-sequences through pathname verbatim. decodeURIComponent throws
+    // URIError there, and attach() runs this unguarded before the MutationObserver is installed
     expect(parseDiffUrl("/owner/repo/compare/50%discount...main")?.target).toEqual({
       kind: "compare",
       base: "50%discount",
@@ -127,7 +127,7 @@ describe("scanUnityFiles", () => {
       "Assets/Scenes/Main.unity",
       "Assets/Data/Config.asset",
     ]);
-    // Behavior replaces the old `content` field: hiding acts on the .js-file-content element
+    // Behavior replaces the old `content` field: the hide acts on the .js-file-content element
     const content = must(document.querySelector<HTMLElement>(".file .js-file-content"));
     const entry = must(entries[0]);
     entry.setRawHidden(true);
@@ -136,7 +136,6 @@ describe("scanUnityFiles", () => {
     expect(content.style.display).toBe("");
     // Classic collapse is handled by Primer's Details CSS, not by us
     expect(entry.collapsed()).toBe(false);
-    // The global bar anchors on the .file container
     expect(entry.globalAnchor()).toBe(document.querySelector(".file"));
     // The host lands right after the content and opts into the Details collapse CSS
     const host = document.createElement("div");
@@ -307,14 +306,14 @@ describe("scanUnityFiles (react ui)", () => {
     const entry = must(scanUnityFiles(document)[0]);
     const region = must(document.querySelector("#diff-aaa111"));
     entry.setRawHidden(true);
-    // React remounts the body with no inline styles when a collapsed file expands;
-    // the debounced rescan re-hides it only ~200ms later. The marker + document-level
+    // React remounts the body with no inline styles when a collapsed file expands.
+    // The debounced rescan re-hides it only ~200ms later. The marker + document-level
     // rule pair hides the fresh body before first paint instead.
     expect(region.hasAttribute("data-prefablens-raw-hidden")).toBe(true);
     // The exact selector of the rule is an implementation detail. Only its presence is
     // the contract (react.spec.ts proves the pre-paint hiding against a real browser).
     expect(document.head.querySelector("style[data-prefablens-hide-rule]")).not.toBeNull();
-    // Un-hiding must lift the CSS rule too, or the restored body would stay invisible
+    // Un-hiding must remove the CSS rule too, or the restored body stays invisible
     entry.setRawHidden(false);
     expect(region.hasAttribute("data-prefablens-raw-hidden")).toBe(false);
   });

@@ -3,7 +3,6 @@ import type { View } from "./view-mode";
 import {
   applyExternal,
   clearOverrides,
-  defaultView,
   effectiveView,
   emptyViewState,
   onDefaultChange,
@@ -58,7 +57,7 @@ describe("view state", () => {
   });
 
   it("same-value setDefault with no overrides is a pure no-op", () => {
-    // With no overrides, no notification is needed either: don't wastefully re-apply all appliers
+    // With no overrides, no notification is needed either: a re-apply of every applier is wasted work
     const { persisted, notified, persist, listener } = sinks();
     const state = emptyViewState("semantic");
     onDefaultChange(state, listener);
@@ -68,14 +67,14 @@ describe("view state", () => {
   });
 
   it("applyExternal updates without persisting (storage.onChanged echo)", () => {
-    // storage.onChanged fires even on the tab that did the set: re-persisting would cause an infinite loop
+    // storage.onChanged fires even on the tab that did the set: a re-persist causes an infinite loop
     const { persisted, notified, listener } = sinks();
     const state = emptyViewState("raw");
     onDefaultChange(state, listener);
     setOverride(state, "a.prefab", "raw");
     applyExternal(state, "semantic");
     expect(effectiveView(state, "a.prefab")).toBe("semantic"); // a switch from another tab still lines up every file
-    expect(defaultView(state)).toBe("semantic");
+    expect(state.def).toBe("semantic");
     expect(persisted).toEqual([]);
     expect(notified).toEqual(["semantic"]);
     notified.length = 0;
@@ -88,6 +87,6 @@ describe("view state", () => {
     setOverride(state, "a.prefab", "raw");
     clearOverrides(state);
     expect(effectiveView(state, "a.prefab")).toBe("semantic");
-    expect(defaultView(state)).toBe("semantic");
+    expect(state.def).toBe("semantic");
   });
 });

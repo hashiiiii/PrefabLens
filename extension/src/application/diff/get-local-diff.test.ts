@@ -1,10 +1,10 @@
 import { expect, it } from "vitest";
-import type { DiffV2 } from "../../domain/diff/types";
+import { type DiffV2, emptyDiff } from "../../domain/diff/types";
 import { err, ok } from "../../domain/result";
 import type { DifferGateway } from "../gateway/differ";
 import { getLocalDiff } from "./get-local-diff";
 
-const DIFF: DiffV2 = { schema: "prefablens.diff.v2", unresolvedGuids: ["g1"], roots: [], loose: [] };
+const DIFF: DiffV2 = { ...emptyDiff(), unresolvedGuids: ["g1"], roots: [], loose: [] };
 const enc = (s: string) => new TextEncoder().encode(s) as Uint8Array<ArrayBuffer>;
 
 function makeFakes(overrides?: {

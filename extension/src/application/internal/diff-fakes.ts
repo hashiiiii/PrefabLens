@@ -1,11 +1,18 @@
 // Shared test harness for the semantic-diff pipeline. get-semantic-diff.test.ts
-// and create-pr-prefetch.test.ts use it to exercise the same production pipeline
+// and prefetch-pr.test.ts use it to run the same production pipeline
 // from two entry points. This is not a *.test.ts file, so Vitest does not
 // collect it. Import it only from tests.
 import { expect, vi } from "vitest";
 import type { TokenRepository } from "../../domain/auth/token-repository";
 import type { DiffRepository } from "../../domain/diff/diff-repository";
-import type { DiffV2, GuidResolvedPush, SemanticDiffRequest, SemanticDiffResponse } from "../../domain/diff/types";
+import { repoKey } from "../../domain/diff/fn/repo-key";
+import {
+  type DiffV2,
+  emptyDiff,
+  type GuidResolvedPush,
+  type SemanticDiffRequest,
+  type SemanticDiffResponse,
+} from "../../domain/diff/types";
 import type { GuidMap } from "../../domain/guid/guid-map";
 import type { GuidRepository } from "../../domain/guid/guid-repository";
 import type { RepoGuidIndex } from "../../domain/guid/repo-guid-index";
@@ -14,19 +21,19 @@ import { ok } from "../../domain/result";
 import type { DiffSession } from "../diff/create-diff-session";
 import { getSemanticDiff } from "../diff/get-semantic-diff";
 import type { DifferGateway } from "../gateway/differ";
-import type { ChangedFile, GithubGateway } from "../gateway/github";
+import type { ChangedFile, GithubGateway, MakeGithubClient } from "../gateway/github";
+import { API_BASE } from "./api-base";
 
-type MakeClient = (base: string, token: string, lane: "user" | "prefetch") => GithubGateway;
 type GetDiffer = () => Promise<DifferGateway>;
 
 type GithubResult<K extends keyof GithubGateway> = Awaited<ReturnType<GithubGateway[K]>>;
-/** Argument tuples recorded for each client method, in call order. */
+// Argument tuples recorded for each client method, in call order.
 export type GithubCalls = { [K in keyof GithubGateway]: Array<Parameters<GithubGateway[K]>> };
-/** Canned answers, consulted before the state-derived default. An array is a
- *  once-queue: each call shifts one entry, and a drained array falls through.
- *  A single value answers every call. */
+// Canned answers, consulted before the state-derived default. An array is a
+// once-queue: each call shifts one entry, and a drained array falls through.
+// A single value answers every call.
 export type GithubResults = { [K in keyof GithubGateway]?: GithubResult<K> | Array<GithubResult<K>> };
-/** Replacement behaviors, consulted after `results` and before the state-derived default. */
+// Replacement behaviors, consulted after `results` and before the state-derived default.
 export type GithubImpls = {
   [K in keyof GithubGateway]?: (...args: Parameters<GithubGateway[K]>) => Promise<GithubResult<K>>;
 };
@@ -39,7 +46,7 @@ export const REQ: SemanticDiffRequest = {
   path: "Assets/Foo.prefab",
 };
 
-export const DIFF: DiffV2 = { schema: "prefablens.diff.v2", unresolvedGuids: ["g1"], roots: [], loose: [] };
+export const DIFF: DiffV2 = { ...emptyDiff(), unresolvedGuids: ["g1"] };
 
 export function makeFakes(overrides?: {
   files?: ChangedFile[];
@@ -127,7 +134,7 @@ export function makeFakes(overrides?: {
     isUnityYaml: overrides?.isUnityYaml ?? (() => true),
   };
   const cacheData: Record<string, GuidMap> = {};
-  if (overrides?.cached) cacheData["https://api.github.com/o/r"] = { ...overrides.cached };
+  if (overrides?.cached) cacheData[repoKey(API_BASE, "o", "r")] = { ...overrides.cached };
   const guidSaves: Array<[string, GuidMap]> = [];
   const guidCache = {
     data: cacheData,
@@ -149,20 +156,28 @@ export function makeFakes(overrides?: {
       diffStoreData[key] = json;
     },
   };
-  // Mirrors the RepoIndexStore interface (loadGuids/saveGuids/loadIndex/saveIndex). It starts empty for each test.
+  // This fake mirrors the RepoIndexRepository interface (loadGuids/saveGuids/loadIndex/saveIndex).
+  // It starts empty. Tests seed guidsData/indexData directly.
   const guidsData: Record<string, GuidMap> = {};
   const indexData: Record<string, RepoGuidIndex> = {};
   const savedGuids: Array<[string, GuidMap]> = [];
   const savedIndexes: Array<[string, RepoGuidIndex]> = [];
+  const loadIndexCalls: string[] = [];
   const repoIndexStore = {
+    guidsData,
+    indexData,
     savedGuids,
     savedIndexes,
+    loadIndexCalls,
     loadGuids: async (repo: string) => guidsData[repo] ?? {},
     saveGuids: async (repo: string, entries: GuidMap) => {
       savedGuids.push([repo, entries]);
       guidsData[repo] = { ...guidsData[repo], ...entries };
     },
-    loadIndex: async (repo: string) => indexData[repo],
+    loadIndex: async (repo: string) => {
+      loadIndexCalls.push(repo);
+      return indexData[repo];
+    },
     saveIndex: async (repo: string, index: RepoGuidIndex) => {
       savedIndexes.push([repo, index]);
       indexData[repo] = index;
@@ -175,25 +190,23 @@ export function makeFakes(overrides?: {
     readPendingSignIn: async () => undefined,
     clearPendingSignIn: async () => {},
   };
-  const makeClient = (_base: string, _token: string, _lane: "user" | "prefetch") => client;
+  const makeClient: MakeGithubClient = () => client;
   const getDiffer = async () => differ;
   return { tokenStore, makeClient, getDiffer, guidCache, diffStore, repoIndexStore, client, calls, results, impls };
 }
 
-/** Drives semanticDiff to completion (the immediate response plus every push) and
- *  returns the fully-resolved response. Errors and diffs that resolve fully in the
- *  PR return unchanged. A pending diff resolves to the json of the final push,
- *  that is, the final output of the pipeline. */
-export async function resolveFully(
+// Serves the request and, when the response is pending, waits for the done push
+// before it returns. Callers assert on the immediate response and the push list.
+export async function serveAndResolve(
   tokenStore: TokenRepository,
-  makeClient: MakeClient,
+  makeClient: MakeGithubClient,
   getDiffer: GetDiffer,
   guidCache: GuidRepository,
   diffStore: DiffRepository,
   repoIndexStore: RepoIndexRepository,
   session: DiffSession,
   req: SemanticDiffRequest,
-): Promise<SemanticDiffResponse> {
+): Promise<{ res: SemanticDiffResponse; pushes: GuidResolvedPush[] }> {
   const pushes: GuidResolvedPush[] = [];
   const res = await getSemanticDiff(
     tokenStore,
@@ -206,8 +219,35 @@ export async function resolveFully(
     req,
     (m) => pushes.push(m),
   );
+  if (res.ok && res.pending) await vi.waitFor(() => expect(pushes.at(-1)?.done).toBe(true));
+  return { res, pushes };
+}
+
+// Drives semanticDiff to completion (the immediate response plus every push) and
+// returns the fully-resolved response. Errors and diffs that resolve fully in the
+// PR return unchanged. A pending diff resolves to the json of the final push,
+// that is, the final output of the pipeline.
+export async function resolveFully(
+  tokenStore: TokenRepository,
+  makeClient: MakeGithubClient,
+  getDiffer: GetDiffer,
+  guidCache: GuidRepository,
+  diffStore: DiffRepository,
+  repoIndexStore: RepoIndexRepository,
+  session: DiffSession,
+  req: SemanticDiffRequest,
+): Promise<SemanticDiffResponse> {
+  const { res, pushes } = await serveAndResolve(
+    tokenStore,
+    makeClient,
+    getDiffer,
+    guidCache,
+    diffStore,
+    repoIndexStore,
+    session,
+    req,
+  );
   if (!res.ok || !res.pending) return res;
-  await vi.waitFor(() => expect(pushes.at(-1)?.done).toBe(true));
   const final = pushes.at(-1);
   return final?.json ? { ok: true, json: final.json } : res;
 }

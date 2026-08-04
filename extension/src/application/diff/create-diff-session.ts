@@ -1,3 +1,4 @@
+import type { BackgroundError, DiffV2 } from "../../domain/diff/types";
 import type { Result } from "../../domain/result";
 import type { ChangedFile, GithubFailure, RefPair } from "../gateway/github";
 
@@ -9,15 +10,15 @@ type PromiseCache<V> = {
 };
 
 type PromiseCacheOptions<V> = {
-  /** Entries older than this recompute on the next get (the stale promise is overwritten in place). */
+  // Entries older than this recompute on the next get (the stale promise is overwritten in place).
   ttlMs?: number;
-  /** Beyond this many entries the oldest-inserted key is evicted. */
+  // Beyond this many entries the oldest-inserted key is evicted.
   max?: number;
-  /** Decides whether a settled value stays cached; entries whose value it rejects are dropped. Default keeps everything. */
+  // Decides whether a settled value stays cached. Entries whose value it rejects are dropped. The default keeps everything.
   retain?: (value: V) => boolean;
 };
 
-// Keyed async memoization: storing the Promise folds concurrent gets; rejections always drop for retry.
+// Keyed async memoization: concurrent gets share the stored Promise. Rejections always drop, so a retry stays possible.
 function createPromiseCache<V>(options: PromiseCacheOptions<V> = {}): PromiseCache<V> {
   const { ttlMs, max, retain } = options;
   const entries = new Map<string, { at: number; promise: Promise<V> }>();
@@ -47,7 +48,7 @@ function createPromiseCache<V>(options: PromiseCacheOptions<V> = {}): PromiseCac
   };
 }
 
-// baseShas: path → blob sha at base. null = tree unavailable → contents-api fallback
+// baseShas: path → blob sha at base. null means the tree is unavailable, and the contents API applies instead.
 export type DiffContext = {
   refs: RefPair;
   files: ChangedFile[];
@@ -55,16 +56,17 @@ export type DiffContext = {
   baseShas: Map<string, string> | null;
 };
 
+// SemanticDiffResponse minus the states that only getSemanticDiff can produce
+// (access-token-missing, pending). A new BackgroundError member flows in here.
 export type DiffOutcome =
-  | { ok: true; json: import("../../domain/diff/types").DiffV2 }
-  | { ok: false; error: "too-large"; bytes: number }
-  | { ok: false; error: "not-unity-yaml" | "diff-failed" | "auth-failed" | "rate-limited" | "fetch-failed" };
+  | { ok: true; json: DiffV2 }
+  | { ok: false; error: Exclude<BackgroundError, "access-token-missing"> }
+  | { ok: false; error: "too-large"; bytes: number };
 
 export type DiffSession = {
   contexts: PromiseCache<Result<DiffContext, GithubFailure>>;
   blobs: PromiseCache<Result<Uint8Array | null, GithubFailure>>;
   diffs: PromiseCache<DiffOutcome>;
-  // resolution
   misses: Set<string>;
   searches: PromiseCache<Result<string | null, GithubFailure>>;
   indexes: PromiseCache<Result<Record<string, string> | null, GithubFailure>>;

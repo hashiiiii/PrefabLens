@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
-import type { DiffV2, SemanticDiffResponse } from "../../../domain/diff/types";
+import { type DiffV2, emptyDiff, type SemanticDiffResponse } from "../../../domain/diff/types";
 import { must } from "../../../internal/must";
+import type { View } from "../../internal/view-mode";
 import {
   emptyFileView,
   type FileResult,
@@ -9,11 +10,10 @@ import {
   showFileView,
   syncFileView,
 } from "./file-view";
-import type { View } from "./view-mode";
 
-const DIFF: DiffV2 = { schema: "prefablens.diff.v2", unresolvedGuids: [], roots: [], loose: [] };
+const DIFF: DiffV2 = emptyDiff();
 
-/** What the panel last drew, as plain data (a real sink, not a spy). */
+// What the panel last drew, as plain data (a real sink, not a spy).
 type Screen =
   | { kind: "loading" }
   | { kind: "diff"; json: DiffV2; resolving: number }
@@ -22,11 +22,11 @@ type Screen =
   | { kind: "authError"; error: string }
   | { kind: "error"; error: string };
 
-/** requestDiff resolves on the microtask queue; a macrotask flushes every chained then. */
+// requestDiff resolves on the microtask queue. A macrotask flushes every chained then.
 const flush = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
 
-/** In-memory implementations of every FileViewDeps interface: each object really stores
- *  the state the machine drives, so assertions read state instead of call recordings. */
+// In-memory implementations of every FileViewDeps interface: each object really stores
+// the state the machine drives, so assertions read state instead of call recordings.
 function makeHarness() {
   const file = {
     rawHidden: false,
@@ -43,7 +43,7 @@ function makeHarness() {
     visible: undefined as boolean | undefined,
     screens: [] as Screen[],
   };
-  // Responses are consumed in order; requests records the force flag of each round-trip.
+  // Responses are consumed in order. requests records the force flag of each round-trip.
   const responses: SemanticDiffResponse[] = [];
   const requests: Array<boolean | undefined> = [];
   const results = {
@@ -121,7 +121,7 @@ describe("showFileView", () => {
   it("show(raw) leaves the raw diff alone and never creates a host or fetches", () => {
     const h = makeHarness();
     showFileView(h.state, h.deps, "raw");
-    // Transition: raw is the passive state — nothing to build, nothing to request.
+    // Transition: raw is the passive state: nothing to build, nothing to request.
     expect(h.host.created).toBe(false);
     expect(h.requests).toHaveLength(0);
     expect(h.file.rawHidden).toBe(false);
@@ -139,8 +139,8 @@ describe("showFileView", () => {
     expect(h.host.visible).toBe(false);
 
     showFileView(h.state, h.deps, "semantic");
-    // Transition: requested stays latched after success, so re-showing only re-asserts
-    // display — exactly one round-trip ever happened.
+    // Transition: requested stays latched after success, so a re-show only re-asserts
+    // display. Exactly one round-trip ever happened.
     expect(h.requests).toHaveLength(1);
     expect(h.file.rawHidden).toBe(true);
     expect(h.host.visible).toBe(true);
@@ -148,7 +148,7 @@ describe("showFileView", () => {
 
   it("keeps the resolving indicator up while pending, even when every guid already has a name", async () => {
     const h = makeHarness();
-    // All names resolved but pending: source merging may still be running in background.
+    // All names resolved but pending: the source merge can still run in the background.
     h.responses.push({
       ok: true,
       json: { ...DIFF, unresolvedGuids: ["g1"], resolved: { g1: "Assets/A.cs" } },
@@ -179,8 +179,8 @@ describe("syncFileView", () => {
   it("sync(semantic) before any semantic render leaves the raw diff alone", () => {
     const h = makeHarness();
     syncFileView(h.state, h.deps, "semantic");
-    // Transition: no host yet → sync must not hide raw (the user would see nothing) and
-    // must not fetch (a fetching sync would hammer retries on rate limits).
+    // Transition: no host yet. sync must not hide raw (the user then sees nothing) and
+    // must not fetch (a sync that fetches retries endlessly on rate limits).
     expect(h.file.rawHidden).toBe(false);
     expect(h.requests).toHaveLength(0);
   });
@@ -195,8 +195,8 @@ describe("syncFileView", () => {
     h.host.connected = false;
     h.file.rawHidden = false;
     syncFileView(h.state, h.deps, "semantic");
-    // Transition: display-only re-assert — host re-attached, raw re-hidden, and still
-    // exactly one request (sync never fetches).
+    // Transition: a display-only re-assert. The host re-attaches, raw re-hides, and still
+    // exactly one request exists (sync never fetches).
     expect(h.host.attachCount).toBe(2);
     expect(h.file.rawHidden).toBe(true);
     expect(h.requests).toHaveLength(1);
@@ -289,8 +289,8 @@ describe("showFileView request", () => {
     expect(h.requests).toEqual([undefined, true]);
     expect(h.screen()).toMatchObject({ kind: "diff", json: DIFF });
 
-    // The registered retry re-runs the whole request with the same force flag: without it
-    // the retried request would bounce off the size guard again.
+    // The registered retry re-runs the whole request with the same force flag: without it,
+    // the retried request hits the size guard again.
     h.responses.push({ ok: true, json: DIFF });
     must(h.results.current).retry();
     await flush();

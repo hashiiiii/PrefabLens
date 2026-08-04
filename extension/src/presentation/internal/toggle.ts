@@ -1,10 +1,10 @@
-import type { View } from "./overlay/view-mode";
+import type { View } from "./view-mode";
 
 export type Toggle = { element: HTMLElement; set(view: View): void };
 
 const FONT = `-apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif`;
 
-// Primer variables on github.com; fallbacks cover the e2e fixture
+// Primer variables on github.com. Fallbacks cover the e2e fixture.
 const PAGE_STYLES = `
   [data-prefablens-global] { display: flex; align-items: center; gap: 8px; margin: 0 0 8px; }
   [data-prefablens-global] .prefablens-seg { margin-left: 0; }
@@ -33,12 +33,12 @@ const PAGE_STYLES = `
 `;
 
 // Toggle lives in GitHub's DOM (not a shadow root)
-export function injectPageStyles(doc: Document = document): void {
-  if (doc.head.querySelector("style[data-prefablens-style]")) return;
-  const style = doc.createElement("style");
+export function injectPageStyles(): void {
+  if (document.head.querySelector("style[data-prefablens-style]")) return;
+  const style = document.createElement("style");
   style.setAttribute("data-prefablens-style", "");
   style.textContent = PAGE_STYLES;
-  doc.head.append(style);
+  document.head.append(style);
 }
 
 export function mountToggle(onSelect: (view: View) => void, initial: View = "raw"): Toggle {
@@ -48,7 +48,7 @@ export function mountToggle(onSelect: (view: View) => void, initial: View = "raw
   wrap.className = "prefablens-seg";
 
   const buttons: HTMLButtonElement[] = [];
-  // set updates display only — avoids onSelect (re-fetch) during a global apply
+  // set updates display only. It avoids onSelect (re-fetch) during a global apply.
   const select = (view: View): void => {
     for (const b of buttons) b.setAttribute("aria-pressed", String(b.dataset.view === view));
   };
@@ -68,4 +68,21 @@ export function mountToggle(onSelect: (view: View) => void, initial: View = "raw
   wrap.append(make("raw", "Raw"), make("semantic", "Semantic"));
   select(initial);
   return { element: wrap, set: select };
+}
+
+// The bar DOM matches the [data-prefablens-global] page styles that this module
+// owns. The content script and the demo must build the bar in the same way.
+// Callers position the element.
+export function mountGlobalBar(
+  onSelect: (view: View) => void,
+  initial: View,
+): { element: HTMLElement; toggle: Toggle } {
+  const bar = document.createElement("div");
+  bar.setAttribute("data-prefablens-global", "");
+  const label = document.createElement("span");
+  label.className = "prefablens-eyebrow";
+  label.textContent = "PrefabLens";
+  const toggle = mountToggle(onSelect, initial);
+  bar.append(label, toggle.element);
+  return { element: bar, toggle };
 }

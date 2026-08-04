@@ -1,19 +1,13 @@
 import type { DiffRepository } from "../../domain/diff/diff-repository";
 import type { DiffV2 } from "../../domain/diff/types";
+import type { StorageAreaWithRemove } from "./storage-area";
 
 const PREFIX = "diff:";
-const MAX_BYTES = 512 * 1024; // storage.session is 10MB: leave large ones to memory cache only
-
-// Needed subset of chrome.storage.session (tests swap in a fake)
-type Area = {
-  get(keys: string | string[] | null): Promise<Record<string, unknown>>;
-  set(items: Record<string, unknown>): Promise<void>;
-  remove(keys: string | string[]): Promise<void>;
-};
+const MAX_BYTES = 512 * 1024; // storage.session is 10MB: large diffs stay in the memory cache only.
 
 // Raw diffs in storage.session under a sha key across SW restarts.
-// Quota overflow → wipe diffs and rewrite once; without this every SW restart recomputes forever.
-export function createChromeDiffRepository(area: Area): DiffRepository {
+// On quota overflow, wipe the diffs and rewrite once. Without this, every SW restart recomputes forever.
+export function createChromeDiffRepository(area: StorageAreaWithRemove): DiffRepository {
   return {
     async load(key) {
       const stored = await area.get(PREFIX + key);
@@ -34,7 +28,7 @@ export function createChromeDiffRepository(area: Area): DiffRepository {
 }
 
 // Wipe only diff: keys (unrelated session keys stay)
-async function flushDiffs(area: Area): Promise<void> {
+async function flushDiffs(area: StorageAreaWithRemove): Promise<void> {
   const all = await area.get(null).catch(() => ({}));
   const keys = Object.keys(all).filter((k) => k.startsWith(PREFIX));
   if (keys.length) await area.remove(keys).catch(() => {});

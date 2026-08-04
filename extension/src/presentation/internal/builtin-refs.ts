@@ -1,16 +1,16 @@
-// Generated from Unity 6000.5.2f1 built-in resource files; do not edit by hand.
-// Regenerate by running, in a Unity editor (batchmode is fine):
+// Generated from Unity 6000.5.2f1 built-in resource files. Do not edit by hand.
+// To regenerate, run in a Unity editor (batchmode is fine):
 //   AssetDatabase.LoadAllAssetsAtPath(path) + TryGetGUIDAndLocalFileIdentifier
-// over "Library/unity default resources" and "Resources/unity_builtin_extra",
-// then feeding the (guid, fileID, name) dump through this file's generator
+// over "Library/unity default resources" and "Resources/unity_builtin_extra".
+// Then feed the (guid, fileID, name) dump through the generator of this file
 // (see PrefabLens issue #104). fileIDs are stable across Unity versions.
 
 export const DEFAULT_RESOURCES_GUID = "0000000000000000e000000000000000";
 export const BUILTIN_EXTRA_GUID = "0000000000000000f000000000000000";
 
-/** Object name for a reference into Unity's built-in resource files, or null
- *  when the guid is not one of the two built-in files or the fileID is unknown.
- *  fileId is the decimal string the diff JSON carries (int64-safe). */
+// Object name for a reference into Unity's built-in resource files, or null
+// when the guid is not one of the two built-in files or the fileID is unknown.
+// fileId is the decimal string the diff JSON carries (int64-safe).
 export function builtinName(guid: string, fileId: string): string | null {
   return BUILTIN_REFS[guid]?.[fileId] ?? null;
 }

@@ -34,7 +34,7 @@ describe("createQueue", () => {
   });
 
   it("runs front tasks before queued ones", async () => {
-    // A user click isn't made to wait behind the prefetch queue
+    // A user click does not wait behind the prefetch queue
     const queue = createQueue(1);
     const order: string[] = [];
     const gate = deferred();
@@ -68,7 +68,7 @@ describe("createQueue", () => {
   });
 
   it("normalizes a synchronous throw into a rejection without losing a slot", async () => {
-    // Even if task() throws before returning a Promise, active doesn't leak: with limit 1, a following task running means nothing leaked
+    // Even if task() throws before it returns a Promise, active does not leak. With limit 1, a following task can run only if nothing leaked.
     const queue = createQueue(1);
     const syncThrow = (() => {
       throw new Error("sync boom");
@@ -78,7 +78,7 @@ describe("createQueue", () => {
   });
 
   it("keeps pumping when a queued task throws synchronously on dispatch", async () => {
-    // A synchronous throw from a task dispatched inside pump()'s .finally doesn't become an unhandled rejection, and the caller's Promise settles
+    // A synchronous throw from a task dispatched inside pump()'s .finally does not become an unhandled rejection, and the caller's Promise settles
     const queue = createQueue(1);
     const gate = deferred();
     const first = queue(async () => {
@@ -129,7 +129,7 @@ describe("createQueue rate limit backoff", () => {
   it("caps the advised wait and falls back when no advice is given", async () => {
     const { sleep, waits } = manualSleep();
     const queue = createQueue(1, sleep);
-    // A 10-minute primary-limit advice is capped: better to fail into the manual message than hang until the reset
+    // A 10-minute primary-limit advice is capped: a fast failure into the manual message beats a hang until the reset
     const capped = queue(async () => {
       throw { kind: "rate-limited", retryAfterMs: 600_000 };
     });

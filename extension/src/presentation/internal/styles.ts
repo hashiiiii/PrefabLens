@@ -1,6 +1,6 @@
 // Shadow-DOM stylesheet. Primer CSS vars inherit through the shadow boundary on
-// github.com (every theme followed automatically); fall back to built-in light/dark.
-// :host needs display:block — all:initial resets display to inline and breaks the card frame.
+// github.com (every theme follows automatically). The built-in light/dark is the fallback.
+// :host needs display:block. all:initial resets display to inline and breaks the card frame.
 export const STYLES = `
   :host { all: initial; display: block; }
   .pl-root {

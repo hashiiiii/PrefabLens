@@ -1,3 +1,4 @@
+import type { BackgroundError } from "../../domain/diff/types";
 import type { Result } from "../../domain/result";
 
 export type GithubFailure =
@@ -8,12 +9,23 @@ export type GithubFailure =
 export function isRateLimited(e: unknown): e is Extract<GithubFailure, { kind: "rate-limited" }> {
   return typeof e === "object" && e !== null && (e as { kind?: string }).kind === "rate-limited";
 }
-export function isAuthFailed(e: unknown): e is Extract<GithubFailure, { kind: "auth-failed" }> {
-  return typeof e === "object" && e !== null && (e as { kind?: string }).kind === "auth-failed";
+
+// GithubFailure kinds are spelled to be valid BackgroundError members. The
+// intersection return type lets the compiler enforce that contract here.
+export function toBackgroundError(e: GithubFailure): GithubFailure["kind"] & BackgroundError {
+  return e.kind;
 }
-// sha is the blob at head (at base for removed files) — the files API provides it for every status.
-export type ChangedFile = { path: string; status: string; previousPath?: string; sha?: string };
+
+// The pipeline branches only on added/removed. The client folds the other
+// GitHub statuses (renamed, copied, changed, unchanged) into "modified".
+export type ChangedFileStatus = "added" | "removed" | "modified";
+// sha is the blob at head (at base for removed files). The files API provides it for every status.
+export type ChangedFile = { path: string; status: ChangedFileStatus; previousPath?: string; sha?: string };
 export type RefPair = { baseSha: string; headSha: string };
+
+// The user lane has priority over the prefetch traffic.
+export type Lane = "user" | "prefetch";
+export type MakeGithubClient = (base: string, token: string, lane: Lane) => GithubGateway;
 
 export type GithubGateway = {
   getPrRefs(owner: string, repo: string, prNumber: number): Promise<Result<RefPair, GithubFailure>>;

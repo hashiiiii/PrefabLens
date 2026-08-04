@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { expect, it } from "vitest";
 import { must } from "../../internal/must";
-import { BUILTIN_EXTRA_GUID, BUILTIN_REFS, DEFAULT_RESOURCES_GUID } from "./builtin_refs";
+import { BUILTIN_EXTRA_GUID, BUILTIN_REFS, DEFAULT_RESOURCES_GUID } from "./builtin-refs";
 
 // All three tables are generated from the same Unity dump (issue #104). This
 // test fails when someone regenerates or edits one side without the others.

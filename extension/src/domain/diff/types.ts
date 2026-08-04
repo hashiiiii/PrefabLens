@@ -48,7 +48,7 @@ export type PrefabInstanceDiff = {
 
 export type NodeDiff = GameObjectDiff | PrefabInstanceDiff;
 
-// Source prefab whose content core asks to be supplied. side is the ref to fetch
+// A source prefab whose content core requests. side is the ref to fetch
 // (added instance -> after/head, removed instance -> before/base).
 export type NeededSource = { guid: string; side: "before" | "after" };
 
@@ -61,9 +61,15 @@ export type DiffV2 = {
   loose: ComponentDiff[];
 };
 
+// The canonical empty diff. The schema literal is a wire contract with
+// core/src/json.zig. Fixtures spread this object and do not restate it.
+export function emptyDiff(): DiffV2 {
+  return { schema: "prefablens.diff.v2", unresolvedGuids: [], roots: [], loose: [] };
+}
+
 export type DiffErrorV1 = { schema: "prefablens.error.v1"; error: string };
 
-// Which diff page a request is for. Every kind shares the blob/diff pipeline; only
+// Which diff page a request is for. Every kind shares the blob/diff pipeline. Only
 // the refs + changed-file discovery differs (PR API / commit API / compare API).
 export type DiffTarget =
   | { kind: "pull"; prNumber: number }
@@ -91,12 +97,19 @@ export type BackgroundError =
   | "diff-failed"
   | "not-unity-yaml";
 
+// Errors that a completed sign-in can clear. Everything else renders a plain error card.
+export type AuthError = Extract<BackgroundError, "access-token-missing" | "auth-failed">;
+
+export function isAuthError(error: BackgroundError): error is AuthError {
+  return error === "access-token-missing" || error === "auth-failed";
+}
+
 export type SemanticDiffResponse =
   | { ok: true; json: DiffV2; pending?: boolean }
   | { ok: false; error: BackgroundError }
   | { ok: false; error: "too-large"; bytes: number };
 
-// Background resolution outcome. Anything but "complete" means a manual retry may help.
+// Background resolution outcome. Anything but "complete" means a manual retry can help.
 export type ResolutionStatus = "complete" | "rateLimited" | "failed";
 
 // Async push background → content (stage 2 of the two-stage response).
@@ -107,7 +120,7 @@ export type GuidResolvedPush = {
   target: DiffTarget;
   path: string;
   resolved: Record<string, string>;
-  json?: DiffV2; // final push may carry a restructured diff after mergeSources
-  done: boolean; // resolution finished (even with empty resolved — turns off the indicator)
-  status?: ResolutionStatus; // on every done push; keep indicator unless "complete"
+  json?: DiffV2; // The final push can carry a restructured diff after updateSources.
+  done: boolean; // Resolution finished. Even with empty resolved, done stops the indicator.
+  status?: ResolutionStatus; // On every done push. Keep the indicator unless "complete".
 };

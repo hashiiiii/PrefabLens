@@ -57,7 +57,7 @@ export async function pollForToken(
       case "authorization_pending":
         continue;
       case "slow_down":
-        // Prefer GitHub's interval; else +5s
+        // The interval from GitHub wins. Otherwise the poll adds 5s.
         interval = body.interval ?? interval + 5;
         continue;
       case "expired_token":

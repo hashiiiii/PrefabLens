@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it } from "vitest";
-import type { DiffV2 } from "../../domain/diff/types";
+import { type DiffV2, emptyDiff } from "../../domain/diff/types";
 import { must } from "../../internal/must";
 import {
   detectTheme,
@@ -13,7 +13,7 @@ import {
 } from "./render";
 
 const DIFF: DiffV2 = {
-  schema: "prefablens.diff.v2",
+  ...emptyDiff(),
   unresolvedGuids: ["def", "ghi"],
   resolved: { def: "Assets/Scripts/Sound.cs" },
   roots: [
@@ -61,7 +61,7 @@ const DIFF: DiffV2 = {
 };
 
 const INSTANCE: DiffV2 = {
-  schema: "prefablens.diff.v2",
+  ...emptyDiff(),
   unresolvedGuids: ["aaa"],
   resolved: { aaa: "Assets/Cylinder Variant.prefab" },
   roots: [
@@ -142,7 +142,7 @@ describe("render", () => {
 
   it("shows unity built-in refs by object name", () => {
     const builtin: DiffV2 = {
-      schema: "prefablens.diff.v2",
+      ...emptyDiff(),
       unresolvedGuids: [],
       roots: [],
       loose: [
@@ -159,7 +159,7 @@ describe("render", () => {
               path: "m_Mesh",
               status: "modified",
               // Both refs point into "unity default resources": 10202 is the
-              // built-in Cube; 424242 is unknown (e.g. a future Unity object).
+              // built-in Cube. 424242 is unknown (for example a future Unity object).
               before: { ref: { fileId: "10202", guid: "0000000000000000e000000000000000", type: 0 } },
               after: { ref: { fileId: "424242", guid: "0000000000000000e000000000000000", type: 0 } },
             },
@@ -179,7 +179,7 @@ describe("render", () => {
     // cli/src/render_html.zig ("null reference reads as None") and the
     // editor's ValueFormatTests.cs.
     const nullRef: DiffV2 = {
-      schema: "prefablens.diff.v2",
+      ...emptyDiff(),
       unresolvedGuids: [],
       roots: [],
       loose: [
@@ -235,7 +235,7 @@ describe("render", () => {
   it("replaces previous content on re-render and shows an empty note for empty diffs", () => {
     const root = freshRoot();
     render(root, DIFF);
-    render(root, { schema: "prefablens.diff.v2", unresolvedGuids: [], roots: [], loose: [] });
+    render(root, { ...emptyDiff(), unresolvedGuids: [], roots: [], loose: [] });
     expect(root.querySelectorAll("details")).toHaveLength(0);
     expect(root.textContent).toContain("No semantic changes");
   });
@@ -259,7 +259,7 @@ describe("render", () => {
 
   it("renders game object overrides in the components section", () => {
     const diff: DiffV2 = {
-      schema: "prefablens.diff.v2",
+      ...emptyDiff(),
       unresolvedGuids: [],
       roots: [
         {
@@ -291,14 +291,13 @@ describe("render", () => {
     expect(text).toContain("components");
     expect(text).toContain("Transform");
     expect(text).toContain("Position");
-    // The override card is open.
     const card = root.querySelector(".pl-components details") as HTMLDetailsElement;
     expect(card.open).toBe(true);
   });
 
   it("marks a mixed-status override group heading as modified", () => {
     const diff: DiffV2 = {
-      schema: "prefablens.diff.v2",
+      ...emptyDiff(),
       unresolvedGuids: [],
       roots: [
         {
@@ -328,7 +327,7 @@ describe("render", () => {
 
   it("renders structural summary rows as label only, without a value placeholder", () => {
     const diff: DiffV2 = {
-      schema: "prefablens.diff.v2",
+      ...emptyDiff(),
       unresolvedGuids: [],
       roots: [
         {
@@ -356,7 +355,7 @@ describe("render", () => {
   it("keeps added and modified component cards open", () => {
     const root = freshRoot();
     const diff: DiffV2 = {
-      schema: "prefablens.diff.v2",
+      ...emptyDiff(),
       unresolvedGuids: [],
       roots: [
         {
@@ -395,7 +394,7 @@ describe("render", () => {
     render(root, diff);
     const cards = [...root.querySelectorAll(".pl-components .pl-kids > details")] as HTMLDetailsElement[];
     expect(cards).toHaveLength(2);
-    // Closing added would look asymmetric ("only Cylinder1 collapsed"), so always open regardless of status
+    // A closed added card looks asymmetric ("only Cylinder1 collapsed"), so every status stays open
     expect(cards[0]?.open).toBe(true); // added Cylinder1 is open too
     expect(cards[0]?.textContent).toContain("Cylinder1"); // className fallback
     expect(cards[1]?.open).toBe(true); // modified Transform is open
@@ -404,7 +403,7 @@ describe("render", () => {
   it("falls back instance name to resolved source prefab stem", () => {
     const root = freshRoot();
     const diff: DiffV2 = {
-      schema: "prefablens.diff.v2",
+      ...emptyDiff(),
       unresolvedGuids: ["bbb"],
       resolved: { bbb: "Assets/Enemy.prefab" },
       roots: [
@@ -428,7 +427,7 @@ describe("render", () => {
   it("falls back to generic instance name and badge when sourceGuid is unresolved", () => {
     const root = freshRoot();
     const diff: DiffV2 = {
-      schema: "prefablens.diff.v2",
+      ...emptyDiff(),
       unresolvedGuids: ["zzz"],
       roots: [
         {
@@ -451,18 +450,14 @@ describe("render", () => {
 
   it("shows a resolving indicator while guid resolution is pending", () => {
     const root = freshRoot();
-    render(
-      root,
-      { schema: "prefablens.diff.v2", unresolvedGuids: ["g1", "g2"], roots: [], loose: [] },
-      { resolving: 2 },
-    );
+    render(root, { ...emptyDiff(), unresolvedGuids: ["g1", "g2"], roots: [], loose: [] }, { resolving: 2 });
     expect(root.textContent).toContain("Resolving 2 reference(s)…");
   });
 
   it("falls back component display to className when the script guid is unresolved", () => {
     const root = freshRoot();
     const diff: DiffV2 = {
-      schema: "prefablens.diff.v2",
+      ...emptyDiff(),
       unresolvedGuids: ["xyz"],
       roots: [],
       loose: [
@@ -489,7 +484,7 @@ describe("render", () => {
   it("renders the components group as an open collapsible with chevron and count", () => {
     const root = freshRoot();
     render(root, DIFF);
-    // The group folds independently of the GameObject row, so the hierarchy can be
+    // The group collapses independently of the GameObject row, so the hierarchy can be
     // scanned with all component noise collapsed.
     const group = root.querySelector<HTMLDetailsElement>("details.pl-components");
     expect(group).not.toBeNull();
@@ -516,7 +511,7 @@ describe("render", () => {
   it("wraps root-level loose components in a components group", () => {
     const root = freshRoot();
     const diff: DiffV2 = {
-      schema: "prefablens.diff.v2",
+      ...emptyDiff(),
       unresolvedGuids: [],
       roots: [],
       loose: [
@@ -581,7 +576,7 @@ describe("render", () => {
 
   it("shows a spinner with the resolving indicator", () => {
     const root = freshRoot();
-    render(root, { schema: "prefablens.diff.v2", unresolvedGuids: ["g1"], roots: [], loose: [] }, { resolving: 1 });
+    render(root, { ...emptyDiff(), unresolvedGuids: ["g1"], roots: [], loose: [] }, { resolving: 1 });
     expect(root.querySelector(".pl-resolving .pl-spinner")).not.toBeNull();
   });
 
@@ -603,7 +598,7 @@ describe("detectTheme", () => {
   it("follows the OS scheme via matchMedia when data-color-mode is auto", () => {
     // GitHub's default is auto: a value that is neither dark nor light defers to matchMedia
     document.documentElement.setAttribute("data-color-mode", "auto");
-    expect(detectTheme(document)).toBe("light"); // jsdom has no matchMedia → fall back to light
+    expect(detectTheme(document)).toBe("light"); // jsdom has no matchMedia, so light is the fallback
     const win = must(document.defaultView);
     win.matchMedia = ((query: string) => ({
       matches: query === "(prefers-color-scheme: dark)",

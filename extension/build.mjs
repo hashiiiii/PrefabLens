@@ -6,7 +6,6 @@ mkdirSync("dist", { recursive: true });
 
 const e2e = process.argv.includes("--e2e");
 
-// --demo build only the site demo bundle
 // Kept out of the default build so the extension's shipped dist stays lean
 if (process.argv.includes("--demo")) {
   await build({

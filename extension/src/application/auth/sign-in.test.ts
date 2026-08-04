@@ -3,7 +3,7 @@ import type { PendingSignIn } from "../../domain/auth/token";
 import type { TokenRepository } from "../../domain/auth/token-repository";
 import { err, ok } from "../../domain/result";
 import type { DeviceCode, GithubAuthGateway, PollResult } from "../gateway/github-auth";
-import { signIn } from "./sign-in";
+import { type SignInFailure, signIn } from "./sign-in";
 
 const CODE: DeviceCode = {
   deviceCode: "dc1",
@@ -60,10 +60,10 @@ function fakeDeps(poll: () => Promise<PollResult>) {
 
 function fakeUi() {
   const pending: Array<{ userCode: string; verificationUri: string }> = [];
-  const failures: string[] = [];
+  const failures: SignInFailure[] = [];
   const ui = {
     showPending: (userCode: string, verificationUri: string) => void pending.push({ userCode, verificationUri }),
-    showFailure: (message: string) => void failures.push(message),
+    showFailure: (reason: SignInFailure) => void failures.push(reason),
   };
   return { ui, pending, failures };
 }
@@ -88,27 +88,27 @@ describe("signIn", () => {
     expect(calls).toContain("clearPending");
   });
 
-  it("maps denied to its failure copy without storing a token", async () => {
+  it("reports denied without storing a token", async () => {
     const { auth, tokenStore, fetchFn, sleep, openTab, now, tokens, calls } = fakeDeps(async () => ({
       status: "denied",
     }));
     const { ui, failures } = fakeUi();
     const state = { inFlight: false };
     await signIn(auth, tokenStore, fetchFn, sleep, openTab, now, state, ui);
-    expect(failures).toEqual(["Authorization denied — try again."]);
+    expect(failures).toEqual(["denied"]);
     expect(tokens).toEqual([]);
     expect(calls).toContain("clearPending");
   });
 
-  it("maps expired to its failure copy", async () => {
+  it("reports expired", async () => {
     const { auth, tokenStore, fetchFn, sleep, openTab, now } = fakeDeps(async () => ({ status: "expired" }));
     const { ui, failures } = fakeUi();
     const state = { inFlight: false };
     await signIn(auth, tokenStore, fetchFn, sleep, openTab, now, state, ui);
-    expect(failures).toEqual(["Code expired — try again."]);
+    expect(failures).toEqual(["expired"]);
   });
 
-  it("shows the generic failure when the code request fails", async () => {
+  it("reports the generic failure when the code request fails", async () => {
     const { auth, tokenStore, fetchFn, sleep, openTab, now, calls } = fakeDeps(async () => ({
       status: "ok",
       token: "t",
@@ -117,7 +117,7 @@ describe("signIn", () => {
     const { ui, failures } = fakeUi();
     const state = { inFlight: false };
     await signIn(auth, tokenStore, fetchFn, sleep, openTab, now, state, ui);
-    expect(failures).toEqual(["Sign-in failed — try again."]);
+    expect(failures).toEqual(["failed"]);
     expect(calls).not.toContain("openTab");
   });
 
@@ -135,7 +135,7 @@ describe("signIn", () => {
     for (let i = 0; i < 10 && !calls.includes("poll"); i++) await Promise.resolve();
     resolvePoll({ status: "ok", token: "tok" });
     await first;
-    // With the first flow settled, a new one may start (its poll stays pending; only the guard matters here).
+    // With the first flow settled, a new one can start (its poll stays pending). Only the guard matters here.
     void signIn(auth, tokenStore, fetchFn, sleep, openTab, now, state, ui);
     expect(calls.filter((c) => c === "request")).toHaveLength(2);
   });

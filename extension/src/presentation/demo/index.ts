@@ -1,7 +1,7 @@
 // Live demo for site/extension.html: real renderer + toggle, wired like the
 // content script but through createDemo* factories (fixtures instead of GitHub).
-// Bundled as dist/demo.js via `node build.mjs --demo`; fixtures via
-// data-before/data-after URLs (empty side = CLI empty-side semantics).
+// Bundled as dist/demo.js via `node build.mjs --demo`. Fixtures come via
+// data-before/data-after URLs (an empty side follows the CLI empty-side semantics).
 
 import { getLocalDiff } from "../../application/diff/get-local-diff";
 import {
@@ -11,17 +11,10 @@ import {
   createFixtureGuidIndexLoader,
 } from "../../container";
 import { must } from "../../internal/must";
-import type { View } from "../content/overlay/view-mode";
-import {
-  defaultView,
-  effectiveView,
-  emptyViewState,
-  onDefaultChange,
-  setDefault,
-  setOverride,
-} from "../content/overlay/view-state";
-import { injectPageStyles, mountToggle } from "../content/toggle";
-import { render, renderError, renderLoading } from "../internal/render";
+import { createViewHost, render, renderError, renderLoading } from "../internal/render";
+import { injectPageStyles, mountGlobalBar, mountToggle } from "../internal/toggle";
+import type { View } from "../internal/view-mode";
+import { effectiveView, emptyViewState, onDefaultChange, setDefault, setOverride } from "../internal/view-state";
 
 type DemoLocals = {
   differ: Awaited<ReturnType<typeof createDemoDiffer>>;
@@ -45,12 +38,10 @@ function attachFile(header: HTMLElement, locals: DemoLocals, initial: View): (vi
     }
     content.style.display = "none";
     if (!host || !root) {
-      host = document.createElement("div");
-      host.setAttribute("data-prefablens-view", "");
+      ({ host, root } = createViewHost());
       // Same Primer class as .js-file-content: the collapse chevron toggles
       // Details--on on .file, and the host must opt into that CSS itself.
       host.classList.add("Details-content--hidden");
-      root = host.attachShadow({ mode: "open" });
       content.after(host);
     }
     host.style.display = "";
@@ -69,16 +60,6 @@ function attachFile(header: HTMLElement, locals: DemoLocals, initial: View): (vi
 }
 
 async function main(): Promise<void> {
-  injectPageStyles();
-
-  // The collapse chevrons work on every file, Unity or not (GitHub behavior).
-  for (const button of document.querySelectorAll(".file-collapse")) {
-    button.addEventListener("click", () => {
-      button.closest(".file")?.classList.toggle("Details--on");
-      button.closest(".file")?.classList.toggle("open");
-    });
-  }
-
   const headers = [...document.querySelectorAll<HTMLElement>(".file-header[data-before]")];
   if (!headers.length) return;
 
@@ -87,7 +68,17 @@ async function main(): Promise<void> {
   const fetchBytes = createDemoFetchBytes();
   const fetchSource = createDemoFetchSource();
   const locals: DemoLocals = { differ, index, fetchBytes, fetchSource };
-  // Semantic by default, like the extension once the user has picked it; the
+
+  injectPageStyles();
+  // The collapse chevrons work on every file, Unity or not (GitHub behavior).
+  for (const button of document.querySelectorAll(".file-collapse")) {
+    button.addEventListener("click", () => {
+      button.closest(".file")?.classList.toggle("Details--on");
+      button.closest(".file")?.classList.toggle("open");
+    });
+  }
+
+  // Semantic by default, like the extension after the user picks it. The
   // demo has no chrome.storage, so persistence is a no-op.
   const state = emptyViewState("semantic");
   const persist = (): void => {};
@@ -98,15 +89,9 @@ async function main(): Promise<void> {
 
   // Global bar above the first Unity file, same anchor rule as the content script.
   const firstFile = must(headers[0]?.closest(".file"));
-  const bar = document.createElement("div");
-  bar.setAttribute("data-prefablens-global", "");
-  const label = document.createElement("span");
-  label.className = "prefablens-eyebrow";
-  label.textContent = "PrefabLens";
-  const globalToggle = mountToggle((view) => setDefault(state, view, persist), defaultView(state));
-  bar.append(label, globalToggle.element);
-  firstFile.before(bar);
-  onDefaultChange(state, (view) => globalToggle.set(view));
+  const bar = mountGlobalBar((view) => setDefault(state, view, persist), state.def);
+  firstFile.before(bar.element);
+  onDefaultChange(state, (view) => bar.toggle.set(view));
 
   for (const header of headers) {
     const path = header.dataset.path ?? "";

@@ -1,18 +1,29 @@
 import { unresolvedRemaining } from "../../../domain/diff/fn/unresolved-remaining";
-import type { BackgroundError, DiffV2, SemanticDiffResponse } from "../../../domain/diff/types";
+import {
+  type AuthError,
+  type BackgroundError,
+  type DiffV2,
+  isAuthError,
+  type SemanticDiffResponse,
+} from "../../../domain/diff/types";
 import { must } from "../../../internal/must";
-import type { View } from "./view-mode";
+import type { View } from "../../internal/view-mode";
 
-// Per-file raw/semantic state machine (host + fetch latch); unit-testable without a browser.
+// The per-file raw/semantic state machine (host + fetch latch). It is unit-testable without a browser.
 
 export type FilePanel = {
   loading(): void;
   diff(json: DiffV2, resolving: number): void;
   incomplete(json: DiffV2, onRetry: () => void): void;
   tooLarge(bytes: number, onForce: () => void): void;
-  authError(error: "access-token-missing" | "auth-failed"): void;
+  authError(error: AuthError): void;
   error(error: BackgroundError): void;
 };
+
+// When every name is resolved but the source merge continues, the floor of 1 keeps the spinner visible.
+export function resolvingCount(json: DiffV2): number {
+  return Math.max(unresolvedRemaining(json).length, 1);
+}
 
 export type FileHost = {
   attach(): void;
@@ -27,7 +38,7 @@ export type FileResult = { json: DiffV2; retry(): void };
 export type FileViewDeps = {
   file: { setRawHidden(hidden: boolean): void; collapsed(): boolean };
   createHost(): FileHost;
-  requestDiff(force?: boolean): Promise<SemanticDiffResponse>; // must never reject: callers map channel loss to fetch-failed
+  requestDiff(force?: boolean): Promise<SemanticDiffResponse>; // This call never rejects: the messenger client maps channel loss to fetch-failed.
   results: { set(result: FileResult): void; get(): FileResult | undefined; armWatchdog(): void };
   onAuthRetry(retry: () => void): void;
   effectiveView(): View;
@@ -52,7 +63,7 @@ export function syncFileView(state: FileViewState, deps: FileViewDeps, view: Vie
   if (!state.host) return; // semantic never rendered here: leave the raw diff alone
   deps.file.setRawHidden(true);
   if (!state.host.attached()) state.host.attach(); // react remount can drop the host with the old body
-  // Follow github collapse (react); classic uses Details CSS in attachHost instead
+  // Follow github collapse (react). Classic uses Details CSS in attachHost instead.
   state.host.setVisible(!deps.file.collapsed());
 }
 
@@ -64,18 +75,17 @@ function request(state: FileViewState, deps: FileViewDeps, force?: boolean): voi
     if (res.ok) {
       deps.results.set({
         json: res.json,
-        // Retry re-enters background resolution; reset latch or request() no-ops
+        // Retry re-enters background resolution. Without a latch reset, request() no-ops.
         retry: () => {
           state.requested = false;
           request(state, deps, force);
         },
       });
       if (res.pending) deps.results.armWatchdog();
-      // Show while pending even if names are resolved (source merging may remain)
-      panel.diff(res.json, res.pending ? Math.max(unresolvedRemaining(res.json).length, 1) : 0);
+      panel.diff(res.json, res.pending ? resolvingCount(res.json) : 0);
       return;
     }
-    state.requested = false; // don't cache errors: next toggle re-fetches
+    state.requested = false; // Do not cache errors: the next toggle re-fetches.
     const prior = deps.results.get();
     if (prior) {
       // Failed retry must not wipe the diff the user is reading
@@ -83,9 +93,9 @@ function request(state: FileViewState, deps: FileViewDeps, force?: boolean): voi
       return;
     }
     if (res.error === "too-large") panel.tooLarge(res.bytes, () => request(state, deps, true));
-    else if (res.error === "access-token-missing" || res.error === "auth-failed") {
+    else if (isAuthError(res.error)) {
       deps.onAuthRetry(() => {
-        // First retry sets requested; duplicate registrations no-op
+        // The first retry sets requested. Duplicate registrations no-op.
         if (!state.requested && deps.effectiveView() === "semantic") request(state, deps);
       });
       panel.authError(res.error);
@@ -103,6 +113,6 @@ export function showFileView(state: FileViewState, deps: FileViewDeps, view: Vie
     state.host.attach();
   }
   syncFileView(state, deps, view);
-  if (state.requested) return; // cache only successful results (re-toggle doesn't re-fetch)
+  if (state.requested) return; // Cache only successful results (a re-toggle does not re-fetch).
   request(state, deps);
 }

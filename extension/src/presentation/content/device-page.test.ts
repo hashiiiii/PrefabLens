@@ -32,7 +32,7 @@ function boxes(): HTMLInputElement[] {
 describe("fillDeviceCode", () => {
   it("fills the eight code boxes in order, skipping the hyphen, and fires input on each", () => {
     document.body.innerHTML = FORM;
-    // GitHub enhances the boxes with JS (auto-advance via data-next); input events keep it in sync.
+    // GitHub enhances the boxes with JS (auto-advance via data-next). Input events keep it in sync.
     let fired = 0;
     for (const b of boxes()) {
       b.addEventListener("input", () => {
@@ -47,7 +47,7 @@ describe("fillDeviceCode", () => {
   it("leaves the readonly hyphen placeholder and the csrf token untouched", () => {
     document.body.innerHTML = FORM;
     expect(fillDeviceCode(document, PENDING, 5_000)).toBe(true);
-    // The hyphen input carries value "-" from the server; it must neither block the fill nor be overwritten.
+    // The hyphen input carries value "-" from the server. It must neither block the fill nor be overwritten.
     expect(must(document.querySelector<HTMLInputElement>('input[name="user-code-4"]')).value).toBe("-");
     expect(must(document.querySelector<HTMLInputElement>('input[name="authenticity_token"]')).value).toBe("tok");
   });

@@ -240,15 +240,14 @@ describe("render", () => {
     expect(root.textContent).toContain("No semantic changes");
   });
 
-  it("renderTooLarge shows the size and renders on click", () => {
+  it("renderTooLarge shows the size and resolves on click", async () => {
     const root = freshRoot();
-    let renders = 0;
-    renderTooLarge(root, 26 * 1024 * 1024, () => void renders++);
+    const clicked = renderTooLarge(root, 26 * 1024 * 1024);
     expect(root.textContent).toContain("Large file (26 MB)");
     const button = must(root.querySelector<HTMLButtonElement>("button.pl-render"));
     expect(button.textContent).toBe("Render anyway");
     button.click();
-    expect(renders).toBe(1);
+    await clicked;
   });
 
   it("renderError shows a clean one-line message", () => {
@@ -612,28 +611,24 @@ describe("detectTheme", () => {
 });
 
 describe("renderSignIn", () => {
-  it("renders the message and a sign-in button that invokes the callback", () => {
+  it("renders the message and resolves when the sign-in button is clicked", async () => {
     const root = freshRoot();
-    let clicks = 0;
-    renderSignIn(root, "Sign in with GitHub to view semantic diffs.", () => clicks++);
+    const clicked = renderSignIn(root, "Sign in with GitHub to view semantic diffs.");
     expect(root.querySelector(".pl-error")?.textContent).toContain("Sign in with GitHub to view semantic diffs.");
     const button = root.querySelector<HTMLButtonElement>("button.pl-render");
     expect(button?.textContent).toBe("Sign in with GitHub");
     button?.click();
-    expect(clicks).toBe(1);
+    await clicked;
   });
 });
 
 describe("renderSignInPending", () => {
   it("shows the user code, a copy button, and a link to the verification page", () => {
     const root = freshRoot();
-    let copies = 0;
-    renderSignInPending(root, "ABCD-1234", "https://github.com/login/device", () => copies++);
+    renderSignInPending(root, "ABCD-1234", "https://github.com/login/device");
     expect(root.querySelector(".pl-user-code")?.textContent).toBe("ABCD-1234");
     const copy = root.querySelector<HTMLButtonElement>("button.pl-render");
     expect(copy?.textContent).toBe("Copy code");
-    copy?.click();
-    expect(copies).toBe(1);
     const link = root.querySelector<HTMLAnchorElement>("a.pl-render");
     expect(link?.href).toBe("https://github.com/login/device");
     // New tab without opener: the PR tab must keep polling while the user authorizes.

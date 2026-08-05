@@ -14,8 +14,8 @@ import type { View } from "../../internal/view-mode";
 export type FilePanel = {
   loading(): void;
   diff(json: DiffV2, resolving: number): void;
-  incomplete(json: DiffV2, onRetry: () => void): void;
-  tooLarge(bytes: number, onForce: () => void): void;
+  incomplete(json: DiffV2): Promise<void>;
+  tooLarge(bytes: number): Promise<void>;
   authError(error: AuthError): void;
   error(error: BackgroundError): void;
 };
@@ -67,40 +67,42 @@ export function syncFileView(state: FileViewState, deps: FileViewDeps, view: Vie
   state.host.setVisible(!deps.file.collapsed());
 }
 
-function request(state: FileViewState, deps: FileViewDeps, force?: boolean): void {
+async function request(state: FileViewState, deps: FileViewDeps, force?: boolean): Promise<void> {
   state.requested = true;
   const panel = must(state.host).panel; // only reachable after show created the host
   panel.loading();
-  void deps.requestDiff(force).then((res) => {
-    if (res.ok) {
-      deps.results.set({
-        json: res.json,
-        // Retry re-enters background resolution. Without a latch reset, request() no-ops.
-        retry: () => {
-          state.requested = false;
-          request(state, deps, force);
-        },
-      });
-      if (res.pending) deps.results.armWatchdog();
-      panel.diff(res.json, res.pending ? resolvingCount(res.json) : 0);
-      return;
-    }
-    state.requested = false; // Do not cache errors: the next toggle re-fetches.
-    const prior = deps.results.get();
-    if (prior) {
-      // Failed retry must not wipe the diff the user is reading
-      panel.incomplete(prior.json, prior.retry);
-      return;
-    }
-    if (res.error === "too-large") panel.tooLarge(res.bytes, () => request(state, deps, true));
-    else if (isAuthError(res.error)) {
-      deps.onAuthRetry(() => {
-        // The first retry sets requested. Duplicate registrations no-op.
-        if (!state.requested && deps.effectiveView() === "semantic") request(state, deps);
-      });
-      panel.authError(res.error);
-    } else panel.error(res.error);
-  });
+  const res = await deps.requestDiff(force);
+  if (res.ok) {
+    deps.results.set({
+      json: res.json,
+      // Retry re-enters background resolution. Without a latch reset, request() no-ops.
+      retry: () => {
+        state.requested = false;
+        void request(state, deps, force);
+      },
+    });
+    if (res.pending) deps.results.armWatchdog();
+    panel.diff(res.json, res.pending ? resolvingCount(res.json) : 0);
+    return;
+  }
+  state.requested = false; // Do not cache errors: the next toggle re-fetches.
+  const prior = deps.results.get();
+  if (prior) {
+    // Failed retry must not wipe the diff the user is reading
+    await panel.incomplete(prior.json);
+    prior.retry();
+    return;
+  }
+  if (res.error === "too-large") {
+    await panel.tooLarge(res.bytes);
+    await request(state, deps, true);
+  } else if (isAuthError(res.error)) {
+    deps.onAuthRetry(() => {
+      // The first retry sets requested. Duplicate registrations no-op.
+      if (!state.requested && deps.effectiveView() === "semantic") void request(state, deps);
+    });
+    panel.authError(res.error);
+  } else panel.error(res.error);
 }
 
 export function showFileView(state: FileViewState, deps: FileViewDeps, view: View): void {
@@ -114,5 +116,5 @@ export function showFileView(state: FileViewState, deps: FileViewDeps, view: Vie
   }
   syncFileView(state, deps, view);
   if (state.requested) return; // Cache only successful results (a re-toggle does not re-fetch).
-  request(state, deps);
+  void request(state, deps);
 }

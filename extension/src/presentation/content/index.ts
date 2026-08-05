@@ -58,10 +58,9 @@ const WATCHDOG_MS = 120_000;
 
 function armWatchdog(view: ViewEntry): void {
   clearTimeout(view.watchdog);
-  view.watchdog = window.setTimeout(
-    () => render(view.root, view.json, { incomplete: { onRetry: view.retry } }),
-    WATCHDOG_MS,
-  );
+  view.watchdog = window.setTimeout(() => {
+    void render(view.root, view.json, { incomplete: true }).then(() => view.retry());
+  }, WATCHDOG_MS);
 }
 
 // Global switch targets: toggle + display for already-attached files
@@ -85,6 +84,8 @@ const tokenStore = createTokenStore();
 const auth = createGithubAuth();
 const signInState = { inFlight: false };
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+// _blank: Open in a new tab
+// noopener: Prevent the opened tab from accessing the original tab
 const openTab = (url: string) => void window.open(url, "_blank", "noopener");
 const now = () => Date.now();
 
@@ -93,14 +94,18 @@ const persistView = (view: View): void => {
 };
 
 // Auth-error panel: device flow. Failures land back here for retry.
-function signInPanel(root: ShadowRoot, message: string): void {
-  renderSignIn(root, message, () => {
-    void signIn(auth, tokenStore, fetch, sleep, openTab, now, signInState, {
-      showPending: (userCode, verificationUri) =>
-        renderSignInPending(root, userCode, verificationUri, () => void navigator.clipboard.writeText(userCode)),
-      showFailure: (reason) => signInPanel(root, SIGN_IN_FAILURE_TEXT[reason]),
-    });
-  });
+async function signInPanel(root: ShadowRoot, message: string): Promise<void> {
+  await renderSignIn(root, message);
+  for await (const event of signIn(auth, tokenStore, fetch, sleep, now, signInState)) {
+    if (event.status === "pending") {
+      renderSignInPending(root, event.userCode, event.verificationUri);
+      openTab(event.verificationUri);
+    } else if (event.status === "failed") {
+      await signInPanel(root, SIGN_IN_FAILURE_TEXT[event.reason]);
+      return;
+    }
+    // ok: accessToken storage.onChanged retries auth-blocked panels
+  }
 }
 
 function attach(viewState: ViewStateData): void {
@@ -166,10 +171,10 @@ function attachToggle(viewState: ViewStateData, page: DiffPage, entry: FileEntry
         },
         panel: {
           loading: () => renderLoading(root),
-          diff: (json, resolving) => render(root, json, { resolving }),
-          incomplete: (json, onRetry) => render(root, json, { incomplete: { onRetry } }),
-          tooLarge: (bytes, onForce) => renderTooLarge(root, bytes, onForce),
-          authError: (error) => signInPanel(root, ERROR_TEXT[error]),
+          diff: (json, resolving) => void render(root, json, { resolving }),
+          incomplete: (json) => render(root, json, { incomplete: true }),
+          tooLarge: (bytes) => renderTooLarge(root, bytes),
+          authError: (error) => void signInPanel(root, ERROR_TEXT[error]),
           error: (error) => renderError(root, ERROR_TEXT[error]),
         },
       };
@@ -214,8 +219,8 @@ function attachToggle(viewState: ViewStateData, page: DiffPage, entry: FileEntry
 }
 
 async function init(): Promise<void> {
-  // Device-page pre-fill: only the code that the PR page of this browser issued.
-  // A storage failure degrades to no pre-fill (the user pastes the code instead).
+  // Device-page pre-fill uses only the code that the PR page of this browser saved.
+  // If storage read fails, pre-fill does not run. The user pastes the code instead.
   if (location.pathname === "/login/device") {
     const pending = await tokenStore.readPendingSignIn().catch(() => undefined);
     if (pending) fillDeviceCode(document, pending, Date.now());
@@ -249,11 +254,11 @@ async function init(): Promise<void> {
     view.json = mergeResolvedPush(view.json, msg);
     if (msg.done && msg.status !== undefined && msg.status !== "complete") {
       // Gave up: keep arrived names, offer manual retry (#194)
-      render(view.root, view.json, { incomplete: { onRetry: view.retry } });
+      void render(view.root, view.json, { incomplete: true }).then(() => view.retry());
       return;
     }
     if (!msg.done) armWatchdog(view);
-    render(view.root, view.json, { resolving: msg.done ? 0 : resolvingCount(view.json) });
+    void render(view.root, view.json, { resolving: msg.done ? 0 : resolvingCount(view.json) });
   });
 
   // SPA: MutationObserver + 50ms debounce follows lazy loads and stays under the

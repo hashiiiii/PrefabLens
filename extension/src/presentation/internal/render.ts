@@ -24,9 +24,10 @@ export function createViewHost(): { host: HTMLDivElement; root: ShadowRoot } {
 export function render(
   root: ShadowRoot,
   diff: DiffV2,
-  opts?: { resolving?: number; incomplete?: { onRetry(): void } },
-): void {
+  opts?: { resolving?: number; incomplete?: boolean },
+): Promise<void> {
   const container = mount(root);
+  let retry: Promise<void> | undefined;
   // The resolving indicator: the diff body is correct from the start. Only reference names arrive later.
   if (opts?.resolving) {
     const busy = note("pl-resolving", `Resolving ${opts.resolving} reference(s)…`);
@@ -37,7 +38,7 @@ export function render(
   } else if (opts?.incomplete) {
     // Resolution gave up (rate limit or error): say so instead of pretending it finished (#194).
     const bar = note("pl-resolving", "Some references were not resolved (GitHub rate limit or error).", ALERT);
-    bar.append(actionButton("Retry", opts.incomplete.onRetry));
+    retry = clickPromise(bar, "Retry");
     container.append(bar);
   }
   for (const node of diff.roots) container.append(renderNode(node, diff));
@@ -46,6 +47,7 @@ export function render(
   if (!diff.roots.length && !diff.loose.length) {
     container.append(note("pl-empty", "No semantic changes", CHECK));
   }
+  return retry ?? Promise.resolve();
 }
 
 export function renderError(root: ShadowRoot, message: string): void {
@@ -82,34 +84,30 @@ export function renderLoading(root: ShadowRoot): void {
   mount(root).append(box);
 }
 
-// The over-25MB guard: no auto-render. It waits for an explicit click.
-export function renderTooLarge(root: ShadowRoot, bytes: number, onRender: () => void): void {
+// The over-25MB guard: no auto-render. Resolves when the user clicks "Render anyway".
+export function renderTooLarge(root: ShadowRoot, bytes: number): Promise<void> {
   const container = mount(root);
-  container.append(
-    note("pl-empty", `Large file (${Math.round(bytes / (1024 * 1024))} MB).`, ALERT),
-    actionButton("Render anyway", onRender),
-  );
+  container.append(note("pl-empty", `Large file (${Math.round(bytes / (1024 * 1024))} MB).`, ALERT));
+  return clickPromise(container, "Render anyway");
 }
 
-// Auth-error panel: message + in-place device-flow button.
-export function renderSignIn(root: ShadowRoot, message: string, onSignIn: () => void): void {
+// Auth-error panel: message + in-place device-flow button. Resolves on click.
+export function renderSignIn(root: ShadowRoot, message: string): Promise<void> {
   const container = mount(root);
-  container.append(note("pl-error", message, ALERT), actionButton("Sign in with GitHub", onSignIn));
+  container.append(note("pl-error", message, ALERT));
+  return clickPromise(container, "Sign in with GitHub");
 }
 
 // Device-flow pending: keep the user code visible while authorizing on GitHub.
-export function renderSignInPending(
-  root: ShadowRoot,
-  userCode: string,
-  verificationUri: string,
-  onCopy: () => void,
-): void {
+export function renderSignInPending(root: ShadowRoot, userCode: string, verificationUri: string): void {
   const container = mount(root);
   const row = note("pl-signin", "Enter this code on GitHub:");
   const code = document.createElement("code");
   code.className = "pl-user-code";
   code.textContent = userCode;
-  const copy = actionButton("Copy code", onCopy);
+  const copy = actionButton("Copy code", () => {
+    void navigator.clipboard?.writeText(userCode);
+  });
   const link = document.createElement("a");
   link.className = "pl-render";
   link.href = verificationUri;
@@ -158,6 +156,13 @@ function actionButton(label: string, onClick: () => void): HTMLButtonElement {
   button.textContent = label;
   button.addEventListener("click", onClick);
   return button;
+}
+
+// Append a button and resolve when the user clicks it once.
+function clickPromise(parent: HTMLElement, label: string): Promise<void> {
+  return new Promise((resolve) => {
+    parent.append(actionButton(label, () => resolve()));
+  });
 }
 
 function summaryRow(status: Status, icon: string, iconClass: string, name: string, meta?: string): HTMLElement {

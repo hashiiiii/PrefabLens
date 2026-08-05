@@ -17,8 +17,8 @@ const DIFF: DiffV2 = emptyDiff();
 type Screen =
   | { kind: "loading" }
   | { kind: "diff"; json: DiffV2; resolving: number }
-  | { kind: "incomplete"; json: DiffV2; onRetry(): void }
-  | { kind: "tooLarge"; bytes: number; onForce(): void }
+  | { kind: "incomplete"; json: DiffV2; proceed(): void }
+  | { kind: "tooLarge"; bytes: number; proceed(): void }
   | { kind: "authError"; error: string }
   | { kind: "error"; error: string };
 
@@ -70,8 +70,14 @@ function makeHarness() {
         panel: {
           loading: () => void host.screens.push({ kind: "loading" }),
           diff: (json, resolving) => void host.screens.push({ kind: "diff", json, resolving }),
-          incomplete: (json, onRetry) => void host.screens.push({ kind: "incomplete", json, onRetry }),
-          tooLarge: (bytes, onForce) => void host.screens.push({ kind: "tooLarge", bytes, onForce }),
+          incomplete: (json) =>
+            new Promise<void>((resolve) => {
+              host.screens.push({ kind: "incomplete", json, proceed: resolve });
+            }),
+          tooLarge: (bytes) =>
+            new Promise<void>((resolve) => {
+              host.screens.push({ kind: "tooLarge", bytes, proceed: resolve });
+            }),
           authError: (error) => void host.screens.push({ kind: "authError", error }),
           error: (error) => void host.screens.push({ kind: "error", error }),
         },
@@ -266,7 +272,7 @@ describe("showFileView request", () => {
     h.responses.push({ ok: true, json: DIFF });
     const incomplete = h.screen();
     if (incomplete.kind !== "incomplete") throw new Error("expected incomplete screen");
-    incomplete.onRetry();
+    incomplete.proceed();
     await flush();
     expect(h.screen()).toMatchObject({ kind: "diff", json: DIFF });
     expect(h.requests).toHaveLength(3);
@@ -283,7 +289,7 @@ describe("showFileView request", () => {
     h.responses.push({ ok: true, json: DIFF, pending: true });
     const tooLarge = h.screen();
     if (tooLarge.kind !== "tooLarge") throw new Error("expected tooLarge screen");
-    tooLarge.onForce();
+    tooLarge.proceed();
     await flush();
     // Transition: force render → the request repeats with force, bypassing the size guard.
     expect(h.requests).toEqual([undefined, true]);

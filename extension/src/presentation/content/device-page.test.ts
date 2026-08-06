@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { must } from "../../internal/must";
-import { fillDeviceCode } from "./device-page";
+import { DEVICE_CODE_BOX_SELECTOR, DEVICE_CODE_CHAR_COUNT, fillDeviceCode } from "./device-page";
 
 const PENDING = { userCode: "ABCD-1234", expiresAt: 10_000 };
 const fixture = readFileSync(join(process.cwd(), "e2e/fixtures/device-activation.html"), "utf8");
@@ -13,10 +13,15 @@ function loadFixture(doc: Document): void {
 }
 
 function boxes(doc: Document): HTMLInputElement[] {
-  return [...doc.querySelectorAll<HTMLInputElement>("input.js-user-code-field")];
+  return [...doc.querySelectorAll<HTMLInputElement>(DEVICE_CODE_BOX_SELECTOR)];
 }
 
 describe("fillDeviceCode", () => {
+  it("fixture matches the autofill contract", () => {
+    loadFixture(document);
+    expect(boxes(document).length).toBe(DEVICE_CODE_CHAR_COUNT);
+  });
+
   it.each([
     { name: "expired pending", now: 10_001, setup: () => loadFixture(document) },
     {

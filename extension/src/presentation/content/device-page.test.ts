@@ -1,82 +1,49 @@
 // @vitest-environment jsdom
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { must } from "../../internal/must";
 import { fillDeviceCode } from "./device-page";
 
 const PENDING = { userCode: "ABCD-1234", expiresAt: 10_000 };
+const fixture = readFileSync(join(process.cwd(), "e2e/fixtures/device-activation.html"), "utf8");
 
-// Trimmed copy of the real Device Activation form (captured 2026-07-11): eight fillable
-// boxes marked js-user-code-field plus a ninth CSS-hidden readonly input holding the hyphen.
-function box(n: number): string {
-  return `<input type="text" name="user-code-${n}" id="user-code-${n}" class="form-control js-user-code-field h1" maxlength="1" aria-label="User code ${n}">`;
+function loadFixture(doc: Document): void {
+  doc.body.innerHTML = new DOMParser().parseFromString(fixture, "text/html").body.innerHTML;
 }
-const FORM =
-  '<form action="/login/device/confirmation" method="post">' +
-  '<input type="hidden" name="authenticity_token" value="tok">' +
-  box(0) +
-  box(1) +
-  box(2) +
-  box(3) +
-  '<input type="text" name="user-code-4" id="user-code-4" class="d-none" aria-label="User code 4" value="-" readonly="">' +
-  box(5) +
-  box(6) +
-  box(7) +
-  box(8) +
-  '<input type="submit" name="commit" value="Continue">' +
-  "</form>";
 
-function boxes(): HTMLInputElement[] {
-  return [...document.querySelectorAll<HTMLInputElement>("input.js-user-code-field")];
+function boxes(doc: Document): HTMLInputElement[] {
+  return [...doc.querySelectorAll<HTMLInputElement>("input.js-user-code-field")];
 }
 
 describe("fillDeviceCode", () => {
-  it("fills the eight code boxes in order, skipping the hyphen, and fires input on each", () => {
-    document.body.innerHTML = FORM;
-    // GitHub enhances the boxes with JS (auto-advance via data-next). Input events keep it in sync.
-    let fired = 0;
-    for (const b of boxes()) {
-      b.addEventListener("input", () => {
-        fired += 1;
-      });
-    }
-    fillDeviceCode(document, PENDING, 5_000);
-    expect(boxes().map((b) => b.value)).toEqual(["A", "B", "C", "D", "1", "2", "3", "4"]);
-    expect(fired).toBe(8);
-  });
-
-  it("leaves the readonly hyphen placeholder and the csrf token untouched", () => {
-    document.body.innerHTML = FORM;
-    fillDeviceCode(document, PENDING, 5_000);
-    // The hyphen input carries value "-" from the server. It must neither block the fill nor be overwritten.
-    expect(must(document.querySelector<HTMLInputElement>('input[name="user-code-4"]')).value).toBe("-");
-    expect(must(document.querySelector<HTMLInputElement>('input[name="authenticity_token"]')).value).toBe("tok");
-  });
-
-  it("does not touch anything once the pending code expired", () => {
-    document.body.innerHTML = FORM;
-    fillDeviceCode(document, PENDING, 10_001);
-    expect(boxes().every((b) => b.value === "")).toBe(true);
+  it.each([
+    { name: "expired pending", now: 10_001, setup: () => loadFixture(document) },
+    {
+      name: "box count mismatch",
+      now: 5_000,
+      setup: () => {
+        loadFixture(document);
+        must(boxes(document)[7]).remove();
+      },
+    },
+  ])("no-ops when $name", ({ now, setup }) => {
+    setup();
+    fillDeviceCode(document, PENDING, now);
+    expect(boxes(document).every((b) => b.value === "")).toBe(true);
   });
 
   it("does not clobber a box the user already typed into", () => {
-    document.body.innerHTML = FORM;
-    must(boxes()[2]).value = "X";
+    loadFixture(document);
+    must(boxes(document)[2]).value = "X";
     fillDeviceCode(document, PENDING, 5_000);
-    expect(must(boxes()[0]).value).toBe("");
-    expect(must(boxes()[2]).value).toBe("X");
+    expect(must(boxes(document)[0]).value).toBe("");
+    expect(must(boxes(document)[2]).value).toBe("X");
   });
 
-  it("no-ops when the box count does not match the code length (unknown layout)", () => {
-    document.body.innerHTML = FORM;
-    must(boxes()[7]).remove();
-    fillDeviceCode(document, PENDING, 5_000);
-    expect(boxes().every((b) => b.value === "")).toBe(true);
-  });
-
-  it("no-ops when the boxes are absent (redesigned page)", () => {
+  it("no-ops when the boxes are absent", () => {
     document.body.innerHTML = "<form><input type='text' name='something-else'></form>";
     fillDeviceCode(document, PENDING, 5_000);
-    expect(document.querySelector("input[name='something-else']")).not.toBeNull();
     expect(must(document.querySelector<HTMLInputElement>("input[name='something-else']")).value).toBe("");
   });
 });

@@ -218,11 +218,6 @@ function attachToggle(viewState: ViewStateData, page: DiffPage, entry: FileEntry
   if (effectiveView(viewState, entry.path) === "semantic") showFileView(fileState, fileDeps, "semantic");
 }
 
-async function initDevicePage(): Promise<void> {
-  const pending = await tokenStore.readPendingSignIn();
-  if (pending) fillDeviceCode(document, pending, Date.now());
-}
-
 async function initDiffRuntime(): Promise<void> {
   const stored = await chrome.storage.local.get(["viewMode"]).catch(() => ({}) as Record<string, unknown>);
   const initial: View = stored.viewMode === "semantic" ? "semantic" : "raw";
@@ -273,13 +268,9 @@ async function initDiffRuntime(): Promise<void> {
 }
 
 async function init(): Promise<void> {
-  // The device activation page opens in a new tab.
-  // The PR (pull request) tab already starts the main runtime.
-  // This tab's only job is to fill in the activation code.
-  // If you use soft navigation, it does not reload this script.
-  // All other pages also start the runtime, but do nothing until on a diff or PR URL.
   if (location.pathname === "/login/device") {
-    await initDevicePage();
+    const pending = await tokenStore.readPendingSignIn();
+    if (pending) fillDeviceCode(document, pending, now());
     return;
   }
   await initDiffRuntime();

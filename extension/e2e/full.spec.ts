@@ -11,6 +11,7 @@ import { type BrowserContext, chromium, expect, test } from "@playwright/test";
 
 const DIST = fileURLToPath(new URL("../dist", import.meta.url));
 const fixture = readFileSync(new URL("./fixtures/pr-files.html", import.meta.url), "utf8");
+const deviceFixture = readFileSync(new URL("./fixtures/device-activation.html", import.meta.url), "utf8");
 
 // Matches the port baked into __API_BASE__ by build.mjs --e2e
 const PORT = 8471;
@@ -111,7 +112,7 @@ function startServer(): Promise<Server> {
         // The first poll succeeds: no human Authorize step. The extension still runs the full poll loop.
         return json({ access_token: "e2e-token" });
       case "/login/device":
-        return send("<!doctype html><title>device</title>", "text/html");
+        return send(deviceFixture, "text/html");
       default:
         res.writeHead(404);
         res.end();
@@ -129,6 +130,12 @@ async function signInFromPrPanel(ctx: BrowserContext): Promise<void> {
   await header.getByRole("button", { name: "Semantic" }).click();
   const view = page.locator("[data-prefablens-view]");
   await view.getByRole("button", { name: "Sign in with GitHub" }).click();
+  const devicePage = await ctx.waitForEvent("page", {
+    timeout: 10_000,
+    predicate: (p) => p.url().includes("/login/device"),
+  });
+  await expect(devicePage.locator("input.js-user-code-field")).toHaveValues(["A", "B", "C", "D", "1", "2", "3", "4"]);
+  await expect(devicePage.locator('input[name="user-code-4"]')).toHaveValue("-");
   // Device flow completes when the auth panel is replaced by diff content (or Signed-in recovery).
   await expect(view).toContainText("Sound", { timeout: 15_000 });
   // Close any verification tab the flow opened

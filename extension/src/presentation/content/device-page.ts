@@ -1,7 +1,7 @@
 import type { PendingSignIn } from "../../domain/auth/token";
 
-// Fill the device activation code boxes (inputs with class js-user-code-field).
-// If the form structure changes, this function does nothing and the user can enter the code manually.
+// Autofill input.js-user-code-field on github.com/login/device.
+// Markup contract: e2e/fixtures/device-activation.html
 export function fillDeviceCode(doc: Document, pending: PendingSignIn, now: number): void {
   if (now > pending.expiresAt) return;
   const boxes = [...doc.querySelectorAll<HTMLInputElement>("input.js-user-code-field")];

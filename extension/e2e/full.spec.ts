@@ -208,7 +208,7 @@ test("rejects a binary .asset through the real wasm sniff", async () => {
   await header.getByRole("button", { name: "Semantic" }).click();
 
   const view = page.locator("[data-prefablens-view]");
-  await expect(view).toContainText("not a text-serialized Unity asset", { timeout: 30_000 });
+  await expect(view).toContainText("not a Unity asset file in text format", { timeout: 30_000 });
   await page.close();
 });
 

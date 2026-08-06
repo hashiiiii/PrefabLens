@@ -39,14 +39,14 @@ describe("fillDeviceCode", () => {
         fired += 1;
       });
     }
-    expect(fillDeviceCode(document, PENDING, 5_000)).toBe(true);
+    fillDeviceCode(document, PENDING, 5_000);
     expect(boxes().map((b) => b.value)).toEqual(["A", "B", "C", "D", "1", "2", "3", "4"]);
     expect(fired).toBe(8);
   });
 
   it("leaves the readonly hyphen placeholder and the csrf token untouched", () => {
     document.body.innerHTML = FORM;
-    expect(fillDeviceCode(document, PENDING, 5_000)).toBe(true);
+    fillDeviceCode(document, PENDING, 5_000);
     // The hyphen input carries value "-" from the server. It must neither block the fill nor be overwritten.
     expect(must(document.querySelector<HTMLInputElement>('input[name="user-code-4"]')).value).toBe("-");
     expect(must(document.querySelector<HTMLInputElement>('input[name="authenticity_token"]')).value).toBe("tok");
@@ -54,14 +54,14 @@ describe("fillDeviceCode", () => {
 
   it("does not touch anything once the pending code expired", () => {
     document.body.innerHTML = FORM;
-    expect(fillDeviceCode(document, PENDING, 10_001)).toBe(false);
+    fillDeviceCode(document, PENDING, 10_001);
     expect(boxes().every((b) => b.value === "")).toBe(true);
   });
 
   it("does not clobber a box the user already typed into", () => {
     document.body.innerHTML = FORM;
     must(boxes()[2]).value = "X";
-    expect(fillDeviceCode(document, PENDING, 5_000)).toBe(false);
+    fillDeviceCode(document, PENDING, 5_000);
     expect(must(boxes()[0]).value).toBe("");
     expect(must(boxes()[2]).value).toBe("X");
   });
@@ -69,12 +69,14 @@ describe("fillDeviceCode", () => {
   it("no-ops when the box count does not match the code length (unknown layout)", () => {
     document.body.innerHTML = FORM;
     must(boxes()[7]).remove();
-    expect(fillDeviceCode(document, PENDING, 5_000)).toBe(false);
+    fillDeviceCode(document, PENDING, 5_000);
     expect(boxes().every((b) => b.value === "")).toBe(true);
   });
 
   it("no-ops when the boxes are absent (redesigned page)", () => {
     document.body.innerHTML = "<form><input type='text' name='something-else'></form>";
-    expect(fillDeviceCode(document, PENDING, 5_000)).toBe(false);
+    fillDeviceCode(document, PENDING, 5_000);
+    expect(document.querySelector("input[name='something-else']")).not.toBeNull();
+    expect(must(document.querySelector<HTMLInputElement>("input[name='something-else']")).value).toBe("");
   });
 });

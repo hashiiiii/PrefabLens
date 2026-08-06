@@ -32,18 +32,18 @@ import { emptyFileView, type FileViewDeps, resolvingCount, showFileView, syncFil
 import { pruneDisconnectedViews, type ViewEntry, type ViewRegistry } from "./overlay/views";
 
 const ERROR_TEXT: Record<BackgroundError, string> = {
-  "access-token-missing": "Sign in with GitHub to view semantic diffs.",
-  "auth-failed": "GitHub authentication failed. Sign in again.",
-  "rate-limited": "GitHub rate limit exceeded. Wait a while and toggle again.",
-  "fetch-failed": "Could not fetch file contents from GitHub.",
-  "diff-failed": "Could not compute a semantic diff for this file.",
-  "not-unity-yaml": "This file is not a text-serialized Unity asset.",
+  "access-token-missing": "Please sign in with GitHub to view semantic diffs.",
+  "auth-failed": "GitHub authentication did not work. Please sign in again.",
+  "rate-limited": "You reached the GitHub rate limit. Please wait, then try again.",
+  "fetch-failed": "Could not get file contents from GitHub.",
+  "diff-failed": "Could not make a semantic diff for this file.",
+  "not-unity-yaml": "This file is not a Unity asset file in text format.",
 };
 
 const SIGN_IN_FAILURE_TEXT: Record<SignInFailure, string> = {
-  denied: "Authorization denied — try again.",
-  expired: "Code expired — try again.",
-  failed: "Sign-in failed — try again.",
+  denied: "Authorization was denied. Please try again.",
+  expired: "The code expired. Please try again.",
+  failed: "Sign-in did not work. Please try again.",
 };
 
 // path → render target for guidResolved pushes
@@ -218,15 +218,12 @@ function attachToggle(viewState: ViewStateData, page: DiffPage, entry: FileEntry
   if (effectiveView(viewState, entry.path) === "semantic") showFileView(fileState, fileDeps, "semantic");
 }
 
-async function init(): Promise<void> {
-  // Device-page pre-fill uses only the code that the PR page of this browser saved.
-  // If storage read fails, pre-fill does not run. The user pastes the code instead.
-  if (location.pathname === "/login/device") {
-    const pending = await tokenStore.readPendingSignIn().catch(() => undefined);
-    if (pending) fillDeviceCode(document, pending, Date.now());
-    return;
-  }
+async function initDevicePage(): Promise<void> {
+  const pending = await tokenStore.readPendingSignIn();
+  if (pending) fillDeviceCode(document, pending, Date.now());
+}
 
+async function initDiffRuntime(): Promise<void> {
   const stored = await chrome.storage.local.get(["viewMode"]).catch(() => ({}) as Record<string, unknown>);
   const initial: View = stored.viewMode === "semantic" ? "semantic" : "raw";
   const viewState = emptyViewState(initial);
@@ -273,6 +270,19 @@ async function init(): Promise<void> {
       attach(viewState);
     }, 50);
   }).observe(document.body, { childList: true, subtree: true });
+}
+
+async function init(): Promise<void> {
+  // The device activation page opens in a new tab.
+  // The PR (pull request) tab already starts the main runtime.
+  // This tab's only job is to fill in the activation code.
+  // If you use soft navigation, it does not reload this script.
+  // All other pages also start the runtime, but do nothing until on a diff or PR URL.
+  if (location.pathname === "/login/device") {
+    await initDevicePage();
+    return;
+  }
+  await initDiffRuntime();
 }
 
 void init();

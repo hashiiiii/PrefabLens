@@ -4,11 +4,11 @@ import { must } from "../../internal/must";
 
 export type FileEntry = {
   path: string;
-  header: HTMLElement; // toggle mount + data-prefablens marker
-  attachHost(host: HTMLElement): void; // insert semantic host at the layout's spot
+  header: HTMLElement;
+  attachHost(host: HTMLElement): void;
   setRawHidden(hidden: boolean): void; // idempotent: re-resolves the live DOM on each call
   collapsed(): boolean; // github file collapse (react chevron)
-  globalAnchor(): Element | null; // element the global bar inserts before
+  globalAnchor(): Element | null;
 };
 
 export type DiffPage = { owner: string; repo: string; target: DiffTarget };

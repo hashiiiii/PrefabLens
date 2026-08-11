@@ -1,6 +1,7 @@
 /// <reference types="node" />
 import { readFileSync } from "node:fs";
 import { beforeAll, describe, expect, it } from "vitest";
+import { BINARY_ASSET } from "../../../test-support/unity-fixtures";
 import type { DiffV2 } from "../../domain/diff/types";
 import type { GuidRepository } from "../../domain/guid/guid-repository";
 import { GithubClient } from "../../infrastructure/clients/github-client";
@@ -157,7 +158,7 @@ describe("mergeGithubSources", () => {
 
   it("skips a binary source and keeps the available diff", async () => {
     const path = "Assets/Source.prefab";
-    const { client, requests } = githubRoutes(() => raw(new Uint8Array([0, 1, 2, 255])));
+    const { client, requests } = githubRoutes(() => raw(BINARY_ASSET));
     const first = firstDiff(differ, new Uint8Array(), VARIANT, { src0: path });
 
     const result = await mergeGithubSources(

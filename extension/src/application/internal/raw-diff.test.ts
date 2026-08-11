@@ -1,6 +1,6 @@
 /// <reference types="node" />
 import { readFileSync } from "node:fs";
-import { beforeAll, describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import { AFTER_PREFAB, BEFORE_PREFAB } from "../../../test-support/unity-fixtures";
 import type { DiffRepository } from "../../domain/diff/diff-repository";
 import type { DiffV2 } from "../../domain/diff/types";
@@ -285,6 +285,61 @@ describe("raw diff", () => {
 
     expect(retried.ok).toBe(true);
     expect(fileRequests).toBe(2);
+  });
+
+  it("reads new PR data after the 60-second cache expires", async () => {
+    vi.useFakeTimers();
+    try {
+      const start = Date.parse("2026-08-12T00:00:00Z");
+      vi.setSystemTime(start);
+      let headSha = "head-one";
+      let filePath = "Assets/First.prefab";
+      const requests: URL[] = [];
+      const client = githubClient((request) => {
+        requests.push(request);
+        if (request.pathname === "/repos/o/r/pulls/1") {
+          return json({ base: { sha: "base-tip" }, head: { sha: headSha } });
+        }
+        if (request.pathname === `/repos/o/r/compare/base-tip...${headSha}`) {
+          return json({ merge_base_commit: { sha: "base-sha" }, files: [] });
+        }
+        if (request.pathname === "/repos/o/r/pulls/1/files") {
+          return json([{ filename: filePath, status: "modified", sha: `${headSha}-blob` }]);
+        }
+        if (request.pathname === "/repos/o/r/git/trees/base-sha") {
+          return json({ truncated: false, tree: [] });
+        }
+        return new Response(null, { status: 500 });
+      });
+      const session = createDiffSession();
+
+      const first = await getContext(session, client, OWNER, REPO, PULL);
+      expect(first.ok).toBe(true);
+      if (!first.ok) return;
+      expect(first.value.refs.headSha).toBe("head-one");
+      expect(first.value.files.map((file) => file.path)).toEqual(["Assets/First.prefab"]);
+      const firstRequestCount = requests.length;
+
+      headSha = "head-two";
+      filePath = "Assets/Second.prefab";
+      vi.setSystemTime(start + 59_999);
+      const cached = await getContext(session, client, OWNER, REPO, PULL);
+      expect(cached.ok).toBe(true);
+      if (!cached.ok) return;
+      expect(cached.value.refs.headSha).toBe("head-one");
+      expect(cached.value.files.map((file) => file.path)).toEqual(["Assets/First.prefab"]);
+      expect(requests).toHaveLength(firstRequestCount);
+
+      vi.setSystemTime(start + 60_001);
+      const refreshed = await getContext(session, client, OWNER, REPO, PULL);
+      expect(refreshed.ok).toBe(true);
+      if (!refreshed.ok) return;
+      expect(refreshed.value.refs.headSha).toBe("head-two");
+      expect(refreshed.value.files.map((file) => file.path)).toEqual(["Assets/Second.prefab"]);
+      expect(requests.length).toBeGreaterThan(firstRequestCount);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("renders a root commit as an all-added diff", async () => {

@@ -30,10 +30,8 @@ const SIGN_IN_FAILURE_TEXT: Record<SignInFailure, string> = {
   failed: "Sign-in did not work. Please try again.",
 };
 
-// path → render target for guidResolved pushes
 const views: ViewRegistry = new Map();
 
-// Global switch targets: toggle + display for already-attached files
 const appliers = new Set<FileView>();
 let globalToggle: Toggle | undefined;
 let currentPage = ""; // drop overrides when leaving this diff page
@@ -146,7 +144,6 @@ async function initDiffRuntime(): Promise<void> {
     }
   });
 
-  // guidResolved: the second-stage push from background. If this view still exists, re-render.
   chrome.runtime.onMessage.addListener((msg: GuidResolvedPush) => {
     if (msg?.type !== "guidResolved") return;
     const view = views.get(viewKey(msg.owner, msg.repo, msg.target, msg.path));

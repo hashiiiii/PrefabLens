@@ -111,7 +111,6 @@ function scanReact(root: ParentNode): FileEntry[] {
     if (!header || header.hasAttribute("data-prefablens")) continue;
     const path = filePathFromReactHeader(header);
     if (!path || !isUnityPath(path)) continue;
-    // Region child that contains the header (normally diffHeaderWrapper)
     const headerBlock = (): Element => {
       let el: Element = header;
       while (el.parentElement && el.parentElement !== region) el = el.parentElement;

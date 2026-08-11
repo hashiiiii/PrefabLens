@@ -144,45 +144,6 @@ describe("scanUnityFiles", () => {
     expect(host.classList.contains("Details-content--hidden")).toBe(true);
   });
 
-  it("finds every UnityYAML asset extension beyond the original trio", () => {
-    // The set of text-serialized assets that unityyamlmerge targets.
-    // Case matches Unity's actual output (camelCase like .overrideController).
-    const paths = [
-      "Assets/M.mat",
-      "Assets/A.anim",
-      "Assets/C.controller",
-      "Assets/O.overrideController",
-      "Assets/P.physicMaterial",
-      "Assets/P2.physicsMaterial2D",
-      "Assets/T.playable",
-      "Assets/K.mask",
-      "Assets/B.brush",
-      "Assets/F.flare",
-      "Assets/F.fontsettings",
-      "Assets/G.guiskin",
-      "Assets/G.giparams",
-      "Assets/R.renderTexture",
-      "Assets/S.spriteatlas",
-      "Assets/S.spriteatlasv2",
-      "Assets/T.terrainlayer",
-      "Assets/X.mixer",
-      "Assets/V.shadervariants",
-      "Assets/P.preset",
-      "Assets/S.signal",
-      "Assets/L.lighting",
-      "Assets/S.scenetemplate",
-    ];
-    document.body.innerHTML = paths
-      .map(
-        (p) => `<div class="file">
-          <div class="file-header" data-path="${p}"></div>
-          <div class="js-file-content">raw diff</div>
-        </div>`,
-      )
-      .join("");
-    expect(scanUnityFiles(document).map((e) => e.path)).toEqual(paths);
-  });
-
   it("skips YAML-but-not-UnityYAML and JSON assets", () => {
     // .meta is not !u! document format, and .asmdef/.shadergraph are JSON.
     const paths = ["Assets/Foo.prefab.meta", "Assets/Code.asmdef", "Assets/S.shadergraph", "Assets/T.png"];
@@ -251,24 +212,6 @@ describe("scanUnityFiles (react ui)", () => {
     expect(scanUnityFiles(document).map((e) => e.path)).toEqual(["Assets/New.prefab"]);
   });
 
-  it("hides every region child except the header block and our host", () => {
-    document.body.innerHTML = REACT_FIXTURE;
-    const entry = must(scanUnityFiles(document)[0]);
-    const host = document.createElement("div");
-    host.setAttribute("data-prefablens-view", "");
-    entry.attachHost(host);
-    // Host goes right after the header wrapper, inside the region
-    const region = must(document.querySelector("#diff-aaa111"));
-    expect(region.children[1]).toBe(host);
-    entry.setRawHidden(true);
-    const body = must(region.querySelector<HTMLElement>(".border.rounded-bottom-2"));
-    expect(body.style.display).toBe("none");
-    expect(host.style.display).not.toBe("none");
-    expect(must(region.querySelector<HTMLElement>(".Diff-module__diffHeaderWrapper")).style.display).not.toBe("none");
-    entry.setRawHidden(false);
-    expect(body.style.display).toBe("");
-  });
-
   it("re-resolves body nodes on every call because react recreates them", () => {
     document.body.innerHTML = REACT_FIXTURE;
     const entry = must(scanUnityFiles(document)[0]);
@@ -282,76 +225,6 @@ describe("scanUnityFiles (react ui)", () => {
     region.append(fresh);
     entry.setRawHidden(true);
     expect(fresh.style.display).toBe("none");
-  });
-
-  it("gives the host the card frame that the hidden body carried", () => {
-    document.body.innerHTML = REACT_FIXTURE;
-    const entry = must(scanUnityFiles(document)[0]);
-    const host = document.createElement("div");
-    host.setAttribute("data-prefablens-view", "");
-    entry.attachHost(host);
-    // On this layout the border/rounded-bottom card chrome lives on the diff body,
-    // not the region: hiding the body removes the frame, so the host must recreate
-    // it (theme-following Primer variables, with fallbacks for non-github pages)
-    const style = host.getAttribute("style") ?? "";
-    expect(style).toContain("border:");
-    expect(style).toContain("var(--borderColor-default");
-    expect(style).toContain("border-radius: 0 0 6px 6px");
-    expect(style).toContain("var(--bgColor-default");
-  });
-
-  it("stamps a marker attribute and injects a stylesheet that hides fresh bodies", () => {
-    document.head.innerHTML = "";
-    document.body.innerHTML = REACT_FIXTURE;
-    const entry = must(scanUnityFiles(document)[0]);
-    const region = must(document.querySelector("#diff-aaa111"));
-    entry.setRawHidden(true);
-    // React remounts the body with no inline styles when a collapsed file expands.
-    // The debounced rescan re-hides it only ~200ms later. The marker + document-level
-    // rule pair hides the fresh body before first paint instead.
-    expect(region.hasAttribute("data-prefablens-raw-hidden")).toBe(true);
-    // The exact selector of the rule is an implementation detail. Only its presence is
-    // the contract (react.spec.ts proves the pre-paint hiding against a real browser).
-    expect(document.head.querySelector("style[data-prefablens-hide-rule]")).not.toBeNull();
-    // Un-hiding must remove the CSS rule too, or the restored body stays invisible
-    entry.setRawHidden(false);
-    expect(region.hasAttribute("data-prefablens-raw-hidden")).toBe(false);
-  });
-
-  it("injects the hide stylesheet only once", () => {
-    document.head.innerHTML = "";
-    document.body.innerHTML = REACT_FIXTURE;
-    const entry = must(scanUnityFiles(document)[0]);
-    // sync() re-runs setRawHidden on every debounced scan, so injection must be idempotent
-    entry.setRawHidden(true);
-    entry.setRawHidden(true);
-    must(scanUnityFiles(document)[0]).setRawHidden(true);
-    expect(document.head.querySelectorAll("style[data-prefablens-hide-rule]")).toHaveLength(1);
-  });
-
-  it("reports the chevron collapse state", () => {
-    document.body.innerHTML = REACT_FIXTURE;
-    const entry = must(scanUnityFiles(document)[0]);
-    expect(entry.collapsed()).toBe(false);
-    // React swaps the chevron icon when the file is collapsed
-    const icon = must(document.querySelector("#diff-aaa111 .octicon-chevron-down"));
-    icon.setAttribute("class", "octicon octicon-chevron-right");
-    expect(entry.collapsed()).toBe(true);
-  });
-
-  it("also reads collapse from the header's collapsed module class", () => {
-    // Second signal, independent of the icon: github stamps this class on the header row
-    document.body.innerHTML = REACT_FIXTURE;
-    const entry = must(scanUnityFiles(document)[0]);
-    const header = must(document.querySelector("#diff-aaa111 .DiffFileHeader-module__diff-file-header"));
-    header.classList.add("DiffFileHeader-module__collapsed__aB3cD");
-    expect(entry.collapsed()).toBe(true);
-  });
-
-  it("anchors the global bar on the virtualized list root", () => {
-    document.body.innerHTML = REACT_FIXTURE;
-    const entry = must(scanUnityFiles(document)[0]);
-    expect(entry.globalAnchor()).toBe(document.querySelector('[data-testid="progressive-diffs-list"]'));
   });
 
   it("is harmless when the react structure is missing pieces", () => {

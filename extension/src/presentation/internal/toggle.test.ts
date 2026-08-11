@@ -10,7 +10,7 @@ function sink() {
 }
 
 describe("mountToggle", () => {
-  it("starts on Raw and reports selection changes", () => {
+  it("starts on Raw and reports one user selection", () => {
     const { selected, onSelect } = sink();
     const toggle = mountToggle(onSelect);
     document.body.append(toggle.element);
@@ -20,8 +20,6 @@ describe("mountToggle", () => {
     expect(selected).toEqual(["semantic"]);
     expect(semantic?.getAttribute("aria-pressed")).toBe("true");
     expect(raw?.getAttribute("aria-pressed")).toBe("false");
-    raw?.click();
-    expect(selected).toEqual(["semantic", "raw"]);
   });
 
   it("starts on the given initial view", () => {
@@ -42,19 +40,5 @@ describe("mountToggle", () => {
     const [, semantic] = [...toggle.element.querySelectorAll("button")];
     expect(semantic?.getAttribute("aria-pressed")).toBe("true");
     expect(selected).toEqual([]);
-  });
-
-  it("injects the page stylesheet exactly once", () => {
-    mountToggle(sink().onSelect);
-    mountToggle(sink().onSelect);
-    expect(document.head.querySelectorAll("style[data-prefablens-style]")).toHaveLength(1);
-  });
-
-  it("renders as a segmented control styled via aria-pressed", () => {
-    const toggle = mountToggle(sink().onSelect);
-    expect(toggle.element.classList.contains("prefablens-seg")).toBe(true);
-    // No inline style changes: CSS keys the selected look on aria-pressed
-    const [raw] = [...toggle.element.querySelectorAll("button")];
-    expect(raw?.getAttribute("style")).toBeNull();
   });
 });

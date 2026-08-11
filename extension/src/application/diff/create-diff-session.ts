@@ -84,7 +84,7 @@ export function createDiffSession(): DiffSession {
       retain: (r) => r.ok,
     }),
     diffs: createPromiseCache<DiffOutcome>({
-      retain: (o) => o.ok || o.error !== "too-large",
+      retain: (o) => o.ok,
     }),
     misses: new Set(),
     searches: createPromiseCache<Result<string | null, GithubFailure>>({ retain: () => false }),

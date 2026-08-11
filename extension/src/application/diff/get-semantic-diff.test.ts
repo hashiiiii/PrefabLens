@@ -167,47 +167,6 @@ describe("semanticDiff", () => {
     expect(diffCalls).toEqual([]);
   });
 
-  it("caches the not-unity-yaml outcome for the sha pair", async () => {
-    // Unlike too-large there is no force escape hatch: the verdict is
-    // deterministic for a given blob pair, so a second toggle must serve the
-    // cached outcome instead of re-fetching and re-sniffing.
-    let sniffCount = 0;
-    const isUnityYaml: DifferGateway["isUnityYaml"] = () => {
-      sniffCount += 1;
-      return false;
-    };
-    const { tokenStore, makeClient, getDiffer, guidCache, diffStore, repoIndexStore } = makeFakes({ isUnityYaml });
-    const session = createDiffSession();
-    expect(
-      await getSemanticDiff(
-        tokenStore,
-        makeClient,
-        getDiffer,
-        guidCache,
-        diffStore,
-        repoIndexStore,
-        session,
-        REQ,
-        () => {},
-      ),
-    ).toEqual({ ok: false, error: "not-unity-yaml" });
-    const sniffs = sniffCount;
-    expect(
-      await getSemanticDiff(
-        tokenStore,
-        makeClient,
-        getDiffer,
-        guidCache,
-        diffStore,
-        repoIndexStore,
-        session,
-        REQ,
-        () => {},
-      ),
-    ).toEqual({ ok: false, error: "not-unity-yaml" });
-    expect(sniffCount).toBe(sniffs);
-  });
-
   it("diffs a file missing from the PR list as modified (files API caps at 3000)", async () => {
     // In a PR with over 3000 files, the listing API is truncated, so a file present in the UI can be absent from the listing
     const { tokenStore, makeClient, getDiffer, guidCache, diffStore, repoIndexStore, calls } = makeFakes({

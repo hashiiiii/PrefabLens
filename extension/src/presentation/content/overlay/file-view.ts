@@ -39,6 +39,7 @@ export function attachFileView(
   const syncView = (view: View): void => {
     if (view === "raw") {
       entry.setRawHidden(false);
+      if (host && !host.isConnected) entry.attachHost(host);
       if (host) host.style.display = "none";
       return;
     }

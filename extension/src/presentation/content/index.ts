@@ -56,9 +56,12 @@ const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 const openTab = (url: string) => void window.open(url, "_blank", "noopener");
 const now = () => Date.now();
 
-const persistView = (view: View): void => {
-  // A storage failure must not disable the current page.
-  void chrome.storage.local.set({ viewMode: view }).catch(() => {});
+const persistView = async (view: View): Promise<void> => {
+  try {
+    await chrome.storage.local.set({ viewMode: view });
+  } catch {
+    // A storage failure must not disable the current page.
+  }
 };
 
 // Auth-error panel: device flow. Failures land back here for retry.
@@ -126,8 +129,13 @@ async function initDevicePage(): Promise<void> {
 }
 
 async function initDiffRuntime(): Promise<void> {
-  const stored = await chrome.storage.local.get(["viewMode"]).catch(() => ({}) as Record<string, unknown>);
-  const initial: View = stored.viewMode === "semantic" ? "semantic" : "raw";
+  let initial: View = "raw";
+  try {
+    const stored = await chrome.storage.local.get(["viewMode"]);
+    if (stored.viewMode === "semantic") initial = "semantic";
+  } catch {
+    // A storage failure must not stop the current page.
+  }
   const viewState = emptyViewState(initial);
   onDefaultChange(viewState, (view) => {
     globalToggle?.set(view);

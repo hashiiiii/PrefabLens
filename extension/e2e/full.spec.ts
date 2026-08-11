@@ -7,7 +7,7 @@
 import { readFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import { fileURLToPath } from "node:url";
-import { type BrowserContext, chromium, expect, test } from "@playwright/test";
+import { type BrowserContext, chromium, expect, type Page, test } from "@playwright/test";
 
 const DIST = fileURLToPath(new URL("../dist", import.meta.url));
 const fixture = readFileSync(new URL("./fixtures/pr-files.html", import.meta.url), "utf8");
@@ -19,11 +19,17 @@ const PORT = 8471;
 type ServerState = {
   requests: string[];
   failNextFile: boolean;
+  deviceAuthorized: boolean;
+  rateLimitGuidSearch: boolean;
+  largePendingDiff: boolean;
 };
 
 const state: ServerState = {
   requests: [],
   failNextFile: false,
+  deviceAuthorized: false,
+  rateLimitGuidSearch: false,
+  largePendingDiff: false,
 };
 
 let guidSearchGate: Promise<void> | undefined;
@@ -48,6 +54,9 @@ MonoBehaviour:
   volume: 0.5
 `;
 const AFTER = BEFORE.replace("0.5", "0.8");
+const LARGE_PADDING = `\n#${"x".repeat(13 * 1024 * 1024)}`;
+const LARGE_BEFORE = BEFORE + LARGE_PADDING;
+const LARGE_AFTER = AFTER + LARGE_PADDING;
 // 26MB with a UnityYAML head but no documents trips the 25MB guard. After
 // force, the content sniff passes and it finishes cheaply with an empty diff.
 const BIG = `%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n${"x".repeat(26 * 1024 * 1024)}`;
@@ -101,6 +110,22 @@ function startServer(): Promise<Server> {
           parents: [{ sha: "P500" }],
           files: [{ filename: "Assets/Foo.prefab", status: "modified" }],
         });
+      case "/o/r/commit/e2e6000":
+        return send(fixture, "text/html");
+      case "/repos/o/r/commits/e2e6000":
+        return json({
+          sha: "H600",
+          parents: [{ sha: "P600" }],
+          files: [{ filename: "Assets/Foo.prefab", status: "modified" }],
+        });
+      case "/o/r/commit/e2e7000":
+        return send(fixture, "text/html");
+      case "/repos/o/r/commits/e2e7000":
+        return json({
+          sha: "H700",
+          parents: [{ sha: "P700" }],
+          files: [{ filename: "Assets/Big.unity", status: "modified" }],
+        });
       // Compare page: merge base from the compare API, head resolved via the sha media type
       case "/o/r/compare/main...topic":
         return send(fixture, "text/html");
@@ -134,7 +159,7 @@ function startServer(): Promise<Server> {
           return res.end("rate limit");
         }
         return send(
-          ["MB", "PC", "MC", "P429", "P500"].includes(ref) ? BEFORE : AFTER,
+          ["MB", "PC", "MC", "P429", "P500", "P600"].includes(ref) ? BEFORE : AFTER,
           "application/vnd.github.raw+json",
         );
       }
@@ -145,14 +170,23 @@ function startServer(): Promise<Server> {
           "application/vnd.github.raw+json",
         );
       }
-      case "/repos/o/r/contents/Assets/Big.unity":
+      case "/repos/o/r/contents/Assets/Big.unity": {
+        if (state.largePendingDiff) {
+          const ref = url.searchParams.get("ref") ?? "";
+          return send(ref === "P700" ? LARGE_BEFORE : LARGE_AFTER, "application/vnd.github.raw+json");
+        }
         return send(BIG, "application/vnd.github.raw+json");
+      }
       // A binary-serialized .asset (for example LightingDataAsset): it passes the
       // path prefilter, and the real wasm content sniff must reject it.
       case "/repos/o/r/contents/Assets/Baked.asset":
         return send("\x00\x01PK-binary-payload", "application/vnd.github.raw+json");
       case "/search/code":
         if (guidSearchGate) await guidSearchGate;
+        if (state.rateLimitGuidSearch) {
+          res.writeHead(429, { "retry-after": "0.001" });
+          return res.end("rate limit");
+        }
         return json({ items: [{ path: "Assets/Scripts/Sound.cs.meta" }] });
       case "/graphql":
         return json({ data: { repository: {} } });
@@ -161,11 +195,11 @@ function startServer(): Promise<Server> {
           device_code: "dc-e2e",
           user_code: "ABCD-1234",
           verification_uri: `http://127.0.0.1:${PORT}/login/device`,
-          interval: 0,
+          interval: 1,
           expires_in: 900,
         });
       case "/login/oauth/access_token":
-        // The first poll succeeds: no human Authorize step. The extension still runs the full poll loop.
+        if (!state.deviceAuthorized) return json({ error: "authorization_pending" });
         return json({ access_token: "e2e-token" });
       case "/login/device":
         return send("<!doctype html><title>device</title>", "text/html");
@@ -192,24 +226,50 @@ async function clearLocalStorage(): Promise<void> {
   await worker.evaluate(() => chrome.storage.local.clear());
 }
 
+// A retry must cross a new service worker and empty session storage so neither cache can hide its request path.
+async function restartDiffRuntime(page: Page): Promise<void> {
+  const worker = context.serviceWorkers()[0] ?? (await context.waitForEvent("serviceworker"));
+  await worker.evaluate(() => chrome.storage.session.clear());
+  const cdp = await context.newCDPSession(page);
+  await cdp.send("ServiceWorker.enable");
+  const stopped = new Promise<void>((resolve) => {
+    cdp.on("ServiceWorker.workerVersionUpdated", ({ versions }) => {
+      if (versions.some((version) => version.scriptURL === worker.url() && version.runningStatus === "stopped")) {
+        resolve();
+      }
+    });
+  });
+  await cdp.send("ServiceWorker.stopAllWorkers");
+  await stopped;
+  await cdp.detach();
+}
+
 test.beforeAll(async () => {
   server = await startServer();
+});
+
+test.afterAll(async () => {
+  server?.close();
+});
+
+test.beforeEach(async () => {
+  state.requests = [];
+  state.failNextFile = false;
+  state.deviceAuthorized = false;
+  state.rateLimitGuidSearch = false;
+  state.largePendingDiff = false;
   context = await chromium.launchPersistentContext("", {
     channel: "chromium", // the chromium channel is required to use extensions headlessly
     args: [`--disable-extensions-except=${DIST}`, `--load-extension=${DIST}`],
   });
   if (!context.serviceWorkers()[0]) await context.waitForEvent("serviceworker");
-});
-
-test.afterAll(async () => {
-  await context?.close();
-  server?.close();
-});
-
-test.beforeEach(async () => {
   releaseHeldGuidSearch();
-  await clearLocalStorage();
   await setLocalStorage({ accessToken: "e2e-token" });
+});
+
+test.afterEach(async () => {
+  releaseHeldGuidSearch();
+  await context?.close();
 });
 
 test("starts PR prefetch before a manual semantic request", async () => {
@@ -218,12 +278,15 @@ test("starts PR prefetch before a manual semantic request", async () => {
   await page.goto(`http://127.0.0.1:${PORT}/o/r/pull/1/files`);
 
   await expect.poll(() => state.requests.join("\n")).toContain("GET /repos/o/r/pulls/1/files?per_page=100&page=1");
+  await expect.poll(() => state.requests.join("\n")).toContain("GET /repos/o/r/contents/Assets/Foo.prefab?ref=MB");
+  await expect.poll(() => state.requests.join("\n")).toContain("GET /repos/o/r/contents/Assets/Foo.prefab?ref=H");
   const header = page.locator('.file-header[data-path="Assets/Foo.prefab"]');
   await expect(header.getByRole("button", { name: "Semantic" })).toBeVisible();
   await page.close();
 });
 
 test("renders a real wasm diff with code-search guid resolution", async () => {
+  state.requests = [];
   const page = await context.newPage();
   await page.goto(`http://127.0.0.1:${PORT}/o/r/pull/1/files`);
 
@@ -236,6 +299,8 @@ test("renders a real wasm diff with code-search guid resolution", async () => {
   await expect(view).toContainText("Volume");
   await expect(view).toContainText("0.5");
   await expect(view).toContainText("0.8");
+  await expect.poll(() => state.requests.join("\n")).toContain("GET /repos/o/r/contents/Assets/Foo.prefab?ref=MB");
+  await expect.poll(() => state.requests.join("\n")).toContain("GET /repos/o/r/contents/Assets/Foo.prefab?ref=H");
   await page.close();
 });
 
@@ -309,6 +374,32 @@ test("gates oversized files behind an explicit render click", async () => {
   await page.close();
 });
 
+test("keeps force enabled for a later retry", async () => {
+  state.largePendingDiff = true;
+  state.rateLimitGuidSearch = true;
+  const page = await context.newPage();
+  await page.goto(`http://127.0.0.1:${PORT}/o/r/commit/e2e7000`);
+
+  const header = page.locator('.file-header[data-path="Assets/Big.unity"]');
+  await header.getByRole("button", { name: "Semantic" }).click();
+  const view = page.locator("[data-prefablens-view]");
+  await expect(view).toContainText("Large file", { timeout: 30_000 });
+  await view.getByRole("button", { name: "Render anyway" }).click();
+  await expect(view).toContainText("Some references were not resolved", { timeout: 30_000 });
+
+  state.rateLimitGuidSearch = false;
+  const fileRequests = (): number =>
+    state.requests.filter((route) => route.startsWith("GET /repos/o/r/contents/Assets/Big.unity?")).length;
+  const requestsBeforeRetry = fileRequests();
+  await restartDiffRuntime(page);
+  await view.getByRole("button", { name: "Retry" }).click();
+
+  await expect.poll(fileRequests).toBeGreaterThan(requestsBeforeRetry);
+  await expect(view).toContainText("Sound", { timeout: 30_000 });
+  await expect(view).toContainText("Volume");
+  await page.close();
+});
+
 test("hides the semantic view when the classic file collapses", async () => {
   const page = await context.newPage();
   await page.goto(`http://127.0.0.1:${PORT}/o/r/pull/1/files`);
@@ -357,6 +448,30 @@ test("recovers when a later semantic request succeeds", async () => {
   await header.getByRole("button", { name: "Raw" }).click();
   await header.getByRole("button", { name: "Semantic" }).click();
   await expect(view).toContainText("Sound");
+  await page.close();
+});
+
+test("keeps the prior diff when a retry fails", async () => {
+  state.rateLimitGuidSearch = true;
+  const page = await context.newPage();
+  await page.goto(`http://127.0.0.1:${PORT}/o/r/commit/e2e6000`);
+
+  const header = page.locator('.file-header[data-path="Assets/Foo.prefab"]');
+  await header.getByRole("button", { name: "Semantic" }).click();
+  const view = page.locator("[data-prefablens-view]");
+  await expect(view).toContainText("Some references were not resolved", { timeout: 15_000 });
+
+  state.rateLimitGuidSearch = false;
+  state.failNextFile = true;
+  const fileRequests = (): number =>
+    state.requests.filter((route) => route.startsWith("GET /repos/o/r/contents/Assets/Foo.prefab?")).length;
+  const requestsBeforeRetry = fileRequests();
+  await restartDiffRuntime(page);
+  await view.getByRole("button", { name: "Retry" }).click();
+
+  await expect.poll(fileRequests).toBeGreaterThan(requestsBeforeRetry);
+  await expect(view).toContainText("Some references were not resolved");
+  await expect(view).toContainText("Volume");
   await page.close();
 });
 
@@ -515,6 +630,41 @@ test("applies a final GUID push after a React body remount", async () => {
   }
 });
 
+test("keeps a pending view through a Raw React remount", async () => {
+  holdGuidSearch();
+  const page = await context.newPage();
+  try {
+    await page.goto(`http://127.0.0.1:${PORT}/o/r/pull/2/files`);
+
+    const header = page.locator('#diff-aaa111 [class*="diff-file-header"]');
+    await header.getByRole("button", { name: "Semantic" }).click();
+    const view = page.locator("#diff-aaa111 [data-prefablens-view]");
+    await expect(view).toContainText("Resolving 1 reference");
+    await header.getByRole("button", { name: "Raw" }).click();
+
+    await page.evaluate(() => {
+      const region = document.querySelector("#diff-aaa111");
+      if (!region) throw new Error("diff region missing");
+      region.querySelector("[data-prefablens-view]")?.remove();
+      region.querySelector(".border.rounded-bottom-2")?.remove();
+      const body = document.createElement("div");
+      body.className = "border position-relative rounded-bottom-2";
+      body.dataset.remountedRaw = "";
+      body.style.display = "none";
+      body.textContent = "remounted raw github diff table";
+      region.append(body);
+    });
+
+    await expect(page.locator("[data-remounted-raw]")).toBeVisible();
+    await header.getByRole("button", { name: "Semantic" }).click();
+    releaseHeldGuidSearch();
+    await expect(view).toContainText("Sound");
+  } finally {
+    releaseHeldGuidSearch();
+    await page.close();
+  }
+});
+
 test("reattaches a fully remounted file with the semantic default", async () => {
   await setLocalStorage({ accessToken: "e2e-token", viewMode: "semantic" });
   const page = await context.newPage();
@@ -546,17 +696,20 @@ test("signs in with GitHub through Device Flow", async () => {
   const header = page.locator('.file-header[data-path="Assets/Foo.prefab"]');
   await header.getByRole("button", { name: "Semantic" }).click();
   const view = page.locator("[data-prefablens-view]");
+  const verificationPagePromise = context.waitForEvent("page");
   await view.getByRole("button", { name: "Sign in with GitHub" }).click();
+  const verificationPage = await verificationPagePromise;
+  await expect(view).toContainText("ABCD-1234");
+  await expect(verificationPage).toHaveURL(`http://127.0.0.1:${PORT}/login/device`);
+  await expect(verificationPage).toHaveTitle("device");
   await expect
-    .poll(() =>
-      ["POST /login/device/code", "POST /login/oauth/access_token"].every((route) => state.requests.includes(route)),
-    )
-    .toBe(true);
+    .poll(() => state.requests.filter((route) => route === "POST /login/oauth/access_token").length)
+    .toBeGreaterThan(0);
+
+  state.deviceAuthorized = true;
   await expect(view).toContainText("Sound", { timeout: 15_000 });
   await expect(view.getByRole("button", { name: "Sign in with GitHub" })).toHaveCount(0);
 
-  for (const other of context.pages()) {
-    if (other !== page && other.url().includes("/login/device")) await other.close();
-  }
+  await verificationPage.close();
   await page.close();
 });

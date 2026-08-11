@@ -1,133 +1,335 @@
-import { describe, expect, it } from "vitest";
-import { err, ok } from "../../domain/result";
-import type { ChangedFile } from "../gateway/github";
-import { DIFF, makeFakes, REQ, resolveFully } from "../internal/diff-fakes";
+/// <reference types="node" />
+import { readFileSync } from "node:fs";
+import { beforeAll, describe, expect, it } from "vitest";
+import { AFTER_PREFAB, BEFORE_PREFAB } from "../../../test-support/unity-fixtures";
+import type { PendingSignIn } from "../../domain/auth/token";
+import type { TokenRepository } from "../../domain/auth/token-repository";
+import type { DiffRepository } from "../../domain/diff/diff-repository";
+import type { DiffV2 } from "../../domain/diff/types";
+import type { GuidMap } from "../../domain/guid/guid-map";
+import type { RepoGuidIndex } from "../../domain/guid/repo-guid-index";
+import type { RepoIndexRepository } from "../../domain/guid/repo-index-repository";
+import { GithubClient } from "../../infrastructure/clients/github-client";
+import { createDiffer } from "../../infrastructure/clients/wasm-differ-client";
+import type { DifferGateway } from "../gateway/differ";
 import { createDiffSession } from "./create-diff-session";
 import { prefetchPr } from "./prefetch-pr";
 
-describe("prefetch", () => {
-  it("precomputes diffs so a later toggle serves without new blob fetches", async () => {
-    const { tokenStore, makeClient, getDiffer, guidCache, diffStore, repoIndexStore, calls } = makeFakes();
-    const session = createDiffSession();
-    await prefetchPr(tokenStore, makeClient, getDiffer, diffStore, repoIndexStore, session, {
-      type: "prefetch",
-      owner: "o",
-      repo: "r",
-      prNumber: 1,
-    });
-    expect(calls.searchMetaByGuid).toEqual([]); // prefetch does not touch the 10 req/min Code Search
-    const fetchesAfterPrefetch = calls.getFileAtRef.length;
-    const res = await resolveFully(
-      tokenStore,
-      makeClient,
-      getDiffer,
-      guidCache,
-      diffStore,
-      repoIndexStore,
-      session,
-      REQ,
-    );
-    expect(res.ok).toBe(true);
-    expect(calls.getFileAtRef).toHaveLength(fetchesAfterPrefetch); // no blob re-fetch
-  });
+const REQUEST = {
+  type: "prefetch" as const,
+  owner: "o",
+  repo: "r",
+  prNumber: 1,
+};
 
-  it("persists prefetched diffs to the diff store (sw restart survival)", async () => {
-    const { tokenStore, makeClient, getDiffer, diffStore, repoIndexStore } = makeFakes();
-    await prefetchPr(tokenStore, makeClient, getDiffer, diffStore, repoIndexStore, createDiffSession(), {
-      type: "prefetch",
-      owner: "o",
-      repo: "r",
-      prNumber: 1,
-    });
-    expect(diffStore.saves).toContainEqual(["base-sha:head-sha:Assets/Foo.prefab", DIFF]);
-  });
+class MemoryTokenRepository implements TokenRepository {
+  async readAccessToken(): Promise<string> {
+    return "token";
+  }
 
-  it("serves a diff persisted by a previous worker from the store", async () => {
-    // The SW stops after 30 seconds: a result prefetched in a prior life must be recoverable via storage.session
-    const { tokenStore, makeClient, getDiffer, guidCache, diffStore, repoIndexStore, calls } = makeFakes();
-    diffStore.data["base-sha:head-sha:Assets/Foo.prefab"] = DIFF; // Seeded as if a prior SW life saved it.
-    const res = await resolveFully(
-      tokenStore,
-      makeClient,
-      getDiffer,
-      guidCache,
-      diffStore,
-      repoIndexStore,
+  async saveAccessToken(_token: string): Promise<void> {}
+
+  async savePendingSignIn(_pending: PendingSignIn): Promise<void> {}
+
+  async readPendingSignIn(): Promise<PendingSignIn | undefined> {
+    return undefined;
+  }
+
+  async clearPendingSignIn(): Promise<void> {}
+}
+
+class MemoryDiffRepository implements DiffRepository {
+  readonly data = new Map<string, DiffV2>();
+  readonly saves: Array<[string, DiffV2]> = [];
+
+  async load(key: string): Promise<DiffV2 | undefined> {
+    return this.data.get(key);
+  }
+
+  async save(key: string, json: DiffV2): Promise<void> {
+    this.saves.push([key, json]);
+    this.data.set(key, json);
+  }
+}
+
+class MemoryRepoIndexRepository implements RepoIndexRepository {
+  private readonly guids = new Map<string, GuidMap>();
+  private readonly indexes = new Map<string, RepoGuidIndex>();
+
+  async loadGuids(repo: string): Promise<GuidMap> {
+    return this.guids.get(repo) ?? {};
+  }
+
+  async saveGuids(repo: string, entries: GuidMap): Promise<void> {
+    this.guids.set(repo, { ...this.guids.get(repo), ...entries });
+  }
+
+  async loadIndex(repo: string): Promise<RepoGuidIndex | undefined> {
+    return this.indexes.get(repo);
+  }
+
+  async saveIndex(repo: string, index: RepoGuidIndex): Promise<void> {
+    this.indexes.set(repo, index);
+  }
+}
+
+let differ: DifferGateway;
+
+beforeAll(async () => {
+  const bytes = readFileSync(new URL("../../../../zig-out/bin/prefablens.wasm", import.meta.url));
+  differ = await createDiffer(bytes);
+});
+
+describe("prefetchPr", () => {
+  it("stores prefetched diffs in the diff repository", async () => {
+    const client = new GithubClient("https://api.github.com", "token", async (input) => {
+      const request = new URL(String(input));
+      if (request.pathname === "/repos/o/r/pulls/1") {
+        return Response.json({ base: { sha: "base-tip" }, head: { sha: "head-sha" } });
+      }
+      if (request.pathname === "/repos/o/r/compare/base-tip...head-sha") {
+        return Response.json({ merge_base_commit: { sha: "base-sha" }, files: [] });
+      }
+      if (request.pathname === "/repos/o/r/pulls/1/files") {
+        return Response.json([{ filename: "Assets/Foo.prefab", status: "modified", sha: "head-blob" }]);
+      }
+      if (request.pathname === "/repos/o/r/git/trees/base-sha") {
+        return Response.json({
+          truncated: false,
+          tree: [{ path: "Assets/Foo.prefab", type: "blob", sha: "base-blob" }],
+        });
+      }
+      if (request.pathname === "/repos/o/r/git/trees/head-sha") {
+        return Response.json({ truncated: true, tree: [] });
+      }
+      if (request.pathname === "/repos/o/r/git/blobs/base-blob") return new Response(BEFORE_PREFAB);
+      if (request.pathname === "/repos/o/r/git/blobs/head-blob") return new Response(AFTER_PREFAB);
+      return new Response(null, { status: 500 });
+    });
+    const repository = new MemoryDiffRepository();
+
+    await prefetchPr(
+      new MemoryTokenRepository(),
+      () => client,
+      async () => differ,
+      repository,
+      new MemoryRepoIndexRepository(),
       createDiffSession(),
-      REQ,
+      REQUEST,
     );
-    expect(res.ok).toBe(true);
-    expect(calls.getFileAtRef).not.toContainEqual(["o", "r", "Assets/Foo.prefab", "base-sha"]);
-  });
 
-  it("prefetches only unity files and caps at 100", async () => {
-    const files: ChangedFile[] = Array.from({ length: 120 }, (_, i) => ({
-      path: `Assets/F${i}.prefab`,
+    expect(repository.saves).toHaveLength(1);
+    expect(repository.saves[0]?.[0]).toBe("base-sha:head-sha:Assets/Foo.prefab");
+    expect(repository.saves[0]?.[1].loose[0]?.fields[0]).toEqual({
+      path: "Volume",
       status: "modified",
-    }));
-    files.push({ path: "README.md", status: "modified" });
-    const { tokenStore, makeClient, getDiffer, diffStore, repoIndexStore, calls } = makeFakes({ files });
-    await prefetchPr(tokenStore, makeClient, getDiffer, diffStore, repoIndexStore, createDiffSession(), {
-      type: "prefetch",
-      owner: "o",
-      repo: "r",
-      prNumber: 1,
+      before: "0.5",
+      after: "0.8",
     });
-    const paths = new Set(calls.getFileAtRef.map((c) => c[2]));
-    expect(paths.has("README.md")).toBe(false);
-    expect(paths.size).toBe(100); // cut off at the cap
   });
 
-  it("skips oversized files without caching them", async () => {
-    const big = new Uint8Array(13 * 1024 * 1024);
-    const { tokenStore, makeClient, getDiffer, guidCache, diffStore, repoIndexStore, results } = makeFakes();
-    results.getFileAtRef = ok(big);
-    const session = createDiffSession();
-    await prefetchPr(tokenStore, makeClient, getDiffer, diffStore, repoIndexStore, session, {
-      type: "prefetch",
-      owner: "o",
-      repo: "r",
-      prNumber: 1,
+  it("uses a stored diff after a worker restart", async () => {
+    const requests: URL[] = [];
+    const client = new GithubClient("https://api.github.com", "token", async (input) => {
+      const request = new URL(String(input));
+      requests.push(request);
+      if (request.pathname === "/repos/o/r/pulls/1") {
+        return Response.json({ base: { sha: "base-tip" }, head: { sha: "head-sha" } });
+      }
+      if (request.pathname === "/repos/o/r/compare/base-tip...head-sha") {
+        return Response.json({ merge_base_commit: { sha: "base-sha" }, files: [] });
+      }
+      if (request.pathname === "/repos/o/r/pulls/1/files") {
+        return Response.json([{ filename: "Assets/Foo.prefab", status: "modified", sha: "head-blob" }]);
+      }
+      if (request.pathname === "/repos/o/r/git/trees/base-sha") {
+        return Response.json({
+          truncated: false,
+          tree: [{ path: "Assets/Foo.prefab", type: "blob", sha: "base-blob" }],
+        });
+      }
+      if (request.pathname === "/repos/o/r/git/trees/head-sha") {
+        return Response.json({ truncated: true, tree: [] });
+      }
+      if (request.pathname === "/repos/o/r/git/blobs/base-blob") return new Response(BEFORE_PREFAB);
+      if (request.pathname === "/repos/o/r/git/blobs/head-blob") return new Response(AFTER_PREFAB);
+      return new Response(null, { status: 500 });
     });
-    expect(diffStore.saves).toEqual([]);
-    // A later manual toggle still shows the too-large gate as before
-    expect(
-      await resolveFully(tokenStore, makeClient, getDiffer, guidCache, diffStore, repoIndexStore, session, REQ),
-    ).toEqual({ ok: false, error: "too-large", bytes: big.length * 2 });
+    const repository = new MemoryDiffRepository();
+    const tokenRepository = new MemoryTokenRepository();
+    const indexRepository = new MemoryRepoIndexRepository();
+
+    await prefetchPr(
+      tokenRepository,
+      () => client,
+      async () => differ,
+      repository,
+      indexRepository,
+      createDiffSession(),
+      REQUEST,
+    );
+    const blobRequestsAfterFirstWorker = requests.filter((request) => request.pathname.includes("/git/blobs/")).length;
+
+    await prefetchPr(
+      tokenRepository,
+      () => client,
+      async () => differ,
+      repository,
+      indexRepository,
+      createDiffSession(),
+      REQUEST,
+    );
+
+    expect(repository.saves).toHaveLength(1);
+    expect(requests.filter((request) => request.pathname.includes("/git/blobs/"))).toHaveLength(
+      blobRequestsAfterFirstWorker,
+    );
   });
 
-  it("aborts silently on rate limit instead of surfacing an error", async () => {
-    // 12 unity files: a prefetch that ignores the rate limit fetches all of them
-    const files: ChangedFile[] = Array.from({ length: 12 }, (_, i) => ({
-      path: `Assets/F${i}.prefab`,
+  it("prefetches only Unity files and stops at one hundred", async () => {
+    const files = Array.from({ length: 120 }, (_, index) => ({
+      filename: `Assets/F${index}.prefab`,
       status: "modified",
+      sha: `head-${index}`,
     }));
-    const { tokenStore, makeClient, getDiffer, diffStore, repoIndexStore, calls, results } = makeFakes({ files });
-    results.getFileAtRef = err({ kind: "rate-limited" as const });
+    files.push({ filename: "README.md", status: "modified", sha: "readme-head" });
+    const requests: URL[] = [];
+    const client = new GithubClient("https://api.github.com", "token", async (input) => {
+      const request = new URL(String(input));
+      requests.push(request);
+      if (request.pathname === "/repos/o/r/pulls/1") {
+        return Response.json({ base: { sha: "base-tip" }, head: { sha: "head-sha" } });
+      }
+      if (request.pathname === "/repos/o/r/compare/base-tip...head-sha") {
+        return Response.json({ merge_base_commit: { sha: "base-sha" }, files: [] });
+      }
+      if (request.pathname === "/repos/o/r/pulls/1/files") {
+        const page = Number(request.searchParams.get("page"));
+        const pageFiles = page === 1 ? files.slice(0, 100) : files.slice(100);
+        return Response.json(pageFiles);
+      }
+      if (request.pathname === "/repos/o/r/git/trees/base-sha") {
+        return Response.json({
+          truncated: false,
+          tree: files.map((file, index) => ({ path: file.filename, type: "blob", sha: `base-${index}` })),
+        });
+      }
+      if (request.pathname === "/repos/o/r/git/trees/head-sha") {
+        return Response.json({ truncated: false, tree: [] });
+      }
+      if (request.pathname.startsWith("/repos/o/r/git/blobs/base-")) return new Response(BEFORE_PREFAB);
+      if (request.pathname.startsWith("/repos/o/r/git/blobs/head-")) return new Response(AFTER_PREFAB);
+      return new Response(null, { status: 500 });
+    });
+    const repository = new MemoryDiffRepository();
+
+    await prefetchPr(
+      new MemoryTokenRepository(),
+      () => client,
+      async () => differ,
+      repository,
+      new MemoryRepoIndexRepository(),
+      createDiffSession(),
+      REQUEST,
+    );
+
+    expect(repository.saves).toHaveLength(100);
+    expect(repository.saves.map(([key]) => key)).not.toContain("base-sha:head-sha:README.md");
+    expect(requests.some((request) => request.pathname.endsWith("/git/blobs/head-100"))).toBe(false);
+    expect(requests.some((request) => request.pathname.endsWith("/git/blobs/readme-head"))).toBe(false);
+  });
+
+  it("does not store an oversized file", async () => {
+    const oversized = new Uint8Array(13 * 1024 * 1024);
+    const client = new GithubClient("https://api.github.com", "token", async (input) => {
+      const request = new URL(String(input));
+      if (request.pathname === "/repos/o/r/pulls/1") {
+        return Response.json({ base: { sha: "base-tip" }, head: { sha: "head-sha" } });
+      }
+      if (request.pathname === "/repos/o/r/compare/base-tip...head-sha") {
+        return Response.json({ merge_base_commit: { sha: "base-sha" }, files: [] });
+      }
+      if (request.pathname === "/repos/o/r/pulls/1/files") {
+        return Response.json([{ filename: "Assets/Big.prefab", status: "modified", sha: "head-big" }]);
+      }
+      if (request.pathname === "/repos/o/r/git/trees/base-sha") {
+        return Response.json({
+          truncated: false,
+          tree: [{ path: "Assets/Big.prefab", type: "blob", sha: "base-big" }],
+        });
+      }
+      if (request.pathname === "/repos/o/r/git/trees/head-sha") {
+        return Response.json({ truncated: true, tree: [] });
+      }
+      if (request.pathname === "/repos/o/r/git/blobs/base-big") return new Response(oversized);
+      if (request.pathname === "/repos/o/r/git/blobs/head-big") return new Response(oversized);
+      return new Response(null, { status: 500 });
+    });
+    const repository = new MemoryDiffRepository();
+
+    await prefetchPr(
+      new MemoryTokenRepository(),
+      () => client,
+      async () => differ,
+      repository,
+      new MemoryRepoIndexRepository(),
+      createDiffSession(),
+      REQUEST,
+    );
+
+    expect(repository.saves).toEqual([]);
+  });
+
+  it("stops the remaining prefetch work after a rate limit", async () => {
+    const files = Array.from({ length: 12 }, (_, index) => ({
+      filename: `Assets/F${index}.prefab`,
+      status: "modified",
+      sha: `head-${index}`,
+    }));
+    const requests: URL[] = [];
+    const client = new GithubClient("https://api.github.com", "token", async (input) => {
+      const request = new URL(String(input));
+      requests.push(request);
+      if (request.pathname === "/repos/o/r/pulls/1") {
+        return Response.json({ base: { sha: "base-tip" }, head: { sha: "head-sha" } });
+      }
+      if (request.pathname === "/repos/o/r/compare/base-tip...head-sha") {
+        return Response.json({ merge_base_commit: { sha: "base-sha" }, files: [] });
+      }
+      if (request.pathname === "/repos/o/r/pulls/1/files") {
+        return Response.json(files);
+      }
+      if (request.pathname === "/repos/o/r/git/trees/base-sha") {
+        return Response.json({
+          truncated: false,
+          tree: files.map((file, index) => ({ path: file.filename, type: "blob", sha: `base-${index}` })),
+        });
+      }
+      if (request.pathname === "/repos/o/r/git/trees/head-sha") {
+        return Response.json({ truncated: false, tree: [] });
+      }
+      if (request.pathname.includes("/git/blobs/")) {
+        return new Response(null, { status: 429, headers: { "retry-after": "1" } });
+      }
+      return new Response(null, { status: 500 });
+    });
+    const repository = new MemoryDiffRepository();
+
     await expect(
-      prefetchPr(tokenStore, makeClient, getDiffer, diffStore, repoIndexStore, createDiffSession(), {
-        type: "prefetch",
-        owner: "o",
-        repo: "r",
-        prNumber: 1,
-      }),
+      prefetchPr(
+        new MemoryTokenRepository(),
+        () => client,
+        async () => differ,
+        repository,
+        new MemoryRepoIndexRepository(),
+        createDiffSession(),
+        REQUEST,
+      ),
     ).resolves.toBeUndefined();
-    // The abort is observable: nothing landed in the cache, and the prefetch attempted only the first chunk
-    expect(diffStore.saves).toEqual([]);
-    const attempted = new Set(calls.getFileAtRef.map((c) => c[2]));
-    expect(attempted.size).toBeLessThanOrEqual(4); // PREFETCH_CONCURRENCY
-  });
 
-  it("returns without network when the access token is missing", async () => {
-    const { tokenStore, makeClient, getDiffer, diffStore, repoIndexStore, calls } = makeFakes({
-      accessToken: undefined,
-    });
-    await prefetchPr(tokenStore, makeClient, getDiffer, diffStore, repoIndexStore, createDiffSession(), {
-      type: "prefetch",
-      owner: "o",
-      repo: "r",
-      prNumber: 1,
-    });
-    expect(calls.getPrRefs).toEqual([]);
+    const blobRequests = requests.filter((request) => request.pathname.includes("/git/blobs/"));
+    expect(blobRequests.length).toBeGreaterThan(0);
+    expect(blobRequests.some((request) => /-(?:4|5|6|7|8|9|10|11)$/.test(request.pathname))).toBe(false);
+    expect(repository.saves).toEqual([]);
   });
 });

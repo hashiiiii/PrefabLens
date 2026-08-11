@@ -1,136 +1,240 @@
 import { describe, expect, it } from "vitest";
-import { err, ok } from "../../domain/result";
+import type { GuidMap } from "../../domain/guid/guid-map";
+import type { RepoGuidIndex } from "../../domain/guid/repo-guid-index";
+import type { RepoIndexRepository } from "../../domain/guid/repo-index-repository";
+import { GithubClient } from "../../infrastructure/clients/github-client";
 import { createDiffSession } from "../diff/create-diff-session";
-import { makeFakes } from "./diff-fakes";
 import { getRepoIndex } from "./repo-index";
 
+const API_BASE = "https://api.github.test";
 const REPO_KEY = "repoKey";
 
-// This suite reuses the shared harness. The dispatcher (calls/results/impls)
-// and the repoIndexStore fake come from diff-fakes. Only the state-derived
-// defaults for listMetaTree/batchBlobTexts are bound here.
-function fakes(overrides?: {
-  metas?: Array<{ path: string; sha: string }>;
-  truncated?: boolean;
-  texts?: Record<string, string | null>;
-  knownGuids?: Record<string, string>;
-  storedIndex?: { treeSha: string; guids: Record<string, string> };
-}) {
-  const f = makeFakes();
-  f.impls.listMetaTree = async () =>
-    ok({
-      truncated: overrides?.truncated ?? false,
-      metas: overrides?.metas ?? [{ path: "Assets/S.cs.meta", sha: "sha1" }],
-    });
-  f.impls.batchBlobTexts = async (_o, _r, oids) =>
-    ok(Object.fromEntries(oids.map((oid) => [oid, overrides?.texts?.[oid] ?? null])));
-  f.repoIndexStore.guidsData[REPO_KEY] = { ...overrides?.knownGuids };
-  if (overrides?.storedIndex) f.repoIndexStore.indexData[REPO_KEY] = overrides.storedIndex;
-  return {
-    client: f.client,
-    store: f.repoIndexStore,
-    calls: f.calls,
-    results: f.results,
-    session: createDiffSession(),
-  };
+class MemoryRepoIndexRepository implements RepoIndexRepository {
+  readonly savedGuids: Array<[string, GuidMap]> = [];
+  readonly savedIndexes: Array<[string, RepoGuidIndex]> = [];
+
+  constructor(
+    private readonly guids: Record<string, GuidMap> = {},
+    private readonly indexes: Record<string, RepoGuidIndex> = {},
+  ) {}
+
+  async loadGuids(repo: string): Promise<GuidMap> {
+    return this.guids[repo] ?? {};
+  }
+
+  async saveGuids(repo: string, entries: GuidMap): Promise<void> {
+    this.savedGuids.push([repo, entries]);
+    this.guids[repo] = { ...this.guids[repo], ...entries };
+  }
+
+  async loadIndex(repo: string): Promise<RepoGuidIndex | undefined> {
+    return this.indexes[repo];
+  }
+
+  async saveIndex(repo: string, index: RepoGuidIndex): Promise<void> {
+    this.savedIndexes.push([repo, index]);
+    this.indexes[repo] = index;
+  }
 }
 
 describe("getRepoIndex", () => {
-  it("builds guid → asset path from meta blobs and persists both layers", async () => {
-    const { client, store, session } = fakes({ texts: { sha1: "fileFormatVersion: 2\nguid: g1\n" } });
-    const res = await getRepoIndex(store, session, client, "o", "r", REPO_KEY, "H");
-    expect(res).toEqual({ g1: "Assets/S.cs" }); // path with .meta stripped
-    expect(store.savedGuids).toContainEqual([REPO_KEY, { sha1: "g1" }]);
-    expect(store.savedIndexes).toContainEqual([REPO_KEY, { treeSha: "H", guids: { g1: "Assets/S.cs" } }]);
+  it("builds and stores the GUID index from meta blobs", async () => {
+    const requests: URL[] = [];
+    const client = new GithubClient(API_BASE, "token", async (input, init) => {
+      const request = new URL(String(input));
+      requests.push(request);
+      if (request.pathname === "/repos/o/r/git/trees/H") {
+        return Response.json({
+          truncated: false,
+          tree: [{ path: "Assets/S.cs.meta", type: "blob", sha: "sha1" }],
+        });
+      }
+      if (request.pathname === "/graphql") {
+        expect(init?.method).toBe("POST");
+        return Response.json({ data: { repository: { b0: { text: "fileFormatVersion: 2\nguid: g1\n" } } } });
+      }
+      return new Response(null, { status: 500 });
+    });
+    const repository = new MemoryRepoIndexRepository();
+
+    const result = await getRepoIndex(repository, createDiffSession(), client, "o", "r", REPO_KEY, "H");
+
+    expect(result).toEqual({ g1: "Assets/S.cs" });
+    expect(repository.savedGuids).toEqual([[REPO_KEY, { sha1: "g1" }]]);
+    expect(repository.savedIndexes).toEqual([[REPO_KEY, { treeSha: "H", guids: { g1: "Assets/S.cs" } }]]);
+    expect(requests.map((request) => request.pathname)).toEqual(["/repos/o/r/git/trees/H", "/graphql"]);
   });
 
-  it("returns the stored index without any api call when the tree sha is unchanged", async () => {
-    // Without a push, neither the tree nor the blobs are re-fetched (repeat visits are zero-cost)
+  it("uses the stored index when the tree SHA is unchanged", async () => {
+    const requests: URL[] = [];
+    const client = new GithubClient(API_BASE, "token", async (input) => {
+      requests.push(new URL(String(input)));
+      return new Response(null, { status: 500 });
+    });
     const stored = { treeSha: "H", guids: { g1: "Assets/S.cs" } };
-    const { client, store, calls, session } = fakes({ storedIndex: stored });
-    expect(await getRepoIndex(store, session, client, "o", "r", REPO_KEY, "H")).toEqual(stored.guids);
-    expect(calls.listMetaTree).toEqual([]);
+    const repository = new MemoryRepoIndexRepository({}, { [REPO_KEY]: stored });
+
+    expect(await getRepoIndex(repository, createDiffSession(), client, "o", "r", REPO_KEY, "H")).toEqual(stored.guids);
+    expect(requests).toHaveLength(0);
   });
 
-  it("fetches only meta blobs missing from the persistent sha cache", async () => {
-    // blobSha → guid is a content-derived permanent cache: only changed .meta go through GraphQL
-    const { client, store, calls, session } = fakes({
-      metas: [
-        { path: "Assets/A.cs.meta", sha: "known-sha" },
-        { path: "Assets/B.cs.meta", sha: "new-sha" },
-      ],
-      knownGuids: { "known-sha": "gA" },
-      texts: { "new-sha": "guid: gB\n" },
+  it("fetches only meta blobs missing from the stored SHA cache", async () => {
+    const graphqlQueries: string[] = [];
+    const client = new GithubClient(API_BASE, "token", async (input, init) => {
+      const request = new URL(String(input));
+      if (request.pathname === "/repos/o/r/git/trees/H") {
+        return Response.json({
+          truncated: false,
+          tree: [
+            { path: "Assets/A.cs.meta", type: "blob", sha: "known-sha" },
+            { path: "Assets/B.cs.meta", type: "blob", sha: "new-sha" },
+          ],
+        });
+      }
+      if (request.pathname === "/graphql") {
+        const body = JSON.parse(String(init?.body)) as { query: string };
+        graphqlQueries.push(body.query);
+        return Response.json({ data: { repository: { b0: { text: "guid: gB\n" } } } });
+      }
+      return new Response(null, { status: 500 });
     });
-    const res = await getRepoIndex(store, session, client, "o", "r", REPO_KEY, "H");
-    expect(calls.batchBlobTexts).toHaveLength(1);
-    expect(calls.batchBlobTexts[0]?.[2]).toEqual(["new-sha"]);
-    expect(res).toEqual({ gA: "Assets/A.cs", gB: "Assets/B.cs" });
+    const repository = new MemoryRepoIndexRepository({ [REPO_KEY]: { "known-sha": "gA" } });
+
+    const result = await getRepoIndex(repository, createDiffSession(), client, "o", "r", REPO_KEY, "H");
+
+    expect(graphqlQueries).toHaveLength(1);
+    expect(graphqlQueries[0]).toContain('object(oid: "new-sha")');
+    expect(graphqlQueries[0]).not.toContain('object(oid: "known-sha")');
+    expect(result).toEqual({ gA: "Assets/A.cs", gB: "Assets/B.cs" });
   });
 
-  it("chunks graphql fetches at 100 blobs per query", async () => {
-    const metas = Array.from({ length: 250 }, (_, i) => ({ path: `Assets/F${i}.cs.meta`, sha: `s${i}` }));
-    const { client, store, calls, session } = fakes({ metas });
-    await getRepoIndex(store, session, client, "o", "r", REPO_KEY, "H");
-    expect(calls.batchBlobTexts).toHaveLength(3); // 100 + 100 + 50
-    expect(calls.batchBlobTexts[0]?.[2]).toHaveLength(100);
-    expect(calls.batchBlobTexts[2]?.[2]).toHaveLength(50);
-  });
-
-  it("gives up on truncated trees", async () => {
-    const { client, store, calls, session } = fakes({ truncated: true });
-    expect(await getRepoIndex(store, session, client, "o", "r", REPO_KEY, "H")).toBeNull();
-    expect(calls.batchBlobTexts).toEqual([]);
-  });
-
-  it("gives up above 50,000 metas (storage quota guard)", async () => {
-    const metas = Array.from({ length: 50_001 }, (_, i) => ({ path: `m${i}.meta`, sha: `s${i}` }));
-    const { client, store, session } = fakes({ metas });
-    expect(await getRepoIndex(store, session, client, "o", "r", REPO_KEY, "H")).toBeNull();
-    expect(store.savedIndexes).toEqual([]);
-  });
-
-  it("skips blobs without a parsable guid", async () => {
-    const { client, store, session } = fakes({
-      metas: [
-        { path: "Assets/A.cs.meta", sha: "sha1" },
-        { path: "Assets/B.cs.meta", sha: "sha2" },
-      ],
-      texts: { sha1: "guid: g1\n", sha2: "not yaml at all" },
+  it("fetches GraphQL blobs in groups of one hundred", async () => {
+    const metas = Array.from({ length: 250 }, (_, index) => ({
+      path: `Assets/F${index}.cs.meta`,
+      type: "blob",
+      sha: `s${index}`,
+    }));
+    const graphqlBatchSizes: number[] = [];
+    const client = new GithubClient(API_BASE, "token", async (input, init) => {
+      const request = new URL(String(input));
+      if (request.pathname === "/repos/o/r/git/trees/H") {
+        return Response.json({ truncated: false, tree: metas });
+      }
+      if (request.pathname === "/graphql") {
+        const body = JSON.parse(String(init?.body)) as { query: string };
+        graphqlBatchSizes.push(body.query.match(/object\(oid:/g)?.length ?? 0);
+        return Response.json({ data: { repository: {} } });
+      }
+      return new Response(null, { status: 500 });
     });
-    expect(await getRepoIndex(store, session, client, "o", "r", REPO_KEY, "H")).toEqual({ g1: "Assets/A.cs" });
+
+    await getRepoIndex(new MemoryRepoIndexRepository(), createDiffSession(), client, "o", "r", REPO_KEY, "H");
+
+    expect(graphqlBatchSizes).toEqual([100, 100, 50]);
   });
 
-  it("memoizes the index per repoKey@ref", async () => {
-    const { client, store, calls, session } = fakes({
-      metas: [{ path: "Assets/S.cs.meta", sha: "sha1" }],
-      texts: { sha1: "guid: g1\n" },
+  it("returns null for a truncated tree", async () => {
+    const requests: URL[] = [];
+    const client = new GithubClient(API_BASE, "token", async (input) => {
+      const request = new URL(String(input));
+      requests.push(request);
+      if (request.pathname === "/repos/o/r/git/trees/H") {
+        return Response.json({ truncated: true, tree: [] });
+      }
+      return new Response(null, { status: 500 });
     });
-    const first = await getRepoIndex(store, session, client, "o", "r", REPO_KEY, "head-sha");
-    expect(first).toEqual({ g1: "Assets/S.cs" });
-    await getRepoIndex(store, session, client, "o", "r", REPO_KEY, "head-sha");
-    // The second call shares the cached promise: not even the store is consulted again.
-    expect(store.loadIndexCalls).toHaveLength(1);
-    expect(calls.listMetaTree).toHaveLength(1);
+
+    expect(
+      await getRepoIndex(new MemoryRepoIndexRepository(), createDiffSession(), client, "o", "r", REPO_KEY, "H"),
+    ).toBeNull();
+    expect(requests.map((request) => request.pathname)).toEqual(["/repos/o/r/git/trees/H"]);
   });
 
-  it("pins the repo to fallback for the session after a rate limit", async () => {
-    const { client, store, calls, results, session } = fakes();
-    results.listMetaTree = err({ kind: "rate-limited" as const });
-    expect(await getRepoIndex(store, session, client, "o", "r", REPO_KEY, "head-sha")).toBeNull();
-    expect(await getRepoIndex(store, session, client, "o", "r", REPO_KEY, "head-sha")).toBeNull();
-    expect(calls.listMetaTree).toHaveLength(1); // fallback: Code Search only from here on
-  });
-
-  it("retries after a non-rate-limit failure instead of caching it", async () => {
-    const { client, store, results, session } = fakes({
-      metas: [{ path: "Assets/S.cs.meta", sha: "sha1" }],
-      texts: { sha1: "guid: g1\n" },
+  it("returns null for more than fifty thousand meta files", async () => {
+    const metas = Array.from({ length: 50_001 }, (_, index) => ({
+      path: `Assets/F${index}.meta`,
+      type: "blob",
+      sha: `s${index}`,
+    }));
+    const requests: URL[] = [];
+    const client = new GithubClient(API_BASE, "token", async (input) => {
+      const request = new URL(String(input));
+      requests.push(request);
+      if (request.pathname === "/repos/o/r/git/trees/H") {
+        return Response.json({ truncated: false, tree: metas });
+      }
+      return new Response(null, { status: 500 });
     });
-    results.listMetaTree = [err({ kind: "fetch-failed" as const })];
-    expect(await getRepoIndex(store, session, client, "o", "r", REPO_KEY, "head-sha")).toBeNull();
-    expect(await getRepoIndex(store, session, client, "o", "r", REPO_KEY, "head-sha")).toEqual({
+    const repository = new MemoryRepoIndexRepository();
+
+    expect(await getRepoIndex(repository, createDiffSession(), client, "o", "r", REPO_KEY, "H")).toBeNull();
+    expect(repository.savedIndexes).toEqual([]);
+    expect(requests.map((request) => request.pathname)).toEqual(["/repos/o/r/git/trees/H"]);
+  });
+
+  it("skips meta files without a GUID", async () => {
+    const client = new GithubClient(API_BASE, "token", async (input) => {
+      const request = new URL(String(input));
+      if (request.pathname === "/repos/o/r/git/trees/H") {
+        return Response.json({
+          truncated: false,
+          tree: [
+            { path: "Assets/A.cs.meta", type: "blob", sha: "sha1" },
+            { path: "Assets/B.cs.meta", type: "blob", sha: "sha2" },
+          ],
+        });
+      }
+      if (request.pathname === "/graphql") {
+        return Response.json({
+          data: { repository: { b0: { text: "guid: g1\n" }, b1: { text: "not yaml at all" } } },
+        });
+      }
+      return new Response(null, { status: 500 });
+    });
+
+    expect(
+      await getRepoIndex(new MemoryRepoIndexRepository(), createDiffSession(), client, "o", "r", REPO_KEY, "H"),
+    ).toEqual({ g1: "Assets/A.cs" });
+  });
+
+  it("pins session fallback after a rate limit", async () => {
+    const requests: URL[] = [];
+    const client = new GithubClient(API_BASE, "token", async (input) => {
+      requests.push(new URL(String(input)));
+      return new Response(null, { status: 429 });
+    });
+    const session = createDiffSession();
+    const repository = new MemoryRepoIndexRepository();
+
+    expect(await getRepoIndex(repository, session, client, "o", "r", REPO_KEY, "H")).toBeNull();
+    expect(await getRepoIndex(repository, session, client, "o", "r", REPO_KEY, "H")).toBeNull();
+    expect(requests).toHaveLength(1);
+  });
+
+  it("retries after a non-rate-limit failure", async () => {
+    let treeRequests = 0;
+    const client = new GithubClient(API_BASE, "token", async (input) => {
+      const request = new URL(String(input));
+      if (request.pathname === "/repos/o/r/git/trees/H") {
+        treeRequests += 1;
+        if (treeRequests === 1) return new Response(null, { status: 500 });
+        return Response.json({
+          truncated: false,
+          tree: [{ path: "Assets/S.cs.meta", type: "blob", sha: "sha1" }],
+        });
+      }
+      if (request.pathname === "/graphql") {
+        return Response.json({ data: { repository: { b0: { text: "guid: g1\n" } } } });
+      }
+      return new Response(null, { status: 500 });
+    });
+    const session = createDiffSession();
+    const repository = new MemoryRepoIndexRepository();
+
+    expect(await getRepoIndex(repository, session, client, "o", "r", REPO_KEY, "H")).toBeNull();
+    expect(await getRepoIndex(repository, session, client, "o", "r", REPO_KEY, "H")).toEqual({
       g1: "Assets/S.cs",
     });
+    expect(treeRequests).toBe(2);
   });
 });

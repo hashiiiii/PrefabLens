@@ -14,9 +14,9 @@ The extension is at version 0.8.1. The refactor can remove obsolete compatibilit
 
 The work covers the production code, tests, and design rules under `extension/`. It also updates `docs/extension.md`.
 
-The work excludes the existing `renovate.json` change. It does not add features or perform speculative performance work.
+The work excludes the existing `renovate.json` change. It does not add features. It does not do speculative performance work.
 
-The extension commits between `main` and `HEAD` are provisional. The refactor can replace their implementation while it preserves behavior.
+The extension commits between `main` and `HEAD` are provisional. The refactor can replace their implementation. It must preserve behavior.
 
 ## Architecture
 
@@ -55,7 +55,7 @@ The `chrome.runtime` request, response, and push types move from `domain/diff/ty
 
 ### Composition root
 
-The `container.ts` file selects clients, supplies concrete values, and connects dependencies. It does not perform I/O or apply policies.
+The `container.ts` file selects clients, supplies concrete values, and connects dependencies. It does not perform I/O. It does not apply policies.
 
 ## Simplicity Rules
 
@@ -73,7 +73,7 @@ The `container.ts` file selects clients, supplies concrete values, and connects 
 - Add comments only for a reason or a constraint.
 - Delete comments that restate the code.
 
-These rules make `view-mode-storage.ts` an inline candidate. The file has one caller and does not own an independent policy.
+These rules make `view-mode-storage.ts` an inline candidate. The file has one caller. It does not own an independent policy.
 
 These rules also remove `application/internal/diff-fakes.ts` from the production tree. Tests can contain small local repetition.
 
@@ -87,9 +87,9 @@ content -> messenger -> background -> use case
         -> Result or push -> content render
 ```
 
-The content script detects the page and sends a typed request. The background entry point supplies each use-case dependency explicitly.
+The content script detects the page. Then it sends a typed request. The background entry point supplies each use-case dependency explicitly.
 
-The use case gets GitHub data and stored data. It calls WASM and returns a `Result` or a later push.
+The use case gets GitHub data and stored data. It calls WASM. Then it returns a `Result` or a later push.
 
 The content script owns the final UI state and render operation.
 
@@ -99,7 +99,7 @@ The content script owns the final UI state and render operation.
 
 Simplify `content/index.ts`, DOM detection, view state, and overlay coordination. Preserve SPA, React remount, Device Flow, and view-mode behavior.
 
-Move the logic from `view-mode-storage.ts` back to its only caller. Remove test cases that only fix an implementation method.
+Move the logic from `view-mode-storage.ts` into its only caller. Remove test cases that only lock an implementation method.
 
 ### 2. Semantic diff
 
@@ -119,7 +119,7 @@ Remove the old `pat` migration and its tests. Keep GitHub pagination, rate-limit
 
 Keep the renderer cohesive. Do not divide it because of its line count.
 
-If both contexts use the same policy, share content and demo code. Do not hide context differences behind adapters.
+If both contexts use the same policy, share content and demo code. Do not put context differences behind adapters.
 
 ### 5. Final audit
 
@@ -129,13 +129,13 @@ Align `docs/extension.md`, layer rules, exports, comments, and tests with the fi
 
 Clients classify concrete HTTP, Chrome, WASM, and storage failures. Use cases return expected failures as explicit `Result` values.
 
-Only programmer errors and unexpected runtime failures reject. Each failure changes form at one boundary only.
+Only programmer errors and unexpected runtime failures cause a rejection. Each failure changes form at one boundary only.
 
 The fetch queue owns rate-limit retries. Prefetch failures do not block a user action.
 
 If GUID or source resolution fails, the use case returns the available diff. It also reports the resolution status.
 
-An asynchronous push reports completion after success or failure. This rule prevents content waiters from remaining active forever.
+An asynchronous push reports completion after success or failure. This rule stops content waiters that stay active forever.
 
 Storage failures do not stop an otherwise usable page. A comment explains why the code can ignore each such failure.
 
@@ -147,7 +147,7 @@ A test must satisfy all these statements:
 
 - The test detects a realistic regression with a clear effect.
 - The test protects a stable contract.
-- No other test detects the same risk sufficiently.
+- No other test detects the same risk with enough precision.
 - The test does not depend unnecessarily on an implementation method.
 - The detection value is higher than the maintenance cost.
 
@@ -162,11 +162,11 @@ Keep tests for these risks:
 
 Delete tests that only examine DOM classes, icons, private call counts, or obsolete compatibility behavior.
 
-If a higher-level test detects the same risk with sufficient precision, delete the lower-level tests.
+If a higher-level test detects the same risk with enough precision, delete the lower-level tests.
 
 If each level detects a different failure cause, a historical failure can have tests at two levels.
 
-Do not use mocks or stubs. Prefer real implementations, real `Response` objects, and in-memory repositories.
+Do not use mocks or stubs. Use real implementations, real `Response` objects, and in-memory repositories.
 
 If one file uses a helper, keep it in that test file. If sharing is necessary, use `extension/test-support/`.
 

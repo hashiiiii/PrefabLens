@@ -15,63 +15,16 @@ import type {
   SemanticDiffResponse,
 } from "../gateway/messenger";
 import { API_BASE } from "../internal/api-base";
+import { mergeGithubSources } from "../internal/github-source-merge";
 import { resolveGuids } from "../internal/guid-resolution";
-import { getBlob, getContext, getDiff, getPair } from "../internal/raw-diff";
+import { getContext, getDiff, getPair } from "../internal/raw-diff";
 import { getRepoIndex } from "../internal/repo-index";
-import { mergeSourceRounds } from "../internal/source-rounds";
 import type { DiffContext, DiffSession } from "./create-diff-session";
 
 type ResolutionClient = Pick<
   GithubGateway,
   "searchMetaByGuid" | "listMetaTree" | "batchBlobTexts" | "getBlobRaw" | "getFileAtRef"
 >;
-
-function updateSources(
-  guidCache: GuidRepository,
-  session: DiffSession,
-  client: ResolutionClient,
-  owner: string,
-  repo: string,
-  repoKey: string,
-  differ: DifferGateway,
-  first: DiffV2,
-  before: Uint8Array,
-  after: Uint8Array,
-  context: DiffContext,
-): Promise<{ json: DiffV2; status: ResolutionStatus }> {
-  return mergeSourceRounds(
-    differ,
-    before,
-    after,
-    first,
-    async (s, path) => {
-      const sha = s.side === "before" ? context.refs.baseSha : context.refs.headSha;
-      // Sources are not PR files: only the base tree can supply a sha. The head side keeps the path fallback.
-      const blobSha = s.side === "before" ? context.baseShas?.get(path) : undefined;
-      const bytes = await getBlob(session, client, owner, repo, path, sha, blobSha);
-      // The loop degrades to the diff so far but reports the cause (#194).
-      if (!bytes.ok) return { abort: isRateLimited(bytes.error) ? "rateLimited" : "failed" };
-      if (!bytes.value) return { skip: true };
-      return { bytes: bytes.value };
-    },
-    async (json) => {
-      const withIndex = applyResolved(json, context.guidIndex);
-      const found = await resolveGuids(
-        guidCache,
-        session,
-        client,
-        owner,
-        repo,
-        repoKey,
-        unresolvedRemaining(withIndex),
-      );
-      return {
-        json: { ...withIndex, resolved: { ...withIndex.resolved, ...found.resolved } },
-        rateLimited: found.rateLimited,
-      };
-    },
-  );
-}
 
 // Background: the index, then Code Search, then the source re-merge via push. The catch still emits done to release waiters.
 async function updateRemaining(
@@ -105,7 +58,7 @@ async function updateRemaining(
         else leftover.push(g);
       }
       if (Object.keys(fromIndex).length) {
-        // The hits land in guidCache: updateSources rebuilds via applyResolved. Without this save, index hits vanish.
+        // The hits land in guidCache: source merging rebuilds via applyResolved. Without this save, index hits vanish.
         await guidCache.save(repoKey, fromIndex);
         // Deliver the available names first. The later final push makes the structure final.
         push({ type: "guidResolved", ...at, resolved: fromIndex, done: false });
@@ -135,18 +88,18 @@ async function updateRemaining(
         return;
       }
       const [before, after] = pair.value;
-      const merged = await updateSources(
+      const merged = await mergeGithubSources(
+        differ,
         guidCache,
         session,
         client,
         owner,
         repo,
         repoKey,
-        differ,
-        json,
+        context,
         before,
         after,
-        context,
+        json,
       );
       json = merged.json;
       // rateLimited wins: this kind has the best chance to succeed on a manual retry.

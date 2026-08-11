@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
-import type { GuidMap } from "../../domain/guid/guid-map";
-import type { RepoGuidIndex } from "../../domain/guid/repo-guid-index";
-import type { RepoIndexRepository } from "../../domain/guid/repo-index-repository";
-import { GithubClient } from "../../infrastructure/clients/github-client";
-import { createDiffSession } from "../diff/create-diff-session";
-import { getRepoIndex } from "./repo-index";
+import { createDiffSession } from "../../src/application/diff/create-diff-session";
+import { getRepoIndex } from "../../src/application/internal/repo-index";
+import type { GuidMap } from "../../src/domain/guid/guid-map";
+import type { RepoGuidIndex } from "../../src/domain/guid/repo-guid-index";
+import type { RepoIndexRepository } from "../../src/domain/guid/repo-index-repository";
+import { GithubClient } from "../../src/infrastructure/clients/github-client";
 
 const API_BASE = "https://api.github.test";
 const REPO_KEY = "repoKey";

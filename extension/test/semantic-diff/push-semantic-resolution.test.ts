@@ -1,16 +1,16 @@
 /// <reference types="node" />
 import { readFileSync } from "node:fs";
 import { beforeAll, describe, expect, it } from "vitest";
-import { type DiffV2, emptyDiff } from "../../domain/diff/types";
-import type { GuidRepository } from "../../domain/guid/guid-repository";
-import type { RepoGuidIndex } from "../../domain/guid/repo-guid-index";
-import type { RepoIndexRepository } from "../../domain/guid/repo-index-repository";
-import { GithubClient } from "../../infrastructure/clients/github-client";
-import { createDiffer } from "../../infrastructure/clients/wasm-differ-client";
-import { createDiffSession, type DiffContext } from "../diff/create-diff-session";
-import type { DifferGateway } from "../gateway/differ";
-import type { GuidResolvedPush, SemanticDiffRequest } from "../gateway/messenger";
-import { pushSemanticResolution } from "./push-semantic-resolution";
+import { createDiffSession, type DiffContext } from "../../src/application/diff/create-diff-session";
+import type { DifferGateway } from "../../src/application/gateway/differ";
+import type { GuidResolvedPush, SemanticDiffRequest } from "../../src/application/gateway/messenger";
+import { pushSemanticResolution } from "../../src/application/internal/push-semantic-resolution";
+import { type DiffV2, emptyDiff } from "../../src/domain/diff/types";
+import type { GuidRepository } from "../../src/domain/guid/guid-repository";
+import type { RepoGuidIndex } from "../../src/domain/guid/repo-guid-index";
+import type { RepoIndexRepository } from "../../src/domain/guid/repo-index-repository";
+import { GithubClient } from "../../src/infrastructure/clients/github-client";
+import { createDiffer } from "../../src/infrastructure/clients/wasm-differ-client";
 
 const API_BASE = "https://api.github.test";
 const OWNER = "o";
@@ -125,7 +125,7 @@ function sourceDiff(resolved?: Record<string, string>): DiffV2 {
 let differ: DifferGateway;
 
 beforeAll(async () => {
-  const bytes = readFileSync(new URL("../../../../zig-out/bin/prefablens.wasm", import.meta.url));
+  const bytes = readFileSync(new URL("../../../zig-out/bin/prefablens.wasm", import.meta.url));
   differ = await createDiffer(bytes);
 });
 

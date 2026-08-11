@@ -1,14 +1,14 @@
 /// <reference types="node" />
 import { readFileSync } from "node:fs";
 import { beforeAll, describe, expect, it, vi } from "vitest";
-import { AFTER_PREFAB, BEFORE_PREFAB } from "../../../test-support/unity-fixtures";
-import type { DiffRepository } from "../../domain/diff/diff-repository";
-import type { DiffV2 } from "../../domain/diff/types";
-import { GithubClient } from "../../infrastructure/clients/github-client";
-import { createDiffer } from "../../infrastructure/clients/wasm-differ-client";
-import { createDiffSession } from "../diff/create-diff-session";
-import type { DifferGateway } from "../gateway/differ";
-import { getContext, getDiff } from "./raw-diff";
+import { AFTER_PREFAB, BEFORE_PREFAB } from "../../fixtures/unity";
+import { createDiffSession } from "../../src/application/diff/create-diff-session";
+import type { DifferGateway } from "../../src/application/gateway/differ";
+import { getContext, getDiff } from "../../src/application/internal/raw-diff";
+import type { DiffRepository } from "../../src/domain/diff/diff-repository";
+import type { DiffV2 } from "../../src/domain/diff/types";
+import { GithubClient } from "../../src/infrastructure/clients/github-client";
+import { createDiffer } from "../../src/infrastructure/clients/wasm-differ-client";
 
 const API_BASE = "https://api.github.test";
 const OWNER = "o";
@@ -58,7 +58,7 @@ function expectVolumeChange(json: DiffV2): void {
 let differ: DifferGateway;
 
 beforeAll(async () => {
-  const bytes = readFileSync(new URL("../../../../zig-out/bin/prefablens.wasm", import.meta.url));
+  const bytes = readFileSync(new URL("../../../zig-out/bin/prefablens.wasm", import.meta.url));
   differ = await createDiffer(bytes);
 });
 

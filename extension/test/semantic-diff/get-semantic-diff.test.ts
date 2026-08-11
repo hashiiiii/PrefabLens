@@ -1,20 +1,20 @@
 /// <reference types="node" />
 import { readFileSync } from "node:fs";
 import { beforeAll, describe, expect, it } from "vitest";
-import { AFTER_PREFAB, BEFORE_PREFAB } from "../../../test-support/unity-fixtures";
-import type { PendingSignIn } from "../../domain/auth/token";
-import type { TokenRepository } from "../../domain/auth/token-repository";
-import type { DiffRepository } from "../../domain/diff/diff-repository";
-import type { DiffV2 } from "../../domain/diff/types";
-import type { GuidRepository } from "../../domain/guid/guid-repository";
-import type { RepoGuidIndex } from "../../domain/guid/repo-guid-index";
-import type { RepoIndexRepository } from "../../domain/guid/repo-index-repository";
-import { GithubClient } from "../../infrastructure/clients/github-client";
-import { createDiffer } from "../../infrastructure/clients/wasm-differ-client";
-import type { DifferGateway } from "../gateway/differ";
-import type { GuidResolvedPush, SemanticDiffRequest } from "../gateway/messenger";
-import { createDiffSession } from "./create-diff-session";
-import { getSemanticDiff } from "./get-semantic-diff";
+import { AFTER_PREFAB, BEFORE_PREFAB } from "../../fixtures/unity";
+import { createDiffSession } from "../../src/application/diff/create-diff-session";
+import { getSemanticDiff } from "../../src/application/diff/get-semantic-diff";
+import type { DifferGateway } from "../../src/application/gateway/differ";
+import type { GuidResolvedPush, SemanticDiffRequest } from "../../src/application/gateway/messenger";
+import type { PendingSignIn } from "../../src/domain/auth/token";
+import type { TokenRepository } from "../../src/domain/auth/token-repository";
+import type { DiffRepository } from "../../src/domain/diff/diff-repository";
+import type { DiffV2 } from "../../src/domain/diff/types";
+import type { GuidRepository } from "../../src/domain/guid/guid-repository";
+import type { RepoGuidIndex } from "../../src/domain/guid/repo-guid-index";
+import type { RepoIndexRepository } from "../../src/domain/guid/repo-index-repository";
+import { GithubClient } from "../../src/infrastructure/clients/github-client";
+import { createDiffer } from "../../src/infrastructure/clients/wasm-differ-client";
 
 const OWNER = "o";
 const REPO = "r";
@@ -77,7 +77,7 @@ class MemoryRepoIndexRepository implements RepoIndexRepository {
 let differ: DifferGateway;
 
 beforeAll(async () => {
-  const bytes = readFileSync(new URL("../../../../zig-out/bin/prefablens.wasm", import.meta.url));
+  const bytes = readFileSync(new URL("../../../zig-out/bin/prefablens.wasm", import.meta.url));
   differ = await createDiffer(bytes);
 });
 

@@ -168,7 +168,12 @@ If each level detects a different failure cause, a historical failure can have t
 
 Do not use mocks or stubs. Use real implementations, real `Response` objects, and in-memory repositories.
 
-If one file uses a helper, keep it in that test file. If sharing is necessary, use `extension/test-support/`.
+Tests under `src/` obey the layer import direction.
+The `extension/test/` directory is a test composition root outside the product layers.
+Put tests that compose multiple layers under `extension/test/`.
+The `extension/fixtures/` directory contains shared static test data.
+If one file uses a helper, keep it in that test file.
+Do not put test-only helpers in `extension/src/`.
 
 ## Design Enforcement
 

@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
-import type { GuidRepository } from "../../domain/guid/guid-repository";
-import { GithubClient } from "../../infrastructure/clients/github-client";
-import { createDiffSession } from "../diff/create-diff-session";
-import { resolveGuids } from "./guid-resolution";
+import { createDiffSession } from "../../src/application/diff/create-diff-session";
+import { resolveGuids } from "../../src/application/internal/guid-resolution";
+import type { GuidRepository } from "../../src/domain/guid/guid-repository";
+import { GithubClient } from "../../src/infrastructure/clients/github-client";
 
 const REPO_KEY = "https://api.github.test:o/r";
 

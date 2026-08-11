@@ -161,10 +161,12 @@ presentation/
 
 #### Tests
 
+- Tests under `src/` obey the layer import direction.
+- `test/` is a test composition root outside the product layers.
+- Put tests that compose multiple layers under `test/`.
+- `fixtures/` contains shared static test data.
 - Keep test-only helpers in test files when one file uses them.
-- If two or more test files share a harness, put it in
-  `application/internal/<noun>.ts` with a clear name (for example `diff-fakes.ts`).
-  Import that module only from tests.
+- Do not put test-only helpers in `src/`.
 
 ### Layer contracts
 

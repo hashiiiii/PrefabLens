@@ -47,7 +47,7 @@ describe("fillDeviceCode", () => {
   it("does not change the form when the pending code expired", () => {
     document.body.innerHTML = FORM;
     fillDeviceCode(document, PENDING, 10_001);
-    expect(boxes().map(b => b.value)).toStrictEqual(["", "", "", "", "", "", "", ""]);
+    expect(boxes().map((b) => b.value)).toStrictEqual(["", "", "", "", "", "", "", ""]);
   });
 
   it("does not change a box that the user already filled", () => {

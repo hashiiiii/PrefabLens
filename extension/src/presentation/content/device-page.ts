@@ -9,7 +9,7 @@ export function fillDeviceCode(doc: Document, pending: PendingSignIn, now: numbe
   if (boxes.length !== chars.length || boxes.some((box) => box.value)) return;
   boxes.forEach((box, i) => {
     box.value = chars.charAt(i);
-    // Fire an "input" event so GitHub's UI detects the change and triggers automatic focus or related logic, just like manual typing.
+    // Keep GitHub's per-box auto-advance code in sync with the programmatic fill.
     box.dispatchEvent(new Event("input", { bubbles: true }));
   });
 }

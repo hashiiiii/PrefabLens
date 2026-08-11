@@ -30,6 +30,7 @@ import { fillDeviceCode } from "./device-page";
 import { flushAuthRetries } from "./overlay/auth-retries";
 import { emptyFileView, type FileViewDeps, resolvingCount, showFileView, syncFileView } from "./overlay/file-view";
 import { pruneDisconnectedViews, type ViewEntry, type ViewRegistry } from "./overlay/views";
+import { loadViewMode, saveViewMode } from "./view-mode-storage";
 
 const ERROR_TEXT: Record<BackgroundError, string> = {
   "access-token-missing": "Please sign in with GitHub to view semantic diffs.",
@@ -90,7 +91,7 @@ const openTab = (url: string) => void window.open(url, "_blank", "noopener");
 const now = () => Date.now();
 
 const persistView = (view: View): void => {
-  void chrome.storage.local.set({ viewMode: view }).catch(() => {});
+  void saveViewMode(view);
 };
 
 // Auth-error panel: device flow. Failures land back here for retry.
@@ -224,8 +225,7 @@ async function initDevicePage(): Promise<void> {
 }
 
 async function initDiffRuntime(): Promise<void> {
-  const stored = await chrome.storage.local.get(["viewMode"]).catch(() => ({}) as Record<string, unknown>);
-  const initial: View = stored.viewMode === "semantic" ? "semantic" : "raw";
+  const initial = await loadViewMode();
   const viewState = emptyViewState(initial);
   onDefaultChange(viewState, (view) => {
     globalToggle?.set(view);

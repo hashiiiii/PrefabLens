@@ -6,13 +6,7 @@ import { expect, vi } from "vitest";
 import type { TokenRepository } from "../../domain/auth/token-repository";
 import type { DiffRepository } from "../../domain/diff/diff-repository";
 import { repoKey } from "../../domain/diff/fn/repo-key";
-import {
-  type DiffV2,
-  emptyDiff,
-  type GuidResolvedPush,
-  type SemanticDiffRequest,
-  type SemanticDiffResponse,
-} from "../../domain/diff/types";
+import { type DiffV2, emptyDiff } from "../../domain/diff/types";
 import type { GuidMap } from "../../domain/guid/guid-map";
 import type { GuidRepository } from "../../domain/guid/guid-repository";
 import type { RepoGuidIndex } from "../../domain/guid/repo-guid-index";
@@ -22,6 +16,7 @@ import type { DiffSession } from "../diff/create-diff-session";
 import { getSemanticDiff } from "../diff/get-semantic-diff";
 import type { DifferGateway } from "../gateway/differ";
 import type { ChangedFile, GithubGateway, MakeGithubClient } from "../gateway/github";
+import type { GuidResolvedPush, SemanticDiffRequest, SemanticDiffResponse } from "../gateway/messenger";
 import { API_BASE } from "./api-base";
 
 type GetDiffer = () => Promise<DifferGateway>;

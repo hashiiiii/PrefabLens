@@ -1,4 +1,4 @@
-import type { BackgroundError, DiffV2 } from "../../domain/diff/types";
+import type { DiffV2 } from "../../domain/diff/types";
 import type { Result } from "../../domain/result";
 import type { ChangedFile, GithubFailure, RefPair } from "../gateway/github";
 
@@ -56,11 +56,12 @@ export type DiffContext = {
   baseShas: Map<string, string> | null;
 };
 
-// SemanticDiffResponse minus the states that only getSemanticDiff can produce
-// (access-token-missing, pending). A new BackgroundError member flows in here.
 export type DiffOutcome =
   | { ok: true; json: DiffV2 }
-  | { ok: false; error: Exclude<BackgroundError, "access-token-missing"> }
+  | {
+      ok: false;
+      error: GithubFailure["kind"] | "diff-failed" | "not-unity-yaml";
+    }
   | { ok: false; error: "too-large"; bytes: number };
 
 export type DiffSession = {

@@ -3,17 +3,17 @@ import type { DiffRepository } from "../../domain/diff/diff-repository";
 import { applyResolved } from "../../domain/diff/fn/apply-resolved";
 import { repoKey } from "../../domain/diff/fn/repo-key";
 import { unresolvedRemaining } from "../../domain/diff/fn/unresolved-remaining";
+import type { DiffV2 } from "../../domain/diff/types";
+import type { GuidRepository } from "../../domain/guid/guid-repository";
+import type { RepoIndexRepository } from "../../domain/guid/repo-index-repository";
+import type { DifferGateway } from "../gateway/differ";
+import { type GithubGateway, isRateLimited, type MakeGithubClient } from "../gateway/github";
 import type {
-  DiffV2,
   GuidResolvedPush,
   ResolutionStatus,
   SemanticDiffRequest,
   SemanticDiffResponse,
-} from "../../domain/diff/types";
-import type { GuidRepository } from "../../domain/guid/guid-repository";
-import type { RepoIndexRepository } from "../../domain/guid/repo-index-repository";
-import type { DifferGateway } from "../gateway/differ";
-import { type GithubGateway, isRateLimited, type MakeGithubClient, toBackgroundError } from "../gateway/github";
+} from "../gateway/messenger";
 import { API_BASE } from "../internal/api-base";
 import { getBlob, getContext, getDiff, getPair } from "../internal/raw-diff";
 import { getRepoIndex } from "../internal/repo-index";
@@ -203,7 +203,7 @@ export async function getSemanticDiff(
   if (!accessToken) return { ok: false, error: "access-token-missing" };
   const client = makeClient(API_BASE, accessToken, "user");
   const ctxResult = await getContext(session, client, req.owner, req.repo, req.target);
-  if (!ctxResult.ok) return { ok: false, error: toBackgroundError(ctxResult.error) };
+  if (!ctxResult.ok) return { ok: false, error: ctxResult.error.kind };
   const ctx = ctxResult.value;
   const outcome = await getDiff(
     getDiffer,

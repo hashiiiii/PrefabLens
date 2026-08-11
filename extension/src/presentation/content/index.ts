@@ -1,7 +1,7 @@
 import { type SignInFailure, signIn } from "../../application/auth/sign-in";
+import type { AuthError, GuidResolvedPush } from "../../application/gateway/messenger";
 import { createGithubAuth, createMessenger, createTokenStore } from "../../container";
 import { targetKey } from "../../domain/diff/fn/target-key";
-import type { AuthError, GuidResolvedPush } from "../../domain/diff/types";
 import { renderSignIn, renderSignInPending } from "../internal/render";
 import { mountGlobalBar, type Toggle } from "../internal/toggle";
 import type { View } from "../internal/view-mode";

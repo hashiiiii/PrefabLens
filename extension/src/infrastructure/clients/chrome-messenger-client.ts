@@ -1,5 +1,9 @@
-import type { MessengerGateway } from "../../application/gateway/messenger";
-import type { PrefetchRequest, SemanticDiffRequest, SemanticDiffResponse } from "../../domain/diff/types";
+import type {
+  MessengerGateway,
+  PrefetchRequest,
+  SemanticDiffRequest,
+  SemanticDiffResponse,
+} from "../../application/gateway/messenger";
 
 // The chrome.runtime relay to the background service worker. sendMessage
 // rejects on channel loss (SW restart, teardown). This is the one place that

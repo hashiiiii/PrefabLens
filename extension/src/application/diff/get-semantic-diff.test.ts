@@ -1,10 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import { repoKey } from "../../domain/diff/fn/repo-key";
-import { type DiffV2, emptyDiff, type GuidResolvedPush } from "../../domain/diff/types";
+import { type DiffV2, emptyDiff } from "../../domain/diff/types";
 import { err, ok } from "../../domain/result";
 import { must } from "../../internal/must";
 import type { DifferGateway } from "../gateway/differ";
 import type { ChangedFile } from "../gateway/github";
+import type { GuidResolvedPush } from "../gateway/messenger";
 import { API_BASE } from "../internal/api-base";
 import { DIFF, makeFakes, REQ, resolveFully, serveAndResolve } from "../internal/diff-fakes";
 import { createDiffSession } from "./create-diff-session";

@@ -1,7 +1,7 @@
-import { mergeResolvedPush } from "../../../domain/diff/fn/merge-resolved-push";
+import type { GuidResolvedPush } from "../../../application/gateway/messenger";
 import { targetKey } from "../../../domain/diff/fn/target-key";
 import { unresolvedRemaining } from "../../../domain/diff/fn/unresolved-remaining";
-import type { DiffTarget, DiffV2, GuidResolvedPush } from "../../../domain/diff/types";
+import type { DiffTarget, DiffV2 } from "../../../domain/diff/types";
 import { render } from "../../internal/render";
 
 export type ViewEntry = {
@@ -14,6 +14,15 @@ export type ViewEntry = {
 export type ViewRegistry = Map<string, ViewEntry>;
 
 const WATCHDOG_MS = 120_000;
+
+function mergeResolvedPush(current: DiffV2, message: GuidResolvedPush): DiffV2 {
+  return (
+    message.json ?? {
+      ...current,
+      resolved: { ...current.resolved, ...message.resolved },
+    }
+  );
+}
 
 export function viewKey(owner: string, repo: string, target: DiffTarget, path: string): string {
   return `${targetKey(owner, repo, target)}:${path}`;

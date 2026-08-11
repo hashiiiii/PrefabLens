@@ -1,6 +1,10 @@
-import type { MessengerGateway } from "../../../application/gateway/messenger";
+import {
+  type AuthError,
+  type BackgroundError,
+  isAuthError,
+  type MessengerGateway,
+} from "../../../application/gateway/messenger";
 import { unresolvedRemaining } from "../../../domain/diff/fn/unresolved-remaining";
-import { type AuthError, type BackgroundError, isAuthError } from "../../../domain/diff/types";
 import { must } from "../../../internal/must";
 import { createViewHost, render, renderError, renderLoading, renderTooLarge } from "../../internal/render";
 import { mountToggle } from "../../internal/toggle";

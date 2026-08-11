@@ -1,4 +1,3 @@
-import type { BackgroundError } from "../../domain/diff/types";
 import type { Result } from "../../domain/result";
 
 export type GithubFailure =
@@ -8,12 +7,6 @@ export type GithubFailure =
 
 export function isRateLimited(e: unknown): e is Extract<GithubFailure, { kind: "rate-limited" }> {
   return typeof e === "object" && e !== null && (e as { kind?: string }).kind === "rate-limited";
-}
-
-// GithubFailure kinds are spelled to be valid BackgroundError members. The
-// intersection return type lets the compiler enforce that contract here.
-export function toBackgroundError(e: GithubFailure): GithubFailure["kind"] & BackgroundError {
-  return e.kind;
 }
 
 // The pipeline branches only on added/removed. The client folds the other

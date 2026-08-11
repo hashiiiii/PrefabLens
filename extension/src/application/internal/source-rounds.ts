@@ -1,5 +1,6 @@
-import type { DiffV2, NeededSource, ResolutionStatus } from "../../domain/diff/types";
+import type { DiffV2, NeededSource } from "../../domain/diff/types";
 import type { DifferGateway } from "../gateway/differ";
+import type { ResolutionStatus } from "../gateway/messenger";
 
 export const MAX_SOURCE_ROUNDS = 3; // Re-diff cap for nested sources. Core has a separate depth cap of 8.
 

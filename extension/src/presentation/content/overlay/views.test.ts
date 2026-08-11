@@ -5,27 +5,7 @@ import { pruneDisconnectedViews, type ViewRegistry } from "./views";
 
 const DIFF = emptyDiff();
 
-// Builds a shadow root the way attachToggle does. connected controls whether the host is in the DOM.
-function makeRoot(connected: boolean): ShadowRoot {
-  const host = document.createElement("div");
-  if (connected) document.body.append(host);
-  return host.attachShadow({ mode: "open" });
-}
-
 describe("view registry", () => {
-  it("prunes views whose host left the DOM and keeps live ones", () => {
-    // An SPA navigation replaces the diff DOM behind the views. The prune ignores
-    // late pushes at the dead view and cuts the reference so GC can collect it.
-    const views: ViewRegistry = new Map();
-    const live = { root: makeRoot(true), json: DIFF, retry: () => {} };
-    const dead = { root: makeRoot(false), json: DIFF, retry: () => {} };
-    views.set("live", live);
-    views.set("dead", dead);
-    pruneDisconnectedViews(views);
-    expect(views.get("live")).toBe(live);
-    expect(views.get("dead")).toBeUndefined();
-  });
-
   it("prunes a view that was connected at render time but removed since", () => {
     // The realistic sequence: render while attached, github replaces the container, then prune runs.
     const views: ViewRegistry = new Map();

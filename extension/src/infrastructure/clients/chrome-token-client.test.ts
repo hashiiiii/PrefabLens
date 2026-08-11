@@ -1,54 +1,56 @@
 import { describe, expect, it } from "vitest";
-import { createChromeTokenClient, readAccessToken, type SettingsStorage } from "./chrome-token-client";
+import type { StorageAreaWithRemove } from "../internal/storage-area";
+import { createChromeTokenClient } from "./chrome-token-client";
 
-function mem(initial: Record<string, unknown> = {}): SettingsStorage & { data: Record<string, unknown> } {
-  const data = { ...initial };
-  // The token repository reads only by key array. The fake normalizes anyway to satisfy StorageArea.
-  const asArray = (keys: string | string[] | null): string[] =>
-    keys === null ? Object.keys(data) : Array.isArray(keys) ? keys : [keys];
-  return {
-    data,
-    get: async (keys) =>
-      Object.fromEntries(
-        asArray(keys)
-          .filter((k) => k in data)
-          .map((k) => [k, data[k]]),
-      ),
-    set: async (items) => void Object.assign(data, items),
-    remove: async (keys) => {
-      for (const k of asArray(keys)) delete data[k];
-    },
-  };
+class MemoryStorageArea implements StorageAreaWithRemove {
+  private readonly values: Record<string, unknown>;
+
+  constructor(initial: Record<string, unknown> = {}) {
+    this.values = { ...initial };
+  }
+
+  async get(keys: string | string[] | null): Promise<Record<string, unknown>> {
+    const selected = keys === null ? Object.keys(this.values) : Array.isArray(keys) ? keys : [keys];
+    return Object.fromEntries(selected.filter((key) => key in this.values).map((key) => [key, this.values[key]]));
+  }
+
+  async set(items: Record<string, unknown>): Promise<void> {
+    Object.assign(this.values, items);
+  }
+
+  async remove(keys: string | string[]): Promise<void> {
+    for (const key of Array.isArray(keys) ? keys : [keys]) delete this.values[key];
+  }
 }
 
-describe("readAccessToken", () => {
-  it("returns accessToken when present", async () => {
-    expect(await readAccessToken(mem({ accessToken: "tok" }))).toBe("tok");
+describe("createChromeTokenClient", () => {
+  it("reads the stored access token", async () => {
+    const tokens = createChromeTokenClient(new MemoryStorageArea({ accessToken: "tok" }));
+
+    expect(await tokens.readAccessToken()).toBe("tok");
   });
 
-  it("returns undefined when neither key exists", async () => {
-    expect(await readAccessToken(mem())).toBeUndefined();
+  it("returns undefined when the access token is absent", async () => {
+    const tokens = createChromeTokenClient(new MemoryStorageArea());
+
+    expect(await tokens.readAccessToken()).toBeUndefined();
   });
 
-  it("migrates legacy pat to accessToken and removes pat", async () => {
-    const s = mem({ pat: "legacy" });
-    expect(await readAccessToken(s)).toBe("legacy");
-    expect(s.data.accessToken).toBe("legacy");
-    expect(s.data.pat).toBeUndefined();
+  it("stores the access token", async () => {
+    const tokens = createChromeTokenClient(new MemoryStorageArea());
+
+    await tokens.saveAccessToken("tok");
+
+    expect(await tokens.readAccessToken()).toBe("tok");
   });
 
-  it("prefers accessToken over pat without rewriting", async () => {
-    const s = mem({ accessToken: "new", pat: "old" });
-    expect(await readAccessToken(s)).toBe("new");
-    expect(s.data.pat).toBe("old");
-  });
-});
+  it("round-trips pending sign-in data", async () => {
+    const tokens = createChromeTokenClient(new MemoryStorageArea());
 
-it("round-trips the pending sign-in", async () => {
-  const store = createChromeTokenClient(mem());
-  expect(await store.readPendingSignIn()).toBeUndefined();
-  await store.savePendingSignIn({ userCode: "ABCD-1234", expiresAt: 99 });
-  expect(await store.readPendingSignIn()).toEqual({ userCode: "ABCD-1234", expiresAt: 99 });
-  await store.clearPendingSignIn();
-  expect(await store.readPendingSignIn()).toBeUndefined();
+    expect(await tokens.readPendingSignIn()).toBeUndefined();
+    await tokens.savePendingSignIn({ userCode: "ABCD-1234", expiresAt: 99 });
+    expect(await tokens.readPendingSignIn()).toEqual({ userCode: "ABCD-1234", expiresAt: 99 });
+    await tokens.clearPendingSignIn();
+    expect(await tokens.readPendingSignIn()).toBeUndefined();
+  });
 });

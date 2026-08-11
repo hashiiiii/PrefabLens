@@ -174,6 +174,9 @@ Put tests that compose multiple layers under `extension/test/`.
 The `extension/fixtures/` directory contains shared static test data.
 If one file uses a helper, keep it in that test file.
 Do not put test-only helpers in `extension/src/`.
+An in-memory storage implementation derives failures from its complete state and capacity.
+A virtual clock advances time when `sleep(ms)` runs.
+Test implementations do not use programmed responses, dependency bags, spies, or private call counts.
 
 ## Design Enforcement
 

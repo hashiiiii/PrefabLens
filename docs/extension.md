@@ -167,6 +167,9 @@ presentation/
 - `fixtures/` contains shared static test data.
 - Keep test-only helpers in test files when one file uses them.
 - Do not put test-only helpers in `src/`.
+- An in-memory storage implementation derives failures from its complete state and capacity.
+- A virtual clock advances time when `sleep(ms)` runs.
+- Test implementations do not use programmed responses, dependency bags, spies, or private call counts.
 
 ### Layer contracts
 

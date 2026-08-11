@@ -26,6 +26,21 @@ const state: ServerState = {
   failNextFile: false,
 };
 
+let guidSearchGate: Promise<void> | undefined;
+let releaseGuidSearch: (() => void) | undefined;
+
+function holdGuidSearch(): void {
+  guidSearchGate = new Promise((resolve) => {
+    releaseGuidSearch = resolve;
+  });
+}
+
+function releaseHeldGuidSearch(): void {
+  releaseGuidSearch?.();
+  guidSearchGate = undefined;
+  releaseGuidSearch = undefined;
+}
+
 // Same minimal prefab as core/tests/wasm_golden.test.mjs: the output is pinned by the golden
 const BEFORE = `--- !u!114 &11400000
 MonoBehaviour:
@@ -40,7 +55,7 @@ const BIG = `%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n${"x".repeat(26 * 1024 *
 function startServer(): Promise<Server> {
   // One-shot 429 for the backoff test: a new server instance resets it
   let servedRateLimit = false;
-  const server = createServer((req, res) => {
+  const server = createServer(async (req, res) => {
     const url = new URL(req.url ?? "/", "http://127.0.0.1");
     state.requests.push(`${req.method ?? "GET"} ${url.pathname}${url.search}`);
     const send = (body: string, type: string): void => {
@@ -137,6 +152,7 @@ function startServer(): Promise<Server> {
       case "/repos/o/r/contents/Assets/Baked.asset":
         return send("\x00\x01PK-binary-payload", "application/vnd.github.raw+json");
       case "/search/code":
+        if (guidSearchGate) await guidSearchGate;
         return json({ items: [{ path: "Assets/Scripts/Sound.cs.meta" }] });
       case "/graphql":
         return json({ data: { repository: {} } });
@@ -191,6 +207,7 @@ test.afterAll(async () => {
 });
 
 test.beforeEach(async () => {
+  releaseHeldGuidSearch();
   await clearLocalStorage();
   await setLocalStorage({ accessToken: "e2e-token" });
 });
@@ -465,6 +482,37 @@ test("re-hides a remounted body after collapse", async () => {
   await expect(view).toBeVisible();
   await expect(page.locator("#diff-aaa111 .border.rounded-bottom-2")).toBeHidden();
   await page.close();
+});
+
+test("applies a final GUID push after a React body remount", async () => {
+  holdGuidSearch();
+  const page = await context.newPage();
+  try {
+    await page.goto(`http://127.0.0.1:${PORT}/o/r/pull/2/files`);
+
+    const header = page.locator('#diff-aaa111 [class*="diff-file-header"]');
+    await header.getByRole("button", { name: "Semantic" }).click();
+    const view = page.locator("#diff-aaa111 [data-prefablens-view]");
+    await expect(view).toContainText("Resolving 1 reference");
+
+    await page.evaluate(() => {
+      const region = document.querySelector("#diff-aaa111");
+      if (!region) throw new Error("diff region missing");
+      region.querySelector("[data-prefablens-view]")?.remove();
+      region.querySelector(".border.rounded-bottom-2")?.remove();
+      const body = document.createElement("div");
+      body.className = "border position-relative rounded-bottom-2";
+      body.textContent = "remounted raw github diff table";
+      region.append(body);
+    });
+
+    await expect(view).toContainText("Resolving 1 reference");
+    releaseHeldGuidSearch();
+    await expect(view).toContainText("Sound");
+  } finally {
+    releaseHeldGuidSearch();
+    await page.close();
+  }
 });
 
 test("reattaches a fully remounted file with the semantic default", async () => {

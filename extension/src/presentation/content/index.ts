@@ -95,11 +95,12 @@ function attach(viewState: ViewStateData): void {
     currentPage = key;
     clearOverrides(viewState);
   }
-  // React virtualizes and discards off-screen DOM, so prune both registries on every
-  // scan. This drops the DiffV2 and shadow root that a dead view pins, and it also
-  // plugs the classic soft leak.
+  // A body remount disconnects the host but keeps its marked header. Reattach the
+  // host before pruning so the view stays registered for its pending push.
+  for (const a of liveAppliers()) a.sync();
+  // React virtualization can disconnect both the header and host. Drop those view
+  // references after live file views have reattached their hosts.
   pruneDisconnectedViews(views);
-  const live = liveAppliers();
   const entries = scanUnityFiles(document);
   const first = entries[0];
   if (first) ensureGlobalToggle(viewState, first);
@@ -109,8 +110,6 @@ function attach(viewState: ViewStateData): void {
     });
     appliers.add(fileView);
   }
-  // React remounts can undo the inline hide under still-marked headers. sync is idempotent and fetch-free.
-  for (const a of live) a.sync();
 }
 
 // Global bar must sit outside recycled react list items (classic: before .file, react: list root)

@@ -505,6 +505,7 @@ test("signs in with GitHub through Device Flow", async () => {
     )
     .toBe(true);
   await expect(view).toContainText("Sound", { timeout: 15_000 });
+  await expect(view.getByRole("button", { name: "Sign in with GitHub" })).toHaveCount(0);
 
   for (const other of context.pages()) {
     if (other !== page && other.url().includes("/login/device")) await other.close();

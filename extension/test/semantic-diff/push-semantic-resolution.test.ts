@@ -263,6 +263,54 @@ describe("pushSemanticResolution", () => {
     expect(pushes.at(-1)).toMatchObject({ done: true, status: "rateLimited" });
   });
 
+  it("keeps rateLimited after a later rejection", async () => {
+    const { client } = githubRoutes(({ url }) => {
+      if (url.pathname === "/repos/o/r/git/trees/head-sha") {
+        return json({ truncated: false, tree: [] });
+      }
+      if (url.pathname === "/search/code") {
+        return new Response(null, { status: 429, headers: { "retry-after": "1" } });
+      }
+      if (url.pathname === "/repos/o/r/contents/Assets/Foo.prefab") return raw(VARIANT);
+      if (url.pathname === "/repos/o/r/contents/Assets/Source.prefab") return raw(SOURCE);
+      return new Response(null, { status: 500 });
+    });
+    let loads = 0;
+    const data: Record<string, Record<string, string>> = {};
+    Object.defineProperty(data, REPO_KEY, {
+      get() {
+        loads++;
+        if (loads > 1) throw new Error("storage unavailable");
+        return { src0: SOURCE_PATH };
+      },
+    });
+    const first = sourceDiff({ src0: SOURCE_PATH });
+    first.unresolvedGuids = [...first.unresolvedGuids, "limited"];
+    const pushes: GuidResolvedPush[] = [];
+    const finalPush = Promise.withResolvers<void>();
+    const operation = pushSemanticResolution(
+      new MemoryGuidRepository(data),
+      new MemoryRepoIndexRepository(),
+      async () => differ,
+      createDiffSession(),
+      client,
+      context(),
+      REPO_KEY,
+      first,
+      ["limited"],
+      REQUEST,
+      (message) => {
+        pushes.push(message);
+        if (message.done) finalPush.resolve();
+      },
+    );
+
+    await finalPush.promise;
+    await operation;
+
+    expect(pushes.at(-1)).toMatchObject({ done: true, status: "rateLimited" });
+  });
+
   it("sends a failed final push after a source fetch failure", async () => {
     const { client, requests } = githubRoutes(({ url }) => {
       if (url.pathname === "/repos/o/r/contents/Assets/Foo.prefab") return raw(VARIANT);

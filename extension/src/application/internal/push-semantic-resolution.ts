@@ -25,6 +25,7 @@ export async function pushSemanticResolution(
 ): Promise<void> {
   const { owner, repo } = request;
   const at = { owner, repo, target: request.target, path: request.path };
+  let status: ResolutionStatus = "complete";
   try {
     // An index build can take tens of seconds and cannot add a name when no GUID remains.
     const index = remaining.length
@@ -48,7 +49,7 @@ export async function pushSemanticResolution(
     const search = leftover.length
       ? await resolveGuids(guidCache, session, client, owner, repo, repoKey, leftover)
       : { resolved: {}, rateLimited: false };
-    let status: ResolutionStatus = search.rateLimited ? "rateLimited" : "complete";
+    status = search.rateLimited ? "rateLimited" : "complete";
     let json: DiffV2 = { ...first, resolved: { ...first.resolved, ...fromIndex, ...search.resolved } };
     if (json.neededSources?.length) {
       // Parallel startup keeps the source re-merge off the critical path.
@@ -92,7 +93,7 @@ export async function pushSemanticResolution(
       ...at,
       resolved: {},
       done: true,
-      status: isRateLimited(error) ? "rateLimited" : "failed",
+      status: status === "rateLimited" || isRateLimited(error) ? "rateLimited" : "failed",
     });
   }
 }

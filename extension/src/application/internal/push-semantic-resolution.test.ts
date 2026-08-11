@@ -231,8 +231,7 @@ describe("pushSemanticResolution", () => {
       if (url.pathname === "/search/code") {
         return new Response(null, { status: 429, headers: { "retry-after": "1" } });
       }
-      if (url.pathname === "/repos/o/r/contents/Assets/Foo.prefab") return raw(VARIANT);
-      if (url.pathname === "/repos/o/r/contents/Assets/Source.prefab") {
+      if (url.pathname === "/repos/o/r/contents/Assets/Foo.prefab") {
         return new Response(null, { status: 500 });
       }
       return new Response(null, { status: 500 });

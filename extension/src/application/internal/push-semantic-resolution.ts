@@ -62,7 +62,7 @@ export async function pushSemanticResolution(
           ...at,
           resolved: {},
           done: true,
-          status: isRateLimited(pair.error) ? "rateLimited" : "failed",
+          status: status === "rateLimited" || isRateLimited(pair.error) ? "rateLimited" : "failed",
         });
         return;
       }

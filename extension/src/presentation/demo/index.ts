@@ -7,7 +7,7 @@
 import { getLocalDiff } from "../../application/diff/get-local-diff";
 import type { DifferGateway } from "../../application/gateway/differ";
 import type { FixturesGateway } from "../../application/gateway/fixtures";
-import { createDemoDiffer, createFixtures } from "../../container";
+import { createDemoDifferLoader, createFixtures } from "../../container";
 import { must } from "../../internal/must";
 import { createViewHost, render, renderError, renderLoading } from "../internal/render";
 import { injectPageStyles, mountGlobalBar, mountToggle } from "../internal/toggle";
@@ -61,7 +61,8 @@ async function main(): Promise<void> {
   if (!headers.length) return;
 
   const fixtures = createFixtures();
-  const differ = await createDemoDiffer();
+  const loadDiffer = createDemoDifferLoader(fixtures.fetchBytes);
+  const differ = await loadDiffer();
   const index = await fixtures.loadGuidIndex();
   const locals: DemoLocals = { differ, index, fixtures };
 

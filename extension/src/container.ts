@@ -15,10 +15,7 @@ import { createChromeTokenClient } from "./infrastructure/clients/chrome-token-c
 import { createFixtureClient } from "./infrastructure/clients/fixture-client";
 import { createGithubClientFactory } from "./infrastructure/clients/github-client";
 import { createGithubDeviceFlowClient } from "./infrastructure/clients/github-device-flow-client";
-import {
-  createDiffer,
-  createDifferLoader as createWasmDifferLoader,
-} from "./infrastructure/clients/wasm-differ-client";
+import { createDifferLoader as createWasmDifferLoader } from "./infrastructure/clients/wasm-differ-client";
 
 export function createTokenStore(): TokenRepository {
   return createChromeTokenClient(chrome.storage.local);
@@ -52,8 +49,8 @@ export function createDifferLoader(): () => Promise<DifferGateway> {
   return createWasmDifferLoader(chrome.runtime.getURL("prefablens.wasm"));
 }
 
-export async function createDemoDiffer(): Promise<DifferGateway> {
-  return createDiffer(await createFixtureClient().fetchBytes("prefablens.wasm"));
+export function createDemoDifferLoader(fetchBytes: FixturesGateway["fetchBytes"]): () => Promise<DifferGateway> {
+  return createWasmDifferLoader("prefablens.wasm", fetchBytes);
 }
 
 export function createFixtures(): FixturesGateway {

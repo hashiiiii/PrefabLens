@@ -37,6 +37,8 @@ describe("createFileViewController", () => {
 
     expect(raw.style.display).toBe("");
     expect(files.querySelector("[data-prefablens-view]")).toBeNull();
+    expect(pressed(controller.element, "raw")).toBe("true");
+    expect(pressed(controller.element, "semantic")).toBe("false");
 
     controller.element.querySelector<HTMLButtonElement>('button[data-view="semantic"]')?.click();
 
@@ -46,12 +48,16 @@ describe("createFileViewController", () => {
     expect(host?.style.display).toBe("");
     expect(selected).toEqual(["semantic"]);
     expect(semanticRoots).toEqual([host?.shadowRoot]);
+    expect(pressed(controller.element, "raw")).toBe("false");
+    expect(pressed(controller.element, "semantic")).toBe("true");
 
     controller.element.querySelector<HTMLButtonElement>('button[data-view="raw"]')?.click();
 
     expect(raw.style.display).toBe("");
     expect(host?.style.display).toBe("none");
     expect(selected).toEqual(["semantic", "raw"]);
+    expect(pressed(controller.element, "raw")).toBe("true");
+    expect(pressed(controller.element, "semantic")).toBe("false");
   });
 
   it("repairs one semantic host without starting semantic work", () => {
@@ -96,10 +102,12 @@ describe("createFileViewController", () => {
 
     controller.apply("raw");
     expect(pressed(controller.element, "raw")).toBe("true");
+    expect(pressed(controller.element, "semantic")).toBe("false");
     expect(selected).toEqual([]);
 
     semanticVisible = true;
     controller.apply("semantic");
+    expect(pressed(controller.element, "raw")).toBe("false");
     expect(pressed(controller.element, "semantic")).toBe("true");
     expect(files.querySelector("[data-prefablens-view]")).toBe(host);
     expect(host?.shadowRoot).toBe(root);

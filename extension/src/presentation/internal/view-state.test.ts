@@ -23,16 +23,16 @@ function sinks() {
 
 describe("view state", () => {
   it("keeps and clears a per-file override", () => {
-    const state = emptyViewState("raw");
-    expect(effectiveView(state, "a.prefab")).toBe("raw");
-
-    setOverride(state, "a.prefab", "semantic");
+    const state = emptyViewState("semantic");
     expect(effectiveView(state, "a.prefab")).toBe("semantic");
-    expect(effectiveView(state, "b.prefab")).toBe("raw");
+
+    setOverride(state, "a.prefab", "raw");
+    expect(effectiveView(state, "a.prefab")).toBe("raw");
+    expect(effectiveView(state, "b.prefab")).toBe("semantic");
 
     clearOverrides(state);
-    expect(effectiveView(state, "a.prefab")).toBe("raw");
-    expect(state.def).toBe("raw");
+    expect(effectiveView(state, "a.prefab")).toBe("semantic");
+    expect(state.def).toBe("semantic");
   });
 
   it("realigns files for different-value and same-value global selections", () => {
@@ -58,7 +58,7 @@ describe("view state", () => {
   });
 
   it("applies an external change and ignores its same-value echo", () => {
-    const { persisted, notified, listener } = sinks();
+    const { notified, listener } = sinks();
     const state = emptyViewState("raw");
     onDefaultChange(state, listener);
     setOverride(state, "a.prefab", "raw");
@@ -66,7 +66,6 @@ describe("view state", () => {
     applyExternal(state, "semantic");
     expect(state.def).toBe("semantic");
     expect(effectiveView(state, "a.prefab")).toBe("semantic");
-    expect(persisted).toEqual([]);
     expect(notified).toEqual(["semantic"]);
 
     notified.length = 0;

@@ -27,51 +27,74 @@ const REQUEST: SemanticDiffRequest = {
 };
 
 class MemoryTokenRepository implements TokenRepository {
-  constructor(private readonly accessToken: string | undefined) {}
+  private pendingSignIn: PendingSignIn | undefined;
+
+  constructor(private accessToken: string | undefined) {}
 
   async readAccessToken(): Promise<string | undefined> {
     return this.accessToken;
   }
 
-  async saveAccessToken(): Promise<void> {}
-
-  async savePendingSignIn(_pending: PendingSignIn): Promise<void> {}
-
-  async readPendingSignIn(): Promise<PendingSignIn | undefined> {
-    return undefined;
+  async saveAccessToken(token: string): Promise<void> {
+    this.accessToken = token;
   }
 
-  async clearPendingSignIn(): Promise<void> {}
+  async savePendingSignIn(pending: PendingSignIn): Promise<void> {
+    this.pendingSignIn = pending;
+  }
+
+  async readPendingSignIn(): Promise<PendingSignIn | undefined> {
+    return this.pendingSignIn;
+  }
+
+  async clearPendingSignIn(): Promise<void> {
+    this.pendingSignIn = undefined;
+  }
 }
 
 class MemoryDiffRepository implements DiffRepository {
-  async load(_key: string): Promise<DiffV2 | undefined> {
-    return undefined;
+  private readonly data = new Map<string, DiffV2>();
+
+  async load(key: string): Promise<DiffV2 | undefined> {
+    return this.data.get(key);
   }
 
-  async save(_key: string, _json: DiffV2): Promise<void> {}
+  async save(key: string, json: DiffV2): Promise<void> {
+    this.data.set(key, json);
+  }
 }
 
 class MemoryGuidRepository implements GuidRepository {
-  async load(_repo: string): Promise<Record<string, string>> {
-    return {};
+  private readonly data = new Map<string, Record<string, string>>();
+
+  async load(repo: string): Promise<Record<string, string>> {
+    return this.data.get(repo) ?? {};
   }
 
-  async save(_repo: string, _entries: Record<string, string>): Promise<void> {}
+  async save(repo: string, entries: Record<string, string>): Promise<void> {
+    this.data.set(repo, { ...this.data.get(repo), ...entries });
+  }
 }
 
 class MemoryRepoIndexRepository implements RepoIndexRepository {
-  async loadGuids(_repo: string): Promise<Record<string, string>> {
-    return {};
+  private readonly guids = new Map<string, Record<string, string>>();
+  private readonly indexes = new Map<string, RepoGuidIndex>();
+
+  async loadGuids(repo: string): Promise<Record<string, string>> {
+    return this.guids.get(repo) ?? {};
   }
 
-  async saveGuids(_repo: string, _entries: Record<string, string>): Promise<void> {}
-
-  async loadIndex(_repo: string): Promise<RepoGuidIndex | undefined> {
-    return undefined;
+  async saveGuids(repo: string, entries: Record<string, string>): Promise<void> {
+    this.guids.set(repo, { ...this.guids.get(repo), ...entries });
   }
 
-  async saveIndex(_repo: string, _index: RepoGuidIndex): Promise<void> {}
+  async loadIndex(repo: string): Promise<RepoGuidIndex | undefined> {
+    return this.indexes.get(repo);
+  }
+
+  async saveIndex(repo: string, index: RepoGuidIndex): Promise<void> {
+    this.indexes.set(repo, index);
+  }
 }
 
 let differ: DifferGateway;

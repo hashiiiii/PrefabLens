@@ -23,19 +23,28 @@ const REQUEST = {
 };
 
 class MemoryTokenRepository implements TokenRepository {
+  private accessToken = "token";
+  private pendingSignIn: PendingSignIn | undefined;
+
   async readAccessToken(): Promise<string> {
-    return "token";
+    return this.accessToken;
   }
 
-  async saveAccessToken(_token: string): Promise<void> {}
+  async saveAccessToken(token: string): Promise<void> {
+    this.accessToken = token;
+  }
 
-  async savePendingSignIn(_pending: PendingSignIn): Promise<void> {}
+  async savePendingSignIn(pending: PendingSignIn): Promise<void> {
+    this.pendingSignIn = pending;
+  }
 
   async readPendingSignIn(): Promise<PendingSignIn | undefined> {
-    return undefined;
+    return this.pendingSignIn;
   }
 
-  async clearPendingSignIn(): Promise<void> {}
+  async clearPendingSignIn(): Promise<void> {
+    this.pendingSignIn = undefined;
+  }
 }
 
 class MemoryDiffRepository implements DiffRepository {

@@ -27,13 +27,17 @@ const REQUEST: SemanticDiffRequest = {
   path: MAIN_PATH,
 };
 class MemoryGuidRepository implements GuidRepository {
+  storageAvailable = true;
+
   constructor(private readonly data: Record<string, Record<string, string>> = {}) {}
 
   async load(repo: string): Promise<Record<string, string>> {
+    if (!this.storageAvailable) throw new Error("storage unavailable");
     return this.data[repo] ?? {};
   }
 
   async save(repo: string, entries: Record<string, string>): Promise<void> {
+    if (!this.storageAvailable) throw new Error("storage unavailable");
     this.data[repo] = { ...this.data[repo], ...entries };
   }
 }
@@ -41,23 +45,25 @@ class MemoryGuidRepository implements GuidRepository {
 class MemoryRepoIndexRepository implements RepoIndexRepository {
   private readonly guids: Record<string, Record<string, string>> = {};
   private readonly indexes: Record<string, RepoGuidIndex> = {};
-
-  constructor(private readonly loadFailure?: Error) {}
+  storageAvailable = true;
 
   async loadGuids(repo: string): Promise<Record<string, string>> {
+    if (!this.storageAvailable) throw new Error("storage unavailable");
     return this.guids[repo] ?? {};
   }
 
   async saveGuids(repo: string, entries: Record<string, string>): Promise<void> {
+    if (!this.storageAvailable) throw new Error("storage unavailable");
     this.guids[repo] = { ...this.guids[repo], ...entries };
   }
 
   async loadIndex(repo: string): Promise<RepoGuidIndex | undefined> {
-    if (this.loadFailure) throw this.loadFailure;
+    if (!this.storageAvailable) throw new Error("storage unavailable");
     return this.indexes[repo];
   }
 
   async saveIndex(repo: string, index: RepoGuidIndex): Promise<void> {
+    if (!this.storageAvailable) throw new Error("storage unavailable");
     this.indexes[repo] = index;
   }
 }
@@ -244,32 +250,25 @@ describe("pushSemanticResolution", () => {
   });
 
   it("keeps rateLimited after a later rejection", async () => {
+    const guidRepository = new MemoryGuidRepository({ [REPO_KEY]: { src0: SOURCE_PATH } });
     const { client } = githubRoutes(({ url }) => {
       if (url.pathname === "/repos/o/r/git/trees/head-sha") {
         return json({ truncated: false, tree: [] });
       }
       if (url.pathname === "/search/code") {
+        guidRepository.storageAvailable = false;
         return new Response(null, { status: 429, headers: { "retry-after": "1" } });
       }
       if (url.pathname === "/repos/o/r/contents/Assets/Foo.prefab") return raw(VARIANT_PREFAB);
       if (url.pathname === "/repos/o/r/contents/Assets/Source.prefab") return raw(SOURCE_PREFAB);
       return new Response(null, { status: 500 });
     });
-    let loads = 0;
-    const data: Record<string, Record<string, string>> = {};
-    Object.defineProperty(data, REPO_KEY, {
-      get() {
-        loads++;
-        if (loads > 1) throw new Error("storage unavailable");
-        return { src0: SOURCE_PATH };
-      },
-    });
     const first = sourceDiff({ src0: SOURCE_PATH });
     first.unresolvedGuids = [...first.unresolvedGuids, "limited"];
     const pushes: GuidResolvedPush[] = [];
     const finalPush = Promise.withResolvers<void>();
     const operation = pushSemanticResolution(
-      new MemoryGuidRepository(data),
+      guidRepository,
       new MemoryRepoIndexRepository(),
       async () => differ,
       createDiffSession(),
@@ -370,11 +369,13 @@ describe("pushSemanticResolution", () => {
 
   it("sends a final push after an unexpected rejection", async () => {
     const { client, requests } = githubRoutes(() => new Response(null, { status: 500 }));
+    const indexRepository = new MemoryRepoIndexRepository();
+    indexRepository.storageAvailable = false;
     const pushes: GuidResolvedPush[] = [];
     const finalPush = Promise.withResolvers<void>();
     const operation = pushSemanticResolution(
       new MemoryGuidRepository(),
-      new MemoryRepoIndexRepository(new Error("storage unavailable")),
+      indexRepository,
       async () => differ,
       createDiffSession(),
       client,

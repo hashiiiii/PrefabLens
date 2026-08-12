@@ -44,7 +44,7 @@ export async function* signIn(
     await tokenStore.clearPendingSignIn();
     yield { status: "failed", reason: result.status };
   } catch {
-    // Only unexpected rejections (storage) land here. Expected failures arrive as values above.
+    // Unexpected gateway, parsing, or storage rejections land here. Expected failures arrive as values above.
     await tokenStore.clearPendingSignIn().catch(() => {});
     yield { status: "failed", reason: "failed" };
   } finally {

@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import { type SignInEvent, signIn } from "../../src/application/auth/sign-in";
 import { createChromeTokenClient } from "../../src/infrastructure/clients/chrome-token-client";
 import { createGithubDeviceFlowClient } from "../../src/infrastructure/clients/github-device-flow-client";
-import type { StorageAreaWithRemove } from "../../src/infrastructure/internal/storage-area";
 
 const DEVICE_CODE_URL = "https://github.com/login/device/code";
 const TOKEN_URL = "https://github.com/login/oauth/access_token";
@@ -19,7 +18,7 @@ const deviceCodeResponse = () =>
     expires_in: 900,
   });
 
-class MemoryStorageArea implements StorageAreaWithRemove {
+class MemoryStorageArea {
   private values: Record<string, unknown>;
 
   constructor(
@@ -125,6 +124,35 @@ describe("signIn", () => {
     ]);
     expect(await tokens.readAccessToken()).toBeUndefined();
     expect(await tokens.readPendingSignIn()).toBeUndefined();
+  });
+
+  it("clears pending sign-in data after an unexpected token request rejection", async () => {
+    const tokens = createChromeTokenClient(new MemoryStorageArea());
+    const clock = new VirtualClock();
+    const route = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === DEVICE_CODE_URL) return deviceCodeResponse();
+      if (url === TOKEN_URL && clock.now === 5_000) throw new Error("token request rejected");
+      throw new Error(`Unexpected request: ${init?.method ?? "GET"} ${url} at ${clock.now}`);
+    }) as typeof fetch;
+    const state = { inFlight: false };
+    const events = signIn(createGithubDeviceFlowClient(route, clock.sleep), tokens, () => 1_000, state);
+
+    await expect(events.next()).resolves.toEqual({
+      done: false,
+      value: {
+        status: "pending",
+        userCode: "ABCD-1234",
+        verificationUri: "https://github.com/login/device",
+      },
+    });
+    expect(await tokens.readPendingSignIn()).toEqual({ userCode: "ABCD-1234", expiresAt: 901_000 });
+
+    await expect(events.next()).resolves.toEqual({ done: false, value: { status: "failed", reason: "failed" } });
+    await expect(events.next()).resolves.toEqual({ done: true, value: undefined });
+    expect(await tokens.readAccessToken()).toBeUndefined();
+    expect(await tokens.readPendingSignIn()).toBeUndefined();
+    expect(state.inFlight).toBe(false);
   });
 
   it("rejects a concurrent second start while the first request remains pending", async () => {

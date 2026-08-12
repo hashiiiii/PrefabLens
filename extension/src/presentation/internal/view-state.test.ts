@@ -10,7 +10,6 @@ import {
   setOverride,
 } from "./view-state";
 
-// Real sinks instead of spies: persisted and notified views land in plain arrays
 function sinks() {
   const persisted: View[] = [];
   const notified: View[] = [];
@@ -23,70 +22,55 @@ function sinks() {
 }
 
 describe("view state", () => {
-  it("resolves effective view as override-or-default", () => {
+  it("keeps and clears a per-file override", () => {
     const state = emptyViewState("raw");
     expect(effectiveView(state, "a.prefab")).toBe("raw");
+
     setOverride(state, "a.prefab", "semantic");
     expect(effectiveView(state, "a.prefab")).toBe("semantic");
-    expect(effectiveView(state, "b.prefab")).toBe("raw"); // an override affects only its target file
+    expect(effectiveView(state, "b.prefab")).toBe("raw");
+
+    clearOverrides(state);
+    expect(effectiveView(state, "a.prefab")).toBe("raw");
+    expect(state.def).toBe("raw");
   });
 
-  it("setDefault persists, clears overrides, and notifies listeners", () => {
-    // The crux of "pressing global always lines up every file": per-file overrides are reset by the global toggle
+  it("realigns files for different-value and same-value global selections", () => {
     const { persisted, notified, persist, listener } = sinks();
     const state = emptyViewState("raw");
     onDefaultChange(state, listener);
     setOverride(state, "a.prefab", "raw");
+
     setDefault(state, "semantic", persist);
     expect(persisted).toEqual(["semantic"]);
     expect(notified).toEqual(["semantic"]);
-    expect(effectiveView(state, "a.prefab")).toBe("semantic"); // the override is cleared
-  });
+    expect(effectiveView(state, "a.prefab")).toBe("semantic");
 
-  it("same-value setDefault still clears overrides without persisting", () => {
-    // "Pressing global always lines everything up": pressing the already-pressed side again still clears overrides.
-    // Only the rewrite to storage is skipped (avoids a wasted onChanged echo)
-    const { persisted, notified, persist, listener } = sinks();
-    const state = emptyViewState("semantic");
-    onDefaultChange(state, listener);
     setOverride(state, "a.prefab", "raw");
     setDefault(state, "semantic", persist);
-    expect(persisted).toEqual([]);
-    expect(notified).toEqual(["semantic"]);
+    expect(persisted).toEqual(["semantic"]);
+    expect(notified).toEqual(["semantic", "semantic"]);
     expect(effectiveView(state, "a.prefab")).toBe("semantic");
-  });
 
-  it("same-value setDefault with no overrides is a pure no-op", () => {
-    // With no overrides, no notification is needed either: a re-apply of every applier is wasted work
-    const { persisted, notified, persist, listener } = sinks();
-    const state = emptyViewState("semantic");
-    onDefaultChange(state, listener);
     setDefault(state, "semantic", persist);
-    expect(persisted).toEqual([]);
-    expect(notified).toEqual([]);
+    expect(persisted).toEqual(["semantic"]);
+    expect(notified).toEqual(["semantic", "semantic"]);
   });
 
-  it("applyExternal updates without persisting (storage.onChanged echo)", () => {
-    // storage.onChanged fires even on the tab that did the set: a re-persist causes an infinite loop
+  it("applies an external change and ignores its same-value echo", () => {
     const { persisted, notified, listener } = sinks();
     const state = emptyViewState("raw");
     onDefaultChange(state, listener);
     setOverride(state, "a.prefab", "raw");
+
     applyExternal(state, "semantic");
-    expect(effectiveView(state, "a.prefab")).toBe("semantic"); // a switch from another tab still lines up every file
     expect(state.def).toBe("semantic");
+    expect(effectiveView(state, "a.prefab")).toBe("semantic");
     expect(persisted).toEqual([]);
     expect(notified).toEqual(["semantic"]);
-    notified.length = 0;
-    applyExternal(state, "semantic"); // ignore a same-value echo
-    expect(notified).toEqual([]);
-  });
 
-  it("clearOverrides drops per-file overrides only", () => {
-    const state = emptyViewState("semantic");
-    setOverride(state, "a.prefab", "raw");
-    clearOverrides(state);
-    expect(effectiveView(state, "a.prefab")).toBe("semantic");
-    expect(state.def).toBe("semantic");
+    notified.length = 0;
+    applyExternal(state, "semantic");
+    expect(notified).toEqual([]);
   });
 });

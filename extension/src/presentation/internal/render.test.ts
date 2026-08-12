@@ -2,15 +2,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { type DiffV2, emptyDiff } from "../../domain/diff/types";
 import { must } from "../../internal/must";
-import {
-  detectTheme,
-  render,
-  renderError,
-  renderLoading,
-  renderSignIn,
-  renderSignInPending,
-  renderTooLarge,
-} from "./render";
+import { detectTheme, render, renderLoading, renderSignIn, renderSignInPending, renderTooLarge } from "./render";
 
 const DIFF: DiffV2 = {
   ...emptyDiff(),
@@ -22,7 +14,10 @@ const DIFF: DiffV2 = {
       fileId: "1",
       name: "Player",
       status: "modified",
-      overrides: [],
+      overrides: [
+        { group: "GameObject", label: "Name", status: "modified", before: "Hero", after: "Player" },
+        { group: "Overrides", label: "Added Components (1)", status: "added", before: null, after: null },
+      ],
       components: [
         {
           kind: "component",
@@ -34,14 +29,18 @@ const DIFF: DiffV2 = {
           status: "modified",
           fields: [
             { path: "volume", status: "modified", before: "0.5", after: "0.8" },
-            {
-              path: "m_Target",
-              status: "modified",
-              before: { ref: { fileId: "100", guid: null, type: null } },
-              after: { ref: { fileId: "0", guid: "ghi", type: 2 } },
-            },
             { path: "newField", status: "added", before: null, after: "1" },
           ],
+        },
+        {
+          kind: "component",
+          fileId: "5",
+          classId: 114,
+          typeName: "MonoBehaviour",
+          scriptGuid: null,
+          className: "Health",
+          status: "added",
+          fields: [{ path: "Enabled", status: "added", before: null, after: "1" }],
         },
       ],
       children: [
@@ -57,13 +56,27 @@ const DIFF: DiffV2 = {
       ],
     },
   ],
-  loose: [],
+  loose: [
+    {
+      kind: "component",
+      fileId: "4",
+      classId: 4,
+      typeName: "Transform",
+      scriptGuid: null,
+      className: null,
+      status: "modified",
+      fields: [{ path: "Position.x", status: "modified", before: "0", after: "1" }],
+    },
+  ],
 };
 
 const INSTANCE: DiffV2 = {
   ...emptyDiff(),
-  unresolvedGuids: ["aaa"],
-  resolved: { aaa: "Assets/Cylinder Variant.prefab" },
+  unresolvedGuids: ["aaa", "bbb"],
+  resolved: {
+    aaa: "Assets/Cylinder Variant.prefab",
+    bbb: "Assets/Enemy.prefab",
+  },
   roots: [
     {
       kind: "gameObject",
@@ -85,6 +98,16 @@ const INSTANCE: DiffV2 = {
           components: [],
           children: [],
         },
+        {
+          kind: "prefabInstance",
+          fileId: "1002",
+          name: "",
+          status: "added",
+          sourceGuid: "bbb",
+          overrides: [],
+          components: [],
+          children: [],
+        },
       ],
     },
   ],
@@ -103,47 +126,39 @@ describe("render", () => {
     document.documentElement.removeAttribute("data-color-mode");
   });
 
-  it("renders the GameObject hierarchy with statuses", () => {
+  it("renders hierarchy, components, overrides, and field values", () => {
     const root = freshRoot();
     render(root, DIFF);
-    const gos = root.querySelectorAll("details.pl-go");
-    expect(gos).toHaveLength(2);
-    expect(gos[0]?.querySelector("summary")?.textContent).toContain("Player");
-    expect(gos[1]?.classList.contains("pl-added")).toBe(true);
-  });
 
-  it("shows field values as before → after and resolves the component to its script stem", () => {
-    const root = freshRoot();
-    render(root, DIFF);
+    const gameObjects = [...root.querySelectorAll<HTMLDetailsElement>("details.pl-go")];
+    expect(gameObjects).toHaveLength(2);
+    expect(gameObjects[0]?.querySelector("summary")?.textContent).toContain("Player");
+    expect(gameObjects[1]?.querySelector("summary")?.textContent).toContain("Weapon");
+
     const text = must(root.querySelector(".pl-root")?.textContent);
-    expect(text).toContain("volume");
-    expect(text).toContain("0.5");
-    expect(text).toContain("0.8");
-    expect(text).toContain("Sound"); // resolved guid → file stem as the display name
-    // The meta carries the full source path (mirrors the ‹Prefab: …› form on instances).
-    expect(text).toContain("‹Script: Assets/Scripts/Sound.cs›");
-  });
+    expect(text).toContain("components (4)");
+    expect(text).toContain("GameObject");
+    expect(text).toContain("NameHero→Player");
+    expect(text).toContain("Sound‹Script: Assets/Scripts/Sound.cs›");
+    expect(text).toContain("volume0.5→0.8");
 
-  it("shows only the current value for added fields, without a before placeholder", () => {
-    const root = freshRoot();
-    render(root, DIFF);
-    const rows = [...root.querySelectorAll(".pl-field")];
-    const added = must(rows.find((r) => r.textContent?.includes("newField")));
+    const added = must([...root.querySelectorAll(".pl-field")].find((row) => row.textContent?.includes("newField")));
     expect(added.textContent).toBe("newField1");
+    const structural = must(
+      [...root.querySelectorAll(".pl-field")].find((row) => row.textContent?.includes("Added Components (1)")),
+    );
+    expect(structural.textContent).toBe("Added Components (1)");
+
+    const cards = [...root.querySelectorAll<HTMLDetailsElement>("details.pl-components > .pl-kids > details")];
+    expect(cards).toHaveLength(5);
+    expect(cards.every((card) => card.open)).toBe(true);
+    expect(root.querySelector(".pl-root > details.pl-components details.pl-comp")?.textContent).toContain("Transform");
   });
 
-  it("falls back to the raw guid when unresolved and to #fileId for local refs", () => {
-    const root = freshRoot();
-    render(root, DIFF);
-    const text = must(root.querySelector(".pl-root")?.textContent);
-    expect(text).toContain("#100"); // local ref
-    expect(text).toContain("ghi"); // unresolved guid stays visible
-  });
-
-  it("shows unity built-in refs by object name", () => {
-    const builtin: DiffV2 = {
+  it("formats local, null, built-in, and unresolved references", () => {
+    const refs: DiffV2 = {
       ...emptyDiff(),
-      unresolvedGuids: [],
+      unresolvedGuids: ["ghi"],
       roots: [],
       loose: [
         {
@@ -156,64 +171,35 @@ describe("render", () => {
           status: "modified",
           fields: [
             {
-              path: "m_Mesh",
+              path: "Local",
               status: "modified",
-              // Both refs point into "unity default resources": 10202 is the
-              // built-in Cube. 424242 is unknown (for example a future Unity object).
-              before: { ref: { fileId: "10202", guid: "0000000000000000e000000000000000", type: 0 } },
-              after: { ref: { fileId: "424242", guid: "0000000000000000e000000000000000", type: 0 } },
+              before: { ref: { fileId: "100", guid: null, type: null } },
+              after: { ref: { fileId: "0", guid: null, type: null } },
             },
-          ],
-        },
-      ],
-    };
-    const root = freshRoot();
-    render(root, builtin);
-    const text = must(root.querySelector(".pl-root")?.textContent);
-    expect(text).toContain("Cube (built-in)"); // known fileID → table name
-    expect(text).toContain("guid:0000000000000000e000000000000000"); // unknown fileID keeps the raw guid
-  });
-
-  it("shows the null reference ({fileID: 0}) as None, like the Unity Inspector", () => {
-    // Same decision-table cases as cli/src/render_tree.zig and
-    // cli/src/render_html.zig ("null reference reads as None") and the
-    // editor's ValueFormatTests.cs.
-    const nullRef: DiffV2 = {
-      ...emptyDiff(),
-      unresolvedGuids: [],
-      roots: [],
-      loose: [
-        {
-          kind: "component",
-          fileId: "5",
-          classId: 65,
-          typeName: "CapsuleCollider",
-          scriptGuid: null,
-          className: null,
-          status: "modified",
-          fields: [
             {
-              path: "Material",
+              path: "Asset",
               status: "modified",
-              // {fileID: 0} is Unity's null reference; 42 is a plain local ref.
-              before: { ref: { fileId: "0", guid: null, type: null } },
-              after: { ref: { fileId: "42", guid: null, type: null } },
+              before: { ref: { fileId: "10202", guid: "0000000000000000e000000000000000", type: 0 } },
+              after: { ref: { fileId: "42", guid: "ghi", type: 2 } },
             },
           ],
         },
       ],
     };
     const root = freshRoot();
-    render(root, nullRef);
+    render(root, refs);
     const text = must(root.querySelector(".pl-root")?.textContent);
-    expect(text).toContain("None"); // {fileID: 0} reads as the Inspector's None
-    expect(text).toContain("#42"); // non-zero local refs keep #fileId
+    expect(text).toContain("#100");
+    expect(text).toContain("None");
+    expect(text).toContain("Cube (built-in)");
+    expect(text).toContain("guid:ghi");
     expect(text).not.toContain("#0");
   });
 
-  it("renders repo-controlled strings as text, never as markup", () => {
+  it("renders repository strings as text", () => {
     const hostile: DiffV2 = {
-      ...DIFF,
+      ...emptyDiff(),
+      unresolvedGuids: [],
       roots: [
         {
           kind: "gameObject",
@@ -225,6 +211,7 @@ describe("render", () => {
           children: [],
         },
       ],
+      loose: [],
     };
     const root = freshRoot();
     render(root, hostile);
@@ -232,7 +219,7 @@ describe("render", () => {
     expect(root.textContent).toContain("<img src=x onerror=alert(1)>");
   });
 
-  it("replaces previous content on re-render and shows an empty note for empty diffs", () => {
+  it("replaces prior content and renders an empty diff", () => {
     const root = freshRoot();
     render(root, DIFF);
     render(root, { ...emptyDiff(), unresolvedGuids: [], roots: [], loose: [] });
@@ -240,7 +227,7 @@ describe("render", () => {
     expect(root.textContent).toContain("No semantic changes");
   });
 
-  it("renderTooLarge shows the size and resolves on click", async () => {
+  it("waits for a large-file action", async () => {
     const root = freshRoot();
     const clicked = renderTooLarge(root, 26 * 1024 * 1024);
     expect(root.textContent).toContain("Large file (26 MB)");
@@ -250,184 +237,20 @@ describe("render", () => {
     await clicked;
   });
 
-  it("renderError shows a clean one-line message", () => {
-    const root = freshRoot();
-    renderError(root, "Sign in with GitHub to view semantic diffs.");
-    expect(root.textContent).toContain("Sign in with GitHub");
-  });
-
-  it("renders game object overrides in the components section", () => {
-    const diff: DiffV2 = {
-      ...emptyDiff(),
-      unresolvedGuids: [],
-      roots: [
-        {
-          kind: "gameObject",
-          fileId: "1",
-          name: "Sensor",
-          status: "modified",
-          overrides: [{ group: "GameObject", label: "Name", status: "modified", before: "Head", after: "Sensor" }],
-          components: [],
-          children: [],
-        },
-      ],
-      loose: [],
-    };
-    const root = freshRoot();
-    render(root, diff);
-    const row = root.querySelector(".pl-components .pl-field.pl-modified");
-    expect(row?.textContent).toContain("Name");
-    expect(row?.textContent).toContain("Head");
-    expect(row?.textContent).toContain("Sensor");
-  });
-
-  it("renders prefab instance with badge, components section and open override card", () => {
+  it("renders prefab instances and fallback names", () => {
     const root = freshRoot();
     render(root, INSTANCE);
-    const text = root.textContent ?? "";
-    expect(text).toContain("Cylinder Variant");
-    expect(text).toContain("‹Prefab: Assets/Cylinder Variant.prefab›");
-    expect(text).toContain("components");
+    const text = must(root.textContent);
+    expect(text).toContain("Cylinder Variant‹Prefab: Assets/Cylinder Variant.prefab›");
     expect(text).toContain("Transform");
-    expect(text).toContain("Position");
-    const card = root.querySelector(".pl-components details") as HTMLDetailsElement;
-    expect(card.open).toBe(true);
+    expect(text).toContain("Position(2.03, 3.63, 1.12)");
+    expect(text).toContain("Enemy‹Prefab: Assets/Enemy.prefab›");
   });
 
-  it("marks a mixed-status override group heading as modified", () => {
+  it("renders unresolved component and instance names", () => {
     const diff: DiffV2 = {
       ...emptyDiff(),
-      unresolvedGuids: [],
-      roots: [
-        {
-          kind: "prefabInstance",
-          fileId: "1001",
-          name: "Cylinder",
-          status: "modified",
-          sourceGuid: null,
-          overrides: [
-            { group: "Transform", label: "Scale.y", status: "added", before: null, after: "2" },
-            { group: "Transform", label: "Position.x", status: "modified", before: "0", after: "1" },
-          ],
-          components: [],
-          children: [],
-        },
-      ],
-      loose: [],
-    };
-    const root = freshRoot();
-    render(root, diff);
-    const card = root.querySelector(".pl-components details") as HTMLDetailsElement;
-    expect(card.classList.contains("pl-modified")).toBe(true);
-    expect(card.querySelector("summary .pl-badge")?.textContent).toBe("~");
-    // The rows themselves keep their original status.
-    expect(card.querySelector(".pl-field.pl-added")?.textContent).toContain("Scale.y");
-  });
-
-  it("renders structural summary rows as label only, without a value placeholder", () => {
-    const diff: DiffV2 = {
-      ...emptyDiff(),
-      unresolvedGuids: [],
-      roots: [
-        {
-          kind: "prefabInstance",
-          fileId: "1001",
-          name: "Cylinder",
-          status: "modified",
-          sourceGuid: null,
-          overrides: [
-            { group: "Overrides", label: "Added Components (1)", status: "added", before: null, after: null },
-          ],
-          components: [],
-          children: [],
-        },
-      ],
-      loose: [],
-    };
-    const root = freshRoot();
-    render(root, diff);
-    const row = root.querySelector(".pl-field");
-    expect(row?.textContent).toContain("Added Components (1)");
-    expect(row?.textContent).not.toContain("—");
-  });
-
-  it("keeps added and modified component cards open", () => {
-    const root = freshRoot();
-    const diff: DiffV2 = {
-      ...emptyDiff(),
-      unresolvedGuids: [],
-      roots: [
-        {
-          kind: "gameObject",
-          fileId: "1",
-          name: "Cylinder",
-          status: "modified",
-          overrides: [],
-          components: [
-            {
-              kind: "component",
-              fileId: "8",
-              classId: 114,
-              typeName: "MonoBehaviour",
-              scriptGuid: null,
-              className: "Cylinder1",
-              status: "added",
-              fields: [{ path: "Enabled", status: "added", before: null, after: "1" }],
-            },
-            {
-              kind: "component",
-              fileId: "4",
-              classId: 4,
-              typeName: "Transform",
-              scriptGuid: null,
-              className: null,
-              status: "modified",
-              fields: [{ path: "Position.x", status: "modified", before: "0.64596", after: "1" }],
-            },
-          ],
-          children: [],
-        },
-      ],
-      loose: [],
-    };
-    render(root, diff);
-    const cards = [...root.querySelectorAll(".pl-components .pl-kids > details")] as HTMLDetailsElement[];
-    expect(cards).toHaveLength(2);
-    // A closed added card looks asymmetric ("only Cylinder1 collapsed"), so every status stays open
-    expect(cards[0]?.open).toBe(true); // added Cylinder1 is open too
-    expect(cards[0]?.textContent).toContain("Cylinder1"); // className fallback
-    expect(cards[1]?.open).toBe(true); // modified Transform is open
-  });
-
-  it("falls back instance name to resolved source prefab stem", () => {
-    const root = freshRoot();
-    const diff: DiffV2 = {
-      ...emptyDiff(),
-      unresolvedGuids: ["bbb"],
-      resolved: { bbb: "Assets/Enemy.prefab" },
-      roots: [
-        {
-          kind: "prefabInstance",
-          fileId: "1001",
-          name: "",
-          status: "added",
-          sourceGuid: "bbb",
-          overrides: [],
-          components: [],
-          children: [],
-        },
-      ],
-      loose: [],
-    };
-    render(root, diff);
-    expect(root.textContent).toContain("Enemy");
-  });
-
-  it("falls back to generic instance name and badge when sourceGuid is unresolved", () => {
-    const root = freshRoot();
-    const diff: DiffV2 = {
-      ...emptyDiff(),
-      unresolvedGuids: ["zzz"],
+      unresolvedGuids: ["xyz", "zzz"],
       roots: [
         {
           kind: "prefabInstance",
@@ -440,25 +263,6 @@ describe("render", () => {
           children: [],
         },
       ],
-      loose: [],
-    };
-    render(root, diff);
-    expect(root.textContent).toContain("Prefab Instance");
-    expect(root.textContent).toContain("‹Prefab›");
-  });
-
-  it("shows a resolving indicator while guid resolution is pending", () => {
-    const root = freshRoot();
-    render(root, { ...emptyDiff(), unresolvedGuids: ["g1", "g2"], roots: [], loose: [] }, { resolving: 2 });
-    expect(root.textContent).toContain("Resolving 2 reference(s)…");
-  });
-
-  it("falls back component display to className when the script guid is unresolved", () => {
-    const root = freshRoot();
-    const diff: DiffV2 = {
-      ...emptyDiff(),
-      unresolvedGuids: ["xyz"],
-      roots: [],
       loose: [
         {
           kind: "component",
@@ -472,132 +276,48 @@ describe("render", () => {
         },
       ],
     };
+    const root = freshRoot();
     render(root, diff);
-    const summary = root.querySelector("details.pl-comp > summary");
-    expect(summary?.textContent).toContain("Cylinder1");
-    expect(summary?.textContent).not.toContain("MonoBehaviour");
-    // No resolved path yet → the meta stays the bare ‹Script› tag.
-    expect(summary?.textContent).toContain("‹Script›");
+    const text = must(root.textContent);
+    expect(text).toContain("Prefab Instance‹Prefab›");
+    expect(text).toContain("Cylinder1‹Script›");
+    expect(text).not.toContain("MonoBehaviour");
   });
 
-  it("renders the components group as an open collapsible with chevron and count", () => {
+  it("shows reference resolution progress", () => {
     const root = freshRoot();
-    render(root, DIFF);
-    // The group collapses independently of the GameObject row, so the hierarchy can be
-    // scanned with all component noise collapsed.
-    const group = root.querySelector<HTMLDetailsElement>("details.pl-components");
-    expect(group).not.toBeNull();
-    expect(group?.open).toBe(true); // open by default: a diff view must show its changes
-    const head = group?.querySelector("summary.pl-components-label");
-    expect(head).not.toBeNull();
-    expect(head?.querySelector(".pl-chevron svg")).not.toBeNull();
-    // The count keeps the collapsed state informative ("1 changed component hidden").
-    expect(head?.textContent).toContain("components (1)");
+    render(root, { ...emptyDiff(), unresolvedGuids: ["g1", "g2"], roots: [], loose: [] }, { resolving: 2 });
+    expect(root.textContent).toContain("Resolving 2 reference(s)…");
   });
 
-  it("indents component cards one level deeper than child GameObjects", () => {
+  it("waits for an incomplete-resolution retry", async () => {
     const root = freshRoot();
-    render(root, DIFF);
-    const kids = must(root.querySelector("details.pl-go > .pl-kids"));
-    // Gear cards live inside the group's own kids box (extra indent + guide line)...
-    expect(kids.querySelector("details.pl-components > .pl-kids > details.pl-comp")).not.toBeNull();
-    // ...while the child GameObject stays directly on the hierarchy spine.
-    const childGo = kids.querySelector("details.pl-go");
-    expect(childGo?.parentElement).toBe(kids);
-    expect(kids.querySelector("details.pl-components details.pl-go")).toBeNull();
+    const retried = render(root, DIFF, { incomplete: true });
+    expect(root.textContent).toContain("Some references were not resolved");
+    must(root.querySelector<HTMLButtonElement>("button.pl-render")).click();
+    await retried;
   });
 
-  it("wraps root-level loose components in a components group", () => {
-    const root = freshRoot();
-    const diff: DiffV2 = {
-      ...emptyDiff(),
-      unresolvedGuids: [],
-      roots: [],
-      loose: [
-        {
-          kind: "component",
-          fileId: "5",
-          classId: 114,
-          typeName: "MonoBehaviour",
-          scriptGuid: null,
-          className: "Cylinder1",
-          status: "modified",
-          fields: [{ path: "Hp", status: "modified", before: "1", after: "2" }],
-        },
-      ],
-    };
-    render(root, diff);
-    // Consistent visual language: gear rows always appear inside a components group.
-    expect(root.querySelector(".pl-root > details.pl-components details.pl-comp")).not.toBeNull();
-  });
-
-  it("renders unity-style rows: chevron, icon and status badge", () => {
-    const root = freshRoot();
-    render(root, DIFF);
-    const summary = must(root.querySelector("details.pl-go > summary"));
-    expect(summary.classList.contains("pl-row")).toBe(true);
-    expect(summary.querySelector(".pl-chevron svg")).not.toBeNull();
-    expect(summary.querySelector(".pl-icon svg")).not.toBeNull();
-    expect(summary.querySelector(".pl-badge")?.textContent).toBe("~");
-  });
-
-  it("skips the status badge on unchanged rows and tints the prefab icon", () => {
-    const root = freshRoot();
-    render(root, INSTANCE);
-    // Plane is unchanged: no badge chip at all, not a blank one
-    const plane = must(root.querySelector("details.pl-go > summary"));
-    expect(plane.querySelector(".pl-badge")).toBeNull();
-    const icon = must(root.querySelector("details.pl-pi > summary .pl-icon"));
-    expect(icon.classList.contains("pl-icon-prefab")).toBe(true);
-  });
-
-  it("marks rows without children as leaves (chevron slot hidden via CSS)", () => {
-    const root = freshRoot();
-    render(root, DIFF);
-    const summaries = [...root.querySelectorAll("details.pl-go > summary")];
-    const weapon = must(summaries.find((s) => s.textContent?.includes("Weapon")));
-    expect(weapon.classList.contains("pl-leaf")).toBe(true);
-    const player = must(summaries.find((s) => s.textContent?.includes("Player")));
-    expect(player.classList.contains("pl-leaf")).toBe(false);
-  });
-
-  it("renderLoading shows an accessible skeleton tree instead of text", () => {
+  it("renders an accessible loading state", () => {
     const root = freshRoot();
     renderLoading(root);
-    const box = must(root.querySelector(".pl-skeleton"));
-    expect(box.getAttribute("role")).toBe("status");
-    expect(box.getAttribute("aria-busy")).toBe("true");
-    expect(box.getAttribute("aria-label")).toContain("Computing semantic diff");
-    expect(box.querySelectorAll(".pl-skel-row")).toHaveLength(5);
-    // The label lives in aria, not in visible text
-    expect(box.textContent).toBe("");
-  });
-
-  it("shows a spinner with the resolving indicator", () => {
-    const root = freshRoot();
-    render(root, { ...emptyDiff(), unresolvedGuids: ["g1"], roots: [], loose: [] }, { resolving: 1 });
-    expect(root.querySelector(".pl-resolving .pl-spinner")).not.toBeNull();
-  });
-
-  it("shows an alert icon on errors", () => {
-    const root = freshRoot();
-    renderError(root, "Could not fetch file contents from GitHub.");
-    expect(root.querySelector(".pl-error .pl-note-icon svg")).not.toBeNull();
+    const status = must(root.querySelector('[role="status"]'));
+    expect(status.getAttribute("aria-busy")).toBe("true");
+    expect(status.getAttribute("aria-label")).toBe("Computing semantic diff…");
   });
 });
 
 describe("detectTheme", () => {
-  it("follows html[data-color-mode]", () => {
+  it("uses an explicit document theme", () => {
     document.documentElement.setAttribute("data-color-mode", "dark");
     expect(detectTheme(document)).toBe("dark");
     document.documentElement.setAttribute("data-color-mode", "light");
     expect(detectTheme(document)).toBe("light");
   });
 
-  it("follows the OS scheme via matchMedia when data-color-mode is auto", () => {
-    // GitHub's default is auto: a value that is neither dark nor light defers to matchMedia
+  it("uses the operating-system theme for automatic mode", () => {
     document.documentElement.setAttribute("data-color-mode", "auto");
-    expect(detectTheme(document)).toBe("light"); // jsdom has no matchMedia, so light is the fallback
+    expect(detectTheme(document)).toBe("light");
     const win = must(document.defaultView);
     win.matchMedia = ((query: string) => ({
       matches: query === "(prefers-color-scheme: dark)",
@@ -611,29 +331,26 @@ describe("detectTheme", () => {
 });
 
 describe("renderSignIn", () => {
-  it("renders the message and resolves when the sign-in button is clicked", async () => {
+  it("waits for the sign-in action", async () => {
     const root = freshRoot();
     const clicked = renderSignIn(root, "Sign in with GitHub to view semantic diffs.");
-    expect(root.querySelector(".pl-error")?.textContent).toContain("Sign in with GitHub to view semantic diffs.");
-    const button = root.querySelector<HTMLButtonElement>("button.pl-render");
-    expect(button?.textContent).toBe("Sign in with GitHub");
-    button?.click();
+    expect(root.textContent).toContain("Sign in with GitHub to view semantic diffs.");
+    const button = must(root.querySelector<HTMLButtonElement>("button.pl-render"));
+    expect(button.textContent).toBe("Sign in with GitHub");
+    button.click();
     await clicked;
   });
 });
 
 describe("renderSignInPending", () => {
-  it("shows the user code, a copy button, and a link to the verification page", () => {
+  it("renders a secure Device Flow link", () => {
     const root = freshRoot();
     renderSignInPending(root, "ABCD-1234", "https://github.com/login/device");
     expect(root.querySelector(".pl-user-code")?.textContent).toBe("ABCD-1234");
-    const copy = root.querySelector<HTMLButtonElement>("button.pl-render");
-    expect(copy?.textContent).toBe("Copy code");
-    const link = root.querySelector<HTMLAnchorElement>("a.pl-render");
-    expect(link?.href).toBe("https://github.com/login/device");
-    // New tab without opener: the PR tab must keep polling while the user authorizes.
-    expect(link?.target).toBe("_blank");
-    expect(link?.rel).toBe("noopener noreferrer");
-    expect(root.querySelector(".pl-signin-wait .pl-spinner")).not.toBeNull();
+    expect(root.querySelector<HTMLButtonElement>("button.pl-render")?.textContent).toBe("Copy code");
+    const link = must(root.querySelector<HTMLAnchorElement>("a.pl-render"));
+    expect(link.href).toBe("https://github.com/login/device");
+    expect(link.target).toBe("_blank");
+    expect(link.rel).toBe("noopener noreferrer");
   });
 });

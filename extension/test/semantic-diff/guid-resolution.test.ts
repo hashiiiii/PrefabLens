@@ -7,8 +7,6 @@ import { GithubClient } from "../../src/infrastructure/clients/github-client";
 const REPO_KEY = "https://api.github.test:o/r";
 
 class MemoryGuidRepository implements GuidRepository {
-  readonly saves: Array<{ repo: string; entries: Record<string, string> }> = [];
-
   constructor(private readonly cached: Record<string, Record<string, string>> = {}) {}
 
   async load(repo: string): Promise<Record<string, string>> {
@@ -16,17 +14,16 @@ class MemoryGuidRepository implements GuidRepository {
   }
 
   async save(repo: string, entries: Record<string, string>): Promise<void> {
-    this.saves.push({ repo, entries });
     this.cached[repo] = { ...this.cached[repo], ...entries };
   }
 }
 
-function searchRoutes(respond: (request: URL, requestCount: number) => Response | Promise<Response>) {
+function searchRoutes(respond: (request: URL) => Response | Promise<Response>) {
   const requests: URL[] = [];
   const fetchRoute = (async (input: RequestInfo | URL) => {
     const request = new URL(String(input));
     requests.push(request);
-    return respond(request, requests.length);
+    return respond(request);
   }) as typeof fetch;
   return { requests, client: new GithubClient("https://api.github.test", "token", fetchRoute) };
 }
@@ -72,9 +69,10 @@ describe("resolveGuids", () => {
 
   it("reports a Code Search rate limit without dropping resolved names", async () => {
     const repository = new MemoryGuidRepository();
-    const { client, requests } = searchRoutes((_request, requestCount) =>
-      requestCount === 1 ? searchSuccess() : new Response(null, { status: 429, headers: { "retry-after": "1" } }),
-    );
+    const { client, requests } = searchRoutes((request) => {
+      if (request.searchParams.get("q")?.includes('"first"')) return searchSuccess();
+      return new Response(null, { status: 429, headers: { "retry-after": "1" } });
+    });
 
     const result = await resolveGuids(repository, createDiffSession(), client, "o", "r", REPO_KEY, [
       "first",

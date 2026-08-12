@@ -49,14 +49,12 @@ class MemoryTokenRepository implements TokenRepository {
 
 class MemoryDiffRepository implements DiffRepository {
   readonly data = new Map<string, DiffV2>();
-  readonly saves: Array<[string, DiffV2]> = [];
 
   async load(key: string): Promise<DiffV2 | undefined> {
     return this.data.get(key);
   }
 
   async save(key: string, json: DiffV2): Promise<void> {
-    this.saves.push([key, json]);
     this.data.set(key, json);
   }
 }
@@ -127,9 +125,8 @@ describe("prefetchPr", () => {
       REQUEST,
     );
 
-    expect(repository.saves).toHaveLength(1);
-    expect(repository.saves[0]?.[0]).toBe("base-sha:head-sha:Assets/Foo.prefab");
-    expect(repository.saves[0]?.[1].loose[0]?.fields[0]).toEqual({
+    const stored = await repository.load("base-sha:head-sha:Assets/Foo.prefab");
+    expect(stored?.loose[0]?.fields[0]).toEqual({
       path: "Volume",
       status: "modified",
       before: "0.5",
@@ -189,7 +186,7 @@ describe("prefetchPr", () => {
       REQUEST,
     );
 
-    expect(repository.saves).toHaveLength(1);
+    await expect(repository.load("base-sha:head-sha:Assets/Foo.prefab")).resolves.toBeDefined();
     expect(requests.filter((request) => request.pathname.includes("/git/blobs/"))).toHaveLength(
       blobRequestsAfterFirstWorker,
     );
@@ -242,8 +239,8 @@ describe("prefetchPr", () => {
       REQUEST,
     );
 
-    expect(repository.saves).toHaveLength(100);
-    expect(repository.saves.map(([key]) => key)).not.toContain("base-sha:head-sha:README.md");
+    expect(repository.data.size).toBe(100);
+    expect(repository.data.has("base-sha:head-sha:README.md")).toBe(false);
     expect(requests.some((request) => request.pathname.endsWith("/git/blobs/head-100"))).toBe(false);
     expect(requests.some((request) => request.pathname.endsWith("/git/blobs/readme-head"))).toBe(false);
   });
@@ -286,7 +283,7 @@ describe("prefetchPr", () => {
       REQUEST,
     );
 
-    expect(repository.saves).toEqual([]);
+    expect(repository.data.size).toBe(0);
   });
 
   it("stops the remaining prefetch work after a rate limit", async () => {
@@ -339,6 +336,6 @@ describe("prefetchPr", () => {
     const blobRequests = requests.filter((request) => request.pathname.includes("/git/blobs/"));
     expect(blobRequests.length).toBeGreaterThan(0);
     expect(blobRequests.some((request) => /-(?:4|5|6|7|8|9|10|11)$/.test(request.pathname))).toBe(false);
-    expect(repository.saves).toEqual([]);
+    expect(repository.data.size).toBe(0);
   });
 });

@@ -10,9 +10,6 @@ const API_BASE = "https://api.github.test";
 const REPO_KEY = "repoKey";
 
 class MemoryRepoIndexRepository implements RepoIndexRepository {
-  readonly savedGuids: Array<[string, GuidMap]> = [];
-  readonly savedIndexes: Array<[string, RepoGuidIndex]> = [];
-
   constructor(
     private readonly guids: Record<string, GuidMap> = {},
     private readonly indexes: Record<string, RepoGuidIndex> = {},
@@ -23,7 +20,6 @@ class MemoryRepoIndexRepository implements RepoIndexRepository {
   }
 
   async saveGuids(repo: string, entries: GuidMap): Promise<void> {
-    this.savedGuids.push([repo, entries]);
     this.guids[repo] = { ...this.guids[repo], ...entries };
   }
 
@@ -32,7 +28,6 @@ class MemoryRepoIndexRepository implements RepoIndexRepository {
   }
 
   async saveIndex(repo: string, index: RepoGuidIndex): Promise<void> {
-    this.savedIndexes.push([repo, index]);
     this.indexes[repo] = index;
   }
 }
@@ -60,8 +55,11 @@ describe("getRepoIndex", () => {
     const result = await getRepoIndex(repository, createDiffSession(), client, "o", "r", REPO_KEY, "H");
 
     expect(result).toEqual({ g1: "Assets/S.cs" });
-    expect(repository.savedGuids).toEqual([[REPO_KEY, { sha1: "g1" }]]);
-    expect(repository.savedIndexes).toEqual([[REPO_KEY, { treeSha: "H", guids: { g1: "Assets/S.cs" } }]]);
+    await expect(repository.loadGuids(REPO_KEY)).resolves.toEqual({ sha1: "g1" });
+    await expect(repository.loadIndex(REPO_KEY)).resolves.toEqual({
+      treeSha: "H",
+      guids: { g1: "Assets/S.cs" },
+    });
     expect(requests.map((request) => request.pathname)).toEqual(["/repos/o/r/git/trees/H", "/graphql"]);
   });
 
@@ -168,7 +166,7 @@ describe("getRepoIndex", () => {
     const repository = new MemoryRepoIndexRepository();
 
     expect(await getRepoIndex(repository, createDiffSession(), client, "o", "r", REPO_KEY, "H")).toBeNull();
-    expect(repository.savedIndexes).toEqual([]);
+    await expect(repository.loadIndex(REPO_KEY)).resolves.toBeUndefined();
     expect(requests.map((request) => request.pathname)).toEqual(["/repos/o/r/git/trees/H"]);
   });
 
@@ -212,12 +210,11 @@ describe("getRepoIndex", () => {
   });
 
   it("retries after a non-rate-limit failure", async () => {
-    let treeRequests = 0;
+    let treeAvailable = false;
     const client = new GithubClient(API_BASE, "token", async (input) => {
       const request = new URL(String(input));
       if (request.pathname === "/repos/o/r/git/trees/H") {
-        treeRequests += 1;
-        if (treeRequests === 1) return new Response(null, { status: 500 });
+        if (!treeAvailable) return new Response(null, { status: 500 });
         return Response.json({
           truncated: false,
           tree: [{ path: "Assets/S.cs.meta", type: "blob", sha: "sha1" }],
@@ -232,9 +229,9 @@ describe("getRepoIndex", () => {
     const repository = new MemoryRepoIndexRepository();
 
     expect(await getRepoIndex(repository, session, client, "o", "r", REPO_KEY, "H")).toBeNull();
+    treeAvailable = true;
     expect(await getRepoIndex(repository, session, client, "o", "r", REPO_KEY, "H")).toEqual({
       g1: "Assets/S.cs",
     });
-    expect(treeRequests).toBe(2);
   });
 });

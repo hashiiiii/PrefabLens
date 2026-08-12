@@ -19,13 +19,13 @@ type PromiseCacheOptions<V> = {
 };
 
 // Keyed async memoization: concurrent gets share the stored Promise. Rejections always drop, so a retry stays possible.
-function createPromiseCache<V>(options: PromiseCacheOptions<V> = {}): PromiseCache<V> {
+function createPromiseCache<V>(options: PromiseCacheOptions<V>, now: () => number): PromiseCache<V> {
   const { ttlMs, max, retain } = options;
   const entries = new Map<string, { at: number; promise: Promise<V> }>();
   return {
     get(key, compute) {
       const hit = entries.get(key);
-      if (hit && (ttlMs === undefined || Date.now() - hit.at < ttlMs)) {
+      if (hit && (ttlMs === undefined || now() - hit.at < ttlMs)) {
         // LRU: a hit re-inserts the entry, so bursts (prefetch) evict the least recently used entry, not the oldest
         entries.delete(key);
         entries.set(key, hit);
@@ -38,7 +38,7 @@ function createPromiseCache<V>(options: PromiseCacheOptions<V> = {}): PromiseCac
         },
         () => entries.delete(key), // never cache failures
       );
-      entries.set(key, { at: Date.now(), promise });
+      entries.set(key, { at: now(), promise });
       if (max !== undefined && entries.size > max) {
         const oldest = entries.keys().next().value;
         if (oldest !== undefined) entries.delete(oldest);
@@ -74,24 +74,36 @@ export type DiffSession = {
   indexFallback: Set<string>;
 };
 
-export function createDiffSession(): DiffSession {
+export function createDiffSession(now: () => number = Date.now): DiffSession {
   return {
-    contexts: createPromiseCache<Result<DiffContext, GithubFailure>>({
-      ttlMs: CONTEXT_TTL_MS,
-      retain: (r) => r.ok,
-    }),
-    blobs: createPromiseCache<Result<Uint8Array | null, GithubFailure>>({
-      max: BLOB_CACHE_MAX,
-      retain: (r) => r.ok,
-    }),
-    diffs: createPromiseCache<DiffOutcome>({
-      retain: (o) => o.ok,
-    }),
+    contexts: createPromiseCache<Result<DiffContext, GithubFailure>>(
+      {
+        ttlMs: CONTEXT_TTL_MS,
+        retain: (r) => r.ok,
+      },
+      now,
+    ),
+    blobs: createPromiseCache<Result<Uint8Array | null, GithubFailure>>(
+      {
+        max: BLOB_CACHE_MAX,
+        retain: (r) => r.ok,
+      },
+      now,
+    ),
+    diffs: createPromiseCache<DiffOutcome>(
+      {
+        retain: (o) => o.ok,
+      },
+      now,
+    ),
     misses: new Set(),
-    searches: createPromiseCache<Result<string | null, GithubFailure>>({ retain: () => false }),
-    indexes: createPromiseCache<Result<Record<string, string> | null, GithubFailure>>({
-      retain: (r) => r.ok,
-    }),
+    searches: createPromiseCache<Result<string | null, GithubFailure>>({ retain: () => false }, now),
+    indexes: createPromiseCache<Result<Record<string, string> | null, GithubFailure>>(
+      {
+        retain: (r) => r.ok,
+      },
+      now,
+    ),
     indexFallback: new Set(),
   };
 }

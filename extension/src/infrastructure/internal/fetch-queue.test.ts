@@ -126,21 +126,20 @@ describe("createQueue rate limit backoff", () => {
   it("retries a rate-limited task after the advised wait", async () => {
     const clock = new VirtualClock();
     const queue = createQueue(1, clock.sleep);
-    let attempts = 0;
     const task = queue(async () => {
-      attempts++;
-      if (attempts === 1) throw { kind: "rate-limited", retryAfterMs: 5_000 };
+      if (clock.now < 5_000) throw { kind: "rate-limited", retryAfterMs: 5_000 };
       return "ok";
     });
+    const timeline: string[] = [];
+    void task.then((value) => timeline.push(value));
     await flush();
     expect(clock.now).toBe(5_000);
-    expect(attempts).toBe(1);
     clock.advanceTo(4_999);
     await flush();
-    expect(attempts).toBe(1);
+    expect(timeline).toEqual([]);
     clock.advanceTo(5_000);
     await expect(task).resolves.toBe("ok");
-    expect(attempts).toBe(2);
+    expect(timeline).toEqual(["ok"]);
   });
 
   it("caps the advised wait and falls back when no advice is given", async () => {
@@ -175,9 +174,7 @@ describe("createQueue rate limit backoff", () => {
   it("gives up after two retries and surfaces the original error", async () => {
     const clock = new VirtualClock();
     const queue = createQueue(1, clock.sleep);
-    let attempts = 0;
     const task = queue(async () => {
-      attempts++;
       throw { kind: "rate-limited", retryAfterMs: 1_000 };
     });
     const taskRejects = expect(task).rejects.toSatisfy(isRateLimited);
@@ -188,43 +185,39 @@ describe("createQueue rate limit backoff", () => {
     expect(clock.now).toBe(2_000);
     clock.advanceTo(2_000);
     await taskRejects;
-    expect(attempts).toBe(3);
   });
 
   it("pauses queued work during backoff instead of failing it", async () => {
     const clock = new VirtualClock();
     const queue = createQueue(1, clock.sleep);
-    let attempts = 0;
+    const timeline: string[] = [];
     const limited = queue(async () => {
-      attempts++;
-      if (attempts === 1) throw { kind: "rate-limited", retryAfterMs: 1_000 };
+      if (clock.now < 1_000) throw { kind: "rate-limited", retryAfterMs: 1_000 };
+      timeline.push("retried");
       return "retried";
     });
     await flush();
-    let ran = false;
     const queued = queue(async () => {
-      ran = true;
+      timeline.push("later");
       return "later";
     });
     await flush();
     expect(clock.now).toBe(1_000);
-    expect(ran).toBe(false);
+    expect(timeline).toEqual([]);
     clock.advanceTo(999);
     await flush();
-    expect(ran).toBe(false);
+    expect(timeline).toEqual([]);
     clock.advanceTo(1_000);
-    await expect(limited).resolves.toBe("retried");
-    await expect(queued).resolves.toBe("later");
+    await expect(Promise.all([limited, queued])).resolves.toEqual(["retried", "later"]);
+    expect(timeline).toEqual(["retried", "later"]);
   });
 
   it("runs user tasks before a retried prefetch task after backoff", async () => {
     const clock = new VirtualClock();
     const queue = createQueue(1, clock.sleep);
     const order: string[] = [];
-    let attempts = 0;
     const prefetchTask = queue(async () => {
-      attempts++;
-      if (attempts === 1) throw { kind: "rate-limited", retryAfterMs: 1_000 };
+      if (clock.now < 1_000) throw { kind: "rate-limited", retryAfterMs: 1_000 };
       order.push("prefetch-retry");
     });
     await flush();

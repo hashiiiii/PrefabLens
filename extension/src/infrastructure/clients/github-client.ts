@@ -1,6 +1,7 @@
 import {
   type ChangedFile,
   type GithubFailure,
+  type GithubGateway,
   isRateLimited,
   type MakeGithubClient,
   type RefPair,
@@ -38,11 +39,11 @@ async function rateLimitFailure(res: Response): Promise<Extract<GithubFailure, {
 
 // Queue-aware fetch: rate-limited responses become classified rejections, so the
 // backoff and retry logic of the queue (fetch-queue.ts) sees them.
-export function createQueuedFetch(queue: Queue, front: boolean): typeof fetch {
+function createQueuedFetch(queue: Queue, fetchFn: typeof fetch, front: boolean): typeof fetch {
   return (input, init) =>
     queue(
       async () => {
-        const res = await fetch(input, init);
+        const res = await fetchFn(input, init);
         const limited = await rateLimitFailure(res);
         if (limited) throw limited;
         return res;
@@ -72,7 +73,7 @@ async function readOr<T>(read: () => Promise<T>): Promise<Result<T, GithubFailur
   }
 }
 
-export class GithubClient {
+export class GithubClient implements GithubGateway {
   constructor(
     private readonly base: string,
     private readonly token: string,
@@ -309,7 +310,12 @@ export class GithubClient {
 }
 
 // One shared queue per factory: the user lane has priority over the prefetch traffic.
-export function createGithubClientFactory(concurrency: number): MakeGithubClient {
-  const queue = createQueue(concurrency);
-  return (base, token, lane) => new GithubClient(base, token, createQueuedFetch(queue, lane === "user"));
+export function createGithubClientFactory(
+  concurrency: number,
+  fetchFn: typeof fetch = (input, init) => fetch(input, init),
+  sleep: (milliseconds: number) => Promise<void> = (milliseconds) =>
+    new Promise((resolve) => setTimeout(resolve, milliseconds)),
+): MakeGithubClient {
+  const queue = createQueue(concurrency, sleep);
+  return (base, token, lane) => new GithubClient(base, token, createQueuedFetch(queue, fetchFn, lane === "user"));
 }

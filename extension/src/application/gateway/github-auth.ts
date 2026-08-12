@@ -18,6 +18,6 @@ export type PollResult =
   | { status: "failed" };
 
 export type GithubAuthGateway = {
-  requestDeviceCode(fetchFn: typeof fetch): Promise<Result<DeviceCode, DeviceFlowFailure>>;
-  pollForToken(fetchFn: typeof fetch, sleep: (ms: number) => Promise<void>, code: DeviceCode): Promise<PollResult>;
+  requestDeviceCode(): Promise<Result<DeviceCode, DeviceFlowFailure>>;
+  pollForToken(code: DeviceCode): Promise<PollResult>;
 };

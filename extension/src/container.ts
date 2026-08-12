@@ -14,7 +14,7 @@ import { createChromeRepoIndexClient } from "./infrastructure/clients/chrome-rep
 import { createChromeTokenClient } from "./infrastructure/clients/chrome-token-client";
 import { createFixtureClient } from "./infrastructure/clients/fixture-client";
 import { createGithubClientFactory } from "./infrastructure/clients/github-client";
-import { pollForToken, requestDeviceCode } from "./infrastructure/clients/github-device-flow-client";
+import { createGithubDeviceFlowClient } from "./infrastructure/clients/github-device-flow-client";
 import {
   createDiffer,
   createDifferLoader as createWasmDifferLoader,
@@ -41,7 +41,7 @@ export function createRepoIndexStore(): RepoIndexRepository {
 }
 
 export function createGithubAuth(): GithubAuthGateway {
-  return { requestDeviceCode, pollForToken };
+  return createGithubDeviceFlowClient();
 }
 
 export function createClientFactory(concurrency: number): MakeGithubClient {

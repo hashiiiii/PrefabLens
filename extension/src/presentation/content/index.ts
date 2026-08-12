@@ -50,7 +50,6 @@ const messenger = createMessenger();
 const tokenStore = createTokenStore();
 const auth = createGithubAuth();
 const signInState = { inFlight: false };
-const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 // _blank: Open in a new tab
 // noopener: Prevent the opened tab from accessing the original tab
 const openTab = (url: string) => void window.open(url, "_blank", "noopener");
@@ -67,7 +66,7 @@ const persistView = async (view: View): Promise<void> => {
 // Auth-error panel: device flow. Failures land back here for retry.
 async function signInPanel(root: ShadowRoot, message: string): Promise<void> {
   await renderSignIn(root, message);
-  for await (const event of signIn(auth, tokenStore, fetch, sleep, now, signInState)) {
+  for await (const event of signIn(auth, tokenStore, now, signInState)) {
     if (event.status === "pending") {
       renderSignInPending(root, event.userCode, event.verificationUri);
       openTab(event.verificationUri);

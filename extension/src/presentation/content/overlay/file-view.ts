@@ -5,9 +5,8 @@ import {
   type MessengerGateway,
 } from "../../../application/gateway/messenger";
 import { unresolvedRemaining } from "../../../domain/diff/fn/unresolved-remaining";
-import { must } from "../../../internal/must";
-import { createViewHost, render, renderError, renderLoading, renderTooLarge } from "../../internal/render";
-import { mountToggle } from "../../internal/toggle";
+import { createFileViewController } from "../../internal/file-view-controller";
+import { render, renderError, renderLoading, renderTooLarge } from "../../internal/render";
 import type { View } from "../../internal/view-mode";
 import { effectiveView, setOverride, type ViewStateData } from "../../internal/view-state";
 import type { DiffPage, FileEntry } from "../detect";
@@ -36,26 +35,10 @@ export function attachFileView(
   showAuthError: (root: ShadowRoot, error: AuthError) => void,
 ): FileView {
   const key = viewKey(page.owner, page.repo, page.target, entry.path);
-  let host: HTMLDivElement | undefined;
-  let root: ShadowRoot | undefined;
   let requested = false;
 
-  const syncView = (view: View): void => {
-    if (view === "raw") {
-      entry.setRawHidden(false);
-      if (host && !host.isConnected) entry.attachHost(host);
-      if (host) host.style.display = "none";
-      return;
-    }
-    if (!host) return;
-    entry.setRawHidden(true);
-    if (!host.isConnected) entry.attachHost(host);
-    host.style.display = entry.collapsed() ? "none" : "";
-  };
-
-  const request = async (force?: boolean): Promise<void> => {
+  const request = async (viewRoot: ShadowRoot, force?: boolean): Promise<void> => {
     requested = true;
-    const viewRoot = must(root);
     renderLoading(viewRoot);
     const response = await messenger.semanticDiff({
       type: "semanticDiff",
@@ -71,7 +54,7 @@ export function attachFileView(
         json: response.json,
         retry: () => {
           requested = false;
-          void request(force);
+          void request(viewRoot, force);
         },
       };
       views.set(key, view);
@@ -91,10 +74,10 @@ export function attachFileView(
     }
     if (response.error === "too-large") {
       await renderTooLarge(viewRoot, response.bytes);
-      await request(true);
+      await request(viewRoot, true);
     } else if (isAuthError(response.error)) {
       authRetries.add(() => {
-        if (!requested && effectiveView(viewState, entry.path) === "semantic") void request();
+        if (!requested && effectiveView(viewState, entry.path) === "semantic") void request(viewRoot);
       });
       showAuthError(viewRoot, response.error);
     } else {
@@ -102,39 +85,24 @@ export function attachFileView(
     }
   };
 
-  const show = (view: View): void => {
-    if (view === "raw") {
-      syncView(view);
-      return;
-    }
-    if (!host) {
-      const created = createViewHost();
-      host = created.host;
-      root = created.root;
-      entry.attachHost(host);
-    }
-    syncView(view);
-    if (!requested) void request();
-  };
-
-  const toggle = mountToggle(
+  const controller = createFileViewController(
+    effectiveView(viewState, entry.path),
     (view) => {
       setOverride(viewState, entry.path, view);
-      show(view);
     },
-    effectiveView(viewState, entry.path),
+    entry.setRawHidden,
+    entry.attachHost,
+    () => !entry.collapsed(),
+    (root) => {
+      if (!requested) void request(root);
+    },
   );
   entry.header.setAttribute("data-prefablens", "");
-  entry.header.append(toggle.element);
+  entry.header.append(controller.element);
 
-  const fileView: FileView = {
+  return {
     header: entry.header,
-    apply: (view) => {
-      toggle.set(view);
-      show(view);
-    },
-    sync: () => syncView(effectiveView(viewState, entry.path)),
+    apply: controller.apply,
+    sync: () => controller.sync(effectiveView(viewState, entry.path)),
   };
-  if (effectiveView(viewState, entry.path) === "semantic") show("semantic");
-  return fileView;
 }

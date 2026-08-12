@@ -24,23 +24,11 @@ class MemoryStorageArea implements StorageAreaWithRemove {
 }
 
 describe("createChromeTokenClient", () => {
-  it("reads the stored access token", async () => {
-    const tokens = createChromeTokenClient(new MemoryStorageArea({ accessToken: "tok" }));
-
-    expect(await tokens.readAccessToken()).toBe("tok");
-  });
-
-  it("returns undefined when the access token is absent", async () => {
+  it("round-trips the access token", async () => {
     const tokens = createChromeTokenClient(new MemoryStorageArea());
 
     expect(await tokens.readAccessToken()).toBeUndefined();
-  });
-
-  it("stores the access token", async () => {
-    const tokens = createChromeTokenClient(new MemoryStorageArea());
-
     await tokens.saveAccessToken("tok");
-
     expect(await tokens.readAccessToken()).toBe("tok");
   });
 

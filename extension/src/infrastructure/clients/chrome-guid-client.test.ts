@@ -25,15 +25,11 @@ class MemoryStorageArea implements StorageArea {
 }
 
 describe("createChromeGuidClient", () => {
-  it("returns no GUID when storage has no entry", async () => {
+  it("stores GUID paths by repository and merges later saves", async () => {
     const guids = createChromeGuidClient(new MemoryStorageArea());
 
     expect(await guids.load("api/o/r")).toEqual({});
-  });
-
-  it("stores GUID paths by repository and merges later saves", async () => {
-    const guids = createChromeGuidClient(new MemoryStorageArea({ "guids:api/o/r": { g0: "Assets/Stored.cs" } }));
-
+    await guids.save("api/o/r", { g0: "Assets/Stored.cs" });
     await guids.save("api/o/r", { g1: "Assets/A.cs" });
     expect(await guids.load("api/o/r")).toEqual({
       g0: "Assets/Stored.cs",

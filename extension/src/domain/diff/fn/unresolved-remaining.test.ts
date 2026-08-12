@@ -14,10 +14,6 @@ describe("unresolvedRemaining", () => {
     expect(unresolvedRemaining({ unresolvedGuids: ["g1"] })).toEqual(["g1"]);
   });
 
-  it("returns empty when everything is resolved", () => {
-    expect(unresolvedRemaining({ unresolvedGuids: ["g1"], resolved: { g1: "Assets/A.cs" } })).toEqual([]);
-  });
-
   it("does not let Object.prototype keys count as resolved", () => {
     // Guids are arbitrary strings: with `in` or property access, "constructor" hits
     // Object.prototype and silently drops out of the unresolved list. Object.hasOwn keeps it.

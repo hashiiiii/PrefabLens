@@ -130,29 +130,38 @@ describe("render", () => {
     const root = freshRoot();
     render(root, DIFF);
 
-    const gameObjects = [...root.querySelectorAll<HTMLDetailsElement>("details.pl-go")];
-    expect(gameObjects).toHaveLength(2);
-    expect(gameObjects[0]?.querySelector("summary")?.textContent).toContain("Player");
-    expect(gameObjects[1]?.querySelector("summary")?.textContent).toContain("Weapon");
+    const summaries = [...root.querySelectorAll("summary")];
+    const player = must(summaries.find((summary) => summary.textContent?.includes("Player"))?.parentElement);
+    const weapon = must(summaries.find((summary) => summary.textContent?.includes("Weapon"))?.parentElement);
+    expect(player.tagName).toBe("DETAILS");
+    expect(weapon.tagName).toBe("DETAILS");
+    expect(player.contains(weapon)).toBe(true);
 
-    const text = must(root.querySelector(".pl-root")?.textContent);
+    const text = must(root.querySelector("div")?.textContent);
     expect(text).toContain("components (4)");
     expect(text).toContain("GameObject");
     expect(text).toContain("NameHero→Player");
     expect(text).toContain("Sound‹Script: Assets/Scripts/Sound.cs›");
     expect(text).toContain("volume0.5→0.8");
 
-    const added = must([...root.querySelectorAll(".pl-field")].find((row) => row.textContent?.includes("newField")));
+    const added = must([...root.querySelectorAll("div")].find((row) => row.textContent === "newField1"));
     expect(added.textContent).toBe("newField1");
     const structural = must(
-      [...root.querySelectorAll(".pl-field")].find((row) => row.textContent?.includes("Added Components (1)")),
+      [...root.querySelectorAll("div")].find((row) => row.textContent === "Added Components (1)"),
     );
     expect(structural.textContent).toBe("Added Components (1)");
 
-    const cards = [...root.querySelectorAll<HTMLDetailsElement>("details.pl-components > .pl-kids > details")];
+    const componentGroups = summaries
+      .filter((summary) => summary.textContent?.startsWith("components ("))
+      .map((summary) => must(summary.parentElement));
+    const cards = componentGroups
+      .flatMap((group) => [...must(group.children.item(1)).children])
+      .filter((child): child is HTMLDetailsElement => child instanceof HTMLDetailsElement);
     expect(cards).toHaveLength(5);
     expect(cards.every((card) => card.open)).toBe(true);
-    expect(root.querySelector(".pl-root > details.pl-components details.pl-comp")?.textContent).toContain("Transform");
+    expect(
+      componentGroups.find((group) => group.children.item(0)?.textContent === "components (1)")?.textContent,
+    ).toContain("Transform");
   });
 
   it("formats local, null, built-in, and unresolved references", () => {
@@ -188,7 +197,7 @@ describe("render", () => {
     };
     const root = freshRoot();
     render(root, refs);
-    const text = must(root.querySelector(".pl-root")?.textContent);
+    const text = must(root.querySelector("div")?.textContent);
     expect(text).toContain("#100");
     expect(text).toContain("None");
     expect(text).toContain("Cube (built-in)");
@@ -231,7 +240,8 @@ describe("render", () => {
     const root = freshRoot();
     const clicked = renderTooLarge(root, 26 * 1024 * 1024);
     expect(root.textContent).toContain("Large file (26 MB)");
-    const button = must(root.querySelector<HTMLButtonElement>("button.pl-render"));
+    const button = must(root.querySelector<HTMLButtonElement>("button"));
+    expect(button.type).toBe("button");
     expect(button.textContent).toBe("Render anyway");
     button.click();
     await clicked;
@@ -294,7 +304,9 @@ describe("render", () => {
     const root = freshRoot();
     const retried = render(root, DIFF, { incomplete: true });
     expect(root.textContent).toContain("Some references were not resolved");
-    must(root.querySelector<HTMLButtonElement>("button.pl-render")).click();
+    const button = must(root.querySelector<HTMLButtonElement>("button"));
+    expect(button.textContent).toBe("Retry");
+    button.click();
     await retried;
   });
 
@@ -335,7 +347,8 @@ describe("renderSignIn", () => {
     const root = freshRoot();
     const clicked = renderSignIn(root, "Sign in with GitHub to view semantic diffs.");
     expect(root.textContent).toContain("Sign in with GitHub to view semantic diffs.");
-    const button = must(root.querySelector<HTMLButtonElement>("button.pl-render"));
+    const button = must(root.querySelector<HTMLButtonElement>("button"));
+    expect(button.type).toBe("button");
     expect(button.textContent).toBe("Sign in with GitHub");
     button.click();
     await clicked;
@@ -346,9 +359,12 @@ describe("renderSignInPending", () => {
   it("renders a secure Device Flow link", () => {
     const root = freshRoot();
     renderSignInPending(root, "ABCD-1234", "https://github.com/login/device");
-    expect(root.querySelector(".pl-user-code")?.textContent).toBe("ABCD-1234");
-    expect(root.querySelector<HTMLButtonElement>("button.pl-render")?.textContent).toBe("Copy code");
-    const link = must(root.querySelector<HTMLAnchorElement>("a.pl-render"));
+    expect(root.querySelector("code")?.textContent).toBe("ABCD-1234");
+    const button = must(root.querySelector<HTMLButtonElement>("button"));
+    expect(button.type).toBe("button");
+    expect(button.textContent).toBe("Copy code");
+    const link = must(root.querySelector<HTMLAnchorElement>("a"));
+    expect(link.textContent).toBe("Open GitHub");
     expect(link.href).toBe("https://github.com/login/device");
     expect(link.target).toBe("_blank");
     expect(link.rel).toBe("noopener noreferrer");

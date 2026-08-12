@@ -26,22 +26,13 @@ class MemoryStorageArea implements StorageArea {
 }
 
 describe("createChromeRepoIndexClient", () => {
-  it("returns no metadata GUID when storage has no entry", async () => {
+  it("stores metadata and index data in separate namespaces", async () => {
     const repoIndex = createChromeRepoIndexClient(new MemoryStorageArea());
 
     expect(await repoIndex.loadGuids("api/o/r")).toEqual({});
-  });
-
-  it("stores metadata and index data in separate namespaces", async () => {
-    const priorIndex: RepoGuidIndex = { treeSha: "tree-1", guids: { g1: "Assets/A.cs" } };
-    const repoIndex = createChromeRepoIndexClient(
-      new MemoryStorageArea({
-        "metaGuids:api/o/r": { sha1: "g1" },
-        "guidIndex:api/o/r": priorIndex,
-      }),
-    );
     const nextIndex: RepoGuidIndex = { treeSha: "tree-2", guids: { g2: "Assets/B.mat" } };
 
+    await repoIndex.saveGuids("api/o/r", { sha1: "g1" });
     await repoIndex.saveGuids("api/o/r", { sha2: "g2" });
     await repoIndex.saveIndex("api/o/r", nextIndex);
 

@@ -1,7 +1,7 @@
 /// <reference types="node" />
 import { readFileSync } from "node:fs";
 import { beforeAll, describe, expect, it } from "vitest";
-import { BINARY_ASSET } from "../../fixtures/unity";
+import { BINARY_ASSET, SOURCE_PREFAB, VARIANT_PREFAB } from "../../fixtures/unity";
 import { createDiffSession, type DiffContext } from "../../src/application/diff/create-diff-session";
 import type { DifferGateway } from "../../src/application/gateway/differ";
 import { mergeGithubSources } from "../../src/application/internal/github-source-merge";
@@ -15,25 +15,6 @@ const OWNER = "o";
 const REPO = "r";
 const REPO_KEY = `${API_BASE}:${OWNER}/${REPO}`;
 const enc = new TextEncoder();
-
-const VARIANT = enc.encode(`--- !u!1001 &1001
-PrefabInstance:
-  m_Modification:
-    m_Modifications:
-    - target: {fileID: 40, guid: src0, type: 3}
-      propertyPath: m_LocalScale.y
-      value: 2
-  m_SourcePrefab: {fileID: 100100000, guid: src0, type: 3}`);
-
-const SOURCE = enc.encode(`--- !u!1 &10
-GameObject:
-  m_Name: Source
-  m_Component:
-  - component: {fileID: 40}
---- !u!4 &40
-Transform:
-  m_GameObject: {fileID: 10}
-  m_LocalScale: {x: 1, y: 1, z: 1}`);
 
 function nestedSource(fileId: number, guid: string): Uint8Array {
   return enc.encode(`--- !u!1001 &${fileId}
@@ -103,10 +84,10 @@ describe("mergeGithubSources", () => {
     const { client, requests } = githubRoutes((request) =>
       request.pathname === `/repos/${OWNER}/${REPO}/contents/Assets/Source.prefab` &&
       request.searchParams.get("ref") === "head-sha"
-        ? raw(SOURCE)
+        ? raw(SOURCE_PREFAB)
         : new Response(null, { status: 404 }),
     );
-    const first = firstDiff(differ, new Uint8Array(), VARIANT, { src0: path });
+    const first = firstDiff(differ, new Uint8Array(), VARIANT_PREFAB, { src0: path });
 
     const result = await mergeGithubSources(
       differ,
@@ -118,7 +99,7 @@ describe("mergeGithubSources", () => {
       REPO_KEY,
       context(),
       new Uint8Array(),
-      VARIANT,
+      VARIANT_PREFAB,
       first,
     );
 
@@ -133,9 +114,11 @@ describe("mergeGithubSources", () => {
   it("fetches a removed source from the base", async () => {
     const path = "Assets/Source.prefab";
     const { client, requests } = githubRoutes((request) =>
-      request.pathname === "/repos/o/r/git/blobs/source-base-blob" ? raw(SOURCE) : new Response(null, { status: 404 }),
+      request.pathname === "/repos/o/r/git/blobs/source-base-blob"
+        ? raw(SOURCE_PREFAB)
+        : new Response(null, { status: 404 }),
     );
-    const first = firstDiff(differ, VARIANT, new Uint8Array(), { src0: path });
+    const first = firstDiff(differ, VARIANT_PREFAB, new Uint8Array(), { src0: path });
 
     const result = await mergeGithubSources(
       differ,
@@ -146,7 +129,7 @@ describe("mergeGithubSources", () => {
       REPO,
       REPO_KEY,
       context(new Map([[path, "source-base-blob"]])),
-      VARIANT,
+      VARIANT_PREFAB,
       new Uint8Array(),
       first,
     );
@@ -159,7 +142,7 @@ describe("mergeGithubSources", () => {
   it("skips a binary source and keeps the available diff", async () => {
     const path = "Assets/Source.prefab";
     const { client, requests } = githubRoutes(() => raw(BINARY_ASSET));
-    const first = firstDiff(differ, new Uint8Array(), VARIANT, { src0: path });
+    const first = firstDiff(differ, new Uint8Array(), VARIANT_PREFAB, { src0: path });
 
     const result = await mergeGithubSources(
       differ,
@@ -171,7 +154,7 @@ describe("mergeGithubSources", () => {
       REPO_KEY,
       context(),
       new Uint8Array(),
-      VARIANT,
+      VARIANT_PREFAB,
       first,
     );
 
@@ -195,7 +178,7 @@ describe("mergeGithubSources", () => {
       const source = sources[request.pathname];
       return source ? raw(source) : new Response(null, { status: 404 });
     });
-    const first = firstDiff(differ, new Uint8Array(), VARIANT, { src0: paths.src0 });
+    const first = firstDiff(differ, new Uint8Array(), VARIANT_PREFAB, { src0: paths.src0 });
 
     const result = await mergeGithubSources(
       differ,
@@ -207,7 +190,7 @@ describe("mergeGithubSources", () => {
       REPO_KEY,
       context(),
       new Uint8Array(),
-      VARIANT,
+      VARIANT_PREFAB,
       first,
     );
 
@@ -223,7 +206,7 @@ describe("mergeGithubSources", () => {
   it("does not repeat a source that makes no progress", async () => {
     const path = "Assets/Missing.prefab";
     const { client, requests } = githubRoutes(() => new Response(null, { status: 404 }));
-    const first = firstDiff(differ, new Uint8Array(), VARIANT, { src0: path });
+    const first = firstDiff(differ, new Uint8Array(), VARIANT_PREFAB, { src0: path });
 
     const result = await mergeGithubSources(
       differ,
@@ -235,7 +218,7 @@ describe("mergeGithubSources", () => {
       REPO_KEY,
       context(),
       new Uint8Array(),
-      VARIANT,
+      VARIANT_PREFAB,
       first,
     );
 
@@ -245,7 +228,7 @@ describe("mergeGithubSources", () => {
 
   it("keeps the first diff when the source path is unresolved", async () => {
     const { client, requests } = githubRoutes(() => new Response(null, { status: 500 }));
-    const first: DiffV2 = firstDiff(differ, new Uint8Array(), VARIANT);
+    const first: DiffV2 = firstDiff(differ, new Uint8Array(), VARIANT_PREFAB);
 
     const result = await mergeGithubSources(
       differ,
@@ -257,7 +240,7 @@ describe("mergeGithubSources", () => {
       REPO_KEY,
       context(),
       new Uint8Array(),
-      VARIANT,
+      VARIANT_PREFAB,
       first,
     );
 

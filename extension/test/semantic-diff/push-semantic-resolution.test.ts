@@ -1,6 +1,7 @@
 /// <reference types="node" />
 import { readFileSync } from "node:fs";
 import { beforeAll, describe, expect, it } from "vitest";
+import { SOURCE_PREFAB, VARIANT_PREFAB } from "../../fixtures/unity";
 import { createDiffSession, type DiffContext } from "../../src/application/diff/create-diff-session";
 import type { DifferGateway } from "../../src/application/gateway/differ";
 import type { GuidResolvedPush, SemanticDiffRequest } from "../../src/application/gateway/messenger";
@@ -25,27 +26,6 @@ const REQUEST: SemanticDiffRequest = {
   target: { kind: "pull", prNumber: 1 },
   path: MAIN_PATH,
 };
-const encoder = new TextEncoder();
-
-const VARIANT = encoder.encode(`--- !u!1001 &1001
-PrefabInstance:
-  m_Modification:
-    m_Modifications:
-    - target: {fileID: 40, guid: src0, type: 3}
-      propertyPath: m_LocalScale.y
-      value: 2
-  m_SourcePrefab: {fileID: 100100000, guid: src0, type: 3}`);
-
-const SOURCE = encoder.encode(`--- !u!1 &10
-GameObject:
-  m_Name: Source
-  m_Component:
-  - component: {fileID: 40}
---- !u!4 &40
-Transform:
-  m_GameObject: {fileID: 10}
-  m_LocalScale: {x: 1, y: 1, z: 1}`);
-
 class MemoryGuidRepository implements GuidRepository {
   constructor(private readonly data: Record<string, Record<string, string>> = {}) {}
 
@@ -117,7 +97,7 @@ function context(): DiffContext {
 }
 
 function sourceDiff(resolved?: Record<string, string>): DiffV2 {
-  const result = differ.diff(new Uint8Array(), VARIANT);
+  const result = differ.diff(new Uint8Array(), VARIANT_PREFAB);
   if (!result.ok) throw new Error(result.error.message);
   return { ...result.value, resolved };
 }
@@ -271,8 +251,8 @@ describe("pushSemanticResolution", () => {
       if (url.pathname === "/search/code") {
         return new Response(null, { status: 429, headers: { "retry-after": "1" } });
       }
-      if (url.pathname === "/repos/o/r/contents/Assets/Foo.prefab") return raw(VARIANT);
-      if (url.pathname === "/repos/o/r/contents/Assets/Source.prefab") return raw(SOURCE);
+      if (url.pathname === "/repos/o/r/contents/Assets/Foo.prefab") return raw(VARIANT_PREFAB);
+      if (url.pathname === "/repos/o/r/contents/Assets/Source.prefab") return raw(SOURCE_PREFAB);
       return new Response(null, { status: 500 });
     });
     let loads = 0;
@@ -313,7 +293,7 @@ describe("pushSemanticResolution", () => {
 
   it("sends a failed final push after a source fetch failure", async () => {
     const { client, requests } = githubRoutes(({ url }) => {
-      if (url.pathname === "/repos/o/r/contents/Assets/Foo.prefab") return raw(VARIANT);
+      if (url.pathname === "/repos/o/r/contents/Assets/Foo.prefab") return raw(VARIANT_PREFAB);
       if (url.pathname === "/repos/o/r/contents/Assets/Source.prefab") {
         return new Response(null, { status: 500 });
       }
@@ -356,8 +336,8 @@ describe("pushSemanticResolution", () => {
       if (url.pathname === "/graphql") {
         return json({ data: { repository: { b0: { text: "guid: src0\n" } } } });
       }
-      if (url.pathname === "/repos/o/r/contents/Assets/Foo.prefab") return raw(VARIANT);
-      if (url.pathname === "/repos/o/r/contents/Assets/Source.prefab") return raw(SOURCE);
+      if (url.pathname === "/repos/o/r/contents/Assets/Foo.prefab") return raw(VARIANT_PREFAB);
+      if (url.pathname === "/repos/o/r/contents/Assets/Source.prefab") return raw(SOURCE_PREFAB);
       return new Response(null, { status: 500 });
     });
     const pushes: GuidResolvedPush[] = [];

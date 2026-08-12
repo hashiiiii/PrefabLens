@@ -1,86 +1,101 @@
 import { describe, expect, it } from "vitest";
 import { type DiffV2, emptyDiff } from "../../domain/diff/types";
+import type { StorageAreaWithRemove } from "../internal/storage-area";
 import { createChromeDiffClient } from "./chrome-diff-client";
 
 const DIFF: DiffV2 = emptyDiff();
 
-// A fake that mimics only the needed subset of chrome.storage.session with a Map.
-// set reproduces quota overflow via failWhen. Calls land in plain arrays, not spies.
-function fakeArea(failWhen?: () => boolean) {
-  const data = new Map<string, unknown>();
-  const sets: Array<Record<string, unknown>> = [];
-  const removes: Array<string | string[]> = [];
-  const area = {
-    data,
-    sets,
-    removes,
-    async get(keys: string | string[] | null) {
-      if (keys === null) return Object.fromEntries(data);
-      const list = Array.isArray(keys) ? keys : [keys];
-      const out: Record<string, unknown> = {};
-      for (const k of list) if (data.has(k)) out[k] = data.get(k);
-      return out;
-    },
-    async set(items: Record<string, unknown>) {
-      sets.push(items);
-      if (failWhen?.()) throw new Error("QUOTA_BYTES quota exceeded");
-      for (const [k, v] of Object.entries(items)) data.set(k, v);
-    },
-    async remove(keys: string | string[]) {
-      removes.push(keys);
-      for (const k of Array.isArray(keys) ? keys : [keys]) data.delete(k);
-    },
-  };
-  return area;
+class MemoryStorageArea implements StorageAreaWithRemove {
+  private values: Record<string, unknown>;
+
+  constructor(
+    initial: Record<string, unknown> = {},
+    private readonly capacity = Number.POSITIVE_INFINITY,
+  ) {
+    this.values = { ...initial };
+  }
+
+  async get(keys: string | string[] | null): Promise<Record<string, unknown>> {
+    const selected = keys === null ? Object.keys(this.values) : Array.isArray(keys) ? keys : [keys];
+    return Object.fromEntries(selected.filter((key) => key in this.values).map((key) => [key, this.values[key]]));
+  }
+
+  async set(items: Record<string, unknown>): Promise<void> {
+    const next = { ...this.values, ...items };
+    if (JSON.stringify(next).length > this.capacity) throw new Error("quota exceeded");
+    this.values = next;
+  }
+
+  async remove(keys: string | string[]): Promise<void> {
+    const removed = new Set(Array.isArray(keys) ? keys : [keys]);
+    this.values = Object.fromEntries(Object.entries(this.values).filter(([key]) => !removed.has(key)));
+  }
 }
 
 describe("createChromeDiffClient", () => {
-  it("round-trips a diff under the diff: prefix", async () => {
-    const area = fakeArea();
+  it("round-trips a diff and returns no diff for a missing key", async () => {
+    const area = new MemoryStorageArea();
     const store = createChromeDiffClient(area);
+
+    expect(await store.load("missing")).toBeUndefined();
+
     await store.save("base:head:Assets/Foo.prefab", DIFF);
-    expect(area.data.get("diff:base:head:Assets/Foo.prefab")).toEqual(DIFF);
+
+    expect(await area.get("diff:base:head:Assets/Foo.prefab")).toEqual({
+      "diff:base:head:Assets/Foo.prefab": DIFF,
+    });
     expect(await store.load("base:head:Assets/Foo.prefab")).toEqual(DIFF);
   });
 
-  it("returns undefined for a missing key", async () => {
-    const store = createChromeDiffClient(fakeArea());
-    expect(await store.load("nope")).toBeUndefined();
-  });
-
-  it("skips diffs larger than the session budget without touching storage", async () => {
-    // Leave large ones to the memory cache only (session is only 10MB)
-    const area = fakeArea();
+  it("skips a diff above the session budget", async () => {
+    const area = new MemoryStorageArea();
     const store = createChromeDiffClient(area);
     const big: DiffV2 = { ...DIFF, unresolvedGuids: [" ".repeat(600 * 1024)] };
-    await store.save("k", big);
-    expect(area.sets).toEqual([]);
+
+    await store.save("large", big);
+
+    expect(await store.load("large")).toBeUndefined();
+    expect(await area.get(null)).toEqual({});
   });
 
-  it("flushes stale diff entries and retries once when the quota overflows", async () => {
-    // This pins the fix for the permanent degradation: once full, every SW restart recomputes
-    // everything. On overflow, the store wipes the accumulated diffs and rewrites once.
-    let setCalls = 0;
-    const area = fakeArea(() => ++setCalls === 1); // only the first set overflows
-    // Seed existing diff entries and one unrelated key
-    area.data.set("diff:old1", DIFF);
-    area.data.set("diff:old2", DIFF);
-    area.data.set("viewMode", "semantic"); // The flush must not delete keys outside diff:
+  it("flushes stale diffs, preserves unrelated data, and stores the requested diff", async () => {
+    const expectedState = {
+      viewMode: "semantic",
+      "diff:new": DIFF,
+    };
+    const area = new MemoryStorageArea(
+      {
+        "diff:old1": DIFF,
+        "diff:old2": DIFF,
+        viewMode: "semantic",
+      },
+      JSON.stringify(expectedState).length,
+    );
     const store = createChromeDiffClient(area);
 
-    // The first set overflows, the flush runs, and the retry succeeds
     await store.save("new", DIFF);
 
-    expect(area.removes).toEqual([["diff:old1", "diff:old2"]]); // wipe only diff:
-    expect(area.data.has("viewMode")).toBe(true); // keep unrelated keys
-    expect(area.data.get("diff:new")).toEqual(DIFF); // the retry wrote it
-    expect(area.sets).toHaveLength(2); // just 1 overflow + 1 retry (pins against a regression to looping)
+    expect(await store.load("old1")).toBeUndefined();
+    expect(await store.load("old2")).toBeUndefined();
+    expect(await store.load("new")).toEqual(DIFF);
+    expect(await area.get(null)).toEqual(expectedState);
   });
 
-  it("gives up quietly if the retry also fails", async () => {
-    // Still unwritable after the flush (a single diff over quota): the store continues with the memory cache and does not throw
-    const area = fakeArea(() => true); // always overflows
+  it("resolves without persistence when the complete post-flush state exceeds capacity", async () => {
+    const unrelatedState = { viewMode: "semantic" };
+    const area = new MemoryStorageArea(
+      {
+        "diff:old": DIFF,
+        ...unrelatedState,
+      },
+      JSON.stringify(unrelatedState).length,
+    );
     const store = createChromeDiffClient(area);
-    await expect(store.save("k", DIFF)).resolves.toBeUndefined();
+
+    await expect(store.save("new", DIFF)).resolves.toBeUndefined();
+
+    expect(await store.load("old")).toBeUndefined();
+    expect(await store.load("new")).toBeUndefined();
+    expect(await area.get(null)).toEqual(unrelatedState);
   });
 });

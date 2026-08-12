@@ -12,21 +12,18 @@ export type SignInEvent =
 export async function* signIn(
   auth: GithubAuthGateway,
   tokenStore: TokenRepository,
-  fetchFn: typeof fetch,
-  sleep: (ms: number) => Promise<void>,
   now: () => number,
   state: { inFlight: boolean },
 ): AsyncGenerator<SignInEvent> {
   if (state.inFlight) return;
   state.inFlight = true;
   try {
-    const code = await auth.requestDeviceCode(fetchFn);
+    const code = await auth.requestDeviceCode();
     if (!code.ok) {
       yield { status: "failed", reason: "failed" };
       return;
     }
-    // Save the pending sign-in before yielding. Presentation opens the tab after pending.
-    // /login/device reads storage to pre-fill the code.
+    // /login/device reads storage before presentation opens it, so pending state must exist before the event.
     await tokenStore.savePendingSignIn({
       userCode: code.value.userCode,
       expiresAt: now() + code.value.expiresIn * 1000,
@@ -36,8 +33,8 @@ export async function* signIn(
       userCode: code.value.userCode,
       verificationUri: code.value.verificationUri,
     };
-    const result = await auth.pollForToken(fetchFn, sleep, code.value);
-    // Success: saveToken fires storage.onChanged, and index.ts retries auth-blocked panels
+    const result = await auth.pollForToken(code.value);
+    // storage.onChanged retries auth-blocked panels after the token is saved.
     if (result.status === "ok") {
       await tokenStore.saveAccessToken(result.token);
       await tokenStore.clearPendingSignIn();
@@ -47,7 +44,7 @@ export async function* signIn(
     await tokenStore.clearPendingSignIn();
     yield { status: "failed", reason: result.status };
   } catch {
-    // Only unexpected rejections (storage) land here. Expected failures arrive as values above.
+    // Unexpected gateway, parsing, or storage rejections land here. Expected failures arrive as values above.
     await tokenStore.clearPendingSignIn().catch(() => {});
     yield { status: "failed", reason: "failed" };
   } finally {

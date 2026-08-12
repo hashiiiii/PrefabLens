@@ -5,5 +5,5 @@ export default defineConfig({
     __API_BASE__: '"https://api.github.com"',
     __GITHUB_ORIGIN__: '"https://github.com"',
   },
-  test: { include: ["src/**/*.test.ts"] },
+  test: { include: ["src/**/*.test.ts", "test/**/*.test.ts"] },
 });

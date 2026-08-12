@@ -1,7 +1,11 @@
-import type { DeviceCode, DeviceFlowFailure, PollResult } from "../../application/gateway/github-auth";
+import type {
+  DeviceCode,
+  DeviceFlowFailure,
+  GithubAuthGateway,
+  PollResult,
+} from "../../application/gateway/github-auth";
 import { err, ok, type Result } from "../../domain/result";
 
-// Public client id of the GitHub OAuth App (device flow enabled).
 export const CLIENT_ID = "Ov23liYYM6t34p7Hxkc1";
 
 type DeviceCodeResponse =
@@ -12,7 +16,7 @@ type TokenResponse = { access_token: string } | { error: string; interval?: numb
 
 const failed = (message: string) => err<DeviceFlowFailure>({ kind: "device-flow-failed", message });
 
-export async function requestDeviceCode(fetchFn: typeof fetch): Promise<Result<DeviceCode, DeviceFlowFailure>> {
+async function requestDeviceCode(fetchFn: typeof fetch): Promise<Result<DeviceCode, DeviceFlowFailure>> {
   const res = await fetchFn(`${__GITHUB_ORIGIN__}/login/device/code`, {
     method: "POST",
     headers: { accept: "application/json" },
@@ -32,7 +36,7 @@ export async function requestDeviceCode(fetchFn: typeof fetch): Promise<Result<D
   });
 }
 
-export async function pollForToken(
+async function pollForToken(
   fetchFn: typeof fetch,
   sleep: (ms: number) => Promise<void>,
   code: DeviceCode,
@@ -57,7 +61,6 @@ export async function pollForToken(
       case "authorization_pending":
         continue;
       case "slow_down":
-        // The interval from GitHub wins. Otherwise the poll adds 5s.
         interval = body.interval ?? interval + 5;
         continue;
       case "expired_token":
@@ -68,4 +71,17 @@ export async function pollForToken(
         return { status: "failed" };
     }
   }
+}
+
+const defaultFetch: typeof fetch = (input, init) => fetch(input, init);
+const defaultSleep = (milliseconds: number) => new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
+
+export function createGithubDeviceFlowClient(
+  fetchFn: typeof fetch = defaultFetch,
+  sleep: (ms: number) => Promise<void> = defaultSleep,
+): GithubAuthGateway {
+  return {
+    requestDeviceCode: () => requestDeviceCode(fetchFn),
+    pollForToken: (code) => pollForToken(fetchFn, sleep, code),
+  };
 }

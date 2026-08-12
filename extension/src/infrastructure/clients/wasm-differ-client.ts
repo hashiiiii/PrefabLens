@@ -14,6 +14,8 @@ type Exports = {
 const utf8 = new TextDecoder();
 const utf8Encoder = new TextEncoder();
 
+type FetchBytes = (url: string) => Promise<BufferSource>;
+
 // assets TLV (LE): [u32 count] repeat{ [u32 guid_len][guid][u32 data_len][data] }.
 // 1:1 with parseAssets in core/src/wasm.zig.
 function encodeAssets(assets: Map<string, Uint8Array>): Uint8Array {
@@ -37,12 +39,13 @@ function encodeAssets(assets: Map<string, Uint8Array>): Uint8Array {
 }
 
 // A lazy singleton. An SW restart causes a re-fetch. The composition root binds the wasm url.
-export function createDifferLoader(wasmUrl: string): () => Promise<DifferGateway> {
+export function createDifferLoader(
+  wasmUrl: string,
+  fetchBytes: FetchBytes = async (url) => (await fetch(url)).arrayBuffer(),
+): () => Promise<DifferGateway> {
   let differ: Promise<DifferGateway> | undefined;
   return () => {
-    differ ??= fetch(wasmUrl)
-      .then((r) => r.arrayBuffer())
-      .then(createDiffer);
+    differ ??= fetchBytes(wasmUrl).then(createDiffer);
     return differ;
   };
 }

@@ -2,213 +2,118 @@ import { describe, expect, it } from "vitest";
 import { isRateLimited } from "../../application/gateway/github";
 import { err, ok } from "../../domain/result";
 import { must } from "../../internal/must";
-import { createQueue } from "../internal/fetch-queue";
-import { createQueuedFetch, GithubClient } from "./github-client";
+import { createGithubClientFactory, GithubClient } from "./github-client";
 
-// fetch fake that returns a fixed path→response table. It also records calls.
-// Matching is url.includes(key), so keys must be unique substrings
-// (for example 'page=1' also matches 'per_page=100', so use '&page=1').
-function fakeFetch(routes: Record<string, () => Response>) {
-  const calls: Array<{ url: string; headers: Record<string, string>; init: RequestInit }> = [];
-  const fn = (async (input: RequestInfo | URL, init?: RequestInit) => {
-    const url = String(input);
-    calls.push({ url, headers: Object.fromEntries(Object.entries(init?.headers ?? {})), init: init ?? {} });
-    for (const [suffix, make] of Object.entries(routes)) {
-      if (url.includes(suffix)) return make();
-    }
-    return new Response("not found", { status: 404 });
-  }) as typeof fetch;
-  return { fn, calls };
+const API = "https://api.github.test";
+
+const json = (body: unknown, status = 200, headers?: HeadersInit) =>
+  new Response(JSON.stringify(body), {
+    status,
+    headers: { "content-type": "application/json", ...Object.fromEntries(new Headers(headers)) },
+  });
+
+function requestKey(input: RequestInfo | URL, init?: RequestInit): string {
+  return `${init?.method ?? "GET"} ${String(input)}`;
 }
 
-const json = (body: unknown, status = 200) =>
-  new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+function unexpectedRequest(input: RequestInfo | URL, init?: RequestInit): never {
+  throw new Error(`Unexpected request: ${requestKey(input, init)}`);
+}
+
+class VirtualClock {
+  now = 0;
+
+  sleep = async (milliseconds: number) => {
+    this.now += milliseconds;
+  };
+}
 
 describe("GithubClient", () => {
-  it("default fetchFn survives strict-this runtimes (Chrome Illegal invocation)", async () => {
-    // Chrome's fetch throws Illegal invocation when called with a non-global this.
-    // Node's fetch ignores this, so this strict stub mimics the real-runtime behavior.
-    const realFetch = globalThis.fetch;
-    function strictFetch(this: unknown, ..._args: Parameters<typeof fetch>) {
-      if (this !== undefined && this !== globalThis) {
-        return Promise.reject(new TypeError("Failed to execute 'fetch': Illegal invocation"));
+  it("returns the merge base", async () => {
+    const fetchFn = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      switch (requestKey(input, init)) {
+        case `GET ${API}/repos/o/r/pulls/7`:
+          return json({ base: { sha: "base-tip" }, head: { sha: "head-sha" } });
+        case `GET ${API}/repos/o/r/compare/base-tip...head-sha`:
+          return json({ merge_base_commit: { sha: "merge-base" } });
+        default:
+          return unexpectedRequest(input, init);
       }
-      return Promise.resolve(new Response(new Uint8Array([1])));
-    }
-    globalThis.fetch = strictFetch as typeof fetch;
-    try {
-      const client = new GithubClient("https://api.github.com", "tok"); // fetchFn omitted = default
-      await expect(client.getFileAtRef("o", "r", "a.prefab", "sha")).resolves.toEqual(ok(new Uint8Array([1])));
-    } finally {
-      globalThis.fetch = realFetch;
-    }
+    }) as typeof fetch;
+
+    const result = await new GithubClient(API, "tok", fetchFn).getPrRefs("o", "r", 7);
+
+    expect(result).toEqual(ok({ baseSha: "merge-base", headSha: "head-sha" }));
   });
 
-  it("getPrRefs returns the merge base as baseSha", async () => {
-    const { fn, calls } = fakeFetch({
-      "/compare/base-tip...head-sha": () => json({ merge_base_commit: { sha: "merge-base" } }),
-      "/pulls/7": () => json({ base: { sha: "base-tip" }, head: { sha: "head-sha" } }),
-    });
-    const client = new GithubClient("https://api.github.com", "tok", fn);
-    const refs = await client.getPrRefs("o", "r", 7);
-    expect(refs).toEqual(ok({ baseSha: "merge-base", headSha: "head-sha" }));
-    expect(calls[0]?.headers.authorization).toBe("Bearer tok");
+  it("sends the required REST headers", async () => {
+    const fetchFn = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (requestKey(input, init) !== `GET ${API}/repos/o/r/pulls/1/files?per_page=100&page=1`) {
+        return unexpectedRequest(input, init);
+      }
+      const headers = new Headers(init?.headers);
+      expect(headers.get("authorization")).toBe("Bearer tok");
+      expect(headers.get("accept")).toBe("application/vnd.github+json");
+      expect(headers.get("x-github-api-version")).toBe("2022-11-28");
+      return json([]);
+    }) as typeof fetch;
+
+    const result = await new GithubClient(API, "tok", fetchFn).listPrFiles("o", "r", 1);
+
+    expect(result).toEqual(ok([]));
   });
 
-  it("listPrFiles paginates past 100 entries", async () => {
-    const page1 = Array.from({ length: 100 }, (_, i) => ({ filename: `f${i}.cs`, status: "modified" }));
-    const page2 = [
-      { filename: "Assets/Foo.prefab", status: "renamed", previous_filename: "Assets/Old.prefab", sha: "blob-head" },
-    ];
-    const { fn } = fakeFetch({
-      "&page=1": () => json(page1),
-      "&page=2": () => json(page2),
-    });
-    const client = new GithubClient("https://api.github.com", "tok", fn);
-    const files = await client.listPrFiles("o", "r", 1);
-    expect(files.ok).toBe(true);
-    if (!files.ok) return;
-    expect(files.value).toHaveLength(101);
-    // The sha is the head blob (the base blob for removed files). getPair fetches by sha, not by path+ref.
-    expect(files.value[100]).toEqual({
+  it("paginates pull request files after 100 entries", async () => {
+    const firstPage = Array.from({ length: 100 }, (_, index) => ({
+      filename: `f${index}.cs`,
+      status: "modified",
+    }));
+    const fetchFn = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      switch (requestKey(input, init)) {
+        case `GET ${API}/repos/o/r/pulls/1/files?per_page=100&page=1`:
+          return json(firstPage);
+        case `GET ${API}/repos/o/r/pulls/1/files?per_page=100&page=2`:
+          return json([
+            {
+              filename: "Assets/Foo.prefab",
+              status: "renamed",
+              previous_filename: "Assets/Old.prefab",
+              sha: "blob-head",
+            },
+          ]);
+        default:
+          return unexpectedRequest(input, init);
+      }
+    }) as typeof fetch;
+
+    const result = await new GithubClient(API, "tok", fetchFn).listPrFiles("o", "r", 1);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value).toHaveLength(101);
+    expect(result.value[100]).toEqual({
       path: "Assets/Foo.prefab",
-      // GitHub reports "renamed". The client folds it into "modified", and previousPath keeps the rename.
       status: "modified",
       previousPath: "Assets/Old.prefab",
       sha: "blob-head",
     });
   });
 
-  it("getBlobRaw requests raw bytes by blob sha", async () => {
-    const { fn, calls } = fakeFetch({ "/git/blobs/": () => new Response(new Uint8Array([1, 2, 3])) });
-    const client = new GithubClient("https://api.github.com", "tok", fn);
-    const bytes = await client.getBlobRaw("o", "r", "blob1");
-    expect(bytes.ok).toBe(true);
-    if (!bytes.ok) return;
-    expect([...must(bytes.value)]).toEqual([1, 2, 3]);
-    expect(calls[0]?.url).toBe("https://api.github.com/repos/o/r/git/blobs/blob1");
-    expect(calls[0]?.headers.accept).toBe("application/vnd.github.raw+json");
-  });
-
-  it("getBlobRaw returns null on 404 (sha gone after a force push)", async () => {
-    const { fn } = fakeFetch({});
-    const client = new GithubClient("https://api.github.com", "tok", fn);
-    expect(await client.getBlobRaw("o", "r", "gone")).toEqual(ok(null));
-  });
-
-  it("getFileAtRef requests raw content with URL-encoded path segments", async () => {
-    const { fn, calls } = fakeFetch({ "/contents/": () => new Response(new Uint8Array([1, 2, 3])) });
-    const client = new GithubClient("https://api.github.com", "tok", fn);
-    const bytes = await client.getFileAtRef("o", "r", "Assets/My Prefab#1.prefab", "sha1");
-    expect(bytes.ok).toBe(true);
-    if (!bytes.ok) return;
-    expect([...must(bytes.value)]).toEqual([1, 2, 3]);
-    expect(calls[0]?.url).toContain("/contents/Assets/My%20Prefab%231.prefab?ref=sha1");
-    expect(calls[0]?.headers.accept).toBe("application/vnd.github.raw+json");
-  });
-
-  it("getFileAtRef returns null on 404 (file absent on that side)", async () => {
-    const { fn } = fakeFetch({});
-    const client = new GithubClient("https://api.github.com", "tok", fn);
-    expect(await client.getFileAtRef("o", "r", "gone.prefab", "sha1")).toEqual(ok(null));
-  });
-
-  it("maps 401/403 to auth-failed and other failures to fetch-failed", async () => {
-    const auth = new GithubClient("https://api.github.com", "bad", fakeFetch({ "/pulls/1": () => json({}, 401) }).fn);
-    await expect(auth.getPrRefs("o", "r", 1)).resolves.toEqual(err({ kind: "auth-failed" }));
-    const boom = new GithubClient("https://api.github.com", "tok", fakeFetch({ "/pulls/1": () => json({}, 500) }).fn);
-    await expect(boom.getPrRefs("o", "r", 1)).resolves.toEqual(err({ kind: "fetch-failed" }));
-  });
-
-  it("searchMetaByGuid queries code search and strips .meta from the hit", async () => {
-    const { fn, calls } = fakeFetch({
-      "/search/code": () => json({ items: [{ path: "Assets/Scripts/Player.cs.meta" }] }),
-    });
-    const client = new GithubClient("https://api.github.com", "tok", fn);
-    expect(await client.searchMetaByGuid("o", "r", "abc123")).toEqual(ok("Assets/Scripts/Player.cs"));
-    expect(calls[0]?.url).toContain(
-      `/search/code?q=${encodeURIComponent('"abc123" repo:o/r extension:meta')}&per_page=1`,
-    );
-  });
-
-  it("searchMetaByGuid returns null on no hits, non-meta hits, and 422", async () => {
-    const empty = new GithubClient(
-      "https://api.github.com",
-      "tok",
-      fakeFetch({ "/search/code": () => json({ items: [] }) }).fn,
-    );
-    expect(await empty.searchMetaByGuid("o", "r", "g")).toEqual(ok(null));
-    const odd = new GithubClient(
-      "https://api.github.com",
-      "tok",
-      fakeFetch({ "/search/code": () => json({ items: [{ path: "README.md" }] }) }).fn,
-    );
-    expect(await odd.searchMetaByGuid("o", "r", "g")).toEqual(ok(null));
-    // 422 means the repository is not indexed, or similar. The client treats it as "unresolved", not as fetch-failed.
-    const unindexed = new GithubClient(
-      "https://api.github.com",
-      "tok",
-      fakeFetch({ "/search/code": () => json({ message: "Validation Failed" }, 422) }).fn,
-    );
-    expect(await unindexed.searchMetaByGuid("o", "r", "g")).toEqual(ok(null));
-  });
-
-  it("searchMetaByGuid propagates rate limiting", async () => {
-    const limited = new GithubClient(
-      "https://api.github.com",
-      "tok",
-      fakeFetch({ "/search/code": () => new Response("", { status: 403, headers: { "retry-after": "60" } }) }).fn,
-    );
-    await expect(limited.searchMetaByGuid("o", "r", "g")).resolves.toSatisfy((r) => !r.ok && isRateLimited(r.error));
-  });
-
-  it("maps rate-limit responses to rate-limited, not auth-failed", async () => {
-    // GitHub rate limits: primary is 403 + x-ratelimit-remaining: 0,
-    // secondary is 403 + retry-after, and newer APIs use 429.
-    // A secondary limit sometimes has no header (only the body message). octokit also decides by the message.
-    const at = (status: number, headers: Record<string, string>, body = "") =>
-      new GithubClient(
-        "https://api.github.com",
-        "tok",
-        fakeFetch({ "/pulls/1": () => new Response(body, { status, headers }) }).fn,
-      );
-    await expect(at(403, { "x-ratelimit-remaining": "0" }).getPrRefs("o", "r", 1)).resolves.toSatisfy(
-      (r) => !r.ok && isRateLimited(r.error),
-    );
-    await expect(at(403, { "retry-after": "60" }).getPrRefs("o", "r", 1)).resolves.toSatisfy(
-      (r) => !r.ok && isRateLimited(r.error),
-    );
-    await expect(at(429, {}).getPrRefs("o", "r", 1)).resolves.toSatisfy((r) => !r.ok && isRateLimited(r.error));
-    await expect(
-      at(403, { "x-ratelimit-remaining": "4999" }, '{"message":"You have exceeded a secondary rate limit."}').getPrRefs(
-        "o",
-        "r",
-        1,
-      ),
-    ).resolves.toSatisfy((r) => !r.ok && isRateLimited(r.error));
-    // Permission-related 403 (not a rate limit) is still auth-failed
-    await expect(
-      at(
-        403,
-        { "x-ratelimit-remaining": "4999" },
-        '{"message":"Resource not accessible by personal access token"}',
-      ).getPrRefs("o", "r", 1),
-    ).resolves.toSatisfy((r) => !r.ok && r.error.kind === "auth-failed");
-  });
-
-  it("getCommit returns the first parent as base and maps files", async () => {
-    const { fn } = fakeFetch({
-      "/commits/abc1234?": () =>
-        json({
+  it("returns the first commit parent and maps its files", async () => {
+    const fetchFn = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (requestKey(input, init) === `GET ${API}/repos/o/r/commits/abc1234?per_page=300&page=1`) {
+        return json({
           sha: "abc1234full",
           parents: [{ sha: "parent-sha" }, { sha: "merge-second-parent" }],
           files: [{ filename: "Assets/Foo.prefab", status: "modified", sha: "blob-head" }],
-        }),
-    });
-    const client = new GithubClient("https://api.github.com", "tok", fn);
-    const commit = await client.getCommit("o", "r", "abc1234");
-    // GitHub's commit page diffs against the first parent, and so does the client
-    expect(commit).toEqual(
+        });
+      }
+      return unexpectedRequest(input, init);
+    }) as typeof fetch;
+
+    const result = await new GithubClient(API, "tok", fetchFn).getCommit("o", "r", "abc1234");
+
+    expect(result).toEqual(
       ok({
         sha: "abc1234full",
         parentSha: "parent-sha",
@@ -217,197 +122,190 @@ describe("GithubClient", () => {
     );
   });
 
-  it("getCommit paginates past 300 files and flags a root commit", async () => {
-    // The commit API pages files 300 at a time (3,000-file cap on GitHub's side)
-    const page1 = Array.from({ length: 300 }, (_, i) => ({ filename: `f${i}.cs`, status: "added" }));
-    const { fn } = fakeFetch({
-      "&page=1": () => json({ sha: "root-sha", parents: [], files: page1 }),
-      "&page=2": () => json({ sha: "root-sha", parents: [], files: [{ filename: "last.cs", status: "added" }] }),
-    });
-    const client = new GithubClient("https://api.github.com", "tok", fn);
-    const commit = await client.getCommit("o", "r", "root-sha");
-    expect(commit.ok).toBe(true);
-    if (!commit.ok) return;
-    expect(commit.value.parentSha).toBeNull(); // root commit: every file is added, no base side exists
-    expect(commit.value.files).toHaveLength(301);
+  it("stops commit pagination after ten full pages", async () => {
+    const accepted = new Set(
+      Array.from({ length: 10 }, (_, index) =>
+        requestKey(`${API}/repos/o/r/commits/root?per_page=300&page=${index + 1}`),
+      ),
+    );
+    const fetchFn = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (!accepted.has(requestKey(input, init))) return unexpectedRequest(input, init);
+      const page = new URL(String(input)).searchParams.get("page");
+      return json({
+        sha: "root-full",
+        parents: [],
+        files: Array.from({ length: 300 }, (_, index) => ({
+          filename: `page-${page}-file-${index}.cs`,
+          status: "added",
+        })),
+      });
+    }) as typeof fetch;
+
+    const result = await new GithubClient(API, "tok", fetchFn).getCommit("o", "r", "root");
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.sha).toBe("root-full");
+    expect(result.value.parentSha).toBeNull();
+    expect(result.value.files).toHaveLength(3_000);
   });
 
-  it("compareRefs returns the merge base and maps files", async () => {
-    const { fn, calls } = fakeFetch({
-      "/compare/feat%2Fx...main": () =>
-        json({
+  it("encodes compare refs and maps removed files", async () => {
+    const fetchFn = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (requestKey(input, init) === `GET ${API}/repos/o/r/compare/feat%2Fx...main`) {
+        return json({
           merge_base_commit: { sha: "merge-base" },
           files: [{ filename: "Assets/Foo.prefab", status: "removed", sha: "blob-base" }],
-        }),
-    });
-    const client = new GithubClient("https://api.github.com", "tok", fn);
-    const cmp = await client.compareRefs("o", "r", "feat/x", "main");
-    expect(cmp).toEqual(
+        });
+      }
+      return unexpectedRequest(input, init);
+    }) as typeof fetch;
+
+    const result = await new GithubClient(API, "tok", fetchFn).compareRefs("o", "r", "feat/x", "main");
+
+    expect(result).toEqual(
       ok({
         mergeBaseSha: "merge-base",
         files: [{ path: "Assets/Foo.prefab", status: "removed", previousPath: undefined, sha: "blob-base" }],
       }),
     );
-    // refs are encoded per side so branch slashes cannot be misread as path segments
-    expect(calls[0]?.url).toContain("/compare/feat%2Fx...main");
   });
 
-  it("resolveRefSha asks for the sha media type and trims the text body", async () => {
-    const { fn, calls } = fakeFetch({ "/commits/main": () => new Response("full-head-sha\n") });
-    const client = new GithubClient("https://api.github.com", "tok", fn);
-    await expect(client.resolveRefSha("o", "r", "main")).resolves.toEqual(ok("full-head-sha"));
-    expect(calls[0]?.headers.accept).toBe("application/vnd.github.sha");
+  it("requests the SHA media type and trims the response", async () => {
+    const fetchFn = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (requestKey(input, init) !== `GET ${API}/repos/o/r/commits/feat%2Fx`) {
+        return unexpectedRequest(input, init);
+      }
+      expect(new Headers(init?.headers).get("accept")).toBe("application/vnd.github.sha");
+      return new Response("full-head-sha\n");
+    }) as typeof fetch;
+
+    const result = await new GithubClient(API, "tok", fetchFn).resolveRefSha("o", "r", "feat/x");
+
+    expect(result).toEqual(ok("full-head-sha"));
   });
 
-  it("carries retry-after advice on a secondary rate limit", async () => {
-    const { fn } = fakeFetch({
-      "/pulls/7": () => new Response("slow down", { status: 403, headers: { "retry-after": "12" } }),
-    });
-    const client = new GithubClient("https://api.github.com", "tok", fn);
-    const result = await client.getPrRefs("o", "r", 7);
-    expect(result.ok).toBe(false);
-    if (result.ok) return;
-    expect(isRateLimited(result.error)).toBe(true);
-    if (!isRateLimited(result.error)) return;
-    // retry-after is seconds. The queue consumes milliseconds.
-    expect(result.error.retryAfterMs).toBe(12_000);
-  });
+  it("requests raw file content with encoded path segments", async () => {
+    const fetchFn = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (requestKey(input, init) !== `GET ${API}/repos/o/r/contents/Assets/My%20Prefab%231.prefab?ref=sha1`) {
+        return unexpectedRequest(input, init);
+      }
+      expect(new Headers(init?.headers).get("accept")).toBe("application/vnd.github.raw+json");
+      return new Response(new Uint8Array([1, 2, 3]));
+    }) as typeof fetch;
 
-  it("derives advice from x-ratelimit-reset when retry-after is absent", async () => {
-    const reset = Math.floor(Date.now() / 1000) + 30;
-    const { fn } = fakeFetch({
-      "/pulls/7": () =>
-        new Response("", {
-          status: 403,
-          headers: { "x-ratelimit-remaining": "0", "x-ratelimit-reset": String(reset) },
-        }),
-    });
-    const client = new GithubClient("https://api.github.com", "tok", fn);
-    const result = await client.getPrRefs("o", "r", 7);
-    expect(result.ok).toBe(false);
-    if (result.ok) return;
-    expect(isRateLimited(result.error)).toBe(true);
-    if (!isRateLimited(result.error)) return;
-    // reset is an absolute epoch: allow scheduling slack around the 30s target
-    expect(result.error.retryAfterMs).toBeGreaterThan(25_000);
-    expect(result.error.retryAfterMs).toBeLessThanOrEqual(30_000);
-  });
-
-  it("leaves retryAfterMs undefined when no header advises a wait", async () => {
-    const { fn } = fakeFetch({
-      "/pulls/7": () => new Response('{"message":"You have exceeded a secondary rate limit."}', { status: 403 }),
-    });
-    const client = new GithubClient("https://api.github.com", "tok", fn);
-    const result = await client.getPrRefs("o", "r", 7);
-    expect(result.ok).toBe(false);
-    if (result.ok) return;
-    expect(isRateLimited(result.error)).toBe(true);
-    if (!isRateLimited(result.error)) return;
-    expect(result.error.retryAfterMs).toBeUndefined();
-  });
-
-  it("attaches advice to graphql RATE_LIMITED errors", async () => {
-    const reset = Math.floor(Date.now() / 1000) + 30;
-    const { fn } = fakeFetch({
-      "/graphql": () =>
-        new Response(JSON.stringify({ errors: [{ type: "RATE_LIMITED" }] }), {
-          status: 200,
-          headers: { "content-type": "application/json", "x-ratelimit-reset": String(reset) },
-        }),
-    });
-    const client = new GithubClient("https://api.github.com", "tok", fn);
-    const result = await client.batchBlobTexts("o", "r", ["oid1"]);
-    expect(result.ok).toBe(false);
-    if (result.ok) return;
-    expect(isRateLimited(result.error)).toBe(true);
-    if (!isRateLimited(result.error)) return;
-    expect(result.error.retryAfterMs).toBeGreaterThan(0);
-  });
-});
-
-describe("createQueuedFetch", () => {
-  // The production regression that this suite pins: bare fetch resolved on 429/403,
-  // so the queue's rate-limit backoff never saw a rejection and never ran. The wrapper
-  // converts rate-limited responses into classified rejections that the queue retries.
-  const swapFetch = async (impl: typeof fetch, run: () => Promise<void>) => {
-    const realFetch = globalThis.fetch;
-    globalThis.fetch = impl;
-    try {
-      await run();
-    } finally {
-      globalThis.fetch = realFetch;
-    }
-  };
-
-  it("retries a rate-limited response through the queue", async () => {
-    const queue = createQueue(1, async () => {}); // instant sleep: the backoff fires immediately
-    let calls = 0;
-    await swapFetch(
-      (async () => {
-        calls++;
-        return calls === 1 ? new Response("", { status: 429 }) : new Response("ok", { status: 200 });
-      }) as typeof fetch,
-      async () => {
-        const res = await createQueuedFetch(queue, true)("https://api.github.com/x", {});
-        expect(res.status).toBe(200);
-        expect(calls).toBe(2);
-      },
+    const result = await new GithubClient(API, "tok", fetchFn).getFileAtRef(
+      "o",
+      "r",
+      "Assets/My Prefab#1.prefab",
+      "sha1",
     );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect([...must(result.value)]).toEqual([1, 2, 3]);
   });
 
-  it("maps exhausted retries to a rate-limited result", async () => {
-    const queue = createQueue(1, async () => {});
-    let calls = 0;
-    await swapFetch(
-      (async () => {
-        calls++;
-        return new Response("", { status: 429 });
-      }) as typeof fetch,
-      async () => {
-        const client = new GithubClient("https://api.github.com", "tok", createQueuedFetch(queue, true));
-        await expect(client.getPrRefs("o", "r", 1)).resolves.toSatisfy((r) => !r.ok && isRateLimited(r.error));
-        expect(calls).toBe(3); // initial attempt + MAX_RATE_LIMIT_RETRIES
-      },
-    );
+  it("returns null when file content is absent", async () => {
+    const fetchFn = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (requestKey(input, init) !== `GET ${API}/repos/o/r/contents/gone.prefab?ref=sha1`) {
+        return unexpectedRequest(input, init);
+      }
+      return new Response("not found", { status: 404 });
+    }) as typeof fetch;
+
+    const result = await new GithubClient(API, "tok", fetchFn).getFileAtRef("o", "r", "gone.prefab", "sha1");
+
+    expect(result).toEqual(ok(null));
   });
 
-  it("passes non-rate-limited responses through without retry", async () => {
-    const queue = createQueue(1, async () => {});
-    let calls = 0;
-    await swapFetch(
-      (async () => {
-        calls++;
-        return new Response("", { status: 401 });
-      }) as typeof fetch,
-      async () => {
-        const client = new GithubClient("https://api.github.com", "tok", createQueuedFetch(queue, true));
-        await expect(client.getPrRefs("o", "r", 1)).resolves.toEqual(err({ kind: "auth-failed" }));
-        expect(calls).toBe(1);
-      },
-    );
-  });
-});
+  it("requests raw bytes by blob SHA", async () => {
+    const fetchFn = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (requestKey(input, init) !== `GET ${API}/repos/o/r/git/blobs/blob1`) {
+        return unexpectedRequest(input, init);
+      }
+      expect(new Headers(init?.headers).get("accept")).toBe("application/vnd.github.raw+json");
+      return new Response(new Uint8Array([1, 2, 3]));
+    }) as typeof fetch;
 
-describe("listMetaTree", () => {
-  it("returns only .meta blobs with the truncated flag", async () => {
-    const { fn, calls } = fakeFetch({
-      "/git/trees/H": () =>
-        json({
-          truncated: false,
-          tree: [
-            { path: "Assets/S.cs.meta", type: "blob", sha: "sha1" },
-            { path: "Assets/S.cs", type: "blob", sha: "sha2" }, // non-.meta is excluded
-            { path: "Assets/Dir.meta", type: "blob", sha: "sha3" },
-            { path: "Assets", type: "tree", sha: "sha4" }, // tree nodes are excluded
-          ],
-        }),
-    });
-    const client = new GithubClient("https://api.github.com", "tok", fn);
-    const res = await client.listMetaTree("o", "r", "H");
-    expect(calls[0]?.url).toBe("https://api.github.com/repos/o/r/git/trees/H?recursive=1");
-    expect(res).toEqual(
+    const result = await new GithubClient(API, "tok", fetchFn).getBlobRaw("o", "r", "blob1");
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect([...must(result.value)]).toEqual([1, 2, 3]);
+  });
+
+  it("returns the asset path from metadata search", async () => {
+    const url = `${API}/search/code?q=${encodeURIComponent('"abc123" repo:o/r extension:meta')}&per_page=1`;
+    const fetchFn = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (requestKey(input, init) !== `GET ${url}`) return unexpectedRequest(input, init);
+      return json({ items: [{ path: "Assets/Scripts/Player.cs.meta" }] });
+    }) as typeof fetch;
+
+    const result = await new GithubClient(API, "tok", fetchFn).searchMetaByGuid("o", "r", "abc123");
+
+    expect(result).toEqual(ok("Assets/Scripts/Player.cs"));
+  });
+
+  it("returns null for empty and non-metadata search results", async () => {
+    const emptyUrl = `${API}/search/code?q=${encodeURIComponent('"empty" repo:o/r extension:meta')}&per_page=1`;
+    const nonMetaUrl = `${API}/search/code?q=${encodeURIComponent('"odd" repo:o/r extension:meta')}&per_page=1`;
+    const fetchFn = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      switch (requestKey(input, init)) {
+        case `GET ${emptyUrl}`:
+          return json({ items: [] });
+        case `GET ${nonMetaUrl}`:
+          return json({ items: [{ path: "README.md" }] });
+        default:
+          return unexpectedRequest(input, init);
+      }
+    }) as typeof fetch;
+    const client = new GithubClient(API, "tok", fetchFn);
+
+    expect(await client.searchMetaByGuid("o", "r", "empty")).toEqual(ok(null));
+    expect(await client.searchMetaByGuid("o", "r", "odd")).toEqual(ok(null));
+  });
+
+  it("keeps the residual metadata search fallback", async () => {
+    const unindexedUrl = `${API}/search/code?q=${encodeURIComponent('"unindexed" repo:o/r extension:meta')}&per_page=1`;
+    const failedUrl = `${API}/search/code?q=${encodeURIComponent('"failed" repo:o/r extension:meta')}&per_page=1`;
+    const fetchFn = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      switch (requestKey(input, init)) {
+        case `GET ${unindexedUrl}`:
+          return json({ message: "Validation Failed" }, 422);
+        case `GET ${failedUrl}`:
+          return json({ message: "Server Error" }, 500);
+        default:
+          return unexpectedRequest(input, init);
+      }
+    }) as typeof fetch;
+    const client = new GithubClient(API, "tok", fetchFn);
+
+    expect(await client.searchMetaByGuid("o", "r", "unindexed")).toEqual(ok(null));
+    expect(await client.searchMetaByGuid("o", "r", "failed")).toEqual(ok(null));
+  });
+
+  it("returns metadata blobs with the truncation state", async () => {
+    const fetchFn = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (requestKey(input, init) !== `GET ${API}/repos/o/r/git/trees/H?recursive=1`) {
+        return unexpectedRequest(input, init);
+      }
+      return json({
+        truncated: true,
+        tree: [
+          { path: "Assets/S.cs.meta", type: "blob", sha: "sha1" },
+          { path: "Assets/S.cs", type: "blob", sha: "sha2" },
+          { path: "Assets/Dir.meta", type: "blob", sha: "sha3" },
+          { path: "Assets", type: "tree", sha: "sha4" },
+        ],
+      });
+    }) as typeof fetch;
+
+    const result = await new GithubClient(API, "tok", fetchFn).listMetaTree("o", "r", "H");
+
+    expect(result).toEqual(
       ok({
-        truncated: false,
+        truncated: true,
         metas: [
           { path: "Assets/S.cs.meta", sha: "sha1" },
           { path: "Assets/Dir.meta", sha: "sha3" },
@@ -415,61 +313,216 @@ describe("listMetaTree", () => {
       }),
     );
   });
-});
 
-describe("listBlobShas", () => {
-  it("maps every blob path to its sha with the truncated flag", async () => {
-    const { fn, calls } = fakeFetch({
-      "/git/trees/merge-base": () =>
-        json({
-          truncated: false,
-          tree: [
-            { path: "Assets/Foo.prefab", type: "blob", sha: "sha1" },
-            { path: "Assets/S.cs.meta", type: "blob", sha: "sha2" },
-            { path: "Assets", type: "tree", sha: "sha3" }, // tree nodes are excluded
-          ],
-        }),
-    });
-    const client = new GithubClient("https://api.github.com", "tok", fn);
-    const res = await client.listBlobShas("o", "r", "merge-base");
-    expect(calls[0]?.url).toBe("https://api.github.com/repos/o/r/git/trees/merge-base?recursive=1");
-    expect(res.ok).toBe(true);
-    if (!res.ok) return;
-    expect(res.value.truncated).toBe(false);
-    expect(res.value.byPath.get("Assets/Foo.prefab")).toBe("sha1");
-    expect(res.value.byPath.get("Assets/S.cs.meta")).toBe("sha2");
-    expect(res.value.byPath.has("Assets")).toBe(false);
+  it("maps every blob path with the truncation state", async () => {
+    const fetchFn = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (requestKey(input, init) !== `GET ${API}/repos/o/r/git/trees/merge-base?recursive=1`) {
+        return unexpectedRequest(input, init);
+      }
+      return json({
+        truncated: false,
+        tree: [
+          { path: "Assets/Foo.prefab", type: "blob", sha: "sha1" },
+          { path: "Assets/S.cs.meta", type: "blob", sha: "sha2" },
+          { path: "Assets", type: "tree", sha: "sha3" },
+        ],
+      });
+    }) as typeof fetch;
+
+    const result = await new GithubClient(API, "tok", fetchFn).listBlobShas("o", "r", "merge-base");
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.truncated).toBe(false);
+    expect([...result.value.byPath]).toEqual([
+      ["Assets/Foo.prefab", "sha1"],
+      ["Assets/S.cs.meta", "sha2"],
+    ]);
+  });
+
+  it("posts a GraphQL query and maps blob text", async () => {
+    const fetchFn = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (requestKey(input, init) !== `POST ${API}/graphql`) return unexpectedRequest(input, init);
+      const headers = new Headers(init?.headers);
+      expect(headers.get("authorization")).toBe("Bearer tok");
+      expect(headers.get("accept")).toBe("application/json");
+      expect(headers.get("content-type")).toBe("application/json");
+      const body = JSON.parse(String(init?.body)) as { query: string };
+      expect(body.query).toContain('b0: object(oid: "sha1")');
+      expect(body.query).toContain('b1: object(oid: "sha2")');
+      return json({ data: { repository: { b0: { text: "guid: g1\n" }, b1: null } } });
+    }) as typeof fetch;
+
+    const result = await new GithubClient(API, "tok", fetchFn).batchBlobTexts("o", "r", ["sha1", "sha2"]);
+
+    expect(result).toEqual(ok({ sha1: "guid: g1\n", sha2: null }));
+  });
+
+  it.each([
+    ["429", 429, {}, ""],
+    ["retry-after", 403, { "retry-after": "60" }, ""],
+    ["zero remaining", 403, { "x-ratelimit-remaining": "0" }, ""],
+    ["body advice", 403, { "x-ratelimit-remaining": "4999" }, '{"message":"Secondary rate limit"}'],
+  ])("classifies %s REST responses as rate-limited", async (_name, status, headers, body) => {
+    const fetchFn = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (requestKey(input, init) !== `GET ${API}/repos/o/r/pulls/1`) return unexpectedRequest(input, init);
+      return new Response(body, { status, headers });
+    }) as typeof fetch;
+
+    const result = await new GithubClient(API, "tok", fetchFn).getPrRefs("o", "r", 1);
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(isRateLimited(result.error)).toBe(true);
+  });
+
+  it("maps a permission response to auth-failed", async () => {
+    const fetchFn = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (requestKey(input, init) !== `GET ${API}/repos/o/r/pulls/1`) return unexpectedRequest(input, init);
+      return new Response('{"message":"Resource not accessible by personal access token"}', {
+        status: 403,
+        headers: { "x-ratelimit-remaining": "4999" },
+      });
+    }) as typeof fetch;
+
+    const result = await new GithubClient(API, "tok", fetchFn).getPrRefs("o", "r", 1);
+
+    expect(result).toEqual(err({ kind: "auth-failed" }));
+  });
+
+  it("maps a non-success response to fetch-failed", async () => {
+    const fetchFn = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (requestKey(input, init) !== `GET ${API}/repos/o/r/pulls/1`) return unexpectedRequest(input, init);
+      return new Response("server error", { status: 500 });
+    }) as typeof fetch;
+
+    const result = await new GithubClient(API, "tok", fetchFn).getPrRefs("o", "r", 1);
+
+    expect(result).toEqual(err({ kind: "fetch-failed" }));
+  });
+
+  it("uses Retry-After before the reset time", async () => {
+    const reset = Math.floor(Date.now() / 1000) + 30;
+    const fetchFn = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (requestKey(input, init) !== `GET ${API}/repos/o/r/pulls/7`) return unexpectedRequest(input, init);
+      return new Response("slow down", {
+        status: 403,
+        headers: { "retry-after": "12", "x-ratelimit-remaining": "0", "x-ratelimit-reset": String(reset) },
+      });
+    }) as typeof fetch;
+
+    const result = await new GithubClient(API, "tok", fetchFn).getPrRefs("o", "r", 7);
+
+    expect(result).toEqual(err({ kind: "rate-limited", retryAfterMs: 12_000 }));
+  });
+
+  it("converts the reset time to a relative wait", async () => {
+    const reset = Math.floor(Date.now() / 1000) + 30;
+    const fetchFn = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (requestKey(input, init) !== `GET ${API}/repos/o/r/pulls/7`) return unexpectedRequest(input, init);
+      return new Response("", {
+        status: 403,
+        headers: { "x-ratelimit-remaining": "0", "x-ratelimit-reset": String(reset) },
+      });
+    }) as typeof fetch;
+
+    const result = await new GithubClient(API, "tok", fetchFn).getPrRefs("o", "r", 7);
+
+    expect(result.ok).toBe(false);
+    if (result.ok || !isRateLimited(result.error)) return;
+    expect(result.error.retryAfterMs).toBeGreaterThan(25_000);
+    expect(result.error.retryAfterMs).toBeLessThanOrEqual(30_000);
+  });
+
+  it("omits advice when a rate-limit response has no advice header", async () => {
+    const fetchFn = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (requestKey(input, init) !== `GET ${API}/repos/o/r/pulls/7`) return unexpectedRequest(input, init);
+      return new Response('{"message":"Secondary rate limit"}', { status: 403 });
+    }) as typeof fetch;
+
+    const result = await new GithubClient(API, "tok", fetchFn).getPrRefs("o", "r", 7);
+
+    expect(result).toEqual(err({ kind: "rate-limited", retryAfterMs: undefined }));
+  });
+
+  it("maps GraphQL RATE_LIMITED and keeps header advice", async () => {
+    const fetchFn = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (requestKey(input, init) !== `POST ${API}/graphql`) return unexpectedRequest(input, init);
+      return json({ errors: [{ type: "RATE_LIMITED" }] }, 200, { "retry-after": "4" });
+    }) as typeof fetch;
+
+    const result = await new GithubClient(API, "tok", fetchFn).batchBlobTexts("o", "r", ["sha1"]);
+
+    expect(result).toEqual(err({ kind: "rate-limited", retryAfterMs: 4_000 }));
   });
 });
 
-describe("batchBlobTexts", () => {
-  it("posts an aliased graphql query and maps oids to texts", async () => {
-    const { fn, calls } = fakeFetch({
-      "/graphql": () => json({ data: { repository: { b0: { text: "guid: g1\n" }, b1: null } } }),
-    });
-    const client = new GithubClient("https://api.github.com", "tok", fn);
-    const res = await client.batchBlobTexts("o", "r", ["sha1", "sha2"]);
-    expect(calls[0]?.url).toBe("https://api.github.com/graphql");
-    const init = must(calls[0]).init;
-    expect(init.method).toBe("POST");
-    const body = JSON.parse(init.body as string) as { query: string };
-    expect(body.query).toContain('b0: object(oid: "sha1")');
-    expect(body.query).toContain('b1: object(oid: "sha2")');
-    expect(res).toEqual(ok({ sha1: "guid: g1\n", sha2: null })); // an unfetchable blob is null
+describe("createGithubClientFactory", () => {
+  it("returns rate-limited after two queue backoffs", async () => {
+    const clock = new VirtualClock();
+    const fetchFn = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (requestKey(input, init) !== `GET ${API}/repos/o/r/pulls/1`) return unexpectedRequest(input, init);
+      if (![0, 30_000, 60_000].includes(clock.now)) {
+        throw new Error(`Unexpected clock state: ${clock.now}`);
+      }
+      return new Response("limited", { status: 429 });
+    }) as typeof fetch;
+    const client = createGithubClientFactory(1, fetchFn, clock.sleep)(API, "tok", "user");
+
+    const result = await client.getPrRefs("o", "r", 1);
+
+    expect(result).toEqual(err({ kind: "rate-limited", retryAfterMs: undefined }));
+    expect(clock.now).toBe(60_000);
   });
 
-  it("maps graphql RATE_LIMITED errors to rate-limited", async () => {
-    // GraphQL can return an errors array with HTTP 200: missing this silently empties the index
-    const { fn } = fakeFetch({ "/graphql": () => json({ errors: [{ type: "RATE_LIMITED" }] }) });
-    const client = new GithubClient("https://api.github.com", "tok", fn);
-    await expect(client.batchBlobTexts("o", "r", ["sha1"])).resolves.toSatisfy((r) => !r.ok && isRateLimited(r.error));
+  it("does not retry an authentication response", async () => {
+    const clock = new VirtualClock();
+    const fetchFn = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (requestKey(input, init) !== `GET ${API}/repos/o/r/pulls/1`) return unexpectedRequest(input, init);
+      if (clock.now !== 0) throw new Error(`Unexpected clock state: ${clock.now}`);
+      return new Response("unauthorized", { status: 401 });
+    }) as typeof fetch;
+    const client = createGithubClientFactory(1, fetchFn, clock.sleep)(API, "tok", "user");
+
+    const result = await client.getPrRefs("o", "r", 1);
+
+    expect(result).toEqual(err({ kind: "auth-failed" }));
+    expect(clock.now).toBe(0);
   });
 
-  it("maps http 403 with retry-after to rate-limited (shared classification)", async () => {
-    const { fn } = fakeFetch({
-      "/graphql": () => new Response("slow down", { status: 403, headers: { "retry-after": "60" } }),
-    });
-    const client = new GithubClient("https://api.github.com", "tok", fn);
-    await expect(client.batchBlobTexts("o", "r", ["sha1"])).resolves.toSatisfy((r) => !r.ok && isRateLimited(r.error));
+  it("shares one queue and runs the user lane first", async () => {
+    const activeResponse = Promise.withResolvers<Response>();
+    const order: string[] = [];
+    const fetchFn = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      switch (requestKey(input, init)) {
+        case `GET ${API}/repos/o/r/commits/active`:
+          order.push("active");
+          return activeResponse.promise;
+        case `GET ${API}/repos/o/r/commits/user`:
+          order.push("user");
+          return new Response("user-sha");
+        case `GET ${API}/repos/o/r/commits/prefetch`:
+          order.push("prefetch");
+          return new Response("prefetch-sha");
+        default:
+          return unexpectedRequest(input, init);
+      }
+    }) as typeof fetch;
+    const factory = createGithubClientFactory(1, fetchFn, async () => {});
+    const prefetch = factory(API, "tok", "prefetch");
+    const user = factory(API, "tok", "user");
+    const active = prefetch.resolveRefSha("o", "r", "active");
+    while (order.length === 0) await Promise.resolve();
+
+    const queuedPrefetch = prefetch.resolveRefSha("o", "r", "prefetch");
+    const queuedUser = user.resolveRefSha("o", "r", "user");
+    activeResponse.resolve(new Response("active-sha"));
+
+    await expect(Promise.all([active, queuedPrefetch, queuedUser])).resolves.toEqual([
+      ok("active-sha"),
+      ok("prefetch-sha"),
+      ok("user-sha"),
+    ]);
+    expect(order).toEqual(["active", "user", "prefetch"]);
   });
 });

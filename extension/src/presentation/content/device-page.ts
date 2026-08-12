@@ -1,6 +1,5 @@
 import type { PendingSignIn } from "../../domain/auth/token";
 
-// Fill the device activation code boxes (inputs with class js-user-code-field).
 // If the form structure changes, this function does nothing and the user can enter the code manually.
 export function fillDeviceCode(doc: Document, pending: PendingSignIn, now: number): void {
   if (now > pending.expiresAt) return;
@@ -9,7 +8,7 @@ export function fillDeviceCode(doc: Document, pending: PendingSignIn, now: numbe
   if (boxes.length !== chars.length || boxes.some((box) => box.value)) return;
   boxes.forEach((box, i) => {
     box.value = chars.charAt(i);
-    // Keep GitHub's per-box auto-advance JS in sync with the programmatic fill
+    // Keep GitHub's per-box auto-advance code in sync with the programmatic fill.
     box.dispatchEvent(new Event("input", { bubbles: true }));
   });
 }

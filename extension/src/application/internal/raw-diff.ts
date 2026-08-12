@@ -12,7 +12,6 @@ import {
   type GithubGateway,
   isRateLimited,
   type RefPair,
-  toBackgroundError,
 } from "../gateway/github";
 
 const EMPTY = new Uint8Array(0);
@@ -209,7 +208,7 @@ async function computeDiff(
   differPromise.catch(() => {}); // Early returns below skip the await. The later await still surfaces the error.
   // A file missing from the listing (the files API caps at 3000) is treated as modified. A 404 side becomes EMPTY.
   const pair = await getPair(session, client, ctx, owner, repo, path);
-  if (!pair.ok) return { ok: false, error: toBackgroundError(pair.error) };
+  if (!pair.ok) return { ok: false, error: pair.error.kind };
   const [before, after] = pair.value;
   if (!force && before.length + after.length > TOO_LARGE_BYTES) {
     return { ok: false, error: "too-large", bytes: before.length + after.length };

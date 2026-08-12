@@ -44,6 +44,9 @@ test "html: self-contained page with pl-root and escaped content" {
     const html = try renderToString(arena, &.{.{ .path = null, .res = res }}, null);
     try testing.expect(std.mem.startsWith(u8, html, "<!DOCTYPE html>"));
     try testing.expect(std.mem.indexOf(u8, html, "<style>") != null);
+    try testing.expect(std.mem.indexOf(u8, html, ":root { color-scheme: light; }") != null);
+    try testing.expect(std.mem.indexOf(u8, html, "@media (prefers-color-scheme: dark)") != null);
+    try testing.expect(std.mem.indexOf(u8, html, ":root { color-scheme: dark; }") != null);
     try testing.expect(std.mem.indexOf(u8, html, "</html>") != null);
     // The stylesheet is embedded, not linked: no external requests ever.
     try testing.expect(std.mem.indexOf(u8, html, "pl-root") != null);

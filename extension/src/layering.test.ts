@@ -8,6 +8,24 @@ const TS_FILES = globSync("**/*.ts", { cwd: SRC }).map((f) => join(SRC, f));
 
 type Layer = "domain" | "application" | "infrastructure" | "presentation";
 
+type ImportEdge = {
+  spec: string;
+  to: string;
+  toLayer: Layer | null;
+};
+
+type RelativeImport = ImportEdge & {
+  from: string;
+  fromLayer: Layer | null;
+};
+
+type FileImports = {
+  from: string;
+  fromLayer: Layer | null;
+  relative: ImportEdge[];
+  external: string[];
+};
+
 const ALLOWED: Record<Layer, Layer[]> = {
   domain: [],
   application: ["domain"],
@@ -15,112 +33,130 @@ const ALLOWED: Record<Layer, Layer[]> = {
   presentation: ["domain", "application"],
 };
 
-function layerOf(file: string): Layer | null {
-  const top = relative(SRC, file).split(SEPARATOR)[0];
+const PRESENTATION_ENTRY = /^presentation\/[^/]+\/index\.ts$/;
+const CLIENT_DIR = /^infrastructure\/clients\//;
+const CLIENT_FILE = /-client\.ts$/;
+const APPLICATION_GATEWAY = /^application\/gateway\//;
+
+function toRel(file: string): string {
+  return relative(SRC, file).split(SEPARATOR).join("/");
+}
+
+function layerOf(relPath: string): Layer | null {
+  const top = relPath.split("/")[0];
   return top === "domain" || top === "application" || top === "infrastructure" || top === "presentation" ? top : null;
 }
 
-function* relativeImports(file: string): Generator<{ spec: string; target: string }> {
-  for (const match of readFileSync(file, "utf8").matchAll(/(?:from\s*|import\s*\(?\s*)"(\.[^"]+)"/g)) {
-    const spec = match[1];
-    if (spec === undefined) continue;
-    yield { spec, target: `${resolve(dirname(file), spec)}.ts` };
-  }
+function buildFileImports(): FileImports[] {
+  return TS_FILES.map((file) => {
+    const from = toRel(file);
+    const fromLayer = layerOf(from);
+    const relativeImports: ImportEdge[] = [];
+    const external: string[] = [];
+
+    for (const match of readFileSync(file, "utf8").matchAll(/(?:from\s*|import\s*\(?\s*)"([^"]+)"/g)) {
+      const spec = match[1];
+      if (spec === undefined) continue;
+      if (!spec.startsWith(".")) {
+        external.push(spec);
+        continue;
+      }
+      const to = toRel(`${resolve(dirname(file), spec)}.ts`);
+      relativeImports.push({ spec, to, toLayer: layerOf(to) });
+    }
+
+    return { from, fromLayer, relative: relativeImports, external };
+  });
 }
 
+function expectNoViolations(violations: string[]) {
+  expect(violations, violations.join("\n")).toEqual([]);
+}
+
+function edgeViolation({ from, spec }: { from: string; spec: string }): string {
+  return `${from} -> ${spec}`;
+}
+
+const FILE_IMPORTS = buildFileImports();
+const RELATIVE_IMPORTS: RelativeImport[] = FILE_IMPORTS.flatMap(({ from, fromLayer, relative: imports }) =>
+  imports.map((edge) => ({ from, fromLayer, ...edge })),
+);
+
 describe("layer imports", () => {
-  it("each layer imports only allowed layers", () => {
-    const violations: string[] = [];
-    for (const file of TS_FILES) {
-      const from = layerOf(file);
-      if (from === null) continue;
-      for (const { spec, target } of relativeImports(file)) {
-        const to = layerOf(target);
-        if (to === null || to === from) continue;
-        if (!ALLOWED[from].includes(to)) violations.push(`${relative(SRC, file)} -> ${spec}`);
-      }
-    }
-    expect(violations).toEqual([]);
+  it("each layer imports only from allowed layers", () => {
+    expectNoViolations(
+      RELATIVE_IMPORTS.filter((relImport) => {
+        if (relImport.fromLayer === null || relImport.toLayer === null || relImport.fromLayer === relImport.toLayer) {
+          return false;
+        }
+        return !ALLOWED[relImport.fromLayer].includes(relImport.toLayer);
+      }).map(edgeViolation),
+    );
   });
 
   it("domain production files import only from domain/", () => {
-    const violations: string[] = [];
-    for (const file of TS_FILES) {
-      if (layerOf(file) !== "domain" || file.endsWith(".test.ts")) continue;
-      for (const match of readFileSync(file, "utf8").matchAll(/(?:from\s*|import\s*\(?\s*)"([^"]+)"/g)) {
-        const spec = match[1];
-        if (spec === undefined) continue;
-        const inside = spec.startsWith(".") && layerOf(`${resolve(dirname(file), spec)}.ts`) === "domain";
-        if (!inside) violations.push(`${relative(SRC, file)} -> ${spec}`);
-      }
-    }
-    expect(violations).toEqual([]);
+    expectNoViolations(
+      FILE_IMPORTS.filter((entry) => entry.fromLayer === "domain" && !entry.from.endsWith(".test.ts")).flatMap(
+        (entry) => [
+          ...entry.external.map((spec) => edgeViolation({ from: entry.from, spec })),
+          ...entry.relative
+            .filter((edge) => edge.toLayer !== "domain")
+            .map((edge) => edgeViolation({ from: entry.from, spec: edge.spec })),
+        ],
+      ),
+    );
   });
 });
 
 describe("application gateway", () => {
-  it("infrastructure imports application only through gateway/", () => {
-    const violations: string[] = [];
-    for (const file of TS_FILES) {
-      if (layerOf(file) !== "infrastructure") continue;
-      for (const { spec, target } of relativeImports(file)) {
-        if (layerOf(target) !== "application") continue;
-        if (/application[\\/]gateway[\\/]/.test(relative(SRC, target))) continue;
-        violations.push(`${relative(SRC, file)} -> ${spec}`);
-      }
-    }
-    expect(violations).toEqual([]);
+  it("infrastructure imports from application only through gateway/", () => {
+    expectNoViolations(
+      RELATIVE_IMPORTS.filter(
+        (relImport) =>
+          relImport.fromLayer === "infrastructure" &&
+          relImport.toLayer === "application" &&
+          !APPLICATION_GATEWAY.test(relImport.to),
+      ).map(edgeViolation),
+    );
   });
 });
 
-describe("internal/ access", () => {
-  it("a file imports internal/ only under its parent", () => {
-    const violations: string[] = [];
-    for (const file of TS_FILES) {
-      const fileRel = relative(SRC, file).split(SEPARATOR).join("/");
-      for (const { spec, target } of relativeImports(file)) {
-        const parts = relative(SRC, target).split(SEPARATOR);
+describe("access to internal/", () => {
+  it("only files under a parent import from that parent/internal/", () => {
+    expectNoViolations(
+      RELATIVE_IMPORTS.flatMap((relImport) => {
+        const parts = relImport.to.split("/");
         const index = parts.indexOf("internal");
-        if (index < 1) continue;
+        if (index < 1) return [];
         const parent = parts.slice(0, index).join("/");
-        if (!fileRel.startsWith(`${parent}/`)) violations.push(`${fileRel} -> ${spec}`);
-      }
-    }
-    expect(violations).toEqual([]);
+        if (relImport.from.startsWith(`${parent}/`)) return [];
+        return [edgeViolation(relImport)];
+      }),
+    );
   });
 });
 
 describe("composition root", () => {
   it("only presentation entry points import container.ts", () => {
-    const violations: string[] = [];
-    for (const file of TS_FILES) {
-      const rel = relative(SRC, file);
-      if (/^presentation[\\/][^\\/]+[\\/]index\.ts$/.test(rel)) continue;
-      for (const { spec, target } of relativeImports(file)) {
-        if (target === join(SRC, "container.ts")) violations.push(`${rel} -> ${spec}`);
-      }
-    }
-    expect(violations).toEqual([]);
+    expectNoViolations(
+      RELATIVE_IMPORTS.filter(
+        (relImport) => relImport.to === "container.ts" && !PRESENTATION_ENTRY.test(relImport.from),
+      ).map(edgeViolation),
+    );
   });
 });
 
 describe("infrastructure clients", () => {
   it("each file in infrastructure/clients implements a gateway or a repository", () => {
-    const violations: string[] = [];
-    for (const file of TS_FILES) {
-      const rel = relative(SRC, file);
-      if (!/^infrastructure[\\/]clients[\\/]/.test(rel)) continue;
-      if (!/-client(\.test)?\.ts$/.test(rel)) {
-        violations.push(rel);
-        continue;
-      }
-      if (rel.endsWith(".test.ts")) continue;
-      const targets = [...relativeImports(file)].map(({ target }) => relative(SRC, target));
-      const implementsInterface = targets.some(
-        (t) => /^application[\\/]gateway[\\/]/.test(t) || /^domain[\\/].*-repository\.ts$/.test(t),
-      );
-      if (!implementsInterface) violations.push(rel);
-    }
-    expect(violations).toEqual([]);
+    expectNoViolations(
+      FILE_IMPORTS.filter((entry) => CLIENT_DIR.test(entry.from)).flatMap((entry) => {
+        if (entry.from.endsWith(".test.ts")) return [];
+        if (!CLIENT_FILE.test(entry.from)) return [entry.from];
+        const implementsInterface = entry.relative.some(
+          ({ to }) => APPLICATION_GATEWAY.test(to) || /^domain\/.*-repository\.ts$/.test(to),
+        );
+        return implementsInterface ? [] : [entry.from];
+      }),
+    );
   });
 });

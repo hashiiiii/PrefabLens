@@ -1,11 +1,11 @@
 import type { TokenRepository } from "../../domain/auth/token-repository";
 import type { DiffRepository } from "../../domain/diff/diff-repository";
 import { repoKey } from "../../domain/diff/fn/repo-key";
-import type { PrefetchRequest } from "../../domain/diff/types";
 import type { RepoIndexRepository } from "../../domain/guid/repo-index-repository";
 import { isUnityPath } from "../../domain/unity/fn/is-unity-path";
 import type { DifferGateway } from "../gateway/differ";
 import type { MakeGithubClient } from "../gateway/github";
+import type { PrefetchRequest } from "../gateway/messenger";
 import { API_BASE } from "../internal/api-base";
 import { getContext, getDiff } from "../internal/raw-diff";
 import { getRepoIndex } from "../internal/repo-index";

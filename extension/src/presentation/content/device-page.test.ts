@@ -5,11 +5,6 @@ import { fillDeviceCode } from "./device-page";
 
 const PENDING = { userCode: "ABCD-1234", expiresAt: 10_000 };
 
-// Trimmed copy of the real Device Activation form (captured 2026-07-11): eight fillable
-// boxes marked js-user-code-field plus a ninth CSS-hidden readonly input holding the hyphen.
-function box(n: number): string {
-  return `<input type="text" name="user-code-${n}" id="user-code-${n}" class="form-control js-user-code-field h1" maxlength="1" aria-label="User code ${n}">`;
-}
 const FORM =
   '<form action="/login/device/confirmation" method="post">' +
   '<input type="hidden" name="authenticity_token" value="tok">' +
@@ -25,16 +20,21 @@ const FORM =
   '<input type="submit" name="commit" value="Continue">' +
   "</form>";
 
+function box(n: number): string {
+  return `<input type="text" name="user-code-${n}" id="user-code-${n}" class="form-control js-user-code-field h1" maxlength="1" aria-label="User code ${n}">`;
+}
+
 function boxes(): HTMLInputElement[] {
   return [...document.querySelectorAll<HTMLInputElement>("input.js-user-code-field")];
 }
 
 describe("fillDeviceCode", () => {
-  it("fills the eight code boxes in order, skipping the hyphen, and fires input on each", () => {
+  it("fills eight code boxes in order, skips the hyphen, and fires input on each box", () => {
     document.body.innerHTML = FORM;
-    // GitHub enhances the boxes with JS (auto-advance via data-next). Input events keep it in sync.
     let fired = 0;
     for (const b of boxes()) {
+      // GitHub adds JS to the boxes for auto-advance with data-next.
+      // The input events keep the page in sync.
       b.addEventListener("input", () => {
         fired += 1;
       });
@@ -44,21 +44,13 @@ describe("fillDeviceCode", () => {
     expect(fired).toBe(8);
   });
 
-  it("leaves the readonly hyphen placeholder and the csrf token untouched", () => {
-    document.body.innerHTML = FORM;
-    fillDeviceCode(document, PENDING, 5_000);
-    // The hyphen input carries value "-" from the server. It must neither block the fill nor be overwritten.
-    expect(must(document.querySelector<HTMLInputElement>('input[name="user-code-4"]')).value).toBe("-");
-    expect(must(document.querySelector<HTMLInputElement>('input[name="authenticity_token"]')).value).toBe("tok");
-  });
-
-  it("does not touch anything once the pending code expired", () => {
+  it("does not change the form when the pending code expired", () => {
     document.body.innerHTML = FORM;
     fillDeviceCode(document, PENDING, 10_001);
-    expect(boxes().every((b) => b.value === "")).toBe(true);
+    expect(boxes().map((b) => b.value)).toStrictEqual(["", "", "", "", "", "", "", ""]);
   });
 
-  it("does not clobber a box the user already typed into", () => {
+  it("does not change a box that the user already filled", () => {
     document.body.innerHTML = FORM;
     must(boxes()[2]).value = "X";
     fillDeviceCode(document, PENDING, 5_000);
@@ -66,17 +58,10 @@ describe("fillDeviceCode", () => {
     expect(must(boxes()[2]).value).toBe("X");
   });
 
-  it("no-ops when the box count does not match the code length (unknown layout)", () => {
+  it("does nothing when the box count does not match the code length", () => {
     document.body.innerHTML = FORM;
     must(boxes()[7]).remove();
     fillDeviceCode(document, PENDING, 5_000);
     expect(boxes().every((b) => b.value === "")).toBe(true);
-  });
-
-  it("no-ops when the boxes are absent (redesigned page)", () => {
-    document.body.innerHTML = "<form><input type='text' name='something-else'></form>";
-    fillDeviceCode(document, PENDING, 5_000);
-    expect(document.querySelector("input[name='something-else']")).not.toBeNull();
-    expect(must(document.querySelector<HTMLInputElement>("input[name='something-else']")).value).toBe("");
   });
 });

@@ -1,120 +1,108 @@
-import { unresolvedRemaining } from "../../../domain/diff/fn/unresolved-remaining";
 import {
   type AuthError,
   type BackgroundError,
-  type DiffV2,
   isAuthError,
-  type SemanticDiffResponse,
-} from "../../../domain/diff/types";
-import { must } from "../../../internal/must";
+  type MessengerGateway,
+} from "../../../application/gateway/messenger";
+import { unresolvedRemaining } from "../../../domain/diff/fn/unresolved-remaining";
+import { createFileViewController } from "../../internal/file-view-controller";
+import { render, renderError, renderLoading, renderTooLarge } from "../../internal/render";
 import type { View } from "../../internal/view-mode";
+import { effectiveView, setOverride, type ViewStateData } from "../../internal/view-state";
+import type { DiffPage, FileEntry } from "../detect";
+import { armViewWatchdog, type ViewRegistry, viewKey } from "./views";
 
-// The per-file raw/semantic state machine (host + fetch latch). It is unit-testable without a browser.
-
-export type FilePanel = {
-  loading(): void;
-  diff(json: DiffV2, resolving: number): void;
-  incomplete(json: DiffV2): Promise<void>;
-  tooLarge(bytes: number): Promise<void>;
-  authError(error: AuthError): void;
-  error(error: BackgroundError): void;
+const ERROR_TEXT: Record<Exclude<BackgroundError, AuthError>, string> = {
+  "rate-limited": "You reached the GitHub rate limit. Please wait, then try again.",
+  "fetch-failed": "Could not get file contents from GitHub.",
+  "diff-failed": "Could not make a semantic diff for this file.",
+  "not-unity-yaml": "This file is not a Unity asset file in text format.",
 };
 
-// When every name is resolved but the source merge continues, the floor of 1 keeps the spinner visible.
-export function resolvingCount(json: DiffV2): number {
-  return Math.max(unresolvedRemaining(json).length, 1);
-}
-
-export type FileHost = {
-  attach(): void;
-  attached(): boolean;
-  setVisible(visible: boolean): void;
-  panel: FilePanel;
+export type FileView = {
+  header: HTMLElement;
+  apply(view: View): void;
+  sync(): void;
 };
 
-// Push-target slot: index.ts adapts onto the view registry (guidResolved + watchdog)
-export type FileResult = { json: DiffV2; retry(): void };
+export function attachFileView(
+  entry: FileEntry,
+  page: DiffPage,
+  messenger: MessengerGateway,
+  viewState: ViewStateData,
+  views: ViewRegistry,
+  authRetries: Set<() => void>,
+  showAuthError: (root: ShadowRoot, error: AuthError) => void,
+): FileView {
+  const key = viewKey(page.owner, page.repo, page.target, entry.path);
+  let requested = false;
 
-export type FileViewDeps = {
-  file: { setRawHidden(hidden: boolean): void; collapsed(): boolean };
-  createHost(): FileHost;
-  requestDiff(force?: boolean): Promise<SemanticDiffResponse>; // This call never rejects: the messenger client maps channel loss to fetch-failed.
-  results: { set(result: FileResult): void; get(): FileResult | undefined; armWatchdog(): void };
-  onAuthRetry(retry: () => void): void;
-  effectiveView(): View;
-};
-
-export type FileViewState = {
-  host: FileHost | undefined;
-  requested: boolean;
-};
-
-export function emptyFileView(): FileViewState {
-  return { host: undefined, requested: false };
-}
-
-// Display-only: safe on every scan, even while a panel sits on an error
-export function syncFileView(state: FileViewState, deps: FileViewDeps, view: View): void {
-  if (view === "raw") {
-    deps.file.setRawHidden(false);
-    state.host?.setVisible(false);
-    return;
-  }
-  if (!state.host) return; // semantic never rendered here: leave the raw diff alone
-  deps.file.setRawHidden(true);
-  if (!state.host.attached()) state.host.attach(); // react remount can drop the host with the old body
-  // Follow github collapse (react). Classic uses Details CSS in attachHost instead.
-  state.host.setVisible(!deps.file.collapsed());
-}
-
-async function request(state: FileViewState, deps: FileViewDeps, force?: boolean): Promise<void> {
-  state.requested = true;
-  const panel = must(state.host).panel; // only reachable after show created the host
-  panel.loading();
-  const res = await deps.requestDiff(force);
-  if (res.ok) {
-    deps.results.set({
-      json: res.json,
-      // Retry re-enters background resolution. Without a latch reset, request() no-ops.
-      retry: () => {
-        state.requested = false;
-        void request(state, deps, force);
-      },
+  const request = async (viewRoot: ShadowRoot, force?: boolean): Promise<void> => {
+    requested = true;
+    renderLoading(viewRoot);
+    const response = await messenger.semanticDiff({
+      type: "semanticDiff",
+      owner: page.owner,
+      repo: page.repo,
+      target: page.target,
+      path: entry.path,
+      force,
     });
-    if (res.pending) deps.results.armWatchdog();
-    panel.diff(res.json, res.pending ? resolvingCount(res.json) : 0);
-    return;
-  }
-  state.requested = false; // Do not cache errors: the next toggle re-fetches.
-  const prior = deps.results.get();
-  if (prior) {
-    // Failed retry must not wipe the diff the user is reading
-    await panel.incomplete(prior.json);
-    prior.retry();
-    return;
-  }
-  if (res.error === "too-large") {
-    await panel.tooLarge(res.bytes);
-    await request(state, deps, true);
-  } else if (isAuthError(res.error)) {
-    deps.onAuthRetry(() => {
-      // The first retry sets requested. Duplicate registrations no-op.
-      if (!state.requested && deps.effectiveView() === "semantic") void request(state, deps);
-    });
-    panel.authError(res.error);
-  } else panel.error(res.error);
-}
+    if (response.ok) {
+      const view = {
+        root: viewRoot,
+        json: response.json,
+        retry: () => {
+          requested = false;
+          void request(viewRoot, force);
+        },
+      };
+      views.set(key, view);
+      if (response.pending) armViewWatchdog(view);
+      void render(viewRoot, response.json, {
+        resolving: response.pending ? Math.max(unresolvedRemaining(response.json).length, 1) : 0,
+      });
+      return;
+    }
 
-export function showFileView(state: FileViewState, deps: FileViewDeps, view: View): void {
-  if (view === "raw") {
-    syncFileView(state, deps, view);
-    return;
-  }
-  if (!state.host) {
-    state.host = deps.createHost();
-    state.host.attach();
-  }
-  syncFileView(state, deps, view);
-  if (state.requested) return; // Cache only successful results (a re-toggle does not re-fetch).
-  void request(state, deps);
+    requested = false;
+    const prior = views.get(key);
+    if (prior) {
+      await render(viewRoot, prior.json, { incomplete: true });
+      prior.retry();
+      return;
+    }
+    if (response.error === "too-large") {
+      await renderTooLarge(viewRoot, response.bytes);
+      await request(viewRoot, true);
+    } else if (isAuthError(response.error)) {
+      authRetries.add(() => {
+        if (!requested && effectiveView(viewState, entry.path) === "semantic") void request(viewRoot);
+      });
+      showAuthError(viewRoot, response.error);
+    } else {
+      renderError(viewRoot, ERROR_TEXT[response.error]);
+    }
+  };
+
+  const controller = createFileViewController(
+    effectiveView(viewState, entry.path),
+    (view) => {
+      setOverride(viewState, entry.path, view);
+    },
+    entry.setRawHidden,
+    entry.attachHost,
+    () => !entry.collapsed(),
+    (root) => {
+      if (!requested) void request(root);
+    },
+  );
+  entry.header.setAttribute("data-prefablens", "");
+  entry.header.append(controller.element);
+
+  return {
+    header: entry.header,
+    apply: controller.apply,
+    sync: () => controller.sync(effectiveView(viewState, entry.path)),
+  };
 }

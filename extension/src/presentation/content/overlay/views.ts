@@ -1,21 +1,58 @@
-import type { DiffV2 } from "../../../domain/diff/types";
+import type { GuidResolvedPush } from "../../../application/gateway/messenger";
+import { targetKey } from "../../../domain/diff/fn/target-key";
+import { unresolvedRemaining } from "../../../domain/diff/fn/unresolved-remaining";
+import type { DiffTarget, DiffV2 } from "../../../domain/diff/types";
+import { render } from "../../internal/render";
 
-// json is mutated in place by the push listener (merge resolved / replace on final push)
 export type ViewEntry = {
   root: ShadowRoot;
   json: DiffV2;
-  retry(): void; // re-request semantic diff (incomplete-resolution affordance)
-  watchdog?: number; // flips to incomplete if the final push never arrives
+  retry(): void;
+  watchdog?: number;
 };
 
-// path-keyed render targets for guidResolved pushes
 export type ViewRegistry = Map<string, ViewEntry>;
 
-// SPA navigation: drop refs so late pushes cannot revive dead views
+const WATCHDOG_MS = 120_000;
+
+function mergeResolvedPush(current: DiffV2, message: GuidResolvedPush): DiffV2 {
+  return (
+    message.json ?? {
+      ...current,
+      resolved: { ...current.resolved, ...message.resolved },
+    }
+  );
+}
+
+export function viewKey(owner: string, repo: string, target: DiffTarget, path: string): string {
+  return `${targetKey(owner, repo, target)}:${path}`;
+}
+
+export function armViewWatchdog(view: ViewEntry): void {
+  clearTimeout(view.watchdog);
+  view.watchdog = window.setTimeout(() => {
+    void render(view.root, view.json, { incomplete: true }).then(() => view.retry());
+  }, WATCHDOG_MS);
+}
+
+export function applyGuidResolvedPush(view: ViewEntry, message: GuidResolvedPush): void {
+  clearTimeout(view.watchdog);
+  view.json = mergeResolvedPush(view.json, message);
+  if (message.done && message.status !== undefined && message.status !== "complete") {
+    void render(view.root, view.json, { incomplete: true }).then(() => view.retry());
+    return;
+  }
+  if (!message.done) armViewWatchdog(view);
+  void render(view.root, view.json, {
+    resolving: message.done ? 0 : Math.max(unresolvedRemaining(view.json).length, 1),
+  });
+}
+
+// Remove detached roots so late pushes cannot render after SPA navigation.
 export function pruneDisconnectedViews(views: ViewRegistry): void {
   for (const [key, view] of views) {
     if (view.root.host.isConnected) continue;
-    clearTimeout(view.watchdog); // orphaned timer must not render into a detached root
+    clearTimeout(view.watchdog);
     views.delete(key);
   }
 }

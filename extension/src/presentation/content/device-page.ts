@@ -8,7 +8,7 @@ export function fillDeviceCode(doc: Document, pending: PendingSignIn, now: numbe
   if (boxes.length !== chars.length || boxes.some((box) => box.value)) return;
   boxes.forEach((box, i) => {
     box.value = chars.charAt(i);
-    // Keep GitHub's per-box auto-advance code in sync with the programmatic fill.
+    // This event tells GitHub that the box value changed. Then GitHub advances to the next box.
     box.dispatchEvent(new Event("input", { bubbles: true }));
   });
 }

@@ -43,7 +43,7 @@ Presentation -> Application -> Domain
               (implements gateway + repository)
 ```
 
-`src/layering.test.ts` enforces these rules:
+`test/architecture/layering.test.ts` enforces these rules:
 
 - the import direction
 - the domain isolation
@@ -148,23 +148,25 @@ infrastructure/
 presentation/
   background/          # service worker entry
   content/
-    overlay/           # view models, view registry, file view state
+    overlay/           # per-file view state
   demo/                # site demo entry
   internal/            # helpers shared by two or more JS contexts
 ```
 
 - Each JS context has its own entry under its folder (`*/index.ts`).
-- View models and named UI callback types live next to the presentation code
-  that owns them (for example under `content/overlay/`).
+- Per-file UI state lives next to the content script under `content/overlay/`.
+- Use explicit subscriptions when a UI event has more than one consumer.
+- Register subscriptions before initial activation.
 - If two or more presentation contexts share a helper (render, the toggle,
   the view state), put it in `presentation/internal/`.
 
 #### Tests
 
-- Tests under `src/` obey the layer import direction.
-- `test/` is a test composition root outside the product layers.
-- Put tests that compose multiple layers under `test/`.
-- `fixtures/` contains shared static test data.
+- Put all extension tests under `test/`.
+- Mirror the production path under `test/` for unit and integration tests.
+- Put layer rules under `test/architecture/`.
+- Put browser tests and their HTML files under `test/e2e/`.
+- `test/fixtures/` contains shared static test data.
 - Keep test-only helpers in test files when one file uses them.
 - Do not put test-only helpers in `src/`.
 - An in-memory storage implementation derives failures from its complete state and capacity.
@@ -177,8 +179,7 @@ presentation/
 
 **Role.** Domain vocabulary only.
 
-**Imports.** Production files in this layer import nothing outside `domain/`.
-Test files can also import the test runner, `node:` modules, and `src/internal/`.
+**Imports.** Files in this layer import nothing outside `domain/`.
 
 **Notes.**
 
@@ -201,16 +202,15 @@ It cannot import `infrastructure/` or `presentation/`.
 - Use CRUD names for use-case verbs: `create`, `get`, `update`, `delete`.
   If a CRUD name hides the intent, use a domain verb
   (for example `sign-in`, `prefetch-pr`).
-- Export a plain verb function `<verb>(gateways…, [state,] input, [callbacks])`.
+- Export a plain verb function `<verb>(gateways…, [state,] input)`.
+- Use an async generator when a use case must emit ordered progress events.
 - Internal modules can export several sibling functions.
 - Send and receive domain models through repository interfaces in `domain/`.
 - Talk to outside systems that do not load or save domain models through gateways.
 - A single-function dependency is a plain parameter
   (for example `fetchBytes`, `makeClient`, `getDiffer`).
 - A multi-method outside capability lives in `application/gateway/`.
-- UI callback shapes are presentation vocabulary.
-  Application asks for the structure it needs.
-  It does not own a named UI type.
+- UI event and subscription types are presentation vocabulary.
 - When construction of working memory needs real logic, application exports a
   state factory (for example `createDiffSession`).
   When construction is only a literal, presentation builds that value itself.
@@ -261,10 +261,10 @@ Transport-only work can call a gateway or repository method directly.
 
 ### Startup
 
-Every entry point follows this sequence:
+Each entry point follows this sequence:
 
 ```
-createX() -> createDiffSession() (if needed) -> register listeners -> call public functions
+createX() -> createDiffSession() (if needed) -> subscribe -> start or iterate
 ```
 
 ## Verification

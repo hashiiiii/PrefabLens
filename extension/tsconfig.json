@@ -14,8 +14,6 @@
   "include": [
     "*.ts",
     "src/**/*",
-    "test/**/*",
-    "fixtures/**/*",
-    "e2e/**/*"
+    "test/**/*"
   ]
 }

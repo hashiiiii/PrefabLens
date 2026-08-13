@@ -19,34 +19,39 @@ const getDiffer = createDifferLoader();
 const makeClient = createClientFactory(6);
 const session = createDiffSession();
 
-function makeGuidPush(tabId: number | undefined): (m: GuidResolvedPush) => void {
-  return (m) => {
-    if (tabId === undefined) return;
-    // Final push releases the indicator: retry a dropped tab message before giving up.
-    // Intermediate pushes stay fire-and-forget. A lost one only delays names until the final push.
-    const attempt = (left: number): void => {
-      void chrome.tabs.sendMessage(tabId, m).catch(() => {
-        if (m.done && left > 0) setTimeout(() => attempt(left - 1), 1000);
-      });
-    };
-    attempt(2);
-  };
+async function sendGuidResolution(tabId: number | undefined, message: GuidResolvedPush): Promise<void> {
+  if (tabId === undefined) return;
+  const attempts = message.done ? 3 : 1;
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    try {
+      await chrome.tabs.sendMessage(tabId, message);
+      return;
+    } catch {
+      if (attempt + 1 === attempts) return;
+      // A final message releases the indicator, so retry it after the content script reloads.
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+    }
+  }
 }
 
 chrome.runtime.onMessage.addListener((msg: BackgroundRequest, sender, sendResponse) => {
   switch (msg?.type) {
     case "semanticDiff": {
-      void getSemanticDiff(
-        tokenStore,
-        makeClient,
-        getDiffer,
-        guidCache,
-        diffStore,
-        repoIndexStore,
-        session,
-        msg,
-        makeGuidPush(sender.tab?.id),
-      ).then(sendResponse);
+      void (async () => {
+        for await (const event of getSemanticDiff(
+          tokenStore,
+          makeClient,
+          getDiffer,
+          guidCache,
+          diffStore,
+          repoIndexStore,
+          session,
+          msg,
+        )) {
+          if (event.type === "response") sendResponse(event.response);
+          else await sendGuidResolution(sender.tab?.id, event.message);
+        }
+      })();
       return true; // async response
     }
     case "prefetch":

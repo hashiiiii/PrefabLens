@@ -13,7 +13,7 @@ import { createFileViewController } from "../internal/file-view-controller";
 import { render, renderError, renderLoading } from "../internal/render";
 import { injectPageStyles, mountGlobalBar } from "../internal/toggle";
 import type { View } from "../internal/view-mode";
-import { effectiveView, emptyViewState, onDefaultChange, setDefault, setOverride } from "../internal/view-state";
+import { effectiveView, emptyViewState, setDefault, setOverride, subscribeDefault } from "../internal/view-state";
 
 function attachFile(
   header: HTMLElement,
@@ -30,7 +30,6 @@ function attachFile(
 
   const controller = createFileViewController(
     initial,
-    onSelect,
     (hidden) => {
       content.style.display = hidden ? "none" : "";
     },
@@ -41,15 +40,17 @@ function attachFile(
       content.after(host);
     },
     () => true,
-    (root) => {
-      if (rendered) return;
-      rendered = true;
-      renderLoading(root);
-      void getLocalDiff(differ, index, fetchBytes, fetchSource, header.dataset.before, header.dataset.after)
-        .then((result) => (result.ok ? render(root, result.value) : renderError(root, result.error.message)))
-        .catch((error) => renderError(root, String(error)));
-    },
   );
+  controller.subscribeSelection(onSelect);
+  controller.subscribeSemantic((root) => {
+    if (rendered) return;
+    rendered = true;
+    renderLoading(root);
+    void getLocalDiff(differ, index, fetchBytes, fetchSource, header.dataset.before, header.dataset.after)
+      .then((result) => (result.ok ? render(root, result.value) : renderError(root, result.error.message)))
+      .catch((error) => renderError(root, String(error)));
+  });
+  controller.start();
 
   header.append(controller.element);
   return controller.apply;
@@ -78,15 +79,16 @@ async function main(): Promise<void> {
   const state = emptyViewState("semantic");
   const persist = (): void => {};
   const appliers: Array<(view: View) => void> = [];
-  onDefaultChange(state, (view) => {
+  subscribeDefault(state, (view) => {
     for (const apply of appliers) apply(view);
   });
 
   // Global bar above the first Unity file, same anchor rule as the content script.
   const firstFile = must(headers[0]?.closest(".file"));
-  const bar = mountGlobalBar((view) => setDefault(state, view, persist), state.def);
+  const bar = mountGlobalBar(state.def);
+  bar.toggle.subscribe((view) => setDefault(state, view, persist));
   firstFile.before(bar.element);
-  onDefaultChange(state, (view) => bar.toggle.set(view));
+  subscribeDefault(state, (view) => bar.toggle.set(view));
 
   for (const header of headers) {
     const path = header.dataset.path ?? "";

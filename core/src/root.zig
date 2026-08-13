@@ -13,6 +13,7 @@ const tree_order = @import("tree_order.zig");
 const inspector = @import("inspector.zig");
 const perf = @import("perf.zig");
 const instantiate = @import("instantiate.zig");
+const prefab = @import("prefab.zig");
 
 pub const Assets = instantiate.Assets;
 pub const isUnityYaml = parser.isUnityYaml;
@@ -75,5 +76,6 @@ test {
     _ = inspector;
     _ = perf;
     _ = instantiate;
+    _ = prefab;
     _ = @import("fixture_test.zig");
 }

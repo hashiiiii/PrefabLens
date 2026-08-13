@@ -33,8 +33,8 @@
 - Modify `core/src/diff.zig` to use allocation-only recursion errors and the Inspector tuple formatter.
 - Modify `core/src/diff_overrides.zig` to consume `prefab.Modification` and remove its production import of `diff.zig`.
 - Modify `core/src/instantiate.zig` to propagate allocation errors and consume shared prefab rules.
-- Modify `core/src/tree.zig` to use shared source GUID and scalar modification reads.
-- Modify `core/src/tree_chain.zig` to keep only hierarchy traversal.
+- Modify `core/src/tree.zig` to use the shared source GUID and the tree-chain scalar lookup wrapper.
+- Modify `core/src/tree_chain.zig` to keep hierarchy traversal and delegate scalar lookup to `prefab.zig`.
 - Modify `core/src/assets_tlv.zig` to decode `prefab.Assets` directly.
 - Modify `core/src/inspector.zig` to own synthesized tuple display values.
 
@@ -513,7 +513,8 @@ git commit -m "refactor: add prefab semantic boundary"
 **Interfaces:**
 
 - Consumes: All public declarations from `prefab.zig` in Task 2.
-- Produces: One implementation of modification parsing, value selection, key creation, source GUID lookup, and scalar lookup.
+- Produces: One implementation in `prefab.zig` for modification parsing, value selection, key creation, source GUID lookup, and scalar lookup.
+- Produces: A thin `tree_chain.zig` wrapper that resolves the structural document before it calls the shared scalar lookup.
 
 - [ ] **Step 1: Add a duplicate-key characterization test**
 
@@ -623,19 +624,30 @@ try entries.append(arena, .{ .key = "propertyPath", .value = property_path_node 
 
 Replace `sourceGuidOf` with `prefab.sourceGuid`. Delete `sourceGuidOf` and `objRefIfSet`.
 
-- [ ] **Step 5: Move tree reads to `prefab.zig`**
+- [ ] **Step 5: Move tree reads to the shared prefab rules**
 
-Import `prefab.zig` in `tree.zig`. Replace the two calls as follows:
+Keep the scalar lookup wrapper in `tree_chain.zig`. It resolves the structural document and delegates value selection to `prefab.zig`:
 
 ```zig
-return prefab.scalarModificationValue(doc, "m_Name") orelse "";
+pub fn modificationValue(idx: *Index, pi_id: i64, property_path: []const u8) ?[]const u8 {
+    const doc = idx.structuralDoc(pi_id) orelse return null;
+    return prefab.scalarModificationValue(doc, property_path);
+}
 ```
+
+Keep the instance-name read in `tree.zig` through this wrapper:
+
+```zig
+return tree_chain.modificationValue(idx, pi_id, "m_Name") orelse "";
+```
+
+Import `prefab.zig` in `tree.zig` for the source GUID read:
 
 ```zig
 .source_guid = if (doc) |value| prefab.sourceGuid(value) else null,
 ```
 
-Delete `sourcePrefabGuid` from `tree.zig`. Delete `modificationValue` from `tree_chain.zig`.
+Delete `sourcePrefabGuid` from `tree.zig`. Keep `modificationValue` in `tree_chain.zig` as the thin wrapper above.
 
 - [ ] **Step 6: Move the `Assets` owner**
 
@@ -669,11 +681,12 @@ Expected: The lint step succeeds and all tests pass.
 Run:
 
 ```sh
-rg -n "fn (sourcePrefabGuid|sourceGuidOf|modificationValue|objRefIfSet|modKeyOf|modValue)" core/src
+rg -n "fn (sourcePrefabGuid|sourceGuidOf|objRefIfSet|modKeyOf|modValue)" core/src
 rg -n 'findValue\([^\n]*"m_Modifications"' core/src
+rg -n 'modificationValue|scalarModificationValue' core/src/tree.zig core/src/tree_chain.zig core/src/tree_order.zig core/src/prefab.zig
 ```
 
-Expected: The first command prints no matches. The second command prints matches only in `prefab.zig` and mutation code in `instantiate.zig`.
+Expected: The first command prints no matches. The second command prints the existing parser readers, the shared reader in `prefab.zig`, and the mutation reader in `instantiate.zig`. The third command shows `tree_chain.zig` as the wrapper owner, `prefab.zig` as the scalar lookup owner, and calls from the tree consumers.
 
 - [ ] **Step 9: Commit the consumer migration**
 

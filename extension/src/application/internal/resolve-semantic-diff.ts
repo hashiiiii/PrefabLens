@@ -10,7 +10,7 @@ import { resolveGuids } from "./guid-resolution";
 import { getPair } from "./raw-diff";
 import { getRepoIndex } from "./repo-index";
 
-export async function pushSemanticResolution(
+export async function* resolveSemanticDiff(
   guidCache: GuidRepository,
   repoIndexStore: RepoIndexRepository,
   getDiffer: () => Promise<DifferGateway>,
@@ -21,8 +21,7 @@ export async function pushSemanticResolution(
   first: DiffV2,
   remaining: string[],
   request: SemanticDiffRequest,
-  push: (message: GuidResolvedPush) => void,
-): Promise<void> {
+): AsyncGenerator<GuidResolvedPush> {
   const { owner, repo } = request;
   const at = { owner, repo, target: request.target, path: request.path };
   let status: ResolutionStatus = "complete";
@@ -43,7 +42,7 @@ export async function pushSemanticResolution(
       if (Object.keys(fromIndex).length) {
         // The source merge reads these names from the GUID cache.
         await guidCache.save(repoKey, fromIndex);
-        push({ type: "guidResolved", ...at, resolved: fromIndex, done: false });
+        yield { type: "guidResolved", ...at, resolved: fromIndex, done: false };
       }
     }
     const search = leftover.length
@@ -58,13 +57,13 @@ export async function pushSemanticResolution(
         getPair(session, client, context, owner, repo, request.path),
       ]);
       if (!pair.ok) {
-        push({
+        yield {
           type: "guidResolved",
           ...at,
           resolved: {},
           done: true,
           status: status === "rateLimited" || isRateLimited(pair.error) ? "rateLimited" : "failed",
-        });
+        };
         return;
       }
       const [before, after] = pair.value;
@@ -85,15 +84,15 @@ export async function pushSemanticResolution(
       // A manual retry has the best chance to recover from a rate limit.
       if (status !== "rateLimited") status = merged.status;
     }
-    push({ type: "guidResolved", ...at, resolved: {}, json, done: true, status });
+    yield { type: "guidResolved", ...at, resolved: {}, json, done: true, status };
   } catch (error) {
     console.debug("prefablens: guid resolution aborted", error);
-    push({
+    yield {
       type: "guidResolved",
       ...at,
       resolved: {},
       done: true,
       status: status === "rateLimited" || isRateLimited(error) ? "rateLimited" : "failed",
-    });
+    };
   }
 }

@@ -3,8 +3,8 @@ import { readFileSync } from "node:fs";
 import { beforeAll, describe, expect, it } from "vitest";
 import { createDiffSession, type DiffContext } from "../../../src/application/diff/create-diff-session";
 import type { DifferGateway } from "../../../src/application/gateway/differ";
-import type { GuidResolvedPush, SemanticDiffRequest } from "../../../src/application/gateway/messenger";
-import { pushSemanticResolution } from "../../../src/application/internal/push-semantic-resolution";
+import type { SemanticDiffRequest } from "../../../src/application/gateway/messenger";
+import { resolveSemanticDiff } from "../../../src/application/internal/resolve-semantic-diff";
 import { type DiffV2, emptyDiff } from "../../../src/domain/diff/types";
 import type { GuidRepository } from "../../../src/domain/guid/guid-repository";
 import type { RepoGuidIndex } from "../../../src/domain/guid/repo-guid-index";
@@ -115,7 +115,13 @@ beforeAll(async () => {
   differ = await createDiffer(bytes);
 });
 
-describe("pushSemanticResolution", () => {
+async function collect<T>(stream: AsyncIterable<T>): Promise<T[]> {
+  const values: T[] = [];
+  for await (const value of stream) values.push(value);
+  return values;
+}
+
+describe("resolveSemanticDiff", () => {
   it("pushes repo-index names before the final JSON", async () => {
     const { client } = githubRoutes(({ url }) => {
       if (url.pathname === "/repos/o/r/git/trees/head-sha") {
@@ -129,9 +135,7 @@ describe("pushSemanticResolution", () => {
       }
       return new Response(null, { status: 500 });
     });
-    const pushes: GuidResolvedPush[] = [];
-    const finalPush = Promise.withResolvers<void>();
-    const operation = pushSemanticResolution(
+    const operation = resolveSemanticDiff(
       new MemoryGuidRepository(),
       new MemoryRepoIndexRepository(),
       async () => differ,
@@ -142,19 +146,15 @@ describe("pushSemanticResolution", () => {
       { ...emptyDiff(), unresolvedGuids: ["indexed"], resolved: {} },
       ["indexed"],
       REQUEST,
-      (message) => {
-        pushes.push(message);
-        if (message.done) finalPush.resolve();
-      },
     );
 
-    await finalPush.promise;
-    await operation;
+    expect(typeof (operation as unknown as AsyncIterable<unknown>)[Symbol.asyncIterator]).toBe("function");
+    const messages = await collect(operation);
 
-    expect(pushes).toHaveLength(2);
-    expect(pushes[0]).toMatchObject({ resolved: { indexed: "Assets/Indexed.cs" }, done: false });
-    expect(pushes[0]?.json).toBeUndefined();
-    expect(pushes[1]).toMatchObject({
+    expect(messages).toHaveLength(2);
+    expect(messages[0]).toMatchObject({ resolved: { indexed: "Assets/Indexed.cs" }, done: false });
+    expect(messages[0]?.json).toBeUndefined();
+    expect(messages[1]).toMatchObject({
       resolved: {},
       json: { resolved: { indexed: "Assets/Indexed.cs" } },
       done: true,
@@ -178,32 +178,25 @@ describe("pushSemanticResolution", () => {
       }
       return new Response(null, { status: 500 });
     });
-    const pushes: GuidResolvedPush[] = [];
-    const finalPush = Promise.withResolvers<void>();
-    const operation = pushSemanticResolution(
-      new MemoryGuidRepository(),
-      new MemoryRepoIndexRepository(),
-      async () => differ,
-      createDiffSession(),
-      client,
-      context(),
-      REPO_KEY,
-      { ...emptyDiff(), unresolvedGuids: ["indexed", "searched"], resolved: {} },
-      ["indexed", "searched"],
-      REQUEST,
-      (message) => {
-        pushes.push(message);
-        if (message.done) finalPush.resolve();
-      },
+    const messages = await collect(
+      resolveSemanticDiff(
+        new MemoryGuidRepository(),
+        new MemoryRepoIndexRepository(),
+        async () => differ,
+        createDiffSession(),
+        client,
+        context(),
+        REPO_KEY,
+        { ...emptyDiff(), unresolvedGuids: ["indexed", "searched"], resolved: {} },
+        ["indexed", "searched"],
+        REQUEST,
+      ),
     );
-
-    await finalPush.promise;
-    await operation;
 
     const searches = requests.filter((request) => request.url.pathname === "/search/code");
     expect(searches).toHaveLength(1);
     expect(searches[0]?.url.searchParams.get("q")).toBe('"searched" repo:o/r extension:meta');
-    expect(pushes.at(-1)?.json?.resolved).toEqual({
+    expect(messages.at(-1)?.json?.resolved).toEqual({
       indexed: "Assets/Indexed.cs",
       searched: "Assets/Searched.cs",
     });
@@ -224,29 +217,22 @@ describe("pushSemanticResolution", () => {
     });
     const first = sourceDiff({ src0: SOURCE_PATH });
     first.unresolvedGuids = [...first.unresolvedGuids, "limited"];
-    const pushes: GuidResolvedPush[] = [];
-    const finalPush = Promise.withResolvers<void>();
-    const operation = pushSemanticResolution(
-      new MemoryGuidRepository({ [REPO_KEY]: { src0: SOURCE_PATH } }),
-      new MemoryRepoIndexRepository(),
-      async () => differ,
-      createDiffSession(),
-      client,
-      context(),
-      REPO_KEY,
-      first,
-      ["limited"],
-      REQUEST,
-      (message) => {
-        pushes.push(message);
-        if (message.done) finalPush.resolve();
-      },
+    const messages = await collect(
+      resolveSemanticDiff(
+        new MemoryGuidRepository({ [REPO_KEY]: { src0: SOURCE_PATH } }),
+        new MemoryRepoIndexRepository(),
+        async () => differ,
+        createDiffSession(),
+        client,
+        context(),
+        REPO_KEY,
+        first,
+        ["limited"],
+        REQUEST,
+      ),
     );
 
-    await finalPush.promise;
-    await operation;
-
-    expect(pushes.at(-1)).toMatchObject({ done: true, status: "rateLimited" });
+    expect(messages.at(-1)).toMatchObject({ done: true, status: "rateLimited" });
   });
 
   it("keeps rateLimited after a later rejection", async () => {
@@ -265,29 +251,22 @@ describe("pushSemanticResolution", () => {
     });
     const first = sourceDiff({ src0: SOURCE_PATH });
     first.unresolvedGuids = [...first.unresolvedGuids, "limited"];
-    const pushes: GuidResolvedPush[] = [];
-    const finalPush = Promise.withResolvers<void>();
-    const operation = pushSemanticResolution(
-      guidRepository,
-      new MemoryRepoIndexRepository(),
-      async () => differ,
-      createDiffSession(),
-      client,
-      context(),
-      REPO_KEY,
-      first,
-      ["limited"],
-      REQUEST,
-      (message) => {
-        pushes.push(message);
-        if (message.done) finalPush.resolve();
-      },
+    const messages = await collect(
+      resolveSemanticDiff(
+        guidRepository,
+        new MemoryRepoIndexRepository(),
+        async () => differ,
+        createDiffSession(),
+        client,
+        context(),
+        REPO_KEY,
+        first,
+        ["limited"],
+        REQUEST,
+      ),
     );
 
-    await finalPush.promise;
-    await operation;
-
-    expect(pushes.at(-1)).toMatchObject({ done: true, status: "rateLimited" });
+    expect(messages.at(-1)).toMatchObject({ done: true, status: "rateLimited" });
   });
 
   it("sends a failed final push after a source fetch failure", async () => {
@@ -298,30 +277,23 @@ describe("pushSemanticResolution", () => {
       }
       return new Response(null, { status: 500 });
     });
-    const pushes: GuidResolvedPush[] = [];
-    const finalPush = Promise.withResolvers<void>();
-    const operation = pushSemanticResolution(
-      new MemoryGuidRepository({ [REPO_KEY]: { src0: SOURCE_PATH } }),
-      new MemoryRepoIndexRepository(),
-      async () => differ,
-      createDiffSession(),
-      client,
-      context(),
-      REPO_KEY,
-      sourceDiff({ src0: SOURCE_PATH }),
-      [],
-      REQUEST,
-      (message) => {
-        pushes.push(message);
-        if (message.done) finalPush.resolve();
-      },
+    const messages = await collect(
+      resolveSemanticDiff(
+        new MemoryGuidRepository({ [REPO_KEY]: { src0: SOURCE_PATH } }),
+        new MemoryRepoIndexRepository(),
+        async () => differ,
+        createDiffSession(),
+        client,
+        context(),
+        REPO_KEY,
+        sourceDiff({ src0: SOURCE_PATH }),
+        [],
+        REQUEST,
+      ),
     );
 
-    await finalPush.promise;
-    await operation;
-
     expect(requests.some((request) => request.url.pathname.includes("/git/trees/"))).toBe(false);
-    expect(pushes.at(-1)).toMatchObject({ done: true, status: "failed" });
+    expect(messages.at(-1)).toMatchObject({ done: true, status: "failed" });
   });
 
   it("merges a source after its GUID resolves asynchronously", async () => {
@@ -339,29 +311,22 @@ describe("pushSemanticResolution", () => {
       if (url.pathname === "/repos/o/r/contents/Assets/Source.prefab") return raw(SOURCE_PREFAB);
       return new Response(null, { status: 500 });
     });
-    const pushes: GuidResolvedPush[] = [];
-    const finalPush = Promise.withResolvers<void>();
-    const operation = pushSemanticResolution(
-      new MemoryGuidRepository(),
-      new MemoryRepoIndexRepository(),
-      async () => differ,
-      createDiffSession(),
-      client,
-      context(),
-      REPO_KEY,
-      sourceDiff(),
-      ["src0"],
-      REQUEST,
-      (message) => {
-        pushes.push(message);
-        if (message.done) finalPush.resolve();
-      },
+    const messages = await collect(
+      resolveSemanticDiff(
+        new MemoryGuidRepository(),
+        new MemoryRepoIndexRepository(),
+        async () => differ,
+        createDiffSession(),
+        client,
+        context(),
+        REPO_KEY,
+        sourceDiff(),
+        ["src0"],
+        REQUEST,
+      ),
     );
 
-    await finalPush.promise;
-    await operation;
-
-    const final = pushes.at(-1);
+    const final = messages.at(-1);
     expect(final).toMatchObject({ done: true, status: "complete" });
     expect(final?.json?.neededSources).toBeUndefined();
     expect(final?.json?.resolved).toEqual({ src0: SOURCE_PATH });
@@ -371,30 +336,23 @@ describe("pushSemanticResolution", () => {
     const { client, requests } = githubRoutes(() => new Response(null, { status: 500 }));
     const indexRepository = new MemoryRepoIndexRepository();
     indexRepository.storageAvailable = false;
-    const pushes: GuidResolvedPush[] = [];
-    const finalPush = Promise.withResolvers<void>();
-    const operation = pushSemanticResolution(
-      new MemoryGuidRepository(),
-      indexRepository,
-      async () => differ,
-      createDiffSession(),
-      client,
-      context(),
-      REPO_KEY,
-      { ...emptyDiff(), unresolvedGuids: ["unknown"], resolved: {} },
-      ["unknown"],
-      REQUEST,
-      (message) => {
-        pushes.push(message);
-        if (message.done) finalPush.resolve();
-      },
+    const messages = await collect(
+      resolveSemanticDiff(
+        new MemoryGuidRepository(),
+        indexRepository,
+        async () => differ,
+        createDiffSession(),
+        client,
+        context(),
+        REPO_KEY,
+        { ...emptyDiff(), unresolvedGuids: ["unknown"], resolved: {} },
+        ["unknown"],
+        REQUEST,
+      ),
     );
 
-    await finalPush.promise;
-    await operation;
-
     expect(requests).toHaveLength(0);
-    expect(pushes).toEqual([
+    expect(messages).toEqual([
       {
         type: "guidResolved",
         owner: OWNER,

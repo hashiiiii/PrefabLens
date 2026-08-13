@@ -51,6 +51,10 @@ export type GuidResolvedPush = {
   status?: ResolutionStatus;
 };
 
+export type SemanticDiffEvent =
+  | { type: "response"; response: SemanticDiffResponse }
+  | { type: "resolution"; message: GuidResolvedPush };
+
 export type MessengerGateway = {
   semanticDiff(req: SemanticDiffRequest): Promise<SemanticDiffResponse>;
   prefetch(req: PrefetchRequest): Promise<void>;

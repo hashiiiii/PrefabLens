@@ -654,25 +654,10 @@ fn isVectorMap(entries: []model.Entry) bool {
     return true;
 }
 
-// Synthesized scalar Node of the form "(a, b, c)" (for single-row display like "Position: (2, 3, 1)").
-// pub: diff_overrides synthesizes its placement summary rows with it too.
-pub fn parenJoinNode(arena: std.mem.Allocator, vals: []const []const u8) !*Node {
-    var out: std.ArrayList(u8) = .empty;
-    try out.append(arena, '(');
-    for (vals, 0..) |v, i| {
-        if (i != 0) try out.appendSlice(arena, ", ");
-        try out.appendSlice(arena, v);
-    }
-    try out.append(arena, ')');
-    const n = try arena.create(Node);
-    n.* = .{ .scalar = try out.toOwnedSlice(arena) };
-    return n;
-}
-
 fn vectorNode(arena: std.mem.Allocator, entries: []model.Entry) !*Node {
     var vals: [4][]const u8 = undefined;
     for (entries, 0..) |e, i| vals[i] = e.value.scalar;
-    return parenJoinNode(arena, vals[0..entries.len]);
+    return inspector.joinedScalarNode(arena, vals[0..entries.len]);
 }
 
 fn appendLeaf(arena: std.mem.Allocator, out: *std.ArrayList(FieldDiff), path: []const u8, status: Status, node: *const Node) !void {

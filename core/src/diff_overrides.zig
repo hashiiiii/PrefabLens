@@ -3,14 +3,11 @@
 const std = @import("std");
 const model = @import("model.zig");
 const inspector = @import("inspector.zig");
-const diffmod = @import("diff.zig");
 const prefab = @import("prefab.zig");
 const testing = std.testing;
 
 const Node = model.Node;
 const Status = model.Status;
-
-const findDoc = diffmod.findDoc;
 
 test "diff: sortByGroup keeps same-group rows contiguous beyond known ranks" {
     // The renderer relies on "rows of the same group are contiguous" as a core invariant.
@@ -64,8 +61,9 @@ test "diff: prefab instance override keyed by target+propertyPath" {
         \\      objectReference: {fileID: 0}
         \\  m_SourcePrefab: {fileID: 100100000, guid: aaa, type: 3}
     ;
+    const diffmod = @import("diff.zig");
     const fd = try diffmod.compute(arena, before, after);
-    const d = findDoc(fd, 1001).?;
+    const d = diffmod.findDoc(fd, 1001).?;
     try testing.expectEqual(model.Status.modified, d.status);
     try testing.expectEqual(@as(usize, 0), d.fields.len);
     try testing.expectEqual(@as(usize, 1), d.overrides.len);
@@ -101,8 +99,9 @@ test "diff: prefab instance name rename emits GameObject override" {
         \\      objectReference: {fileID: 0}
         \\  m_SourcePrefab: {fileID: 100100000, guid: aaa, type: 3}
     ;
+    const diffmod = @import("diff.zig");
     const fd = try diffmod.compute(arena, before, after);
-    const d = findDoc(fd, 1001).?;
+    const d = diffmod.findDoc(fd, 1001).?;
     try testing.expectEqual(model.Status.modified, d.status);
     try testing.expectEqual(@as(usize, 1), d.overrides.len);
     try testing.expectEqualStrings("GameObject", d.overrides[0].group);
@@ -155,8 +154,9 @@ test "diff: modified instance overrides are sorted group-contiguous, Transform f
         \\      objectReference: {fileID: 0}
         \\  m_SourcePrefab: {fileID: 100100000, guid: aaa, type: 3}
     ;
+    const diffmod = @import("diff.zig");
     const fd = try diffmod.compute(arena, before, after);
-    const d = findDoc(fd, 1001).?;
+    const d = diffmod.findDoc(fd, 1001).?;
     try testing.expectEqual(model.Status.modified, d.status);
     try testing.expectEqual(@as(usize, 3), d.overrides.len);
     try testing.expectEqualStrings("Transform", d.overrides[0].group);
@@ -205,8 +205,9 @@ test "diff: added prefab instance emits placement summary rows" {
         \\      value: Cylinder Variant
         \\  m_SourcePrefab: {fileID: 100100000, guid: aaa, type: 3}
     ;
+    const diffmod = @import("diff.zig");
     const fd = try diffmod.compute(arena, "", after);
-    const d = findDoc(fd, 1001).?;
+    const d = diffmod.findDoc(fd, 1001).?;
     try testing.expectEqual(model.Status.added, d.status);
     // Recorded placement is emitted as a single synthesized row even at default values (identity Rotation).
     // EulerAnglesHint (hidden in Inspector) is not emitted; m_Name appears as a GameObject row.
@@ -236,8 +237,9 @@ test "diff: added prefab instance keeps partial scale override" {
         \\      value: 2
         \\  m_SourcePrefab: {fileID: 100100000, guid: aaa, type: 3}
     ;
+    const diffmod = @import("diff.zig");
     const fd = try diffmod.compute(arena, "", after);
-    const d = findDoc(fd, 1001).?;
+    const d = diffmod.findDoc(fd, 1001).?;
     try testing.expectEqual(@as(usize, 1), d.overrides.len);
     try testing.expectEqualStrings("Scale.y", d.overrides[0].label);
     try testing.expectEqualStrings("2", d.overrides[0].after.?.scalar);
@@ -261,8 +263,9 @@ test "diff: removed prefab instance mirrors overrides to before" {
         \\      addedObject: {fileID: 55}
         \\  m_SourcePrefab: {fileID: 100100000, guid: aaa, type: 3}
     ;
+    const diffmod = @import("diff.zig");
     const fd = try diffmod.compute(arena, before, "");
-    const d = findDoc(fd, 1001).?;
+    const d = diffmod.findDoc(fd, 1001).?;
     try testing.expectEqual(model.Status.removed, d.status);
     // Mirror of added: values on the before side, structural summary removed with the before-side count.
     try testing.expectEqual(@as(usize, 2), d.overrides.len);
@@ -297,8 +300,9 @@ test "diff: non-empty added components produce a summary row" {
         \\      addedObject: {fileID: 55}
         \\  m_SourcePrefab: {fileID: 100100000, guid: aaa, type: 3}
     ;
+    const diffmod = @import("diff.zig");
     const fd = try diffmod.compute(arena, before, after);
-    const d = findDoc(fd, 1001).?;
+    const d = diffmod.findDoc(fd, 1001).?;
     try testing.expectEqual(@as(usize, 1), d.overrides.len);
     try testing.expectEqualStrings("Overrides", d.overrides[0].group);
     try testing.expectEqualStrings("Added Components (1)", d.overrides[0].label);
@@ -482,7 +486,7 @@ fn soleOverridesFromMods(arena: std.mem.Allocator, doc: *const model.Document, m
         }
         if (!all) continue;
         consumed[pi] = true;
-        const n = try diffmod.parenJoinNode(arena, vals[0..p.comps.len]);
+        const n = try inspector.joinedScalarNode(arena, vals[0..p.comps.len]);
         try out.append(arena, .{
             .group = "Transform",
             .label = p.label,

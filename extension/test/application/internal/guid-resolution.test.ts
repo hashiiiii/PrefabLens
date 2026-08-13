@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { createDiffSession } from "../../../src/application/diff/create-diff-session";
 import { resolveGuids } from "../../../src/application/internal/guid-resolution";
 import type { GuidRepository } from "../../../src/domain/guid/guid-repository";
-import { GithubClient } from "../../../src/infrastructure/clients/github-client";
+import { createGithubGateway } from "../../../src/infrastructure/clients/github-client";
 
 const REPO_KEY = "https://api.github.test:o/r";
 
@@ -25,7 +25,7 @@ function searchRoutes(respond: (request: URL) => Response | Promise<Response>) {
     requests.push(request);
     return respond(request);
   }) as typeof fetch;
-  return { requests, client: new GithubClient("https://api.github.test", "token", fetchRoute) };
+  return { requests, client: createGithubGateway("https://api.github.test", "token", fetchRoute) };
 }
 
 function searchSuccess(): Response {

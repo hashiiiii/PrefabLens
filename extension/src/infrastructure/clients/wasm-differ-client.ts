@@ -38,19 +38,26 @@ function encodeAssets(assets: Map<string, Uint8Array>): Uint8Array {
   return out;
 }
 
-// A lazy singleton. An SW restart causes a re-fetch. The composition root binds the wasm url.
-export function createDifferLoader(
-  wasmUrl: string,
-  fetchBytes: FetchBytes = async (url) => (await fetch(url)).arrayBuffer(),
-): () => Promise<DifferGateway> {
-  let differ: Promise<DifferGateway> | undefined;
-  return () => {
-    differ ??= fetchBytes(wasmUrl).then(createDiffer);
-    return differ;
-  };
+const defaultFetchBytes: FetchBytes = async (url) => (await fetch(url)).arrayBuffer();
+
+export function createDifferGateway(wasmUrl: string, fetchBytes?: FetchBytes): () => Promise<DifferGateway>;
+export function createDifferGateway(wasmBytes: BufferSource): Promise<DifferGateway>;
+export function createDifferGateway(
+  wasmUrlOrBytes: string | BufferSource,
+  fetchBytes: FetchBytes = defaultFetchBytes,
+): (() => Promise<DifferGateway>) | Promise<DifferGateway> {
+  if (typeof wasmUrlOrBytes === "string") {
+    let differ: Promise<DifferGateway> | undefined;
+    return () => {
+      // A lazy singleton. An SW restart causes a re-fetch.
+      differ ??= fetchBytes(wasmUrlOrBytes).then(instantiateDifferGateway);
+      return differ;
+    };
+  }
+  return instantiateDifferGateway(wasmUrlOrBytes);
 }
 
-export async function createDiffer(wasmBytes: BufferSource): Promise<DifferGateway> {
+async function instantiateDifferGateway(wasmBytes: BufferSource): Promise<DifferGateway> {
   const { instance } = await WebAssembly.instantiate(wasmBytes);
   const exp = instance.exports as unknown as Exports;
 

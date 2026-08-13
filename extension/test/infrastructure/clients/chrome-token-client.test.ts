@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createChromeTokenClient } from "../../../src/infrastructure/clients/chrome-token-client";
+import { createChromeTokenRepository } from "../../../src/infrastructure/clients/chrome-token-client";
 import type { StorageAreaWithRemove } from "../../../src/infrastructure/internal/storage-area";
 
 class MemoryStorageArea implements StorageAreaWithRemove {
@@ -23,9 +23,9 @@ class MemoryStorageArea implements StorageAreaWithRemove {
   }
 }
 
-describe("createChromeTokenClient", () => {
+describe("createChromeTokenRepository", () => {
   it("round-trips the access token", async () => {
-    const tokens = createChromeTokenClient(new MemoryStorageArea());
+    const tokens = createChromeTokenRepository(new MemoryStorageArea());
 
     expect(await tokens.readAccessToken()).toBeUndefined();
     await tokens.saveAccessToken("tok");
@@ -33,7 +33,7 @@ describe("createChromeTokenClient", () => {
   });
 
   it("round-trips pending sign-in data", async () => {
-    const tokens = createChromeTokenClient(new MemoryStorageArea());
+    const tokens = createChromeTokenRepository(new MemoryStorageArea());
 
     expect(await tokens.readPendingSignIn()).toBeUndefined();
     await tokens.savePendingSignIn({ userCode: "ABCD-1234", expiresAt: 99 });

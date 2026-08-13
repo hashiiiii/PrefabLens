@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { DeviceCode } from "../../../src/application/gateway/github-auth";
 import { err, ok } from "../../../src/domain/result";
-import { CLIENT_ID, createGithubDeviceFlowClient } from "../../../src/infrastructure/clients/github-device-flow-client";
+import {
+  CLIENT_ID,
+  createGithubDeviceFlowGateway,
+} from "../../../src/infrastructure/clients/github-device-flow-client";
 
 const DEVICE_CODE_URL = "https://github.com/login/device/code";
 const TOKEN_URL = "https://github.com/login/oauth/access_token";
@@ -32,7 +35,7 @@ function expectPost(init: RequestInit | undefined): URLSearchParams {
   return new URLSearchParams(String(init?.body));
 }
 
-describe("createGithubDeviceFlowClient", () => {
+describe("createGithubDeviceFlowGateway", () => {
   it("maps a successful device-code response", async () => {
     const route = (async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
@@ -49,7 +52,7 @@ describe("createGithubDeviceFlowClient", () => {
       });
     }) as typeof fetch;
 
-    const auth = createGithubDeviceFlowClient(route);
+    const auth = createGithubDeviceFlowGateway(route);
 
     await expect(auth.requestDeviceCode()).resolves.toEqual(ok(code));
   });
@@ -61,7 +64,7 @@ describe("createGithubDeviceFlowClient", () => {
       return json({}, 500);
     }) as typeof fetch;
 
-    await expect(createGithubDeviceFlowClient(route).requestDeviceCode()).resolves.toEqual(
+    await expect(createGithubDeviceFlowGateway(route).requestDeviceCode()).resolves.toEqual(
       err({ kind: "device-flow-failed", message: "device code request failed (HTTP 500)" }),
     );
   });
@@ -73,7 +76,7 @@ describe("createGithubDeviceFlowClient", () => {
       return json({ error: "invalid_client", error_description: "bad client id" });
     }) as typeof fetch;
 
-    await expect(createGithubDeviceFlowClient(route).requestDeviceCode()).resolves.toEqual(
+    await expect(createGithubDeviceFlowGateway(route).requestDeviceCode()).resolves.toEqual(
       err({ kind: "device-flow-failed", message: "bad client id" }),
     );
   });
@@ -91,7 +94,7 @@ describe("createGithubDeviceFlowClient", () => {
       return json({ access_token: "tok123" });
     }) as typeof fetch;
 
-    const result = await createGithubDeviceFlowClient(route, clock.sleep).pollForToken(code);
+    const result = await createGithubDeviceFlowGateway(route, clock.sleep).pollForToken(code);
 
     expect(result).toEqual({ status: "ok", token: "tok123" });
     expect(clock.now).toBe(5_000);
@@ -107,7 +110,7 @@ describe("createGithubDeviceFlowClient", () => {
       throw new Error(`Unexpected poll time: ${clock.now}`);
     }) as typeof fetch;
 
-    const result = await createGithubDeviceFlowClient(route, clock.sleep).pollForToken(code);
+    const result = await createGithubDeviceFlowGateway(route, clock.sleep).pollForToken(code);
 
     expect(result).toEqual({ status: "ok", token: "tok123" });
     expect(clock.now).toBe(15_000);
@@ -123,7 +126,7 @@ describe("createGithubDeviceFlowClient", () => {
       throw new Error(`Unexpected poll time: ${clock.now}`);
     }) as typeof fetch;
 
-    await expect(createGithubDeviceFlowClient(route, clock.sleep).pollForToken(code)).resolves.toEqual({
+    await expect(createGithubDeviceFlowGateway(route, clock.sleep).pollForToken(code)).resolves.toEqual({
       status: "ok",
       token: "tok123",
     });
@@ -140,7 +143,7 @@ describe("createGithubDeviceFlowClient", () => {
       throw new Error(`Unexpected poll time: ${clock.now}`);
     }) as typeof fetch;
 
-    await expect(createGithubDeviceFlowClient(route, clock.sleep).pollForToken(code)).resolves.toEqual({
+    await expect(createGithubDeviceFlowGateway(route, clock.sleep).pollForToken(code)).resolves.toEqual({
       status: "ok",
       token: "tok123",
     });
@@ -161,6 +164,6 @@ describe("createGithubDeviceFlowClient", () => {
       return json(body, status);
     }) as typeof fetch;
 
-    await expect(createGithubDeviceFlowClient(route, clock.sleep).pollForToken(code)).resolves.toEqual(expected);
+    await expect(createGithubDeviceFlowGateway(route, clock.sleep).pollForToken(code)).resolves.toEqual(expected);
   });
 });

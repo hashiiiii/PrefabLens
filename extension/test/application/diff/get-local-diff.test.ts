@@ -3,14 +3,14 @@ import { readFileSync } from "node:fs";
 import { beforeAll, describe, expect, it } from "vitest";
 import { getLocalDiff } from "../../../src/application/diff/get-local-diff";
 import type { DifferGateway } from "../../../src/application/gateway/differ";
-import { createDiffer } from "../../../src/infrastructure/clients/wasm-differ-client";
+import { createDifferGateway } from "../../../src/infrastructure/clients/wasm-differ-client";
 import { AFTER_PREFAB, BEFORE_PREFAB, SOURCE_PREFAB, VARIANT_PREFAB } from "../../fixtures/unity";
 
 let differ: DifferGateway;
 
 beforeAll(async () => {
   const bytes = readFileSync(new URL("../../../../zig-out/bin/prefablens.wasm", import.meta.url));
-  differ = await createDiffer(bytes);
+  differ = await createDifferGateway(bytes);
 });
 
 describe("getLocalDiff", () => {

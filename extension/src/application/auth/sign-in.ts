@@ -10,21 +10,21 @@ export type SignInEvent =
   | { status: "failed"; reason: SignInFailure };
 
 export async function* signIn(
-  auth: GithubAuthGateway,
-  tokenStore: TokenRepository,
+  githubAuthGateway: GithubAuthGateway,
+  tokenRepository: TokenRepository,
   now: () => number,
   state: { inFlight: boolean },
 ): AsyncGenerator<SignInEvent> {
   if (state.inFlight) return;
   state.inFlight = true;
   try {
-    const code = await auth.requestDeviceCode();
+    const code = await githubAuthGateway.requestDeviceCode();
     if (!code.ok) {
       yield { status: "failed", reason: "failed" };
       return;
     }
     // /login/device reads storage before presentation opens it, so pending state must exist before the event.
-    await tokenStore.savePendingSignIn({
+    await tokenRepository.savePendingSignIn({
       userCode: code.value.userCode,
       expiresAt: now() + code.value.expiresIn * 1000,
     });
@@ -33,19 +33,19 @@ export async function* signIn(
       userCode: code.value.userCode,
       verificationUri: code.value.verificationUri,
     };
-    const result = await auth.pollForToken(code.value);
+    const result = await githubAuthGateway.pollForToken(code.value);
     // storage.onChanged retries auth-blocked panels after the token is saved.
     if (result.status === "ok") {
-      await tokenStore.saveAccessToken(result.token);
-      await tokenStore.clearPendingSignIn();
+      await tokenRepository.saveAccessToken(result.token);
+      await tokenRepository.clearPendingSignIn();
       yield { status: "ok" };
       return;
     }
-    await tokenStore.clearPendingSignIn();
+    await tokenRepository.clearPendingSignIn();
     yield { status: "failed", reason: result.status };
   } catch {
     // Unexpected gateway, parsing, or storage rejections land here. Expected failures arrive as values above.
-    await tokenStore.clearPendingSignIn().catch(() => {});
+    await tokenRepository.clearPendingSignIn().catch(() => {});
     yield { status: "failed", reason: "failed" };
   } finally {
     state.inFlight = false;

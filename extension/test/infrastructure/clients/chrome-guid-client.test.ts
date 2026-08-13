@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createChromeGuidClient } from "../../../src/infrastructure/clients/chrome-guid-client";
+import { createChromeGuidRepository } from "../../../src/infrastructure/clients/chrome-guid-client";
 import type { StorageArea } from "../../../src/infrastructure/internal/storage-area";
 
 class MemoryStorageArea implements StorageArea {
@@ -24,9 +24,9 @@ class MemoryStorageArea implements StorageArea {
   }
 }
 
-describe("createChromeGuidClient", () => {
+describe("createChromeGuidRepository", () => {
   it("stores GUID paths by repository and merges later saves", async () => {
-    const guids = createChromeGuidClient(new MemoryStorageArea());
+    const guids = createChromeGuidRepository(new MemoryStorageArea());
 
     expect(await guids.load("api/o/r")).toEqual({});
     await guids.save("api/o/r", { g0: "Assets/Stored.cs" });
@@ -56,7 +56,7 @@ describe("createChromeGuidClient", () => {
 
   it("rejects a write when the complete next state exceeds capacity", async () => {
     const initial = { unrelated: "x".repeat(40) };
-    const guids = createChromeGuidClient(new MemoryStorageArea(initial, JSON.stringify(initial).length));
+    const guids = createChromeGuidRepository(new MemoryStorageArea(initial, JSON.stringify(initial).length));
 
     await expect(guids.save("api/o/r", { g1: "Assets/A.cs" })).rejects.toThrow("quota exceeded");
   });

@@ -12,9 +12,9 @@ import { mergeSourceRounds } from "./source-rounds";
 
 export async function mergeGithubSources(
   differ: DifferGateway,
-  guidCache: GuidRepository,
+  guidRepository: GuidRepository,
   session: DiffSession,
-  client: Pick<GithubGateway, "searchMetaByGuid" | "getBlobRaw" | "getFileAtRef">,
+  githubGateway: Pick<GithubGateway, "searchMetaByGuid" | "getBlobRaw" | "getFileAtRef">,
   owner: string,
   repo: string,
   repoKey: string,
@@ -32,7 +32,7 @@ export async function mergeGithubSources(
       const sha = source.side === "before" ? context.refs.baseSha : context.refs.headSha;
       // Only the base tree can supply a blob sha for a source outside the changed-file list.
       const blobSha = source.side === "before" ? context.baseShas?.get(path) : undefined;
-      const bytes = await getBlob(session, client, owner, repo, path, sha, blobSha);
+      const bytes = await getBlob(session, githubGateway, owner, repo, path, sha, blobSha);
       if (!bytes.ok) return { abort: isRateLimited(bytes.error) ? "rateLimited" : "failed" };
       if (!bytes.value) return { skip: true };
       return { bytes: bytes.value };
@@ -40,9 +40,9 @@ export async function mergeGithubSources(
     async (json) => {
       const withIndex = applyResolved(json, context.guidIndex);
       const found = await resolveGuids(
-        guidCache,
+        guidRepository,
         session,
-        client,
+        githubGateway,
         owner,
         repo,
         repoKey,

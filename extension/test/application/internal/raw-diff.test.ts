@@ -3,11 +3,12 @@ import { readFileSync } from "node:fs";
 import { beforeAll, describe, expect, it } from "vitest";
 import { createDiffSession } from "../../../src/application/diff/create-diff-session";
 import type { DifferGateway } from "../../../src/application/gateway/differ";
+import type { GithubGateway } from "../../../src/application/gateway/github";
 import { getContext, getDiff } from "../../../src/application/internal/raw-diff";
 import type { DiffRepository } from "../../../src/domain/diff/diff-repository";
 import type { DiffV2 } from "../../../src/domain/diff/types";
-import { GithubClient } from "../../../src/infrastructure/clients/github-client";
-import { createDiffer } from "../../../src/infrastructure/clients/wasm-differ-client";
+import { createGithubGateway } from "../../../src/infrastructure/clients/github-client";
+import { createDifferGateway } from "../../../src/infrastructure/clients/wasm-differ-client";
 import { AFTER_PREFAB, BEFORE_PREFAB } from "../../fixtures/unity";
 
 const API_BASE = "https://api.github.test";
@@ -28,9 +29,9 @@ class MemoryDiffRepository implements DiffRepository {
   }
 }
 
-function githubClient(respond: (request: URL) => Response | Promise<Response>): GithubClient {
+function githubClient(respond: (request: URL) => Response | Promise<Response>): GithubGateway {
   const fetchRoute = (async (input: RequestInfo | URL) => respond(new URL(String(input)))) as typeof fetch;
-  return new GithubClient(API_BASE, "token", fetchRoute);
+  return createGithubGateway(API_BASE, "token", fetchRoute);
 }
 
 function json(value: unknown, status = 200, headers?: HeadersInit): Response {
@@ -59,7 +60,7 @@ let differ: DifferGateway;
 
 beforeAll(async () => {
   const bytes = readFileSync(new URL("../../../../zig-out/bin/prefablens.wasm", import.meta.url));
-  differ = await createDiffer(bytes);
+  differ = await createDifferGateway(bytes);
 });
 
 describe("raw diff", () => {

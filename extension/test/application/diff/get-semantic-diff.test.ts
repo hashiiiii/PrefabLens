@@ -12,8 +12,8 @@ import type { DiffV2 } from "../../../src/domain/diff/types";
 import type { GuidRepository } from "../../../src/domain/guid/guid-repository";
 import type { RepoGuidIndex } from "../../../src/domain/guid/repo-guid-index";
 import type { RepoIndexRepository } from "../../../src/domain/guid/repo-index-repository";
-import { GithubClient } from "../../../src/infrastructure/clients/github-client";
-import { createDiffer } from "../../../src/infrastructure/clients/wasm-differ-client";
+import { createGithubGateway } from "../../../src/infrastructure/clients/github-client";
+import { createDifferGateway } from "../../../src/infrastructure/clients/wasm-differ-client";
 import { AFTER_PREFAB, BEFORE_PREFAB } from "../../fixtures/unity";
 
 const OWNER = "o";
@@ -101,7 +101,7 @@ let differ: DifferGateway;
 
 beforeAll(async () => {
   const bytes = readFileSync(new URL("../../../../zig-out/bin/prefablens.wasm", import.meta.url));
-  differ = await createDiffer(bytes);
+  differ = await createDifferGateway(bytes);
 });
 
 async function collect<T>(stream: AsyncIterable<T>): Promise<T[]> {
@@ -116,7 +116,7 @@ describe("getSemanticDiff", () => {
     const stream = getSemanticDiff(
       new MemoryTokenRepository(undefined),
       (base, token) =>
-        new GithubClient(base, token, async (input) => {
+        createGithubGateway(base, token, async (input) => {
           requests.push(new URL(String(input)));
           return new Response(null, { status: 500 });
         }),
@@ -140,7 +140,7 @@ describe("getSemanticDiff", () => {
       getSemanticDiff(
         new MemoryTokenRepository("token"),
         (base, token) =>
-          new GithubClient(base, token, async (input) => {
+          createGithubGateway(base, token, async (input) => {
             const request = new URL(String(input));
             if (request.pathname === "/repos/o/r/pulls/1") {
               return new Response(JSON.stringify({ base: { sha: "base-tip" }, head: { sha: "head-sha" } }), {
@@ -211,7 +211,7 @@ describe("getSemanticDiff", () => {
     const stream = getSemanticDiff(
       new MemoryTokenRepository("token"),
       (base, token) =>
-        new GithubClient(base, token, async (input) => {
+        createGithubGateway(base, token, async (input) => {
           const request = new URL(String(input));
           if (request.pathname === "/repos/o/r/pulls/1") {
             return new Response(JSON.stringify({ base: { sha: "base-tip" }, head: { sha: "head-sha" } }), {

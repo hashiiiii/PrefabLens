@@ -10,16 +10,16 @@ export type GuidResolution = {
 };
 
 export async function resolveGuids(
-  guidCache: GuidRepository,
+  guidRepository: GuidRepository,
   session: DiffSession,
-  client: Pick<GithubGateway, "searchMetaByGuid">,
+  githubGateway: Pick<GithubGateway, "searchMetaByGuid">,
   owner: string,
   repo: string,
   repoKey: string,
   guids: string[],
 ): Promise<GuidResolution> {
   if (!guids.length) return { resolved: {}, rateLimited: false };
-  const cached = await guidCache.load(repoKey);
+  const cached = await guidRepository.load(repoKey);
   const resolved: Record<string, string> = {};
   const unknown: string[] = [];
   for (const guid of guids) {
@@ -33,7 +33,7 @@ export async function resolveGuids(
   let rateLimited = false;
   for (const guid of searchable.slice(0, MAX_SEARCHES)) {
     const key = `${repoKey}:${guid}`;
-    const pathResult = await session.searches.get(key, () => client.searchMetaByGuid(owner, repo, guid));
+    const pathResult = await session.searches.get(key, () => githubGateway.searchMetaByGuid(owner, repo, guid));
     if (!pathResult.ok) {
       if (isRateLimited(pathResult.error)) {
         rateLimited = true;
@@ -45,6 +45,6 @@ export async function resolveGuids(
     if (pathResult.value) resolved[guid] = found[guid] = pathResult.value;
     else session.misses.add(key);
   }
-  if (Object.keys(found).length) await guidCache.save(repoKey, found);
+  if (Object.keys(found).length) await guidRepository.save(repoKey, found);
   return { resolved, rateLimited };
 }

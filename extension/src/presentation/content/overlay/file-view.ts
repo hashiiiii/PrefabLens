@@ -48,7 +48,7 @@ export function fileKey(page: DiffPage, path: string): string {
 export function createFileView(
   entry: FileEntry,
   page: DiffPage,
-  messenger: MessengerGateway,
+  messengerGateway: MessengerGateway,
   viewState: ViewStateData,
 ): FileView {
   let root: ShadowRoot | undefined;
@@ -76,7 +76,7 @@ export function createFileView(
       if (!root || file.status === "loading" || file.status === "pending") return;
       file.status = "loading";
       renderLoading(root);
-      const response = await messenger.semanticDiff({
+      const response = await messengerGateway.semanticDiff({
         type: "semanticDiff",
         owner: page.owner,
         repo: page.repo,

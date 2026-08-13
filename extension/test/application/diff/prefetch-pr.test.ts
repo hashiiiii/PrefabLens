@@ -11,8 +11,8 @@ import type { DiffV2 } from "../../../src/domain/diff/types";
 import type { GuidMap } from "../../../src/domain/guid/guid-map";
 import type { RepoGuidIndex } from "../../../src/domain/guid/repo-guid-index";
 import type { RepoIndexRepository } from "../../../src/domain/guid/repo-index-repository";
-import { GithubClient } from "../../../src/infrastructure/clients/github-client";
-import { createDiffer } from "../../../src/infrastructure/clients/wasm-differ-client";
+import { createGithubGateway } from "../../../src/infrastructure/clients/github-client";
+import { createDifferGateway } from "../../../src/infrastructure/clients/wasm-differ-client";
 import { AFTER_PREFAB, BEFORE_PREFAB } from "../../fixtures/unity";
 
 const REQUEST = {
@@ -84,12 +84,12 @@ let differ: DifferGateway;
 
 beforeAll(async () => {
   const bytes = readFileSync(new URL("../../../../zig-out/bin/prefablens.wasm", import.meta.url));
-  differ = await createDiffer(bytes);
+  differ = await createDifferGateway(bytes);
 });
 
 describe("prefetchPr", () => {
   it("stores prefetched diffs in the diff repository", async () => {
-    const client = new GithubClient("https://api.github.com", "token", async (input) => {
+    const client = createGithubGateway("https://api.github.com", "token", async (input) => {
       const request = new URL(String(input));
       if (request.pathname === "/repos/o/r/pulls/1") {
         return Response.json({ base: { sha: "base-tip" }, head: { sha: "head-sha" } });
@@ -136,7 +136,7 @@ describe("prefetchPr", () => {
 
   it("uses a stored diff after a worker restart", async () => {
     const requests: URL[] = [];
-    const client = new GithubClient("https://api.github.com", "token", async (input) => {
+    const client = createGithubGateway("https://api.github.com", "token", async (input) => {
       const request = new URL(String(input));
       requests.push(request);
       if (request.pathname === "/repos/o/r/pulls/1") {
@@ -200,7 +200,7 @@ describe("prefetchPr", () => {
     }));
     files.push({ filename: "README.md", status: "modified", sha: "readme-head" });
     const requests: URL[] = [];
-    const client = new GithubClient("https://api.github.com", "token", async (input) => {
+    const client = createGithubGateway("https://api.github.com", "token", async (input) => {
       const request = new URL(String(input));
       requests.push(request);
       if (request.pathname === "/repos/o/r/pulls/1") {
@@ -247,7 +247,7 @@ describe("prefetchPr", () => {
 
   it("does not store an oversized file", async () => {
     const oversized = new Uint8Array(13 * 1024 * 1024);
-    const client = new GithubClient("https://api.github.com", "token", async (input) => {
+    const client = createGithubGateway("https://api.github.com", "token", async (input) => {
       const request = new URL(String(input));
       if (request.pathname === "/repos/o/r/pulls/1") {
         return Response.json({ base: { sha: "base-tip" }, head: { sha: "head-sha" } });
@@ -293,7 +293,7 @@ describe("prefetchPr", () => {
       sha: `head-${index}`,
     }));
     const requests: URL[] = [];
-    const client = new GithubClient("https://api.github.com", "token", async (input) => {
+    const client = createGithubGateway("https://api.github.com", "token", async (input) => {
       const request = new URL(String(input));
       requests.push(request);
       if (request.pathname === "/repos/o/r/pulls/1") {

@@ -11,11 +11,11 @@ import { getPair } from "./raw-diff";
 import { getRepoIndex } from "./repo-index";
 
 export async function* resolveSemanticDiff(
-  guidCache: GuidRepository,
-  repoIndexStore: RepoIndexRepository,
+  guidRepository: GuidRepository,
+  repoIndexRepository: RepoIndexRepository,
   getDiffer: () => Promise<DifferGateway>,
   session: DiffSession,
-  client: GithubGateway,
+  githubGateway: GithubGateway,
   context: DiffContext,
   repoKey: string,
   first: DiffV2,
@@ -28,7 +28,7 @@ export async function* resolveSemanticDiff(
   try {
     // An index build can take tens of seconds and cannot add a name when no GUID remains.
     const index = remaining.length
-      ? await getRepoIndex(repoIndexStore, session, client, owner, repo, repoKey, context.refs.headSha)
+      ? await getRepoIndex(repoIndexRepository, session, githubGateway, owner, repo, repoKey, context.refs.headSha)
       : null;
     const fromIndex: Record<string, string> = {};
     let leftover = remaining;
@@ -41,12 +41,12 @@ export async function* resolveSemanticDiff(
       }
       if (Object.keys(fromIndex).length) {
         // The source merge reads these names from the GUID cache.
-        await guidCache.save(repoKey, fromIndex);
+        await guidRepository.save(repoKey, fromIndex);
         yield { type: "guidResolved", ...at, resolved: fromIndex, done: false };
       }
     }
     const search = leftover.length
-      ? await resolveGuids(guidCache, session, client, owner, repo, repoKey, leftover)
+      ? await resolveGuids(guidRepository, session, githubGateway, owner, repo, repoKey, leftover)
       : { resolved: {}, rateLimited: false };
     status = search.rateLimited ? "rateLimited" : "complete";
     let json: DiffV2 = { ...first, resolved: { ...first.resolved, ...fromIndex, ...search.resolved } };
@@ -54,7 +54,7 @@ export async function* resolveSemanticDiff(
       // Parallel startup keeps the source re-merge off the critical path.
       const [differ, pair] = await Promise.all([
         getDiffer(),
-        getPair(session, client, context, owner, repo, request.path),
+        getPair(session, githubGateway, context, owner, repo, request.path),
       ]);
       if (!pair.ok) {
         yield {
@@ -69,9 +69,9 @@ export async function* resolveSemanticDiff(
       const [before, after] = pair.value;
       const merged = await mergeGithubSources(
         differ,
-        guidCache,
+        guidRepository,
         session,
-        client,
+        githubGateway,
         owner,
         repo,
         repoKey,

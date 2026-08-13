@@ -208,7 +208,7 @@ It cannot import `infrastructure/` or `presentation/`.
 - Send and receive domain models through repository interfaces in `domain/`.
 - Talk to outside systems that do not load or save domain models through gateways.
 - A single-function dependency is a plain parameter
-  (for example `fetchBytes`, `makeClient`, `getDiffer`).
+  (for example `fetchBytes`, `makeGithubGateway`, `getDiffer`).
 - A multi-method outside capability lives in `application/gateway/`.
 - UI event and subscription types are presentation vocabulary.
 - When construction of working memory needs real logic, application exports a

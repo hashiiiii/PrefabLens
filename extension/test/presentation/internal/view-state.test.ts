@@ -5,9 +5,9 @@ import {
   clearOverrides,
   effectiveView,
   emptyViewState,
-  onDefaultChange,
   setDefault,
   setOverride,
+  subscribeDefault,
 } from "../../../src/presentation/internal/view-state";
 
 function sinks() {
@@ -38,7 +38,7 @@ describe("view state", () => {
   it("realigns files for different-value and same-value global selections", () => {
     const { persisted, notified, persist, listener } = sinks();
     const state = emptyViewState("raw");
-    onDefaultChange(state, listener);
+    subscribeDefault(state, listener);
     setOverride(state, "a.prefab", "raw");
 
     setDefault(state, "semantic", persist);
@@ -60,7 +60,7 @@ describe("view state", () => {
   it("applies an external change and ignores its same-value echo", () => {
     const { notified, listener } = sinks();
     const state = emptyViewState("raw");
-    onDefaultChange(state, listener);
+    subscribeDefault(state, listener);
     setOverride(state, "a.prefab", "raw");
 
     applyExternal(state, "semantic");
@@ -71,5 +71,17 @@ describe("view state", () => {
     notified.length = 0;
     applyExternal(state, "semantic");
     expect(notified).toEqual([]);
+  });
+
+  it("stops default notifications after unsubscribe", () => {
+    const { notified, persist, listener } = sinks();
+    const state = emptyViewState("raw");
+    const unsubscribe = subscribeDefault(state, listener);
+
+    setDefault(state, "semantic", persist);
+    unsubscribe();
+    setDefault(state, "raw", persist);
+
+    expect(notified).toEqual(["semantic"]);
   });
 });

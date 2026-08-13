@@ -25,14 +25,15 @@ describe("createFileViewController", () => {
 
     const controller = createFileViewController(
       "raw",
-      (view) => void selected.push(view),
       (hidden) => {
         raw.style.display = hidden ? "none" : "";
       },
       (host) => raw.after(host),
       () => true,
-      (root) => void semanticRoots.push(root),
     );
+    controller.subscribeSelection((view) => void selected.push(view));
+    controller.subscribeSemantic((root) => void semanticRoots.push(root));
+    controller.start();
     files.prepend(controller.element);
 
     expect(raw.style.display).toBe("");
@@ -71,14 +72,16 @@ describe("createFileViewController", () => {
 
     const controller = createFileViewController(
       "semantic",
-      (view) => void selected.push(view),
       (hidden) => {
         raw.style.display = hidden ? "none" : "";
       },
       (host) => raw.after(host),
       () => semanticVisible,
-      (root) => void semanticRoots.push(root),
     );
+    expect(files.querySelector("[data-prefablens-view]")).toBeNull();
+    controller.subscribeSelection((view) => void selected.push(view));
+    controller.subscribeSemantic((root) => void semanticRoots.push(root));
+    controller.start();
     files.prepend(controller.element);
 
     const host = files.querySelector<HTMLDivElement>("[data-prefablens-view]");

@@ -9,8 +9,8 @@ import {
   applyExternal,
   clearOverrides,
   emptyViewState,
-  onDefaultChange,
   setDefault,
+  subscribeDefault,
   type ViewStateData,
 } from "../internal/view-state";
 import { type FileEntry, parseDiffUrl, parsePrPage, scanUnityFiles } from "./detect";
@@ -117,7 +117,8 @@ function ensureGlobalToggle(viewState: ViewStateData, first: FileEntry): void {
   if (globalToggle?.element.closest("[data-prefablens-global]")?.isConnected) return;
   const anchor = first.globalAnchor();
   if (!anchor?.parentElement) return;
-  const bar = mountGlobalBar((view) => setDefault(viewState, view, persistView), viewState.def);
+  const bar = mountGlobalBar(viewState.def);
+  bar.toggle.subscribe((view) => setDefault(viewState, view, persistView));
   anchor.before(bar.element);
   globalToggle = bar.toggle;
 }
@@ -136,7 +137,7 @@ async function initDiffRuntime(): Promise<void> {
     // A storage failure must not stop the current page.
   }
   const viewState = emptyViewState(initial);
-  onDefaultChange(viewState, (view) => {
+  subscribeDefault(viewState, (view) => {
     globalToggle?.set(view);
     for (const a of liveAppliers()) a.apply(view);
   });

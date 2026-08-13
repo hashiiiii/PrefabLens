@@ -44,6 +44,10 @@ export function applyExternal(state: ViewStateData, view: View): void {
   if (view !== state.def) change(state, view);
 }
 
-export function onDefaultChange(state: ViewStateData, fn: (view: View) => void): void {
+export function subscribeDefault(state: ViewStateData, fn: (view: View) => void): () => void {
   state.listeners.push(fn);
+  return () => {
+    const index = state.listeners.indexOf(fn);
+    if (index !== -1) state.listeners.splice(index, 1);
+  };
 }

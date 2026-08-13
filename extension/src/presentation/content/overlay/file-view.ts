@@ -87,16 +87,15 @@ export function attachFileView(
 
   const controller = createFileViewController(
     effectiveView(viewState, entry.path),
-    (view) => {
-      setOverride(viewState, entry.path, view);
-    },
     entry.setRawHidden,
     entry.attachHost,
     () => !entry.collapsed(),
-    (root) => {
-      if (!requested) void request(root);
-    },
   );
+  controller.subscribeSelection((view) => setOverride(viewState, entry.path, view));
+  controller.subscribeSemantic((root) => {
+    if (!requested) void request(root);
+  });
+  controller.start();
   entry.header.setAttribute("data-prefablens", "");
   entry.header.append(controller.element);
 

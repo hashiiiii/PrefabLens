@@ -7,4 +7,4 @@ node = '24'
 # (node build.mjs, node --test) always runs on the Node.js pinned above.
 pnpm = '11.20.0'
 dotnet = '10'
-'pipx:bump-my-version' = '1.5.0'
+'pipx:bump-my-version' = '1.5.1'

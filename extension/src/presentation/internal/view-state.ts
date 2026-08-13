@@ -3,12 +3,12 @@ import type { View } from "./view-mode";
 export type ViewStateData = {
   def: View;
   overrides: Map<string, View>;
-  listeners: Array<(view: View) => void>;
+  listeners: Set<(view: View) => void>;
 };
 
 // The persistent default plus per-file overrides. A global switch always clears overrides.
 export function emptyViewState(initial: View): ViewStateData {
-  return { def: initial, overrides: new Map(), listeners: [] };
+  return { def: initial, overrides: new Map(), listeners: new Set() };
 }
 
 export function effectiveView(state: ViewStateData, path: string): View {
@@ -45,9 +45,6 @@ export function applyExternal(state: ViewStateData, view: View): void {
 }
 
 export function subscribeDefault(state: ViewStateData, fn: (view: View) => void): () => void {
-  state.listeners.push(fn);
-  return () => {
-    const index = state.listeners.indexOf(fn);
-    if (index !== -1) state.listeners.splice(index, 1);
-  };
+  state.listeners.add(fn);
+  return () => state.listeners.delete(fn);
 }

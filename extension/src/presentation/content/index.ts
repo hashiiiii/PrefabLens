@@ -8,16 +8,15 @@ import type { View } from "../internal/view-mode";
 import {
   applyExternal,
   clearOverrides,
+  effectiveView,
   emptyViewState,
   setDefault,
   subscribeDefault,
   type ViewStateData,
 } from "../internal/view-state";
-import { type FileEntry, parseDiffUrl, parsePrPage, scanUnityFiles } from "./detect";
+import { type DiffPage, type FileEntry, parseDiffUrl, parsePrPage, scanUnityFiles } from "./detect";
 import { fillDeviceCode } from "./device-page";
-import { flushAuthRetries } from "./overlay/auth-retries";
-import { attachFileView, type FileView } from "./overlay/file-view";
-import { applyGuidResolvedPush, pruneDisconnectedViews, type ViewRegistry, viewKey } from "./overlay/views";
+import { createFileView, type FileRegistry, fileKey } from "./overlay/file-view";
 
 const ERROR_TEXT: Record<AuthError, string> = {
   "access-token-missing": "Please sign in with GitHub to view semantic diffs.",
@@ -30,21 +29,22 @@ const SIGN_IN_FAILURE_TEXT: Record<SignInFailure, string> = {
   failed: "Sign-in did not work. Please try again.",
 };
 
-const views: ViewRegistry = new Map();
-
-const appliers = new Set<FileView>();
+const files: FileRegistry = new Map();
 let globalToggle: Toggle | undefined;
 let currentPage = ""; // drop overrides when leaving this diff page
 let prefetchedPr = ""; // prefetch once per PR across conversation + files tabs
 
-// SPA navigation can remove the DOM behind an applier.
-function liveAppliers(): Set<FileView> {
-  for (const a of appliers) if (!a.header.isConnected) appliers.delete(a);
-  return appliers;
+// SPA navigation can remove a complete file view or only its body.
+function syncFiles(): FileRegistry {
+  for (const [key, file] of files) {
+    if (file.header.isConnected) file.sync();
+    else {
+      file.dispose();
+      files.delete(key);
+    }
+  }
+  return files;
 }
-
-// Auth-blocked panels: retry all when a token lands
-const authRetries = new Set<() => void>();
 
 const messenger = createMessenger();
 const tokenStore = createTokenStore();
@@ -95,20 +95,18 @@ function attach(viewState: ViewStateData): void {
     currentPage = key;
     clearOverrides(viewState);
   }
-  // A body remount disconnects the host but keeps its marked header. Reattach the
-  // host before pruning so the view stays registered for its pending push.
-  for (const a of liveAppliers()) a.sync();
-  // React virtualization can disconnect both the header and host. Drop those view
-  // references after live file views have reattached their hosts.
-  pruneDisconnectedViews(views);
+  // A body remount keeps its header, so sync reattaches the semantic host before a pending push arrives.
+  syncFiles();
   const entries = scanUnityFiles(document);
   const first = entries[0];
   if (first) ensureGlobalToggle(viewState, first);
   for (const entry of entries) {
-    const fileView = attachFileView(entry, page, messenger, viewState, views, authRetries, (root, error) => {
+    const file = createFileView(entry, page, messenger, viewState);
+    file.subscribeAuth((root, error) => {
       void signInPanel(root, ERROR_TEXT[error]);
     });
-    appliers.add(fileView);
+    files.set(file.key, file);
+    file.start();
   }
 }
 
@@ -139,7 +137,7 @@ async function initDiffRuntime(): Promise<void> {
   const viewState = emptyViewState(initial);
   subscribeDefault(viewState, (view) => {
     globalToggle?.set(view);
-    for (const a of liveAppliers()) a.apply(view);
+    for (const file of syncFiles().values()) file.apply(view);
   });
   // Cross-tab default sync. applyExternal ignores the originating tab's echo.
   chrome.storage.onChanged.addListener((changes, area) => {
@@ -147,15 +145,18 @@ async function initDiffRuntime(): Promise<void> {
     const next = changes.viewMode?.newValue;
     if (next === "raw" || next === "semantic") applyExternal(viewState, next);
     if (typeof changes.accessToken?.newValue === "string" && changes.accessToken.newValue) {
-      // Token landed (this tab or elsewhere): retry every auth-blocked panel
-      flushAuthRetries(authRetries);
+      for (const file of syncFiles().values()) {
+        if (file.status === "auth-blocked" && effectiveView(viewState, file.path) === "semantic") {
+          void file.request();
+        }
+      }
     }
   });
 
   chrome.runtime.onMessage.addListener((msg: GuidResolvedPush) => {
     if (msg?.type !== "guidResolved") return;
-    const view = views.get(viewKey(msg.owner, msg.repo, msg.target, msg.path));
-    if (view) applyGuidResolvedPush(view, msg);
+    const page: DiffPage = { owner: msg.owner, repo: msg.repo, target: msg.target };
+    files.get(fileKey(page, msg.path))?.resolve(msg);
   });
 
   // SPA: MutationObserver + 50ms debounce follows lazy loads and stays under the

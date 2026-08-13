@@ -576,7 +576,7 @@ fn diffNode(
     prefix: []const u8,
     a: *const Node,
     b: *const Node,
-) anyerror!void {
+) std.mem.Allocator.Error!void {
     // Recurse if the same kind.
     if (a.* == .map and b.* == .map) {
         try diffMap(arena, out, prefix, a.map, b.map);
@@ -598,7 +598,7 @@ fn diffMap(
     prefix: []const u8,
     a: []model.Entry,
     b: []model.Entry,
-) anyerror!void {
+) std.mem.Allocator.Error!void {
     // Keys in a: modified/removed or recurse
     for (a) |ea| {
         const path = try joinKey(arena, prefix, ea.key);
@@ -623,7 +623,7 @@ fn diffSeq(
     prefix: []const u8,
     a: []*Node,
     b: []*Node,
-) anyerror!void {
+) std.mem.Allocator.Error!void {
     const n = @min(a.len, b.len);
     for (a[0..n], b[0..n], 0..) |ea, eb, i| {
         const path = try std.fmt.allocPrint(arena, "{s}[{d}]", .{ prefix, i });
@@ -690,7 +690,7 @@ fn flattenSubtree(
     prefix: []const u8,
     node: *const Node,
     status: Status,
-) anyerror!void {
+) std.mem.Allocator.Error!void {
     switch (node.*) {
         .map => |entries| {
             if (isVectorMap(entries)) {
@@ -709,7 +709,7 @@ fn flattenSubtree(
 
 // ---- guid collection ----
 
-fn collectGuids(arena: std.mem.Allocator, set: *std.StringArrayHashMapUnmanaged(void), node: *const Node) anyerror!void {
+fn collectGuids(arena: std.mem.Allocator, set: *std.StringArrayHashMapUnmanaged(void), node: *const Node) std.mem.Allocator.Error!void {
     switch (node.*) {
         .ref => |r| if (r.guid) |g| try set.put(arena, g, {}),
         .map => |entries| for (entries) |e| try collectGuids(arena, set, e.value),

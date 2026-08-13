@@ -210,7 +210,7 @@ fn materialize(
     obj_by_id: *std.AutoHashMap(i64, ObjectDiff),
     children_of: *std.AutoHashMap(i64, std.ArrayList(i64)),
     go_id: i64,
-) anyerror!?ObjectDiff {
+) std.mem.Allocator.Error!?ObjectDiff {
     var self = obj_by_id.get(go_id).?;
     var kept_children: std.ArrayList(ObjectDiff) = .empty;
     if (children_of.get(go_id)) |kids| {

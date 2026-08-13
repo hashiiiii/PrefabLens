@@ -60,10 +60,11 @@ fn expandNode(ctx: *Ctx, node: *model.ObjectDiff, docs: *std.AutoHashMap(i64, *m
     };
     const inst_doc = docs.get(node.file_id) orelse return;
 
-    // Parse the source and apply this instance's m_RemovedComponents / m_Modifications.
-    // Don't let a broken source asset sink the whole diff: on parse failure, leave just that
-    // instance in the degraded view (override enumeration).
-    const src_docs = parser.parse(ctx.arena, bytes) catch return;
+    // Keep the degraded instance only when source nesting is unsafe.
+    const src_docs = parser.parse(ctx.arena, bytes) catch |err| switch (err) {
+        error.NestingTooDeep => return,
+        error.OutOfMemory => return error.OutOfMemory,
+    };
     applyRemovedComponents(inst_doc, src_docs);
     var applied = try applyModifications(ctx.arena, inst_doc, src_docs, guid);
 
@@ -390,6 +391,66 @@ test "instantiate: unparseable source degrades to the override view" {
     try testing.expectEqual(@as(usize, 1), res.roots.len);
     try testing.expect(res.roots[0].overrides.len != 0);
     try testing.expectEqual(@as(usize, 0), res.needed_sources.len);
+}
+
+test "instantiate: source allocation failure reaches the caller" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const after =
+        \\--- !u!1001 &1001
+        \\PrefabInstance:
+        \\  m_Modification:
+        \\    m_Modifications: []
+        \\  m_SourcePrefab: {fileID: 100100000, guid: srcguid, type: 3}
+    ;
+    const fd = try diffmod.compute(arena, "", after);
+    var result = try tree.build(arena, fd);
+
+    var source: std.ArrayList(u8) = .empty;
+    for (0..2048) |index| {
+        const document = try std.fmt.allocPrint(
+            arena,
+            "--- !u!1 &{d}\nGameObject:\n  m_Name: Object{d}\n",
+            .{ index + 1, index + 1 },
+        );
+        try source.appendSlice(arena, document);
+    }
+    var assets: Assets = .empty;
+    try assets.put(arena, "srcguid", source.items);
+
+    var buffer: [64 * 1024]u8 = undefined;
+    var fixed = std.heap.FixedBufferAllocator.init(&buffer);
+    try testing.expectError(
+        error.OutOfMemory,
+        expand(fixed.allocator(), &result, fd, &assets),
+    );
+}
+
+test "instantiate: unsafe source nesting keeps the degraded instance" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const after =
+        \\--- !u!1001 &1001
+        \\PrefabInstance:
+        \\  m_Modification:
+        \\    m_Modifications: []
+        \\  m_SourcePrefab: {fileID: 100100000, guid: srcguid, type: 3}
+    ;
+    var source: std.ArrayList(u8) = .empty;
+    try source.appendSlice(arena, "--- !u!114 &1\nMonoBehaviour:\n  m_Field: ");
+    for (0..130) |_| try source.appendSlice(arena, "{a: ");
+    try source.append(arena, '1');
+    for (0..130) |_| try source.append(arena, '}');
+
+    var assets: Assets = .empty;
+    try assets.put(arena, "srcguid", source.items);
+    const result = try root.diffBytesWithAssets(arena, "", after, &assets);
+    try testing.expectEqual(@as(usize, 1), result.roots.len);
+    try testing.expectEqual(@as(usize, 0), result.roots[0].children.len);
 }
 
 test "instantiate: removed components are dropped from the merged tree" {

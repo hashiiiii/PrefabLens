@@ -4,6 +4,8 @@ const Node = model.Node;
 const Entry = model.Entry;
 const Document = model.Document;
 
+pub const Error = std.mem.Allocator.Error || error{NestingTooDeep};
+
 const testing = std.testing;
 
 fn parseOne(arena: std.mem.Allocator, src: []const u8) !Document {
@@ -232,6 +234,16 @@ test "parse: deeply nested flow value is rejected instead of overflowing the sta
     try testing.expectError(error.NestingTooDeep, parse(arena, src.items));
 }
 
+test "parse: allocation failure reaches the caller" {
+    var buffer: [1]u8 = undefined;
+    var fixed = std.heap.FixedBufferAllocator.init(&buffer);
+
+    try testing.expectError(
+        error.OutOfMemory,
+        parse(fixed.allocator(), "--- !u!1 &1\nGameObject:\n  m_Name: A\n"),
+    );
+}
+
 test "parse: sequence document body degrades to an empty map instead of crashing" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
@@ -355,7 +367,7 @@ const Parser = struct {
 
 // Break into meaningful logical lines (indent + content). Drop blank lines, `%` directives,
 // and `#` comments.
-fn tokenize(arena: std.mem.Allocator, source: []const u8) ![]Line {
+fn tokenize(arena: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error![]Line {
     var lines: std.ArrayList(Line) = .empty;
     var it = std.mem.splitScalar(u8, source, '\n');
     while (it.next()) |raw0| {
@@ -372,7 +384,7 @@ fn tokenize(arena: std.mem.Allocator, source: []const u8) ![]Line {
     return lines.toOwnedSlice(arena);
 }
 
-pub fn parse(arena: std.mem.Allocator, source: []const u8) ![]Document {
+pub fn parse(arena: std.mem.Allocator, source: []const u8) Error![]Document {
     var p = Parser{ .arena = arena, .lines = try tokenize(arena, source) };
     var docs: std.ArrayList(Document) = .empty;
     while (p.peek()) |line| {
@@ -385,7 +397,7 @@ pub fn parse(arena: std.mem.Allocator, source: []const u8) ![]Document {
     return docs.toOwnedSlice(arena);
 }
 
-fn parseDocument(p: *Parser) !Document {
+fn parseDocument(p: *Parser) Error!Document {
     const header = p.advance().?; // "--- !u!1 &123 [stripped]"
     var class_id: u32 = 0;
     var file_id: i64 = 0;
@@ -439,7 +451,7 @@ fn indentOfNext(p: *const Parser, default_indent: usize) usize {
 const max_nesting_depth: usize = 128;
 
 // Parse a block (mapping or sequence) whose entries line up exactly at `indent`.
-fn parseBlock(p: *Parser, indent: usize, depth: usize) anyerror!*Node {
+fn parseBlock(p: *Parser, indent: usize, depth: usize) Error!*Node {
     if (depth > max_nesting_depth) return error.NestingTooDeep;
     const first = p.peek() orelse return emptyMap(p.arena);
     if (first.indent < indent or std.mem.startsWith(u8, first.text, "---")) return emptyMap(p.arena);
@@ -449,7 +461,7 @@ fn parseBlock(p: *Parser, indent: usize, depth: usize) anyerror!*Node {
     return parseMap(p, indent, depth);
 }
 
-fn parseMap(p: *Parser, indent: usize, depth: usize) anyerror!*Node {
+fn parseMap(p: *Parser, indent: usize, depth: usize) Error!*Node {
     var entries: std.ArrayList(Entry) = .empty;
     while (p.peek()) |line| {
         if (line.indent != indent) break;
@@ -470,7 +482,7 @@ fn parseMap(p: *Parser, indent: usize, depth: usize) anyerror!*Node {
 // or a block sequence whose dashes line up at the key's own indent (a Unity convention,
 // where `m_Component:` is immediately followed by `- component: {...}` at the same column).
 // If neither, an empty map.
-fn parseNestedValue(p: *Parser, key_indent: usize, depth: usize) anyerror!*Node {
+fn parseNestedValue(p: *Parser, key_indent: usize, depth: usize) Error!*Node {
     if (p.peek()) |next| {
         const is_dash = std.mem.startsWith(u8, next.text, "- ") or std.mem.eql(u8, next.text, "-");
         if (next.indent > key_indent or (is_dash and next.indent == key_indent)) {
@@ -480,7 +492,7 @@ fn parseNestedValue(p: *Parser, key_indent: usize, depth: usize) anyerror!*Node 
     return emptyMap(p.arena);
 }
 
-fn parseSeq(p: *Parser, indent: usize, depth: usize) anyerror!*Node {
+fn parseSeq(p: *Parser, indent: usize, depth: usize) Error!*Node {
     var items: std.ArrayList(*Node) = .empty;
     while (p.peek()) |line| {
         if (line.indent != indent) break;
@@ -505,7 +517,7 @@ fn parseSeq(p: *Parser, indent: usize, depth: usize) anyerror!*Node {
 //   - target: {fileID: 0}
 //     propertyPath: m_Name
 //     value: Foo
-fn parseSeqMapItem(p: *Parser, dash_indent: usize, first_line: []const u8, depth: usize) anyerror!*Node {
+fn parseSeqMapItem(p: *Parser, dash_indent: usize, first_line: []const u8, depth: usize) Error!*Node {
     var entries: std.ArrayList(Entry) = .empty;
     // All of the item's keys line up at the column right after "- ".
     const key_indent = dash_indent + 2;
@@ -533,13 +545,13 @@ fn parseSeqMapItem(p: *Parser, dash_indent: usize, first_line: []const u8, depth
 
 // ---------- helpers ----------
 
-fn makeNode(arena: std.mem.Allocator, value: Node) !*Node {
+fn makeNode(arena: std.mem.Allocator, value: Node) std.mem.Allocator.Error!*Node {
     const n = try arena.create(Node);
     n.* = value;
     return n;
 }
 
-fn emptyMap(arena: std.mem.Allocator) !*Node {
+fn emptyMap(arena: std.mem.Allocator) std.mem.Allocator.Error!*Node {
     return makeNode(arena, .{ .map = &[_]Entry{} });
 }
 
@@ -571,7 +583,7 @@ fn looksLikeMapEntry(s: []const u8) bool {
     return kv.has_colon and kv.key.len > 0;
 }
 
-fn parseValue(arena: std.mem.Allocator, raw: []const u8, depth: usize) anyerror!*Node {
+fn parseValue(arena: std.mem.Allocator, raw: []const u8, depth: usize) Error!*Node {
     if (depth > max_nesting_depth) return error.NestingTooDeep;
     const s = std.mem.trim(u8, raw, " ");
     if (s.len == 0) return makeNode(arena, .{ .scalar = "" });
@@ -581,7 +593,7 @@ fn parseValue(arena: std.mem.Allocator, raw: []const u8, depth: usize) anyerror!
 }
 
 // Parse a flow mapping `{a: b, c: d}`. Returns a Ref node if it has a `fileID` key.
-fn parseFlow(arena: std.mem.Allocator, s: []const u8, depth: usize) anyerror!*Node {
+fn parseFlow(arena: std.mem.Allocator, s: []const u8, depth: usize) Error!*Node {
     const inner = stripBrackets(s, '{', '}');
     var entries: std.ArrayList(Entry) = .empty;
     var it = splitTopLevel(inner);
@@ -609,7 +621,7 @@ fn scalarString(n: *const Node) ?[]const u8 {
     };
 }
 
-fn parseFlowSeq(arena: std.mem.Allocator, s: []const u8, depth: usize) anyerror!*Node {
+fn parseFlowSeq(arena: std.mem.Allocator, s: []const u8, depth: usize) Error!*Node {
     const inner = std.mem.trim(u8, stripBrackets(s, '[', ']'), " ");
     var items: std.ArrayList(*Node) = .empty;
     if (inner.len != 0) {
@@ -637,7 +649,7 @@ fn stripBrackets(s: []const u8, open: u8, close: u8) []const u8 {
 // Strip enclosing quotes. Double-quoted scalars also resolve YAML backslash
 // escapes `\"` and `\\` (the only escapes Unity emits), so that scalar
 // holds the literal value rather than the source form.
-fn unquote(arena: std.mem.Allocator, s: []const u8) anyerror![]const u8 {
+fn unquote(arena: std.mem.Allocator, s: []const u8) std.mem.Allocator.Error![]const u8 {
     if (s.len >= 2 and s[0] == '\'' and s[s.len - 1] == '\'') {
         return s[1 .. s.len - 1];
     }

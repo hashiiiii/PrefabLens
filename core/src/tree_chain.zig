@@ -3,6 +3,7 @@
 // that owns a transform, bridging stripped documents to the nearest real instance.
 const std = @import("std");
 const model = @import("model.zig");
+const prefab = @import("prefab.zig");
 const root = @import("root.zig");
 const testing = std.testing;
 
@@ -51,25 +52,10 @@ fn isTransformClass(id: u32) bool {
     return id == 4 or id == 224;
 }
 
-// Read one m_Modifications override value of a PrefabInstance by propertyPath
-// (from the after-preferred structural doc).
+// Read one m_Modifications override value from the after-preferred structural doc.
 pub fn modificationValue(idx: *Index, pi_id: i64, property_path: []const u8) ?[]const u8 {
     const doc = idx.structuralDoc(pi_id) orelse return null;
-    const m = model.findValue(doc.body.map, "m_Modification") orelse return null;
-    if (m.* != .map) return null;
-    const list = model.findValue(m.map, "m_Modifications") orelse return null;
-    if (list.* != .seq) return null;
-    for (list.seq) |item| {
-        if (item.* != .map) continue;
-        const pp = model.findValue(item.map, "propertyPath") orelse continue;
-        if (pp.* != .scalar or !std.mem.eql(u8, pp.scalar, property_path)) continue;
-        const v = model.findValue(item.map, "value") orelse continue;
-        return switch (v.*) {
-            .scalar => |s| s,
-            else => null,
-        };
-    }
-    return null;
+    return prefab.scalarModificationValue(doc, property_path);
 }
 
 // Walk the m_PrefabInstance chain of a stripped PrefabInstance outward and

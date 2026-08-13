@@ -15,7 +15,7 @@ const perf = @import("perf.zig");
 const instantiate = @import("instantiate.zig");
 const prefab = @import("prefab.zig");
 
-pub const Assets = instantiate.Assets;
+pub const Assets = prefab.Assets;
 pub const isUnityYaml = parser.isUnityYaml;
 pub const DiffError = parser.Error;
 pub const JsonError = DiffError || std.Io.Writer.Error;

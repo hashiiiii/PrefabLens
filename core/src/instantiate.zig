@@ -7,9 +7,10 @@ const model = @import("model.zig");
 const parser = @import("parser.zig");
 const diffmod = @import("diff.zig");
 const diff_overrides = @import("diff_overrides.zig");
+const prefab = @import("prefab.zig");
 const tree = @import("tree.zig");
 
-pub const Assets = std.StringHashMapUnmanaged([]const u8);
+const Assets = prefab.Assets;
 
 const Ctx = struct {
     arena: std.mem.Allocator,
@@ -155,31 +156,30 @@ const AppliedSet = std.StringHashMapUnmanaged(void);
 // Returns the key set of mods that were applied or pushed down (for the leftover degraded view).
 fn applyModifications(arena: std.mem.Allocator, inst_doc: *const model.Document, src_docs: []model.Document, source_guid: []const u8) !AppliedSet {
     var applied: AppliedSet = .empty;
-    const m = model.findValue(inst_doc.body.map, "m_Modification") orelse return applied;
-    if (m.* != .map) return applied;
-    const list = model.findValue(m.map, "m_Modifications") orelse return applied;
-    if (list.* != .seq) return applied;
-    for (list.seq) |item| {
-        if (item.* != .map) continue;
-        const pp = model.findValue(item.map, "propertyPath") orelse continue;
-        if (pp.* != .scalar) continue;
-        const target = model.findValue(item.map, "target") orelse continue;
-        if (target.* != .ref) continue;
-        const tguid = target.ref.guid orelse continue;
-        if (!std.mem.eql(u8, tguid, source_guid)) continue;
-        const value = model.findValue(item.map, "value");
-        const obj_ref = objRefIfSet(model.findValue(item.map, "objectReference"));
-        // objectReference if set, otherwise value (same rule as diff.zig's modValue).
-        const eff = obj_ref orelse (value orelse continue);
+    var iterator = prefab.modifications(inst_doc);
+    while (iterator.next()) |modification| {
+        const target = modification.target orelse continue;
+        const target_guid = target.guid orelse continue;
+        if (!std.mem.eql(u8, target_guid, source_guid)) continue;
+        const effective_value = modification.effectiveValue() orelse continue;
         var handled = false;
-        for (src_docs) |*d| {
-            if (d.file_id != target.ref.file_id) continue;
-            setByPropertyPath(d.body, pp.scalar, eff);
+        for (src_docs) |*doc| {
+            if (doc.file_id != target.file_id) continue;
+            setByPropertyPath(doc.body, modification.property_path, effective_value);
             handled = true;
             break;
         }
-        if (!handled) handled = try pushDown(arena, src_docs, target.ref.file_id, pp, value, obj_ref);
-        if (handled) try applied.put(arena, try diff_overrides.modKeyOf(arena, target.ref.file_id, pp.scalar), {});
+        if (!handled) {
+            handled = try pushDown(
+                arena,
+                src_docs,
+                target.file_id,
+                modification.property_path,
+                modification.value,
+                modification.object_reference,
+            );
+        }
+        if (handled) try applied.put(arena, try modification.key(arena), {});
     }
     return applied;
 }
@@ -187,34 +187,28 @@ fn applyModifications(arena: std.mem.Allocator, inst_doc: *const model.Document,
 // Append the XOR-transformed mod to every instance doc. Only in the correct instance does the
 // inner fileID match and get applied; others are pushed down recursively or surface as leftover rows
 // (extra rows in a source with multiple instances are tolerated — safer than dropping information).
-fn pushDown(arena: std.mem.Allocator, src_docs: []model.Document, target_id: i64, pp: *model.Node, value: ?*model.Node, obj_ref: ?*model.Node) !bool {
+fn pushDown(arena: std.mem.Allocator, src_docs: []model.Document, target_id: i64, property_path: []const u8, value: ?*model.Node, obj_ref: ?*model.Node) !bool {
     var pushed = false;
     for (src_docs) |*d| {
         if (d.class_id != 1001 or d.stripped) continue;
-        const pguid = sourceGuidOf(d) orelse continue;
-        if (try appendMod(arena, d, target_id ^ d.file_id, pguid, pp, value, obj_ref)) pushed = true;
+        const pguid = prefab.sourceGuid(d) orelse continue;
+        if (try appendMod(arena, d, target_id ^ d.file_id, pguid, property_path, value, obj_ref)) pushed = true;
     }
     return pushed;
 }
 
-fn sourceGuidOf(doc: *const model.Document) ?[]const u8 {
-    const s = model.findValue(doc.body.map, "m_SourcePrefab") orelse return null;
-    return switch (s.*) {
-        .ref => |r| r.guid,
-        else => null,
-    };
-}
-
-fn appendMod(arena: std.mem.Allocator, pi_doc: *model.Document, inner_id: i64, pguid: []const u8, pp: *model.Node, value: ?*model.Node, obj_ref: ?*model.Node) !bool {
+fn appendMod(arena: std.mem.Allocator, pi_doc: *model.Document, inner_id: i64, pguid: []const u8, property_path: []const u8, value: ?*model.Node, obj_ref: ?*model.Node) !bool {
     const m = model.findValue(pi_doc.body.map, "m_Modification") orelse return false;
     if (m.* != .map) return false;
     const list = model.findValue(m.map, "m_Modifications") orelse return false;
     if (list.* != .seq) return false;
     const target = try arena.create(model.Node);
     target.* = .{ .ref = .{ .file_id = inner_id, .guid = pguid, .type_id = 3 } };
+    const property_path_node = try arena.create(model.Node);
+    property_path_node.* = .{ .scalar = property_path };
     var entries: std.ArrayList(model.Entry) = .empty;
     try entries.append(arena, .{ .key = "target", .value = target });
-    try entries.append(arena, .{ .key = "propertyPath", .value = pp });
+    try entries.append(arena, .{ .key = "propertyPath", .value = property_path_node });
     if (value) |v| try entries.append(arena, .{ .key = "value", .value = v });
     if (obj_ref) |o| try entries.append(arena, .{ .key = "objectReference", .value = o });
     const item = try arena.create(model.Node);
@@ -224,14 +218,6 @@ fn appendMod(arena: std.mem.Allocator, pi_doc: *model.Document, inner_id: i64, p
     new_seq[list.seq.len] = item;
     list.seq = new_seq;
     return true;
-}
-
-fn objRefIfSet(n: ?*model.Node) ?*model.Node {
-    const node = n orelse return null;
-    return switch (node.*) {
-        .ref => |r| if (r.file_id != 0 or r.guid != null) node else null,
-        else => null,
-    };
 }
 
 // Replace a leaf via a path like "m_LocalScale.y" / "m_Materials.Array.data[0]".

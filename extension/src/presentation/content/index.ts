@@ -1,6 +1,6 @@
 import { type SignInFailure, signIn } from "../../application/auth/sign-in";
 import type { AuthError, GuidResolvedPush } from "../../application/gateway/messenger";
-import { createGithubAuthGateway, createMessengerGateway, createTokenRepository } from "../../container";
+import { createAuthRepository, createGithubAuthGateway, createMessengerGateway } from "../../container";
 import { targetKey } from "../../domain/diff/fn/target-key";
 import { renderSignIn, renderSignInPending } from "../internal/render";
 import { mountGlobalBar, type Toggle } from "../internal/toggle";
@@ -47,7 +47,7 @@ function syncFiles(): FileRegistry {
 }
 
 const messengerGateway = createMessengerGateway();
-const tokenRepository = createTokenRepository();
+const authRepository = createAuthRepository();
 const githubAuthGateway = createGithubAuthGateway();
 const signInState = { inFlight: false };
 // _blank: Open in a new tab
@@ -66,7 +66,7 @@ const persistView = async (view: View): Promise<void> => {
 // Auth-error panel: device flow. Failures land back here for retry.
 async function signInPanel(root: ShadowRoot, message: string): Promise<void> {
   await renderSignIn(root, message);
-  for await (const event of signIn(githubAuthGateway, tokenRepository, now, signInState)) {
+  for await (const event of signIn(githubAuthGateway, authRepository, now, signInState)) {
     if (event.status === "pending") {
       renderSignInPending(root, event.userCode, event.verificationUri);
       openTab(event.verificationUri);
@@ -122,7 +122,7 @@ function ensureGlobalToggle(viewState: ViewStateData, first: FileEntry): void {
 }
 
 async function initDevicePage(): Promise<void> {
-  const pending = await tokenRepository.readPendingSignIn();
+  const pending = await authRepository.loadPendingSignIn();
   if (pending) fillDeviceCode(document, pending, Date.now());
 }
 

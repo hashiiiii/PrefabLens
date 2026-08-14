@@ -1,4 +1,4 @@
-import type { TokenRepository } from "../../domain/auth/token-repository";
+import type { AuthRepository } from "../../domain/auth/auth-repository";
 import type { DiffRepository } from "../../domain/diff/diff-repository";
 import { repoKey } from "../../domain/diff/fn/repo-key";
 import type { RepoIndexRepository } from "../../domain/guid/repo-index-repository";
@@ -16,7 +16,7 @@ const PREFETCH_CONCURRENCY = 4;
 
 // Raw diff only. Code Search and the source merge stay at serve time (10 req/min).
 export async function prefetchPr(
-  tokenRepository: TokenRepository,
+  authRepository: AuthRepository,
   makeGithubGateway: MakeGithubGateway,
   getDiffer: () => Promise<DifferGateway>,
   diffRepository: DiffRepository,
@@ -25,7 +25,7 @@ export async function prefetchPr(
   req: PrefetchRequest,
 ): Promise<void> {
   try {
-    const accessToken = await tokenRepository.readAccessToken();
+    const accessToken = await authRepository.loadAccessToken();
     if (!accessToken) return;
     const githubGateway = makeGithubGateway(API_BASE, accessToken, "prefetch");
     const ctxResult = await getContext(session, githubGateway, req.owner, req.repo, {

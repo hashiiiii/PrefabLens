@@ -3,22 +3,22 @@ import type { FixturesGateway } from "./application/gateway/fixtures";
 import type { MakeGithubGateway } from "./application/gateway/github";
 import type { GithubAuthGateway } from "./application/gateway/github-auth";
 import type { MessengerGateway } from "./application/gateway/messenger";
-import type { TokenRepository } from "./domain/auth/token-repository";
+import type { AuthRepository } from "./domain/auth/auth-repository";
 import type { DiffRepository } from "./domain/diff/diff-repository";
 import type { GuidRepository } from "./domain/guid/guid-repository";
 import type { RepoIndexRepository } from "./domain/guid/repo-index-repository";
+import { createChromeAuthRepository } from "./infrastructure/clients/chrome-auth-client";
 import { createChromeDiffRepository } from "./infrastructure/clients/chrome-diff-client";
 import { createChromeGuidRepository } from "./infrastructure/clients/chrome-guid-client";
 import { createChromeMessengerGateway } from "./infrastructure/clients/chrome-messenger-client";
 import { createChromeRepoIndexRepository } from "./infrastructure/clients/chrome-repo-index-client";
-import { createChromeTokenRepository } from "./infrastructure/clients/chrome-token-client";
 import { createFixturesGateway as createHttpFixturesGateway } from "./infrastructure/clients/fixture-client";
 import { createGithubGateway as createQueuedGithubGateway } from "./infrastructure/clients/github-client";
 import { createGithubDeviceFlowGateway } from "./infrastructure/clients/github-device-flow-client";
 import { createDifferGateway as createWasmDifferGateway } from "./infrastructure/clients/wasm-differ-client";
 
-export function createTokenRepository(): TokenRepository {
-  return createChromeTokenRepository(chrome.storage.local);
+export function createAuthRepository(): AuthRepository {
+  return createChromeAuthRepository(chrome.storage.local);
 }
 
 export function createMessengerGateway(): MessengerGateway {

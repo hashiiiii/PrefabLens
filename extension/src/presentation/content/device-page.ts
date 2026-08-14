@@ -1,4 +1,4 @@
-import type { PendingSignIn } from "../../domain/auth/token";
+import type { PendingSignIn } from "../../domain/auth/pending-sign-in";
 
 // If the form structure changes, this function does nothing and the user can enter the code manually.
 export function fillDeviceCode(doc: Document, pending: PendingSignIn, now: number): void {

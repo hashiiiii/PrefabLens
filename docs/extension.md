@@ -137,7 +137,7 @@ infrastructure/
 - A client implements a repository interface from `domain/` or a gateway type
   from `application/gateway/`.
 - Put each client in `clients/` as `*-client.ts`
-  (for example `github-client.ts`, `chrome-token-client.ts`).
+  (for example `github-client.ts`, `chrome-auth-client.ts`).
 - Put helpers that implement no interface in `internal/`
   (for example `fetch-queue.ts`, `merge-store.ts`, `storage-area.ts`).
 - Only infrastructure files import `internal/` (the internal rule in Overview).
@@ -256,7 +256,7 @@ Transport-only work can call a gateway or repository method directly.
   (`chrome.runtime.onMessage`, `chrome.storage.onChanged`, DOM events).
 - The `viewMode` storage key is a UI preference.
   Presentation reads and writes it directly.
-- The `accessToken` / `signin` keys belong to the token repository.
+- The `accessToken` and `signin` keys belong to the auth repository.
   Presentation only observes their change events.
 
 ### Startup

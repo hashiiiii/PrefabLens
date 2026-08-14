@@ -1,4 +1,4 @@
-import type { TokenRepository } from "../../domain/auth/token-repository";
+import type { AuthRepository } from "../../domain/auth/auth-repository";
 import type { GithubAuthGateway, PollResult } from "../gateway/github-auth";
 
 // Application reports only the outcome kind. Presentation owns the user-visible text.
@@ -11,7 +11,7 @@ export type SignInEvent =
 
 export async function* signIn(
   githubAuthGateway: GithubAuthGateway,
-  tokenRepository: TokenRepository,
+  authRepository: AuthRepository,
   now: () => number,
   state: { inFlight: boolean },
 ): AsyncGenerator<SignInEvent> {
@@ -24,7 +24,7 @@ export async function* signIn(
       return;
     }
     // /login/device reads storage before presentation opens it, so pending state must exist before the event.
-    await tokenRepository.savePendingSignIn({
+    await authRepository.savePendingSignIn({
       userCode: code.value.userCode,
       expiresAt: now() + code.value.expiresIn * 1000,
     });
@@ -36,16 +36,16 @@ export async function* signIn(
     const result = await githubAuthGateway.pollForToken(code.value);
     // storage.onChanged retries auth-blocked panels after the token is saved.
     if (result.status === "ok") {
-      await tokenRepository.saveAccessToken(result.token);
-      await tokenRepository.clearPendingSignIn();
+      await authRepository.saveAccessToken(result.token);
+      await authRepository.clearPendingSignIn();
       yield { status: "ok" };
       return;
     }
-    await tokenRepository.clearPendingSignIn();
+    await authRepository.clearPendingSignIn();
     yield { status: "failed", reason: result.status };
   } catch {
     // Unexpected gateway, parsing, or storage rejections land here. Expected failures arrive as values above.
-    await tokenRepository.clearPendingSignIn().catch(() => {});
+    await authRepository.clearPendingSignIn().catch(() => {});
     yield { status: "failed", reason: "failed" };
   } finally {
     state.inFlight = false;

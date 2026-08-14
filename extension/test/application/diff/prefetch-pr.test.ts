@@ -4,8 +4,8 @@ import { beforeAll, describe, expect, it } from "vitest";
 import { createDiffSession } from "../../../src/application/diff/create-diff-session";
 import { prefetchPr } from "../../../src/application/diff/prefetch-pr";
 import type { DifferGateway } from "../../../src/application/gateway/differ";
-import type { PendingSignIn } from "../../../src/domain/auth/token";
-import type { TokenRepository } from "../../../src/domain/auth/token-repository";
+import type { AuthRepository } from "../../../src/domain/auth/auth-repository";
+import type { PendingSignIn } from "../../../src/domain/auth/pending-sign-in";
 import type { DiffRepository } from "../../../src/domain/diff/diff-repository";
 import type { DiffV2 } from "../../../src/domain/diff/types";
 import type { GuidMap } from "../../../src/domain/guid/guid-map";
@@ -22,11 +22,11 @@ const REQUEST = {
   prNumber: 1,
 };
 
-class MemoryTokenRepository implements TokenRepository {
+class MemoryAuthRepository implements AuthRepository {
   private accessToken = "token";
   private pendingSignIn: PendingSignIn | undefined;
 
-  async readAccessToken(): Promise<string> {
+  async loadAccessToken(): Promise<string> {
     return this.accessToken;
   }
 
@@ -38,7 +38,7 @@ class MemoryTokenRepository implements TokenRepository {
     this.pendingSignIn = pending;
   }
 
-  async readPendingSignIn(): Promise<PendingSignIn | undefined> {
+  async loadPendingSignIn(): Promise<PendingSignIn | undefined> {
     return this.pendingSignIn;
   }
 
@@ -116,7 +116,7 @@ describe("prefetchPr", () => {
     const repository = new MemoryDiffRepository();
 
     await prefetchPr(
-      new MemoryTokenRepository(),
+      new MemoryAuthRepository(),
       () => client,
       async () => differ,
       repository,
@@ -162,11 +162,11 @@ describe("prefetchPr", () => {
       return new Response(null, { status: 500 });
     });
     const repository = new MemoryDiffRepository();
-    const tokenRepository = new MemoryTokenRepository();
+    const authRepository = new MemoryAuthRepository();
     const indexRepository = new MemoryRepoIndexRepository();
 
     await prefetchPr(
-      tokenRepository,
+      authRepository,
       () => client,
       async () => differ,
       repository,
@@ -177,7 +177,7 @@ describe("prefetchPr", () => {
     const blobRequestsAfterFirstWorker = requests.filter((request) => request.pathname.includes("/git/blobs/")).length;
 
     await prefetchPr(
-      tokenRepository,
+      authRepository,
       () => client,
       async () => differ,
       repository,
@@ -230,7 +230,7 @@ describe("prefetchPr", () => {
     const repository = new MemoryDiffRepository();
 
     await prefetchPr(
-      new MemoryTokenRepository(),
+      new MemoryAuthRepository(),
       () => client,
       async () => differ,
       repository,
@@ -274,7 +274,7 @@ describe("prefetchPr", () => {
     const repository = new MemoryDiffRepository();
 
     await prefetchPr(
-      new MemoryTokenRepository(),
+      new MemoryAuthRepository(),
       () => client,
       async () => differ,
       repository,
@@ -323,7 +323,7 @@ describe("prefetchPr", () => {
 
     await expect(
       prefetchPr(
-        new MemoryTokenRepository(),
+        new MemoryAuthRepository(),
         () => client,
         async () => differ,
         repository,

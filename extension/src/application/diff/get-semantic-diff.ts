@@ -1,4 +1,4 @@
-import type { TokenRepository } from "../../domain/auth/token-repository";
+import type { AuthRepository } from "../../domain/auth/auth-repository";
 import type { DiffRepository } from "../../domain/diff/diff-repository";
 import { applyResolved } from "../../domain/diff/fn/apply-resolved";
 import { repoKey } from "../../domain/diff/fn/repo-key";
@@ -14,7 +14,7 @@ import { resolveSemanticDiff } from "../internal/resolve-semantic-diff";
 import type { DiffSession } from "./create-diff-session";
 
 export async function* getSemanticDiff(
-  tokenRepository: TokenRepository,
+  authRepository: AuthRepository,
   makeGithubGateway: MakeGithubGateway,
   getDiffer: () => Promise<DifferGateway>,
   guidRepository: GuidRepository,
@@ -23,7 +23,7 @@ export async function* getSemanticDiff(
   session: DiffSession,
   req: SemanticDiffRequest,
 ): AsyncGenerator<SemanticDiffEvent> {
-  const accessToken = await tokenRepository.readAccessToken();
+  const accessToken = await authRepository.loadAccessToken();
   if (!accessToken) {
     yield { type: "response", response: { ok: false, error: "access-token-missing" } };
     return;

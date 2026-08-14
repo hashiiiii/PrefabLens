@@ -3,15 +3,15 @@ import { getSemanticDiff } from "../../application/diff/get-semantic-diff";
 import { prefetchPr } from "../../application/diff/prefetch-pr";
 import type { BackgroundRequest, GuidResolvedPush } from "../../application/gateway/messenger";
 import {
+  createAuthRepository,
   createDifferGateway,
   createDiffRepository,
   createGithubGateway,
   createGuidRepository,
   createRepoIndexRepository,
-  createTokenRepository,
 } from "../../container";
 
-const tokenRepository = createTokenRepository();
+const authRepository = createAuthRepository();
 const guidRepository = createGuidRepository();
 const diffRepository = createDiffRepository();
 const repoIndexRepository = createRepoIndexRepository();
@@ -39,7 +39,7 @@ chrome.runtime.onMessage.addListener((msg: BackgroundRequest, sender, sendRespon
     case "semanticDiff": {
       void (async () => {
         for await (const event of getSemanticDiff(
-          tokenRepository,
+          authRepository,
           makeGithubGateway,
           getDiffer,
           guidRepository,
@@ -55,7 +55,7 @@ chrome.runtime.onMessage.addListener((msg: BackgroundRequest, sender, sendRespon
       return true; // async response
     }
     case "prefetch":
-      void prefetchPr(tokenRepository, makeGithubGateway, getDiffer, diffRepository, repoIndexRepository, session, msg);
+      void prefetchPr(authRepository, makeGithubGateway, getDiffer, diffRepository, repoIndexRepository, session, msg);
       return undefined; // prefetch is fire-and-forget
   }
 });

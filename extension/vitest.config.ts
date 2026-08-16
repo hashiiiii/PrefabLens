@@ -5,5 +5,12 @@ export default defineConfig({
     __API_BASE__: '"https://api.github.com"',
     __GITHUB_ORIGIN__: '"https://github.com"',
   },
-  test: { include: ["test/**/*.test.ts"] },
+  test: {
+    include: ["test/**/*.test.ts"],
+    // suppress console log
+    // see: https://vitest.dev/config/onconsolelog.html
+    onConsoleLog(log: string, type: 'stdout' | 'stderr'): boolean | void {
+      return false;
+    }
+  },
 });

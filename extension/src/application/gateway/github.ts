@@ -9,7 +9,7 @@ export function isRateLimited(e: unknown): e is Extract<GithubFailure, { kind: "
   return typeof e === "object" && e !== null && (e as { kind?: string }).kind === "rate-limited";
 }
 
-// The pipeline branches only on added/removed. The client folds the other
+// The pipeline branches only on added/removed. The gateway folds the other
 // GitHub statuses (renamed, copied, changed, unchanged) into "modified".
 export type ChangedFileStatus = "added" | "removed" | "modified";
 // sha is the blob at head (at base for removed files). The files API provides it for every status.
@@ -18,7 +18,7 @@ export type RefPair = { baseSha: string; headSha: string };
 
 // The user lane has priority over the prefetch traffic.
 export type Lane = "user" | "prefetch";
-export type MakeGithubClient = (base: string, token: string, lane: Lane) => GithubGateway;
+export type MakeGithubGateway = (base: string, token: string, lane: Lane) => GithubGateway;
 
 export type GithubGateway = {
   getPrRefs(owner: string, repo: string, prNumber: number): Promise<Result<RefPair, GithubFailure>>;

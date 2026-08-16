@@ -3,7 +3,7 @@ import type { RepoIndexRepository } from "../../domain/guid/repo-index-repositor
 import { createMergeStore } from "../internal/merge-store";
 import type { StorageArea } from "../internal/storage-area";
 
-export function createChromeRepoIndexClient(area: StorageArea): RepoIndexRepository {
+export function createChromeRepoIndexRepository(area: StorageArea): RepoIndexRepository {
   const metaGuids = createMergeStore(area, "metaGuids");
   const indexKey = (repo: string): string => `guidIndex:${repo}`;
   return {

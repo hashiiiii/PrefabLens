@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { RepoGuidIndex } from "../../../src/domain/guid/repo-guid-index";
-import { createChromeRepoIndexClient } from "../../../src/infrastructure/clients/chrome-repo-index-client";
+import { createChromeRepoIndexRepository } from "../../../src/infrastructure/clients/chrome-repo-index-client";
 import type { StorageArea } from "../../../src/infrastructure/internal/storage-area";
 
 class MemoryStorageArea implements StorageArea {
@@ -25,9 +25,9 @@ class MemoryStorageArea implements StorageArea {
   }
 }
 
-describe("createChromeRepoIndexClient", () => {
+describe("createChromeRepoIndexRepository", () => {
   it("stores metadata and index data in separate namespaces", async () => {
-    const repoIndex = createChromeRepoIndexClient(new MemoryStorageArea());
+    const repoIndex = createChromeRepoIndexRepository(new MemoryStorageArea());
 
     expect(await repoIndex.loadGuids("api/o/r")).toEqual({});
     const nextIndex: RepoGuidIndex = { treeSha: "tree-2", guids: { g2: "Assets/B.mat" } };
@@ -42,7 +42,7 @@ describe("createChromeRepoIndexClient", () => {
 
   it("ignores a failed metadata write and keeps the prior value", async () => {
     const initial = { "metaGuids:api/o/r": { sha1: "g1" } };
-    const repoIndex = createChromeRepoIndexClient(new MemoryStorageArea(initial, JSON.stringify(initial).length));
+    const repoIndex = createChromeRepoIndexRepository(new MemoryStorageArea(initial, JSON.stringify(initial).length));
 
     await expect(repoIndex.saveGuids("api/o/r", { sha2: "g2" })).resolves.toBeUndefined();
     expect(await repoIndex.loadGuids("api/o/r")).toEqual({ sha1: "g1" });
@@ -51,7 +51,7 @@ describe("createChromeRepoIndexClient", () => {
   it("ignores a failed index write and keeps the prior value", async () => {
     const prior: RepoGuidIndex = { treeSha: "tree-1", guids: { g1: "Assets/A.cs" } };
     const initial = { "guidIndex:api/o/r": prior };
-    const repoIndex = createChromeRepoIndexClient(new MemoryStorageArea(initial, JSON.stringify(initial).length));
+    const repoIndex = createChromeRepoIndexRepository(new MemoryStorageArea(initial, JSON.stringify(initial).length));
 
     await expect(
       repoIndex.saveIndex("api/o/r", {

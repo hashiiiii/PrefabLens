@@ -7,7 +7,7 @@
 import { getLocalDiff } from "../../application/diff/get-local-diff";
 import type { DifferGateway } from "../../application/gateway/differ";
 import type { FixturesGateway } from "../../application/gateway/fixtures";
-import { createDemoDifferLoader, createFixtures } from "../../container";
+import { createDemoDifferGateway, createFixturesGateway } from "../../container";
 import { must } from "../../internal/must";
 import { createFileViewController } from "../internal/file-view-controller";
 import { render, renderError, renderLoading } from "../internal/render";
@@ -60,10 +60,10 @@ async function main(): Promise<void> {
   const headers = [...document.querySelectorAll<HTMLElement>(".file-header[data-before]")];
   if (!headers.length) return;
 
-  const fixtures = createFixtures();
-  const loadDiffer = createDemoDifferLoader(fixtures.fetchBytes);
+  const fixturesGateway = createFixturesGateway();
+  const loadDiffer = createDemoDifferGateway(fixturesGateway.fetchBytes);
   const differ = await loadDiffer();
-  const index = await fixtures.loadGuidIndex();
+  const index = await fixturesGateway.loadGuidIndex();
 
   injectPageStyles();
   // The collapse chevrons work on every file, Unity or not (GitHub behavior).
@@ -96,8 +96,8 @@ async function main(): Promise<void> {
       header,
       differ,
       index,
-      fixtures.fetchBytes,
-      fixtures.fetchSource,
+      fixturesGateway.fetchBytes,
+      fixturesGateway.fetchSource,
       effectiveView(state, path),
       (view) => setOverride(state, path, view),
     );

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createChromeTokenClient } from "../../../src/infrastructure/clients/chrome-token-client";
+import { createChromeAuthRepository } from "../../../src/infrastructure/clients/chrome-auth-client";
 import type { StorageAreaWithRemove } from "../../../src/infrastructure/internal/storage-area";
 
 class MemoryStorageArea implements StorageAreaWithRemove {
@@ -23,22 +23,22 @@ class MemoryStorageArea implements StorageAreaWithRemove {
   }
 }
 
-describe("createChromeTokenClient", () => {
+describe("createChromeAuthRepository", () => {
   it("round-trips the access token", async () => {
-    const tokens = createChromeTokenClient(new MemoryStorageArea());
+    const auth = createChromeAuthRepository(new MemoryStorageArea());
 
-    expect(await tokens.readAccessToken()).toBeUndefined();
-    await tokens.saveAccessToken("tok");
-    expect(await tokens.readAccessToken()).toBe("tok");
+    expect(await auth.loadAccessToken()).toBeUndefined();
+    await auth.saveAccessToken("tok");
+    expect(await auth.loadAccessToken()).toBe("tok");
   });
 
   it("round-trips pending sign-in data", async () => {
-    const tokens = createChromeTokenClient(new MemoryStorageArea());
+    const auth = createChromeAuthRepository(new MemoryStorageArea());
 
-    expect(await tokens.readPendingSignIn()).toBeUndefined();
-    await tokens.savePendingSignIn({ userCode: "ABCD-1234", expiresAt: 99 });
-    expect(await tokens.readPendingSignIn()).toEqual({ userCode: "ABCD-1234", expiresAt: 99 });
-    await tokens.clearPendingSignIn();
-    expect(await tokens.readPendingSignIn()).toBeUndefined();
+    expect(await auth.loadPendingSignIn()).toBeUndefined();
+    await auth.savePendingSignIn({ userCode: "ABCD-1234", expiresAt: 99 });
+    expect(await auth.loadPendingSignIn()).toEqual({ userCode: "ABCD-1234", expiresAt: 99 });
+    await auth.clearPendingSignIn();
+    expect(await auth.loadPendingSignIn()).toBeUndefined();
   });
 });

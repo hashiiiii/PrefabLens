@@ -3,20 +3,20 @@ import { getSemanticDiff } from "../../application/diff/get-semantic-diff";
 import { prefetchPr } from "../../application/diff/prefetch-pr";
 import type { BackgroundRequest, GuidResolvedPush } from "../../application/gateway/messenger";
 import {
-  createClientFactory,
-  createDifferLoader,
-  createDiffStore,
-  createGuidCache,
-  createRepoIndexStore,
-  createTokenStore,
+  createAuthRepository,
+  createDifferGateway,
+  createDiffRepository,
+  createGithubGateway,
+  createGuidRepository,
+  createRepoIndexRepository,
 } from "../../container";
 
-const tokenStore = createTokenStore();
-const guidCache = createGuidCache();
-const diffStore = createDiffStore();
-const repoIndexStore = createRepoIndexStore();
-const getDiffer = createDifferLoader();
-const makeClient = createClientFactory(6);
+const authRepository = createAuthRepository();
+const guidRepository = createGuidRepository();
+const diffRepository = createDiffRepository();
+const repoIndexRepository = createRepoIndexRepository();
+const getDiffer = createDifferGateway();
+const makeGithubGateway = createGithubGateway(6);
 const session = createDiffSession();
 
 async function sendGuidResolution(tabId: number | undefined, message: GuidResolvedPush): Promise<void> {
@@ -39,12 +39,12 @@ chrome.runtime.onMessage.addListener((msg: BackgroundRequest, sender, sendRespon
     case "semanticDiff": {
       void (async () => {
         for await (const event of getSemanticDiff(
-          tokenStore,
-          makeClient,
+          authRepository,
+          makeGithubGateway,
           getDiffer,
-          guidCache,
-          diffStore,
-          repoIndexStore,
+          guidRepository,
+          diffRepository,
+          repoIndexRepository,
           session,
           msg,
         )) {
@@ -55,7 +55,7 @@ chrome.runtime.onMessage.addListener((msg: BackgroundRequest, sender, sendRespon
       return true; // async response
     }
     case "prefetch":
-      void prefetchPr(tokenStore, makeClient, getDiffer, diffStore, repoIndexStore, session, msg);
+      void prefetchPr(authRepository, makeGithubGateway, getDiffer, diffRepository, repoIndexRepository, session, msg);
       return undefined; // prefetch is fire-and-forget
   }
 });

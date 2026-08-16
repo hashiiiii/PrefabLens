@@ -1,7 +1,7 @@
 import type { FixturesGateway } from "../../application/gateway/fixtures";
 
 // Reads static fixture files next to the site demo page (no GitHub, no chrome.*).
-export function createFixtureClient(): FixturesGateway {
+export function createFixturesGateway(): FixturesGateway {
   const fetchBytes = async (url: string): Promise<Uint8Array<ArrayBuffer>> => {
     const res = await fetch(url);
     if (!res.ok) throw new Error(`${url}: HTTP ${res.status}`);

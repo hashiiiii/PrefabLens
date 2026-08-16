@@ -76,7 +76,7 @@ async function pollForToken(
 const defaultFetch: typeof fetch = (input, init) => fetch(input, init);
 const defaultSleep = (milliseconds: number) => new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
 
-export function createGithubDeviceFlowClient(
+export function createGithubDeviceFlowGateway(
   fetchFn: typeof fetch = defaultFetch,
   sleep: (ms: number) => Promise<void> = defaultSleep,
 ): GithubAuthGateway {

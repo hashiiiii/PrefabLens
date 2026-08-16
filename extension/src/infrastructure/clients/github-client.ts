@@ -3,7 +3,7 @@ import {
   type GithubFailure,
   type GithubGateway,
   isRateLimited,
-  type MakeGithubClient,
+  type MakeGithubGateway,
   type RefPair,
 } from "../../application/gateway/github";
 import { assetPathFromMeta } from "../../domain/diff/fn/asset-path-from-meta";
@@ -73,7 +73,7 @@ async function readOr<T>(read: () => Promise<T>): Promise<Result<T, GithubFailur
   }
 }
 
-export class GithubClient implements GithubGateway {
+class GithubClient implements GithubGateway {
   constructor(
     private readonly base: string,
     private readonly token: string,
@@ -309,13 +309,35 @@ export class GithubClient implements GithubGateway {
   }
 }
 
-// One shared queue per factory: the user lane has priority over the prefetch traffic.
-export function createGithubClientFactory(
+const defaultFetch: typeof fetch = (input, init) => fetch(input, init);
+const defaultSleep = (milliseconds: number) => new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
+
+function githubGateway(base: string, token: string, fetchFn: typeof fetch): GithubGateway {
+  return new GithubClient(base, token, fetchFn);
+}
+
+export function createGithubGateway(base: string, token: string, fetchFn?: typeof fetch): GithubGateway;
+export function createGithubGateway(
   concurrency: number,
-  fetchFn: typeof fetch = (input, init) => fetch(input, init),
-  sleep: (milliseconds: number) => Promise<void> = (milliseconds) =>
-    new Promise((resolve) => setTimeout(resolve, milliseconds)),
-): MakeGithubClient {
-  const queue = createQueue(concurrency, sleep);
-  return (base, token, lane) => new GithubClient(base, token, createQueuedFetch(queue, fetchFn, lane === "user"));
+  fetchFn?: typeof fetch,
+  sleep?: (milliseconds: number) => Promise<void>,
+): MakeGithubGateway;
+export function createGithubGateway(
+  baseOrConcurrency: string | number,
+  tokenOrFetch?: string | typeof fetch,
+  fetchOrSleep?: typeof fetch | ((milliseconds: number) => Promise<void>),
+): GithubGateway | MakeGithubGateway {
+  if (typeof baseOrConcurrency === "number") {
+    const fetchFn = typeof tokenOrFetch === "function" ? tokenOrFetch : defaultFetch;
+    const sleep =
+      typeof fetchOrSleep === "function" ? (fetchOrSleep as (milliseconds: number) => Promise<void>) : defaultSleep;
+    // One shared queue: the user lane has priority over the prefetch traffic.
+    const queue = createQueue(baseOrConcurrency, sleep);
+    return (base, token, lane) => githubGateway(base, token, createQueuedFetch(queue, fetchFn, lane === "user"));
+  }
+  return githubGateway(
+    baseOrConcurrency,
+    tokenOrFetch as string,
+    typeof fetchOrSleep === "function" ? (fetchOrSleep as typeof fetch) : defaultFetch,
+  );
 }

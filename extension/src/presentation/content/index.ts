@@ -1,6 +1,6 @@
 import { type SignInFailure, signIn } from "../../application/auth/sign-in";
 import type { AuthError, GuidResolvedPush } from "../../application/gateway/messenger";
-import { createGithubAuth, createMessenger, createTokenStore } from "../../container";
+import { createAuthRepository, createGithubAuthGateway, createMessengerGateway } from "../../container";
 import { targetKey } from "../../domain/diff/fn/target-key";
 import { renderSignIn, renderSignInPending } from "../internal/render";
 import { mountGlobalBar, type Toggle } from "../internal/toggle";
@@ -46,9 +46,9 @@ function syncFiles(): FileRegistry {
   return files;
 }
 
-const messenger = createMessenger();
-const tokenStore = createTokenStore();
-const auth = createGithubAuth();
+const messengerGateway = createMessengerGateway();
+const authRepository = createAuthRepository();
+const githubAuthGateway = createGithubAuthGateway();
 const signInState = { inFlight: false };
 // _blank: Open in a new tab
 // noopener: Prevent the opened tab from accessing the original tab
@@ -66,7 +66,7 @@ const persistView = async (view: View): Promise<void> => {
 // Auth-error panel: device flow. Failures land back here for retry.
 async function signInPanel(root: ShadowRoot, message: string): Promise<void> {
   await renderSignIn(root, message);
-  for await (const event of signIn(auth, tokenStore, now, signInState)) {
+  for await (const event of signIn(githubAuthGateway, authRepository, now, signInState)) {
     if (event.status === "pending") {
       renderSignInPending(root, event.userCode, event.verificationUri);
       openTab(event.verificationUri);
@@ -85,7 +85,7 @@ function attach(viewState: ViewStateData): void {
     if (prKey !== prefetchedPr) {
       prefetchedPr = prKey;
       // Fire-and-forget. If prefetch fails, the manual toggle stays available.
-      void messenger.prefetch({ type: "prefetch", ...prPage });
+      void messengerGateway.prefetch({ type: "prefetch", ...prPage });
     }
   }
   const page = parseDiffUrl(location.pathname);
@@ -101,7 +101,7 @@ function attach(viewState: ViewStateData): void {
   const first = entries[0];
   if (first) ensureGlobalToggle(viewState, first);
   for (const entry of entries) {
-    const file = createFileView(entry, page, messenger, viewState);
+    const file = createFileView(entry, page, messengerGateway, viewState);
     file.subscribeAuth((root, error) => {
       void signInPanel(root, ERROR_TEXT[error]);
     });
@@ -121,8 +121,8 @@ function ensureGlobalToggle(viewState: ViewStateData, first: FileEntry): void {
   globalToggle = bar.toggle;
 }
 
-async function initDevicePage(): Promise<void> {
-  const pending = await tokenStore.readPendingSignIn();
+async function initDeviceActivationPage(): Promise<void> {
+  const pending = await authRepository.loadPendingSignIn();
   if (pending) fillDeviceCode(document, pending, Date.now());
 }
 
@@ -180,7 +180,7 @@ async function init(): Promise<void> {
   // If you use soft navigation, it does not reload this script.
   // All other pages also start the runtime, but do nothing until on a diff or PR URL.
   if (location.pathname === "/login/device") {
-    await initDevicePage();
+    await initDeviceActivationPage();
     return;
   }
   await initDiffRuntime();

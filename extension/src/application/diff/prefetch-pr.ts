@@ -1,10 +1,10 @@
-import type { TokenRepository } from "../../domain/auth/token-repository";
+import type { AuthRepository } from "../../domain/auth/auth-repository";
 import type { DiffRepository } from "../../domain/diff/diff-repository";
 import { repoKey } from "../../domain/diff/fn/repo-key";
 import type { RepoIndexRepository } from "../../domain/guid/repo-index-repository";
 import { isUnityPath } from "../../domain/unity/fn/is-unity-path";
 import type { DifferGateway } from "../gateway/differ";
-import type { MakeGithubClient } from "../gateway/github";
+import type { MakeGithubGateway } from "../gateway/github";
 import type { PrefetchRequest } from "../gateway/messenger";
 import { API_BASE } from "../internal/api-base";
 import { getContext, getDiff } from "../internal/raw-diff";
@@ -16,19 +16,22 @@ const PREFETCH_CONCURRENCY = 4;
 
 // Raw diff only. Code Search and the source merge stay at serve time (10 req/min).
 export async function prefetchPr(
-  tokenStore: TokenRepository,
-  makeClient: MakeGithubClient,
+  authRepository: AuthRepository,
+  makeGithubGateway: MakeGithubGateway,
   getDiffer: () => Promise<DifferGateway>,
-  diffStore: DiffRepository,
-  repoIndexStore: RepoIndexRepository,
+  diffRepository: DiffRepository,
+  repoIndexRepository: RepoIndexRepository,
   session: DiffSession,
   req: PrefetchRequest,
 ): Promise<void> {
   try {
-    const accessToken = await tokenStore.readAccessToken();
+    const accessToken = await authRepository.loadAccessToken();
     if (!accessToken) return;
-    const client = makeClient(API_BASE, accessToken, "prefetch");
-    const ctxResult = await getContext(session, client, req.owner, req.repo, { kind: "pull", prNumber: req.prNumber });
+    const githubGateway = makeGithubGateway(API_BASE, accessToken, "prefetch");
+    const ctxResult = await getContext(session, githubGateway, req.owner, req.repo, {
+      kind: "pull",
+      prNumber: req.prNumber,
+    });
     if (!ctxResult.ok) {
       console.debug("prefablens: prefetch aborted", ctxResult.error);
       return;
@@ -36,9 +39,9 @@ export async function prefetchPr(
     const ctx = ctxResult.value;
     // Index sync independent of raw-diff prefetch (speeds 3-stage resolution at serve time)
     void getRepoIndex(
-      repoIndexStore,
+      repoIndexRepository,
       session,
-      client,
+      githubGateway,
       req.owner,
       req.repo,
       repoKey(API_BASE, req.owner, req.repo),
@@ -48,7 +51,9 @@ export async function prefetchPr(
     for (let i = 0; i < unity.length; i += PREFETCH_CONCURRENCY) {
       const chunk = unity.slice(i, i + PREFETCH_CONCURRENCY);
       const outcomes = await Promise.all(
-        chunk.map((f) => getDiff(getDiffer, diffStore, session, client, ctx, req.owner, req.repo, f.path, false)),
+        chunk.map((f) =>
+          getDiff(getDiffer, diffRepository, session, githubGateway, ctx, req.owner, req.repo, f.path, false),
+        ),
       );
       // Only a rate limit stops the whole run. Other per-file failures appear again on a manual toggle.
       if (outcomes.some((o) => !o.ok && o.error === "rate-limited")) {

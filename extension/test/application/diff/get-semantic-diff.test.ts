@@ -5,15 +5,15 @@ import { createDiffSession } from "../../../src/application/diff/create-diff-ses
 import { getSemanticDiff } from "../../../src/application/diff/get-semantic-diff";
 import type { DifferGateway } from "../../../src/application/gateway/differ";
 import type { SemanticDiffRequest } from "../../../src/application/gateway/messenger";
-import type { PendingSignIn } from "../../../src/domain/auth/token";
-import type { TokenRepository } from "../../../src/domain/auth/token-repository";
+import type { AuthRepository } from "../../../src/domain/auth/auth-repository";
+import type { PendingSignIn } from "../../../src/domain/auth/pending-sign-in";
 import type { DiffRepository } from "../../../src/domain/diff/diff-repository";
 import type { DiffV2 } from "../../../src/domain/diff/types";
 import type { GuidRepository } from "../../../src/domain/guid/guid-repository";
 import type { RepoGuidIndex } from "../../../src/domain/guid/repo-guid-index";
 import type { RepoIndexRepository } from "../../../src/domain/guid/repo-index-repository";
-import { GithubClient } from "../../../src/infrastructure/clients/github-client";
-import { createDiffer } from "../../../src/infrastructure/clients/wasm-differ-client";
+import { createGithubGateway } from "../../../src/infrastructure/clients/github-client";
+import { createDifferGateway } from "../../../src/infrastructure/clients/wasm-differ-client";
 import { AFTER_PREFAB, BEFORE_PREFAB } from "../../fixtures/unity";
 
 const OWNER = "o";
@@ -26,12 +26,12 @@ const REQUEST: SemanticDiffRequest = {
   path: "Assets/Foo.prefab",
 };
 
-class MemoryTokenRepository implements TokenRepository {
+class MemoryAuthRepository implements AuthRepository {
   private pendingSignIn: PendingSignIn | undefined;
 
   constructor(private accessToken: string | undefined) {}
 
-  async readAccessToken(): Promise<string | undefined> {
+  async loadAccessToken(): Promise<string | undefined> {
     return this.accessToken;
   }
 
@@ -43,7 +43,7 @@ class MemoryTokenRepository implements TokenRepository {
     this.pendingSignIn = pending;
   }
 
-  async readPendingSignIn(): Promise<PendingSignIn | undefined> {
+  async loadPendingSignIn(): Promise<PendingSignIn | undefined> {
     return this.pendingSignIn;
   }
 
@@ -101,7 +101,7 @@ let differ: DifferGateway;
 
 beforeAll(async () => {
   const bytes = readFileSync(new URL("../../../../zig-out/bin/prefablens.wasm", import.meta.url));
-  differ = await createDiffer(bytes);
+  differ = await createDifferGateway(bytes);
 });
 
 async function collect<T>(stream: AsyncIterable<T>): Promise<T[]> {
@@ -114,9 +114,9 @@ describe("getSemanticDiff", () => {
   it("yields access-token-missing before network work", async () => {
     const requests: URL[] = [];
     const stream = getSemanticDiff(
-      new MemoryTokenRepository(undefined),
+      new MemoryAuthRepository(undefined),
       (base, token) =>
-        new GithubClient(base, token, async (input) => {
+        createGithubGateway(base, token, async (input) => {
           requests.push(new URL(String(input)));
           return new Response(null, { status: 500 });
         }),
@@ -138,9 +138,9 @@ describe("getSemanticDiff", () => {
   it("returns a complete result when the PR meta index resolves every GUID", async () => {
     const events = await collect(
       getSemanticDiff(
-        new MemoryTokenRepository("token"),
+        new MemoryAuthRepository("token"),
         (base, token) =>
-          new GithubClient(base, token, async (input) => {
+          createGithubGateway(base, token, async (input) => {
             const request = new URL(String(input));
             if (request.pathname === "/repos/o/r/pulls/1") {
               return new Response(JSON.stringify({ base: { sha: "base-tip" }, head: { sha: "head-sha" } }), {
@@ -209,9 +209,9 @@ describe("getSemanticDiff", () => {
       releaseSearch = resolve;
     });
     const stream = getSemanticDiff(
-      new MemoryTokenRepository("token"),
+      new MemoryAuthRepository("token"),
       (base, token) =>
-        new GithubClient(base, token, async (input) => {
+        createGithubGateway(base, token, async (input) => {
           const request = new URL(String(input));
           if (request.pathname === "/repos/o/r/pulls/1") {
             return new Response(JSON.stringify({ base: { sha: "base-tip" }, head: { sha: "head-sha" } }), {

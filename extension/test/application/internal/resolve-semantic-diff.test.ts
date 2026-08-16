@@ -9,8 +9,8 @@ import { type DiffV2, emptyDiff } from "../../../src/domain/diff/types";
 import type { GuidRepository } from "../../../src/domain/guid/guid-repository";
 import type { RepoGuidIndex } from "../../../src/domain/guid/repo-guid-index";
 import type { RepoIndexRepository } from "../../../src/domain/guid/repo-index-repository";
-import { GithubClient } from "../../../src/infrastructure/clients/github-client";
-import { createDiffer } from "../../../src/infrastructure/clients/wasm-differ-client";
+import { createGithubGateway } from "../../../src/infrastructure/clients/github-client";
+import { createDifferGateway } from "../../../src/infrastructure/clients/wasm-differ-client";
 import { SOURCE_PREFAB, VARIANT_PREFAB } from "../../fixtures/unity";
 
 const API_BASE = "https://api.github.test";
@@ -77,7 +77,7 @@ function githubRoutes(respond: (request: RoutedRequest) => Response | Promise<Re
     requests.push(request);
     return respond(request);
   }) as typeof fetch;
-  return { requests, client: new GithubClient(API_BASE, "token", fetchRoute) };
+  return { requests, client: createGithubGateway(API_BASE, "token", fetchRoute) };
 }
 
 function json(value: unknown, status = 200): Response {
@@ -112,7 +112,7 @@ let differ: DifferGateway;
 
 beforeAll(async () => {
   const bytes = readFileSync(new URL("../../../../zig-out/bin/prefablens.wasm", import.meta.url));
-  differ = await createDiffer(bytes);
+  differ = await createDifferGateway(bytes);
 });
 
 async function collect<T>(stream: AsyncIterable<T>): Promise<T[]> {

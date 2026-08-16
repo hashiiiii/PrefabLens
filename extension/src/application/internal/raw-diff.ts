@@ -19,13 +19,13 @@ const TOO_LARGE_BYTES = 25 * 1024 * 1024; // Files over 25MB render only on clic
 const MAX_CONCURRENT_META_FETCHES = 8;
 const utf8 = new TextDecoder();
 
-type BlobClient = Pick<GithubGateway, "getBlobRaw" | "getFileAtRef">;
+type GithubBlobs = Pick<GithubGateway, "getBlobRaw" | "getFileAtRef">;
 type MetaFetcher = (path: string, side: "base" | "head") => Promise<Result<string | null, GithubFailure>>;
 
 // The blob sha wins when it is known (#110). On 404 (force push), the fetch uses path+ref instead.
 export function getBlob(
   session: DiffSession,
-  client: BlobClient,
+  githubGateway: GithubBlobs,
   owner: string,
   repo: string,
   path: string,
@@ -34,18 +34,18 @@ export function getBlob(
 ): Promise<Result<Uint8Array | null, GithubFailure>> {
   // blob sha never collides with `${sha}:${path}`
   return session.blobs.get(blobSha ?? `${sha}:${path}`, async () => {
-    if (!blobSha) return client.getFileAtRef(owner, repo, path, sha);
-    const raw = await client.getBlobRaw(owner, repo, blobSha);
+    if (!blobSha) return githubGateway.getFileAtRef(owner, repo, path, sha);
+    const raw = await githubGateway.getBlobRaw(owner, repo, blobSha);
     if (!raw.ok) return raw;
     if (raw.value) return ok(raw.value);
-    return client.getFileAtRef(owner, repo, path, sha);
+    return githubGateway.getFileAtRef(owner, repo, path, sha);
   });
 }
 
 // Before/after blobs. status/previousPath follow the files API.
 export async function getPair(
   session: DiffSession,
-  client: BlobClient,
+  githubGateway: GithubBlobs,
   ctx: DiffContext,
   owner: string,
   repo: string,
@@ -54,7 +54,7 @@ export async function getPair(
   const file = ctx.files.find((f) => f.path === path);
   const beforePath = file?.previousPath ?? path;
   const fetchSide = async (p: string, ref: string, blob?: string): Promise<Result<Uint8Array, GithubFailure>> => {
-    const bytes = await getBlob(session, client, owner, repo, p, ref, blob);
+    const bytes = await getBlob(session, githubGateway, owner, repo, p, ref, blob);
     if (!bytes.ok) return bytes;
     return ok(bytes.value ?? EMPTY);
   };
@@ -118,22 +118,22 @@ async function createGuidIndex(
 
 // Per-kind: refs and changed-file discovery. Everything downstream is target-agnostic.
 async function loadRefsAndFiles(
-  client: GithubGateway,
+  githubGateway: GithubGateway,
   owner: string,
   repo: string,
   target: DiffTarget,
 ): Promise<Result<{ refs: RefPair; files: ChangedFile[] }, GithubFailure>> {
   if (target.kind === "pull") {
     const [refs, files] = await Promise.all([
-      client.getPrRefs(owner, repo, target.prNumber),
-      client.listPrFiles(owner, repo, target.prNumber),
+      githubGateway.getPrRefs(owner, repo, target.prNumber),
+      githubGateway.listPrFiles(owner, repo, target.prNumber),
     ]);
     if (!refs.ok) return refs;
     if (!files.ok) return files;
     return ok({ refs: refs.value, files: files.value });
   }
   if (target.kind === "commit") {
-    const commit = await client.getCommit(owner, repo, target.sha);
+    const commit = await githubGateway.getCommit(owner, repo, target.sha);
     if (!commit.ok) return commit;
     // Root commit: the before side is never fetched. Its own sha as baseSha keeps tree lookups harmless.
     return ok({
@@ -142,9 +142,9 @@ async function loadRefsAndFiles(
     });
   }
   const [cmp, headSha] = await Promise.all([
-    client.compareRefs(owner, repo, target.base, target.head),
+    githubGateway.compareRefs(owner, repo, target.base, target.head),
     // Cache keys need an immutable sha. Compare commits truncate at 250, so the last one is not always the head.
-    client.resolveRefSha(owner, repo, target.head),
+    githubGateway.resolveRefSha(owner, repo, target.head),
   ]);
   if (!cmp.ok) return cmp;
   if (!headSha.ok) return headSha;
@@ -153,13 +153,13 @@ async function loadRefsAndFiles(
 
 export function getContext(
   session: DiffSession,
-  client: GithubGateway,
+  githubGateway: GithubGateway,
   owner: string,
   repo: string,
   target: DiffTarget,
 ): Promise<Result<DiffContext, GithubFailure>> {
   return session.contexts.get(targetKey(owner, repo, target), async () => {
-    const loaded = await loadRefsAndFiles(client, owner, repo, target);
+    const loaded = await loadRefsAndFiles(githubGateway, owner, repo, target);
     if (!loaded.ok) return loaded;
     const { refs, files } = loaded.value;
     const bySha = new Map(files.map((f) => [f.path, f.sha]));
@@ -168,7 +168,7 @@ export function getContext(
         // files API sha matches the side createGuidIndex reads (head, or base for removed metas)
         const bytes = await getBlob(
           session,
-          client,
+          githubGateway,
           owner,
           repo,
           path,
@@ -179,7 +179,7 @@ export function getContext(
         return ok(bytes.value ? utf8.decode(bytes.value) : null);
       }),
       // Only rate limits propagate. Anything else becomes null, and the contents API applies instead.
-      client.listBlobShas(owner, repo, refs.baseSha),
+      githubGateway.listBlobShas(owner, repo, refs.baseSha),
     ]);
     if (!guidIndex.ok) return guidIndex;
     let baseShas: Map<string, string> | null = null;
@@ -196,7 +196,7 @@ export function getContext(
 async function computeDiff(
   getDiffer: () => Promise<DifferGateway>,
   session: DiffSession,
-  client: GithubGateway,
+  githubGateway: GithubGateway,
   ctx: DiffContext,
   owner: string,
   repo: string,
@@ -207,7 +207,7 @@ async function computeDiff(
   const differPromise = getDiffer();
   differPromise.catch(() => {}); // Early returns below skip the await. The later await still surfaces the error.
   // A file missing from the listing (the files API caps at 3000) is treated as modified. A 404 side becomes EMPTY.
-  const pair = await getPair(session, client, ctx, owner, repo, path);
+  const pair = await getPair(session, githubGateway, ctx, owner, repo, path);
   if (!pair.ok) return { ok: false, error: pair.error.kind };
   const [before, after] = pair.value;
   if (!force && before.length + after.length > TOO_LARGE_BYTES) {
@@ -226,9 +226,9 @@ async function computeDiff(
 // Sha-keyed: a push produces a new key (no invalidation)
 export function getDiff(
   getDiffer: () => Promise<DifferGateway>,
-  diffStore: DiffRepository,
+  diffRepository: DiffRepository,
   session: DiffSession,
-  client: GithubGateway,
+  githubGateway: GithubGateway,
   ctx: DiffContext,
   owner: string,
   repo: string,
@@ -237,10 +237,10 @@ export function getDiff(
 ): Promise<DiffOutcome> {
   const key = `${ctx.refs.baseSha}:${ctx.refs.headSha}:${path}`;
   return session.diffs.get(key, async (): Promise<DiffOutcome> => {
-    const stored = await diffStore.load(key); // prior SW life
+    const stored = await diffRepository.load(key); // prior SW life
     if (stored) return { ok: true, json: stored };
-    const outcome = await computeDiff(getDiffer, session, client, ctx, owner, repo, path, force);
-    if (outcome.ok) void diffStore.save(key, outcome.json);
+    const outcome = await computeDiff(getDiffer, session, githubGateway, ctx, owner, repo, path, force);
+    if (outcome.ok) void diffRepository.save(key, outcome.json);
     return outcome;
   });
 }

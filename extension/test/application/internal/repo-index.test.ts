@@ -4,7 +4,7 @@ import { getRepoIndex } from "../../../src/application/internal/repo-index";
 import type { GuidMap } from "../../../src/domain/guid/guid-map";
 import type { RepoGuidIndex } from "../../../src/domain/guid/repo-guid-index";
 import type { RepoIndexRepository } from "../../../src/domain/guid/repo-index-repository";
-import { GithubClient } from "../../../src/infrastructure/clients/github-client";
+import { createGithubGateway } from "../../../src/infrastructure/clients/github-client";
 
 const API_BASE = "https://api.github.test";
 const REPO_KEY = "repoKey";
@@ -35,7 +35,7 @@ class MemoryRepoIndexRepository implements RepoIndexRepository {
 describe("getRepoIndex", () => {
   it("builds and stores the GUID index from meta blobs", async () => {
     const requests: URL[] = [];
-    const client = new GithubClient(API_BASE, "token", async (input, init) => {
+    const client = createGithubGateway(API_BASE, "token", async (input, init) => {
       const request = new URL(String(input));
       requests.push(request);
       if (request.pathname === "/repos/o/r/git/trees/H") {
@@ -65,7 +65,7 @@ describe("getRepoIndex", () => {
 
   it("uses the stored index when the tree SHA is unchanged", async () => {
     const requests: URL[] = [];
-    const client = new GithubClient(API_BASE, "token", async (input) => {
+    const client = createGithubGateway(API_BASE, "token", async (input) => {
       requests.push(new URL(String(input)));
       return new Response(null, { status: 500 });
     });
@@ -78,7 +78,7 @@ describe("getRepoIndex", () => {
 
   it("fetches only meta blobs missing from the stored SHA cache", async () => {
     const graphqlQueries: string[] = [];
-    const client = new GithubClient(API_BASE, "token", async (input, init) => {
+    const client = createGithubGateway(API_BASE, "token", async (input, init) => {
       const request = new URL(String(input));
       if (request.pathname === "/repos/o/r/git/trees/H") {
         return Response.json({
@@ -113,7 +113,7 @@ describe("getRepoIndex", () => {
       sha: `s${index}`,
     }));
     const graphqlBatchSizes: number[] = [];
-    const client = new GithubClient(API_BASE, "token", async (input, init) => {
+    const client = createGithubGateway(API_BASE, "token", async (input, init) => {
       const request = new URL(String(input));
       if (request.pathname === "/repos/o/r/git/trees/H") {
         return Response.json({ truncated: false, tree: metas });
@@ -133,7 +133,7 @@ describe("getRepoIndex", () => {
 
   it("returns null for a truncated tree", async () => {
     const requests: URL[] = [];
-    const client = new GithubClient(API_BASE, "token", async (input) => {
+    const client = createGithubGateway(API_BASE, "token", async (input) => {
       const request = new URL(String(input));
       requests.push(request);
       if (request.pathname === "/repos/o/r/git/trees/H") {
@@ -155,7 +155,7 @@ describe("getRepoIndex", () => {
       sha: `s${index}`,
     }));
     const requests: URL[] = [];
-    const client = new GithubClient(API_BASE, "token", async (input) => {
+    const client = createGithubGateway(API_BASE, "token", async (input) => {
       const request = new URL(String(input));
       requests.push(request);
       if (request.pathname === "/repos/o/r/git/trees/H") {
@@ -171,7 +171,7 @@ describe("getRepoIndex", () => {
   });
 
   it("skips meta files without a GUID", async () => {
-    const client = new GithubClient(API_BASE, "token", async (input) => {
+    const client = createGithubGateway(API_BASE, "token", async (input) => {
       const request = new URL(String(input));
       if (request.pathname === "/repos/o/r/git/trees/H") {
         return Response.json({
@@ -197,7 +197,7 @@ describe("getRepoIndex", () => {
 
   it("pins session fallback after a rate limit", async () => {
     const requests: URL[] = [];
-    const client = new GithubClient(API_BASE, "token", async (input) => {
+    const client = createGithubGateway(API_BASE, "token", async (input) => {
       requests.push(new URL(String(input)));
       return new Response(null, { status: 429 });
     });
@@ -211,7 +211,7 @@ describe("getRepoIndex", () => {
 
   it("retries after a non-rate-limit failure", async () => {
     let treeAvailable = false;
-    const client = new GithubClient(API_BASE, "token", async (input) => {
+    const client = createGithubGateway(API_BASE, "token", async (input) => {
       const request = new URL(String(input));
       if (request.pathname === "/repos/o/r/git/trees/H") {
         if (!treeAvailable) return new Response(null, { status: 500 });

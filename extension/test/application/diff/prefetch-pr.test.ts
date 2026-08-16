@@ -4,15 +4,15 @@ import { beforeAll, describe, expect, it } from "vitest";
 import { createDiffSession } from "../../../src/application/diff/create-diff-session";
 import { prefetchPr } from "../../../src/application/diff/prefetch-pr";
 import type { DifferGateway } from "../../../src/application/gateway/differ";
-import type { PendingSignIn } from "../../../src/domain/auth/token";
-import type { TokenRepository } from "../../../src/domain/auth/token-repository";
+import type { AuthRepository } from "../../../src/domain/auth/auth-repository";
+import type { PendingSignIn } from "../../../src/domain/auth/pending-sign-in";
 import type { DiffRepository } from "../../../src/domain/diff/diff-repository";
 import type { DiffV2 } from "../../../src/domain/diff/types";
 import type { GuidMap } from "../../../src/domain/guid/guid-map";
 import type { RepoGuidIndex } from "../../../src/domain/guid/repo-guid-index";
 import type { RepoIndexRepository } from "../../../src/domain/guid/repo-index-repository";
-import { GithubClient } from "../../../src/infrastructure/clients/github-client";
-import { createDiffer } from "../../../src/infrastructure/clients/wasm-differ-client";
+import { createGithubGateway } from "../../../src/infrastructure/clients/github-client";
+import { createDifferGateway } from "../../../src/infrastructure/clients/wasm-differ-client";
 import { AFTER_PREFAB, BEFORE_PREFAB } from "../../fixtures/unity";
 
 const REQUEST = {
@@ -22,11 +22,11 @@ const REQUEST = {
   prNumber: 1,
 };
 
-class MemoryTokenRepository implements TokenRepository {
+class MemoryAuthRepository implements AuthRepository {
   private accessToken = "token";
   private pendingSignIn: PendingSignIn | undefined;
 
-  async readAccessToken(): Promise<string> {
+  async loadAccessToken(): Promise<string> {
     return this.accessToken;
   }
 
@@ -38,7 +38,7 @@ class MemoryTokenRepository implements TokenRepository {
     this.pendingSignIn = pending;
   }
 
-  async readPendingSignIn(): Promise<PendingSignIn | undefined> {
+  async loadPendingSignIn(): Promise<PendingSignIn | undefined> {
     return this.pendingSignIn;
   }
 
@@ -84,12 +84,12 @@ let differ: DifferGateway;
 
 beforeAll(async () => {
   const bytes = readFileSync(new URL("../../../../zig-out/bin/prefablens.wasm", import.meta.url));
-  differ = await createDiffer(bytes);
+  differ = await createDifferGateway(bytes);
 });
 
 describe("prefetchPr", () => {
   it("stores prefetched diffs in the diff repository", async () => {
-    const client = new GithubClient("https://api.github.com", "token", async (input) => {
+    const client = createGithubGateway("https://api.github.com", "token", async (input) => {
       const request = new URL(String(input));
       if (request.pathname === "/repos/o/r/pulls/1") {
         return Response.json({ base: { sha: "base-tip" }, head: { sha: "head-sha" } });
@@ -116,7 +116,7 @@ describe("prefetchPr", () => {
     const repository = new MemoryDiffRepository();
 
     await prefetchPr(
-      new MemoryTokenRepository(),
+      new MemoryAuthRepository(),
       () => client,
       async () => differ,
       repository,
@@ -136,7 +136,7 @@ describe("prefetchPr", () => {
 
   it("uses a stored diff after a worker restart", async () => {
     const requests: URL[] = [];
-    const client = new GithubClient("https://api.github.com", "token", async (input) => {
+    const client = createGithubGateway("https://api.github.com", "token", async (input) => {
       const request = new URL(String(input));
       requests.push(request);
       if (request.pathname === "/repos/o/r/pulls/1") {
@@ -162,11 +162,11 @@ describe("prefetchPr", () => {
       return new Response(null, { status: 500 });
     });
     const repository = new MemoryDiffRepository();
-    const tokenRepository = new MemoryTokenRepository();
+    const authRepository = new MemoryAuthRepository();
     const indexRepository = new MemoryRepoIndexRepository();
 
     await prefetchPr(
-      tokenRepository,
+      authRepository,
       () => client,
       async () => differ,
       repository,
@@ -177,7 +177,7 @@ describe("prefetchPr", () => {
     const blobRequestsAfterFirstWorker = requests.filter((request) => request.pathname.includes("/git/blobs/")).length;
 
     await prefetchPr(
-      tokenRepository,
+      authRepository,
       () => client,
       async () => differ,
       repository,
@@ -200,7 +200,7 @@ describe("prefetchPr", () => {
     }));
     files.push({ filename: "README.md", status: "modified", sha: "readme-head" });
     const requests: URL[] = [];
-    const client = new GithubClient("https://api.github.com", "token", async (input) => {
+    const client = createGithubGateway("https://api.github.com", "token", async (input) => {
       const request = new URL(String(input));
       requests.push(request);
       if (request.pathname === "/repos/o/r/pulls/1") {
@@ -230,7 +230,7 @@ describe("prefetchPr", () => {
     const repository = new MemoryDiffRepository();
 
     await prefetchPr(
-      new MemoryTokenRepository(),
+      new MemoryAuthRepository(),
       () => client,
       async () => differ,
       repository,
@@ -247,7 +247,7 @@ describe("prefetchPr", () => {
 
   it("does not store an oversized file", async () => {
     const oversized = new Uint8Array(13 * 1024 * 1024);
-    const client = new GithubClient("https://api.github.com", "token", async (input) => {
+    const client = createGithubGateway("https://api.github.com", "token", async (input) => {
       const request = new URL(String(input));
       if (request.pathname === "/repos/o/r/pulls/1") {
         return Response.json({ base: { sha: "base-tip" }, head: { sha: "head-sha" } });
@@ -274,7 +274,7 @@ describe("prefetchPr", () => {
     const repository = new MemoryDiffRepository();
 
     await prefetchPr(
-      new MemoryTokenRepository(),
+      new MemoryAuthRepository(),
       () => client,
       async () => differ,
       repository,
@@ -293,7 +293,7 @@ describe("prefetchPr", () => {
       sha: `head-${index}`,
     }));
     const requests: URL[] = [];
-    const client = new GithubClient("https://api.github.com", "token", async (input) => {
+    const client = createGithubGateway("https://api.github.com", "token", async (input) => {
       const request = new URL(String(input));
       requests.push(request);
       if (request.pathname === "/repos/o/r/pulls/1") {
@@ -323,7 +323,7 @@ describe("prefetchPr", () => {
 
     await expect(
       prefetchPr(
-        new MemoryTokenRepository(),
+        new MemoryAuthRepository(),
         () => client,
         async () => differ,
         repository,

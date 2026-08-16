@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { type SignInEvent, signIn } from "../../../src/application/auth/sign-in";
-import { createChromeTokenClient } from "../../../src/infrastructure/clients/chrome-token-client";
-import { createGithubDeviceFlowClient } from "../../../src/infrastructure/clients/github-device-flow-client";
+import { createChromeAuthRepository } from "../../../src/infrastructure/clients/chrome-auth-client";
+import { createGithubDeviceFlowGateway } from "../../../src/infrastructure/clients/github-device-flow-client";
 
 const DEVICE_CODE_URL = "https://github.com/login/device/code";
 const TOKEN_URL = "https://github.com/login/oauth/access_token";
@@ -62,7 +62,7 @@ async function collect(events: AsyncGenerator<SignInEvent>): Promise<SignInEvent
 describe("signIn", () => {
   it("emits code then success, stores the token, and removes pending sign-in data", async () => {
     const area = new MemoryStorageArea();
-    const tokens = createChromeTokenClient(area);
+    const authRepository = createChromeAuthRepository(area);
     const clock = new VirtualClock();
     const route = (async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
@@ -70,9 +70,9 @@ describe("signIn", () => {
       if (url === TOKEN_URL && clock.now === 5_000) return json({ access_token: "tok123" });
       throw new Error(`Unexpected request: ${init?.method ?? "GET"} ${url} at ${clock.now}`);
     }) as typeof fetch;
-    const auth = createGithubDeviceFlowClient(route, clock.sleep);
+    const auth = createGithubDeviceFlowGateway(route, clock.sleep);
     const state = { inFlight: false };
-    const events = signIn(auth, tokens, () => 1_000, state);
+    const events = signIn(auth, authRepository, () => 1_000, state);
 
     await expect(events.next()).resolves.toEqual({
       done: false,
@@ -82,16 +82,16 @@ describe("signIn", () => {
         verificationUri: "https://github.com/login/device",
       },
     });
-    expect(await tokens.readPendingSignIn()).toEqual({ userCode: "ABCD-1234", expiresAt: 901_000 });
+    expect(await authRepository.loadPendingSignIn()).toEqual({ userCode: "ABCD-1234", expiresAt: 901_000 });
 
     expect(await collect(events)).toEqual([{ status: "ok" }]);
-    expect(await tokens.readAccessToken()).toBe("tok123");
-    expect(await tokens.readPendingSignIn()).toBeUndefined();
+    expect(await authRepository.loadAccessToken()).toBe("tok123");
+    expect(await authRepository.loadPendingSignIn()).toBeUndefined();
     expect(state.inFlight).toBe(false);
   });
 
   it("emits a request failure and clears in-flight state", async () => {
-    const tokens = createChromeTokenClient(new MemoryStorageArea());
+    const authRepository = createChromeAuthRepository(new MemoryStorageArea());
     const route = (async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url === DEVICE_CODE_URL) return json({}, 500);
@@ -99,14 +99,14 @@ describe("signIn", () => {
     }) as typeof fetch;
     const state = { inFlight: false };
 
-    const events = await collect(signIn(createGithubDeviceFlowClient(route), tokens, () => 1_000, state));
+    const events = await collect(signIn(createGithubDeviceFlowGateway(route), authRepository, () => 1_000, state));
 
     expect(events).toEqual([{ status: "failed", reason: "failed" }]);
     expect(state.inFlight).toBe(false);
   });
 
   it("emits one terminal denied result", async () => {
-    const tokens = createChromeTokenClient(new MemoryStorageArea());
+    const authRepository = createChromeAuthRepository(new MemoryStorageArea());
     const clock = new VirtualClock();
     const route = (async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
@@ -116,18 +116,20 @@ describe("signIn", () => {
     }) as typeof fetch;
     const state = { inFlight: false };
 
-    const events = await collect(signIn(createGithubDeviceFlowClient(route, clock.sleep), tokens, () => 1_000, state));
+    const events = await collect(
+      signIn(createGithubDeviceFlowGateway(route, clock.sleep), authRepository, () => 1_000, state),
+    );
 
     expect(events).toEqual([
       { status: "pending", userCode: "ABCD-1234", verificationUri: "https://github.com/login/device" },
       { status: "failed", reason: "denied" },
     ]);
-    expect(await tokens.readAccessToken()).toBeUndefined();
-    expect(await tokens.readPendingSignIn()).toBeUndefined();
+    expect(await authRepository.loadAccessToken()).toBeUndefined();
+    expect(await authRepository.loadPendingSignIn()).toBeUndefined();
   });
 
   it("clears pending sign-in data after an unexpected token request rejection", async () => {
-    const tokens = createChromeTokenClient(new MemoryStorageArea());
+    const authRepository = createChromeAuthRepository(new MemoryStorageArea());
     const clock = new VirtualClock();
     const route = (async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
@@ -136,7 +138,7 @@ describe("signIn", () => {
       throw new Error(`Unexpected request: ${init?.method ?? "GET"} ${url} at ${clock.now}`);
     }) as typeof fetch;
     const state = { inFlight: false };
-    const events = signIn(createGithubDeviceFlowClient(route, clock.sleep), tokens, () => 1_000, state);
+    const events = signIn(createGithubDeviceFlowGateway(route, clock.sleep), authRepository, () => 1_000, state);
 
     await expect(events.next()).resolves.toEqual({
       done: false,
@@ -146,17 +148,17 @@ describe("signIn", () => {
         verificationUri: "https://github.com/login/device",
       },
     });
-    expect(await tokens.readPendingSignIn()).toEqual({ userCode: "ABCD-1234", expiresAt: 901_000 });
+    expect(await authRepository.loadPendingSignIn()).toEqual({ userCode: "ABCD-1234", expiresAt: 901_000 });
 
     await expect(events.next()).resolves.toEqual({ done: false, value: { status: "failed", reason: "failed" } });
     await expect(events.next()).resolves.toEqual({ done: true, value: undefined });
-    expect(await tokens.readAccessToken()).toBeUndefined();
-    expect(await tokens.readPendingSignIn()).toBeUndefined();
+    expect(await authRepository.loadAccessToken()).toBeUndefined();
+    expect(await authRepository.loadPendingSignIn()).toBeUndefined();
     expect(state.inFlight).toBe(false);
   });
 
   it("rejects a concurrent second start while the first request remains pending", async () => {
-    const tokens = createChromeTokenClient(new MemoryStorageArea());
+    const authRepository = createChromeAuthRepository(new MemoryStorageArea());
     const clock = new VirtualClock();
     const codeRequest = Promise.withResolvers<Response>();
     const route = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -165,14 +167,14 @@ describe("signIn", () => {
       if (url === TOKEN_URL && clock.now === 5_000) return json({ access_token: "tok123" });
       throw new Error(`Unexpected request: ${init?.method ?? "GET"} ${url} at ${clock.now}`);
     }) as typeof fetch;
-    const auth = createGithubDeviceFlowClient(route, clock.sleep);
+    const auth = createGithubDeviceFlowGateway(route, clock.sleep);
     const state = { inFlight: false };
 
-    const first = collect(signIn(auth, tokens, () => 1_000, state));
+    const first = collect(signIn(auth, authRepository, () => 1_000, state));
     await Promise.resolve();
 
     expect(state.inFlight).toBe(true);
-    expect(await collect(signIn(auth, tokens, () => 1_000, state))).toEqual([]);
+    expect(await collect(signIn(auth, authRepository, () => 1_000, state))).toEqual([]);
 
     codeRequest.resolve(deviceCodeResponse());
     expect(await first).toEqual([

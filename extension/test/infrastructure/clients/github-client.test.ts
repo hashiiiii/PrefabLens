@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { isRateLimited } from "../../../src/application/gateway/github";
 import { err, ok } from "../../../src/domain/result";
-import { createGithubClientFactory, GithubClient } from "../../../src/infrastructure/clients/github-client";
+import { createGithubGateway } from "../../../src/infrastructure/clients/github-client";
 import { must } from "../../../src/internal/must";
 
 const API = "https://api.github.test";
@@ -28,7 +28,7 @@ class VirtualClock {
   };
 }
 
-describe("GithubClient", () => {
+describe("createGithubGateway", () => {
   it("returns the merge base", async () => {
     const fetchFn = (async (input: RequestInfo | URL, init?: RequestInit) => {
       switch (requestKey(input, init)) {
@@ -41,7 +41,7 @@ describe("GithubClient", () => {
       }
     }) as typeof fetch;
 
-    const result = await new GithubClient(API, "tok", fetchFn).getPrRefs("o", "r", 7);
+    const result = await createGithubGateway(API, "tok", fetchFn).getPrRefs("o", "r", 7);
 
     expect(result).toEqual(ok({ baseSha: "merge-base", headSha: "head-sha" }));
   });
@@ -58,7 +58,7 @@ describe("GithubClient", () => {
       return json([]);
     }) as typeof fetch;
 
-    const result = await new GithubClient(API, "tok", fetchFn).listPrFiles("o", "r", 1);
+    const result = await createGithubGateway(API, "tok", fetchFn).listPrFiles("o", "r", 1);
 
     expect(result).toEqual(ok([]));
   });
@@ -86,7 +86,7 @@ describe("GithubClient", () => {
       }
     }) as typeof fetch;
 
-    const result = await new GithubClient(API, "tok", fetchFn).listPrFiles("o", "r", 1);
+    const result = await createGithubGateway(API, "tok", fetchFn).listPrFiles("o", "r", 1);
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
@@ -111,7 +111,7 @@ describe("GithubClient", () => {
       return unexpectedRequest(input, init);
     }) as typeof fetch;
 
-    const result = await new GithubClient(API, "tok", fetchFn).getCommit("o", "r", "abc1234");
+    const result = await createGithubGateway(API, "tok", fetchFn).getCommit("o", "r", "abc1234");
 
     expect(result).toEqual(
       ok({
@@ -141,7 +141,7 @@ describe("GithubClient", () => {
       });
     }) as typeof fetch;
 
-    const result = await new GithubClient(API, "tok", fetchFn).getCommit("o", "r", "root");
+    const result = await createGithubGateway(API, "tok", fetchFn).getCommit("o", "r", "root");
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
@@ -161,7 +161,7 @@ describe("GithubClient", () => {
       return unexpectedRequest(input, init);
     }) as typeof fetch;
 
-    const result = await new GithubClient(API, "tok", fetchFn).compareRefs("o", "r", "feat/x", "main");
+    const result = await createGithubGateway(API, "tok", fetchFn).compareRefs("o", "r", "feat/x", "main");
 
     expect(result).toEqual(
       ok({
@@ -180,7 +180,7 @@ describe("GithubClient", () => {
       return new Response("full-head-sha\n");
     }) as typeof fetch;
 
-    const result = await new GithubClient(API, "tok", fetchFn).resolveRefSha("o", "r", "feat/x");
+    const result = await createGithubGateway(API, "tok", fetchFn).resolveRefSha("o", "r", "feat/x");
 
     expect(result).toEqual(ok("full-head-sha"));
   });
@@ -194,7 +194,7 @@ describe("GithubClient", () => {
       return new Response(new Uint8Array([1, 2, 3]));
     }) as typeof fetch;
 
-    const result = await new GithubClient(API, "tok", fetchFn).getFileAtRef(
+    const result = await createGithubGateway(API, "tok", fetchFn).getFileAtRef(
       "o",
       "r",
       "Assets/My Prefab#1.prefab",
@@ -214,7 +214,7 @@ describe("GithubClient", () => {
       return new Response("not found", { status: 404 });
     }) as typeof fetch;
 
-    const result = await new GithubClient(API, "tok", fetchFn).getFileAtRef("o", "r", "gone.prefab", "sha1");
+    const result = await createGithubGateway(API, "tok", fetchFn).getFileAtRef("o", "r", "gone.prefab", "sha1");
 
     expect(result).toEqual(ok(null));
   });
@@ -228,7 +228,7 @@ describe("GithubClient", () => {
       return new Response(new Uint8Array([1, 2, 3]));
     }) as typeof fetch;
 
-    const result = await new GithubClient(API, "tok", fetchFn).getBlobRaw("o", "r", "blob1");
+    const result = await createGithubGateway(API, "tok", fetchFn).getBlobRaw("o", "r", "blob1");
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
@@ -242,7 +242,7 @@ describe("GithubClient", () => {
       return json({ items: [{ path: "Assets/Scripts/Player.cs.meta" }] });
     }) as typeof fetch;
 
-    const result = await new GithubClient(API, "tok", fetchFn).searchMetaByGuid("o", "r", "abc123");
+    const result = await createGithubGateway(API, "tok", fetchFn).searchMetaByGuid("o", "r", "abc123");
 
     expect(result).toEqual(ok("Assets/Scripts/Player.cs"));
   });
@@ -260,7 +260,7 @@ describe("GithubClient", () => {
           return unexpectedRequest(input, init);
       }
     }) as typeof fetch;
-    const client = new GithubClient(API, "tok", fetchFn);
+    const client = createGithubGateway(API, "tok", fetchFn);
 
     expect(await client.searchMetaByGuid("o", "r", "empty")).toEqual(ok(null));
     expect(await client.searchMetaByGuid("o", "r", "odd")).toEqual(ok(null));
@@ -279,7 +279,7 @@ describe("GithubClient", () => {
           return unexpectedRequest(input, init);
       }
     }) as typeof fetch;
-    const client = new GithubClient(API, "tok", fetchFn);
+    const client = createGithubGateway(API, "tok", fetchFn);
 
     expect(await client.searchMetaByGuid("o", "r", "unindexed")).toEqual(ok(null));
     expect(await client.searchMetaByGuid("o", "r", "failed")).toEqual(ok(null));
@@ -301,7 +301,7 @@ describe("GithubClient", () => {
       });
     }) as typeof fetch;
 
-    const result = await new GithubClient(API, "tok", fetchFn).listMetaTree("o", "r", "H");
+    const result = await createGithubGateway(API, "tok", fetchFn).listMetaTree("o", "r", "H");
 
     expect(result).toEqual(
       ok({
@@ -329,7 +329,7 @@ describe("GithubClient", () => {
       });
     }) as typeof fetch;
 
-    const result = await new GithubClient(API, "tok", fetchFn).listBlobShas("o", "r", "merge-base");
+    const result = await createGithubGateway(API, "tok", fetchFn).listBlobShas("o", "r", "merge-base");
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
@@ -353,7 +353,7 @@ describe("GithubClient", () => {
       return json({ data: { repository: { b0: { text: "guid: g1\n" }, b1: null } } });
     }) as typeof fetch;
 
-    const result = await new GithubClient(API, "tok", fetchFn).batchBlobTexts("o", "r", ["sha1", "sha2"]);
+    const result = await createGithubGateway(API, "tok", fetchFn).batchBlobTexts("o", "r", ["sha1", "sha2"]);
 
     expect(result).toEqual(ok({ sha1: "guid: g1\n", sha2: null }));
   });
@@ -369,7 +369,7 @@ describe("GithubClient", () => {
       return new Response(body, { status, headers });
     }) as typeof fetch;
 
-    const result = await new GithubClient(API, "tok", fetchFn).getPrRefs("o", "r", 1);
+    const result = await createGithubGateway(API, "tok", fetchFn).getPrRefs("o", "r", 1);
 
     expect(result.ok).toBe(false);
     if (result.ok) return;
@@ -385,7 +385,7 @@ describe("GithubClient", () => {
       });
     }) as typeof fetch;
 
-    const result = await new GithubClient(API, "tok", fetchFn).getPrRefs("o", "r", 1);
+    const result = await createGithubGateway(API, "tok", fetchFn).getPrRefs("o", "r", 1);
 
     expect(result).toEqual(err({ kind: "auth-failed" }));
   });
@@ -396,7 +396,7 @@ describe("GithubClient", () => {
       return new Response("server error", { status: 500 });
     }) as typeof fetch;
 
-    const result = await new GithubClient(API, "tok", fetchFn).getPrRefs("o", "r", 1);
+    const result = await createGithubGateway(API, "tok", fetchFn).getPrRefs("o", "r", 1);
 
     expect(result).toEqual(err({ kind: "fetch-failed" }));
   });
@@ -411,7 +411,7 @@ describe("GithubClient", () => {
       });
     }) as typeof fetch;
 
-    const result = await new GithubClient(API, "tok", fetchFn).getPrRefs("o", "r", 7);
+    const result = await createGithubGateway(API, "tok", fetchFn).getPrRefs("o", "r", 7);
 
     expect(result).toEqual(err({ kind: "rate-limited", retryAfterMs: 12_000 }));
   });
@@ -426,7 +426,7 @@ describe("GithubClient", () => {
       });
     }) as typeof fetch;
 
-    const result = await new GithubClient(API, "tok", fetchFn).getPrRefs("o", "r", 7);
+    const result = await createGithubGateway(API, "tok", fetchFn).getPrRefs("o", "r", 7);
 
     expect(result.ok).toBe(false);
     if (result.ok || !isRateLimited(result.error)) return;
@@ -440,7 +440,7 @@ describe("GithubClient", () => {
       return new Response('{"message":"Secondary rate limit"}', { status: 403 });
     }) as typeof fetch;
 
-    const result = await new GithubClient(API, "tok", fetchFn).getPrRefs("o", "r", 7);
+    const result = await createGithubGateway(API, "tok", fetchFn).getPrRefs("o", "r", 7);
 
     expect(result).toEqual(err({ kind: "rate-limited", retryAfterMs: undefined }));
   });
@@ -451,13 +451,13 @@ describe("GithubClient", () => {
       return json({ errors: [{ type: "RATE_LIMITED" }] }, 200, { "retry-after": "4" });
     }) as typeof fetch;
 
-    const result = await new GithubClient(API, "tok", fetchFn).batchBlobTexts("o", "r", ["sha1"]);
+    const result = await createGithubGateway(API, "tok", fetchFn).batchBlobTexts("o", "r", ["sha1"]);
 
     expect(result).toEqual(err({ kind: "rate-limited", retryAfterMs: 4_000 }));
   });
 });
 
-describe("createGithubClientFactory", () => {
+describe("createGithubGateway", () => {
   it("returns rate-limited after two queue backoffs", async () => {
     const clock = new VirtualClock();
     const fetchFn = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -467,7 +467,7 @@ describe("createGithubClientFactory", () => {
       }
       return new Response("limited", { status: 429 });
     }) as typeof fetch;
-    const client = createGithubClientFactory(1, fetchFn, clock.sleep)(API, "tok", "user");
+    const client = createGithubGateway(1, fetchFn, clock.sleep)(API, "tok", "user");
 
     const result = await client.getPrRefs("o", "r", 1);
 
@@ -482,7 +482,7 @@ describe("createGithubClientFactory", () => {
       if (clock.now !== 0) throw new Error(`Unexpected clock state: ${clock.now}`);
       return new Response("unauthorized", { status: 401 });
     }) as typeof fetch;
-    const client = createGithubClientFactory(1, fetchFn, clock.sleep)(API, "tok", "user");
+    const client = createGithubGateway(1, fetchFn, clock.sleep)(API, "tok", "user");
 
     const result = await client.getPrRefs("o", "r", 1);
 
@@ -508,9 +508,9 @@ describe("createGithubClientFactory", () => {
           return unexpectedRequest(input, init);
       }
     }) as typeof fetch;
-    const factory = createGithubClientFactory(1, fetchFn, async () => {});
-    const prefetch = factory(API, "tok", "prefetch");
-    const user = factory(API, "tok", "user");
+    const makeGithubGateway = createGithubGateway(1, fetchFn, async () => {});
+    const prefetch = makeGithubGateway(API, "tok", "prefetch");
+    const user = makeGithubGateway(API, "tok", "user");
     const active = prefetch.resolveRefSha("o", "r", "active");
     while (order.length === 0) await Promise.resolve();
 

@@ -6,7 +6,7 @@ import type { DiffSession } from "../diff/create-diff-session";
 import type { GithubFailure, GithubGateway } from "../gateway/github";
 import { isRateLimited } from "../gateway/github";
 
-type SearchClient = Pick<GithubGateway, "listMetaTree" | "batchBlobTexts">;
+type GithubMetaTree = Pick<GithubGateway, "listMetaTree" | "batchBlobTexts">;
 
 const INDEX_MAX_METAS = 50_000; // Above this count, the code skips the index to protect the storage quota.
 const GRAPHQL_BATCH = 100;
@@ -15,17 +15,20 @@ const GRAPHQL_BATCH = 100;
 // null, and Code Search applies instead. blobSha→guid is content-derived (a
 // permanent cache). After a push, only changed .meta files are fetched.
 async function updateRepoIndex(
-  client: SearchClient,
-  store: RepoIndexRepository,
+  githubGateway: GithubMetaTree,
+  repoIndexRepository: RepoIndexRepository,
   owner: string,
   repo: string,
   repoKey: string,
   ref: string,
 ): Promise<Result<Record<string, string> | null, GithubFailure>> {
-  const existing = await store.loadIndex(repoKey);
+  const existing = await repoIndexRepository.loadIndex(repoKey);
   if (existing?.treeSha === ref) return ok(existing.guids);
   // The stored sha→guid map is independent of the tree fetch. The two loads run in parallel.
-  const [tree, known] = await Promise.all([client.listMetaTree(owner, repo, ref), store.loadGuids(repoKey)]);
+  const [tree, known] = await Promise.all([
+    githubGateway.listMetaTree(owner, repo, ref),
+    repoIndexRepository.loadGuids(repoKey),
+  ]);
   if (!tree.ok) return tree;
   if (tree.value.truncated || tree.value.metas.length > INDEX_MAX_METAS) return ok(null);
   // hasOwn: like the guid cache, avoids false prototype hits
@@ -33,7 +36,7 @@ async function updateRepoIndex(
   const fetched: Record<string, string> = {};
   for (let i = 0; i < missing.length; i += GRAPHQL_BATCH) {
     const chunk = missing.slice(i, i + GRAPHQL_BATCH);
-    const texts = await client.batchBlobTexts(
+    const texts = await githubGateway.batchBlobTexts(
       owner,
       repo,
       chunk.map((m) => m.sha),
@@ -46,22 +49,22 @@ async function updateRepoIndex(
       if (guid) fetched[m.sha] = guid;
     }
   }
-  if (Object.keys(fetched).length) await store.saveGuids(repoKey, fetched);
+  if (Object.keys(fetched).length) await repoIndexRepository.saveGuids(repoKey, fetched);
   const guids: Record<string, string> = {};
   for (const m of tree.value.metas) {
     // The sha keys are hex, so a plain lookup cannot hit Object.prototype.
     const guid = fetched[m.sha] ?? known[m.sha];
     if (guid) guids[guid] = assetPathFromMeta(m.path);
   }
-  await store.saveIndex(repoKey, { treeSha: ref, guids });
+  await repoIndexRepository.saveIndex(repoKey, { treeSha: ref, guids });
   return ok(guids);
 }
 
 // The memoized whole-repo index. Rate-limited repos stay on the fallback for the SW lifetime.
 export async function getRepoIndex(
-  repoIndexStore: RepoIndexRepository,
+  repoIndexRepository: RepoIndexRepository,
   session: DiffSession,
-  client: SearchClient,
+  githubGateway: GithubMetaTree,
   owner: string,
   repo: string,
   repoKey: string,
@@ -69,7 +72,7 @@ export async function getRepoIndex(
 ): Promise<Record<string, string> | null> {
   if (session.indexFallback.has(repoKey)) return null;
   const result = await session.indexes.get(`${repoKey}@${ref}`, () =>
-    updateRepoIndex(client, repoIndexStore, owner, repo, repoKey, ref),
+    updateRepoIndex(githubGateway, repoIndexRepository, owner, repo, repoKey, ref),
   );
   if (!result.ok) {
     // Cache already dropped the failure, so the next visit retries

@@ -9,6 +9,6 @@ export default defineConfig({
     include: ["test/**/*.test.ts"],
     // suppress console log
     // see: https://vitest.dev/config/onconsolelog.html
-    onConsoleLog: () => false
+    onConsoleLog: () => false,
   },
 });

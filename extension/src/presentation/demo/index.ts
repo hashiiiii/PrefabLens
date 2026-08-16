@@ -13,7 +13,7 @@ import { createFileViewController } from "../internal/file-view-controller";
 import { render, renderError, renderLoading } from "../internal/render";
 import { injectPageStyles, mountGlobalBar } from "../internal/toggle";
 import type { ViewMode } from "../internal/view-mode";
-import { resolve, getDefault, setDefault, setOverride, subscribeDefault } from "../internal/view-state";
+import { getDefault, resolve, setDefault, setOverride, subscribeDefault } from "../internal/view-state";
 
 function attachFile(
   header: HTMLElement,

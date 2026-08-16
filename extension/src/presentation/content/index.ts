@@ -8,8 +8,8 @@ import type { ViewMode } from "../internal/view-mode";
 import {
   applyExternal,
   clearOverrides,
-  resolve,
   getDefault,
+  resolve,
   setDefault,
   subscribeDefault,
   type ViewState,

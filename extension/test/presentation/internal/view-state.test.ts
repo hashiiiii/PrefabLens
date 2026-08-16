@@ -3,8 +3,8 @@ import type { ViewMode } from "../../../src/presentation/internal/view-mode";
 import {
   applyExternal,
   clearOverrides,
-  resolve,
   getDefault,
+  resolve,
   setDefault,
   setOverride,
   subscribeDefault,

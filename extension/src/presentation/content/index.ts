@@ -121,7 +121,7 @@ function ensureGlobalToggle(viewState: ViewStateData, first: FileEntry): void {
   globalToggle = bar.toggle;
 }
 
-async function initDevicePage(): Promise<void> {
+async function initDeviceActivationPage(): Promise<void> {
   const pending = await authRepository.loadPendingSignIn();
   if (pending) fillDeviceCode(document, pending, Date.now());
 }
@@ -180,7 +180,7 @@ async function init(): Promise<void> {
   // If you use soft navigation, it does not reload this script.
   // All other pages also start the runtime, but do nothing until on a diff or PR URL.
   if (location.pathname === "/login/device") {
-    await initDevicePage();
+    await initDeviceActivationPage();
     return;
   }
   await initDiffRuntime();

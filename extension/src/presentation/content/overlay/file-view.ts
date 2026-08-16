@@ -10,8 +10,8 @@ import { unresolvedRemaining } from "../../../domain/diff/fn/unresolved-remainin
 import type { DiffV2 } from "../../../domain/diff/types";
 import { createFileViewController } from "../../internal/file-view-controller";
 import { render, renderError, renderLoading, renderTooLarge } from "../../internal/render";
-import type { View } from "../../internal/view-mode";
-import { effectiveView, setOverride, type ViewStateData } from "../../internal/view-state";
+import type { ViewMode } from "../../internal/view-mode";
+import { resolve, setOverride, type ViewState } from "../../internal/view-state";
 import type { DiffPage, FileEntry } from "../detect";
 
 const ERROR_TEXT: Record<Exclude<BackgroundError, AuthError>, string> = {
@@ -31,7 +31,7 @@ export type FileView = {
   header: HTMLElement;
   status: FileStatus;
   start(): void;
-  apply(view: View): void;
+  apply(view: ViewMode): void;
   sync(): void;
   request(): Promise<void>;
   resolve(message: GuidResolvedPush): void;
@@ -49,7 +49,7 @@ export function createFileView(
   entry: FileEntry,
   page: DiffPage,
   messengerGateway: MessengerGateway,
-  viewState: ViewStateData,
+  viewState: ViewState,
 ): FileView {
   let root: ShadowRoot | undefined;
   let json: DiffV2 | undefined;
@@ -58,7 +58,7 @@ export function createFileView(
   const authListeners = new Set<(root: ShadowRoot, error: AuthError) => void>();
 
   const controller = createFileViewController(
-    effectiveView(viewState, entry.path),
+    resolve(viewState, entry.path),
     entry.setRawHidden,
     entry.attachHost,
     () => !entry.collapsed(),
@@ -71,7 +71,7 @@ export function createFileView(
     status: "idle",
     start: controller.start,
     apply: controller.apply,
-    sync: () => controller.sync(effectiveView(viewState, entry.path)),
+    sync: () => controller.sync(resolve(viewState, entry.path)),
     request: async () => {
       if (!root || file.status === "loading" || file.status === "pending") return;
       file.status = "loading";

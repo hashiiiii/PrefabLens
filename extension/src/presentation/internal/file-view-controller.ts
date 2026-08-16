@@ -1,18 +1,18 @@
 import { createViewHost } from "./render";
 import { mountToggle } from "./toggle";
-import type { View } from "./view-mode";
+import type { ViewMode } from "./view-mode";
 
 export type FileViewController = {
   element: HTMLElement;
   start(): void;
-  apply(view: View): void;
-  sync(view: View): void;
-  subscribeSelection(listener: (view: View) => void): () => void;
+  apply(view: ViewMode): void;
+  sync(view: ViewMode): void;
+  subscribeSelection(listener: (view: ViewMode) => void): () => void;
   subscribeSemantic(listener: (root: ShadowRoot) => void): () => void;
 };
 
 export function createFileViewController(
-  initial: View,
+  initial: ViewMode,
   setRawHidden: (hidden: boolean) => void,
   attachHost: (host: HTMLDivElement) => void,
   semanticVisible: () => boolean,
@@ -20,7 +20,7 @@ export function createFileViewController(
   let host: HTMLDivElement | undefined;
   let root: ShadowRoot | undefined;
   let started = false;
-  const selectionListeners = new Set<(view: View) => void>();
+  const selectionListeners = new Set<(view: ViewMode) => void>();
   const semanticListeners = new Set<(root: ShadowRoot) => void>();
 
   const ensureHost = (): { host: HTMLDivElement; root: ShadowRoot } => {
@@ -33,7 +33,7 @@ export function createFileViewController(
     return { host, root };
   };
 
-  const sync = (view: View): void => {
+  const sync = (view: ViewMode): void => {
     if (view === "raw") {
       setRawHidden(false);
       if (host) {
@@ -47,7 +47,7 @@ export function createFileViewController(
     current.host.style.display = semanticVisible() ? "" : "none";
   };
 
-  const activate = (view: View): void => {
+  const activate = (view: ViewMode): void => {
     sync(view);
     if (view === "semantic") {
       const semanticRoot = ensureHost().root;

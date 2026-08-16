@@ -1,38 +1,37 @@
-import type { View } from "./view-mode";
+import type { ViewMode } from "./view-mode";
 
-export type ViewStateData = {
-  def: View;
-  overrides: Map<string, View>;
-  listeners: Set<(view: View) => void>;
+export type ViewState = {
+  page: ViewMode;
+  files: Map<string, ViewMode>;
+  listeners: Set<(view: ViewMode) => void>;
 };
 
-// The persistent default plus per-file overrides. A global switch always clears overrides.
-export function emptyViewState(initial: View): ViewStateData {
-  return { def: initial, overrides: new Map(), listeners: new Set() };
+export function getDefault(page: ViewMode): ViewState {
+  return { page: page, files: new Map(), listeners: new Set() };
 }
 
-export function effectiveView(state: ViewStateData, path: string): View {
-  return state.overrides.get(path) ?? state.def;
+export function resolve(state: ViewState, path: string): ViewMode {
+  return state.files.get(path) ?? state.page;
 }
 
-export function setOverride(state: ViewStateData, path: string, view: View): void {
-  state.overrides.set(path, view);
+export function setOverride(state: ViewState, path: string, file: ViewMode): void {
+  state.files.set(path, file);
 }
 
-export function clearOverrides(state: ViewStateData): void {
-  state.overrides.clear();
+export function clearOverrides(state: ViewState): void {
+  state.files.clear();
 }
 
-function change(state: ViewStateData, view: View): void {
-  state.def = view;
-  state.overrides.clear();
+function change(state: ViewState, view: ViewMode): void {
+  state.page = view;
+  state.files.clear();
   for (const fn of state.listeners) fn(view);
 }
 
-export function setDefault(state: ViewStateData, view: View, persist: (view: View) => void): void {
-  if (view === state.def) {
+export function setDefault(state: ViewState, view: ViewMode, persist: (view: ViewMode) => void): void {
+  if (view === state.page) {
     // A same-value click still realigns: clear overrides and re-apply, but do not persist
-    if (state.overrides.size) change(state, view);
+    if (state.files.size) change(state, view);
     return;
   }
   change(state, view);
@@ -40,11 +39,11 @@ export function setDefault(state: ViewStateData, view: View, persist: (view: Vie
 }
 
 // storage.onChanged also fires on the originating tab. Ignore the same value and do not persist.
-export function applyExternal(state: ViewStateData, view: View): void {
-  if (view !== state.def) change(state, view);
+export function applyExternal(state: ViewState, view: ViewMode): void {
+  if (view !== state.page) change(state, view);
 }
 
-export function subscribeDefault(state: ViewStateData, fn: (view: View) => void): () => void {
+export function subscribeDefault(state: ViewState, fn: (view: ViewMode) => void): () => void {
   state.listeners.add(fn);
   return () => state.listeners.delete(fn);
 }

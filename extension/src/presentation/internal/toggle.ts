@@ -1,9 +1,9 @@
-import type { View } from "./view-mode";
+import type { ViewMode } from "./view-mode";
 
 export type Toggle = {
   element: HTMLElement;
-  set(view: View): void;
-  subscribe(listener: (view: View) => void): () => void;
+  set(view: ViewMode): void;
+  subscribe(listener: (view: ViewMode) => void): () => void;
 };
 
 const FONT = `-apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif`;
@@ -45,19 +45,19 @@ export function injectPageStyles(): void {
   document.head.append(style);
 }
 
-export function mountToggle(initial: View = "raw"): Toggle {
+export function mountToggle(initial: ViewMode = "raw"): Toggle {
   injectPageStyles();
   const wrap = document.createElement("span");
   wrap.setAttribute("data-prefablens-toggle", "");
   wrap.className = "prefablens-seg";
 
   const buttons: HTMLButtonElement[] = [];
-  const listeners = new Set<(view: View) => void>();
+  const listeners = new Set<(view: ViewMode) => void>();
   // set updates display only. It avoids a re-fetch during a global apply.
-  const select = (view: View): void => {
+  const select = (view: ViewMode): void => {
     for (const b of buttons) b.setAttribute("aria-pressed", String(b.dataset.view === view));
   };
-  const make = (view: View, label: string): HTMLButtonElement => {
+  const make = (view: ViewMode, label: string): HTMLButtonElement => {
     const btn = document.createElement("button");
     btn.type = "button";
     btn.textContent = label;
@@ -85,7 +85,7 @@ export function mountToggle(initial: View = "raw"): Toggle {
 // The bar DOM matches the [data-prefablens-global] page styles that this module
 // owns. The content script and the demo must build the bar in the same way.
 // Callers position the element.
-export function mountGlobalBar(initial: View): { element: HTMLElement; toggle: Toggle } {
+export function mountGlobalBar(initial: ViewMode): { element: HTMLElement; toggle: Toggle } {
   const bar = document.createElement("div");
   bar.setAttribute("data-prefablens-global", "");
   const label = document.createElement("span");

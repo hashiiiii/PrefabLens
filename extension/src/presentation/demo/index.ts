@@ -12,8 +12,8 @@ import { must } from "../../internal/must";
 import { createFileViewController } from "../internal/file-view-controller";
 import { render, renderError, renderLoading } from "../internal/render";
 import { injectPageStyles, mountGlobalBar } from "../internal/toggle";
-import type { View } from "../internal/view-mode";
-import { effectiveView, emptyViewState, setDefault, setOverride, subscribeDefault } from "../internal/view-state";
+import type { ViewMode } from "../internal/view-mode";
+import { resolve, getDefault, setDefault, setOverride, subscribeDefault } from "../internal/view-state";
 
 function attachFile(
   header: HTMLElement,
@@ -21,9 +21,9 @@ function attachFile(
   index: Map<string, string>,
   fetchBytes: FixturesGateway["fetchBytes"],
   fetchSource: FixturesGateway["fetchSource"],
-  initial: View,
-  onSelect: (view: View) => void,
-): (view: View) => void {
+  initial: ViewMode,
+  onSelect: (view: ViewMode) => void,
+): (view: ViewMode) => void {
   // Non-null: site/build.mjs always nests the header in a .file with a .js-file-content sibling.
   const content = must(header.parentElement?.querySelector<HTMLElement>(".js-file-content"));
   let rendered = false;
@@ -76,16 +76,16 @@ async function main(): Promise<void> {
 
   // Semantic by default, like the extension after the user picks it. The
   // demo has no chrome.storage, so persistence is a no-op.
-  const state = emptyViewState("semantic");
+  const state = getDefault("semantic");
   const persist = (): void => {};
-  const appliers: Array<(view: View) => void> = [];
+  const appliers: Array<(view: ViewMode) => void> = [];
   subscribeDefault(state, (view) => {
     for (const apply of appliers) apply(view);
   });
 
   // Global bar above the first Unity file, same anchor rule as the content script.
   const firstFile = must(headers[0]?.closest(".file"));
-  const bar = mountGlobalBar(state.def);
+  const bar = mountGlobalBar(state.page);
   bar.toggle.subscribe((view) => setDefault(state, view, persist));
   firstFile.before(bar.element);
   subscribeDefault(state, (view) => bar.toggle.set(view));
@@ -98,7 +98,7 @@ async function main(): Promise<void> {
       index,
       fixturesGateway.fetchBytes,
       fixturesGateway.fetchSource,
-      effectiveView(state, path),
+      resolve(state, path),
       (view) => setOverride(state, path, view),
     );
     appliers.push(apply);

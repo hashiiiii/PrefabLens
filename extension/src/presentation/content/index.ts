@@ -4,15 +4,15 @@ import { createAuthRepository, createGithubAuthGateway, createMessengerGateway }
 import { targetKey } from "../../domain/diff/fn/target-key";
 import { renderSignIn, renderSignInPending } from "../internal/render";
 import { mountGlobalBar, type Toggle } from "../internal/toggle";
-import type { View } from "../internal/view-mode";
+import type { ViewMode } from "../internal/view-mode";
 import {
   applyExternal,
   clearOverrides,
-  effectiveView,
-  emptyViewState,
+  resolve,
+  getDefault,
   setDefault,
   subscribeDefault,
-  type ViewStateData,
+  type ViewState,
 } from "../internal/view-state";
 import { type DiffPage, type FileEntry, parseDiffUrl, parsePrPage, scanUnityFiles } from "./detect";
 import { fillDeviceCode } from "./device-page";
@@ -55,7 +55,7 @@ const signInState = { inFlight: false };
 const openTab = (url: string) => void window.open(url, "_blank", "noopener");
 const now = () => Date.now();
 
-const persistView = async (view: View): Promise<void> => {
+const persistView = async (view: ViewMode): Promise<void> => {
   try {
     await chrome.storage.local.set({ viewMode: view });
   } catch {
@@ -78,7 +78,7 @@ async function signInPanel(root: ShadowRoot, message: string): Promise<void> {
   }
 }
 
-function attach(viewState: ViewStateData): void {
+function attach(viewState: ViewState): void {
   const prPage = parsePrPage(location.pathname);
   if (prPage) {
     const prKey = targetKey(prPage.owner, prPage.repo, { kind: "pull", prNumber: prPage.prNumber });
@@ -111,11 +111,11 @@ function attach(viewState: ViewStateData): void {
 }
 
 // Global bar must sit outside recycled react list items (classic: before .file, react: list root)
-function ensureGlobalToggle(viewState: ViewStateData, first: FileEntry): void {
+function ensureGlobalToggle(viewState: ViewState, first: FileEntry): void {
   if (globalToggle?.element.closest("[data-prefablens-global]")?.isConnected) return;
   const anchor = first.globalAnchor();
   if (!anchor?.parentElement) return;
-  const bar = mountGlobalBar(viewState.def);
+  const bar = mountGlobalBar(viewState.page);
   bar.toggle.subscribe((view) => setDefault(viewState, view, persistView));
   anchor.before(bar.element);
   globalToggle = bar.toggle;
@@ -127,14 +127,14 @@ async function initDeviceActivationPage(): Promise<void> {
 }
 
 async function initDiffRuntime(): Promise<void> {
-  let initial: View = "raw";
+  let initial: ViewMode = "raw";
   try {
     const stored = await chrome.storage.local.get(["viewMode"]);
     if (stored.viewMode === "semantic") initial = "semantic";
   } catch {
     // A storage failure must not stop the current page.
   }
-  const viewState = emptyViewState(initial);
+  const viewState = getDefault(initial);
   subscribeDefault(viewState, (view) => {
     globalToggle?.set(view);
     for (const file of syncFiles().values()) file.apply(view);
@@ -146,7 +146,7 @@ async function initDiffRuntime(): Promise<void> {
     if (next === "raw" || next === "semantic") applyExternal(viewState, next);
     if (typeof changes.accessToken?.newValue === "string" && changes.accessToken.newValue) {
       for (const file of syncFiles().values()) {
-        if (file.status === "auth-blocked" && effectiveView(viewState, file.path) === "semantic") {
+        if (file.status === "auth-blocked" && resolve(viewState, file.path) === "semantic") {
           void file.request();
         }
       }

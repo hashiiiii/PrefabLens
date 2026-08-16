@@ -1,1 +1,1 @@
-export type View = "raw" | "semantic";
+export type ViewMode = "raw" | "semantic";

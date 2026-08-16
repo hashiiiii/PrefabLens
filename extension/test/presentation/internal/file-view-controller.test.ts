@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it } from "vitest";
 import { createFileViewController } from "../../../src/presentation/internal/file-view-controller";
-import type { View } from "../../../src/presentation/internal/view-mode";
+import type { ViewMode } from "../../../src/presentation/internal/view-mode";
 
-function pressed(controller: HTMLElement, view: View): string | null {
+function pressed(controller: HTMLElement, view: ViewMode): string | null {
   return (
     controller.querySelector<HTMLButtonElement>(`button[data-view="${view}"]`)?.getAttribute("aria-pressed") ?? null
   );
@@ -16,7 +16,7 @@ describe("createFileViewController", () => {
   });
 
   it("switches raw and semantic views after a user selection", () => {
-    const selected: View[] = [];
+    const selected: ViewMode[] = [];
     const semanticRoots: ShadowRoot[] = [];
     const raw = document.createElement("div");
     const files = document.createElement("div");
@@ -62,7 +62,7 @@ describe("createFileViewController", () => {
   });
 
   it("repairs one semantic host without starting semantic work", () => {
-    const selected: View[] = [];
+    const selected: ViewMode[] = [];
     const semanticRoots: ShadowRoot[] = [];
     const raw = document.createElement("div");
     const files = document.createElement("div");

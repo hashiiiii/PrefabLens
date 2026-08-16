@@ -13,7 +13,7 @@ import { createFileViewController } from "../internal/file-view-controller";
 import { render, renderError, renderLoading } from "../internal/render";
 import { injectPageStyles, mountGlobalBar } from "../internal/toggle";
 import type { ViewMode } from "../internal/view-mode";
-import { getDefault, resolve, setDefault, setOverride, subscribeDefault } from "../internal/view-state";
+import { getDefault, resolve, setDefault, setFileViewMode, subscribe } from "../internal/view-state";
 
 function attachFile(
   header: HTMLElement,
@@ -79,7 +79,7 @@ async function main(): Promise<void> {
   const state = getDefault("semantic");
   const persist = (): void => {};
   const appliers: Array<(view: ViewMode) => void> = [];
-  subscribeDefault(state, (view) => {
+  subscribe(state, (view) => {
     for (const apply of appliers) apply(view);
   });
 
@@ -88,7 +88,7 @@ async function main(): Promise<void> {
   const bar = mountGlobalBar(state.page);
   bar.toggle.subscribe((view) => setDefault(state, view, persist));
   firstFile.before(bar.element);
-  subscribeDefault(state, (view) => bar.toggle.set(view));
+  subscribe(state, (view) => bar.toggle.set(view));
 
   for (const header of headers) {
     const path = header.dataset.path ?? "";
@@ -99,7 +99,7 @@ async function main(): Promise<void> {
       fixturesGateway.fetchBytes,
       fixturesGateway.fetchSource,
       resolve(state, path),
-      (view) => setOverride(state, path, view),
+      (view) => setFileViewMode(state, path, view),
     );
     appliers.push(apply);
   }

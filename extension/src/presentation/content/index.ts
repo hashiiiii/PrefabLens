@@ -7,11 +7,11 @@ import { mountGlobalBar, type Toggle } from "../internal/toggle";
 import type { ViewMode } from "../internal/view-mode";
 import {
   applyExternal,
-  clearOverrides,
+  clearFilesViewMode,
   getDefault,
   resolve,
   setDefault,
-  subscribeDefault,
+  subscribe,
   type ViewState,
 } from "../internal/view-state";
 import { type DiffPage, type FileEntry, parseDiffUrl, parsePrPage, scanUnityFiles } from "./detect";
@@ -93,7 +93,7 @@ function attach(viewState: ViewState): void {
   const key = targetKey(page.owner, page.repo, page.target);
   if (key !== currentPage) {
     currentPage = key;
-    clearOverrides(viewState);
+    clearFilesViewMode(viewState);
   }
   // A body remount keeps its header, so sync reattaches the semantic host before a pending push arrives.
   syncFiles();
@@ -135,7 +135,7 @@ async function initDiffRuntime(): Promise<void> {
     // A storage failure must not stop the current page.
   }
   const viewState = getDefault(initial);
-  subscribeDefault(viewState, (view) => {
+  subscribe(viewState, (view) => {
     globalToggle?.set(view);
     for (const file of syncFiles().values()) file.apply(view);
   });

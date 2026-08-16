@@ -11,7 +11,7 @@ import type { DiffV2 } from "../../../domain/diff/types";
 import { createFileViewController } from "../../internal/file-view-controller";
 import { render, renderError, renderLoading, renderTooLarge } from "../../internal/render";
 import type { ViewMode } from "../../internal/view-mode";
-import { resolve, setOverride, type ViewState } from "../../internal/view-state";
+import { resolve, setFileViewMode, type ViewState } from "../../internal/view-state";
 import type { DiffPage, FileEntry } from "../detect";
 
 const ERROR_TEXT: Record<Exclude<BackgroundError, AuthError>, string> = {
@@ -140,7 +140,7 @@ export function createFileView(
     }, WATCHDOG_MS);
   }
 
-  controller.subscribeSelection((view) => setOverride(viewState, entry.path, view));
+  controller.subscribeSelection((view) => setFileViewMode(viewState, entry.path, view));
   controller.subscribeSemantic((semanticRoot) => {
     root = semanticRoot;
     if (!json && file.status !== "loading" && file.status !== "pending") void file.request();

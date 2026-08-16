@@ -3,7 +3,7 @@ import type { ViewMode } from "./view-mode";
 export type ViewState = {
   page: ViewMode;
   files: Map<string, ViewMode>;
-  listeners: Set<(view: ViewMode) => void>;
+  listeners: Set<(file: ViewMode) => void>;
 };
 
 export function getDefault(page: ViewMode): ViewState {
@@ -14,18 +14,18 @@ export function resolve(state: ViewState, path: string): ViewMode {
   return state.files.get(path) ?? state.page;
 }
 
-export function setOverride(state: ViewState, path: string, file: ViewMode): void {
+export function setFileViewMode(state: ViewState, path: string, file: ViewMode): void {
   state.files.set(path, file);
 }
 
-export function clearOverrides(state: ViewState): void {
+export function clearFilesViewMode(state: ViewState): void {
   state.files.clear();
 }
 
-function change(state: ViewState, view: ViewMode): void {
-  state.page = view;
+function change(state: ViewState, page: ViewMode): void {
+  state.page = page;
   state.files.clear();
-  for (const fn of state.listeners) fn(view);
+  for (const fn of state.listeners) fn(page);
 }
 
 export function setDefault(state: ViewState, view: ViewMode, persist: (view: ViewMode) => void): void {
@@ -43,7 +43,7 @@ export function applyExternal(state: ViewState, view: ViewMode): void {
   if (view !== state.page) change(state, view);
 }
 
-export function subscribeDefault(state: ViewState, fn: (view: ViewMode) => void): () => void {
+export function subscribe(state: ViewState, fn: (file: ViewMode) => void): () => void {
   state.listeners.add(fn);
   return () => state.listeners.delete(fn);
 }

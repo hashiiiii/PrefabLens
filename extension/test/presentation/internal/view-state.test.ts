@@ -2,12 +2,12 @@ import { describe, expect, it } from "vitest";
 import type { ViewMode } from "../../../src/presentation/internal/view-mode";
 import {
   applyExternal,
-  clearOverrides,
+  clearFilesViewMode,
   getDefault,
   resolve,
   setDefault,
-  setOverride,
-  subscribeDefault,
+  setFileViewMode,
+  subscribe,
 } from "../../../src/presentation/internal/view-state";
 
 function sinks() {
@@ -26,11 +26,11 @@ describe("view state", () => {
     const state = getDefault("semantic");
     expect(resolve(state, "a.prefab")).toBe("semantic");
 
-    setOverride(state, "a.prefab", "raw");
+    setFileViewMode(state, "a.prefab", "raw");
     expect(resolve(state, "a.prefab")).toBe("raw");
     expect(resolve(state, "b.prefab")).toBe("semantic");
 
-    clearOverrides(state);
+    clearFilesViewMode(state);
     expect(resolve(state, "a.prefab")).toBe("semantic");
     expect(state.page).toBe("semantic");
   });
@@ -38,15 +38,15 @@ describe("view state", () => {
   it("realigns files for different-value and same-value global selections", () => {
     const { persisted, notified, persist, listener } = sinks();
     const state = getDefault("raw");
-    subscribeDefault(state, listener);
-    setOverride(state, "a.prefab", "raw");
+    subscribe(state, listener);
+    setFileViewMode(state, "a.prefab", "raw");
 
     setDefault(state, "semantic", persist);
     expect(persisted).toEqual(["semantic"]);
     expect(notified).toEqual(["semantic"]);
     expect(resolve(state, "a.prefab")).toBe("semantic");
 
-    setOverride(state, "a.prefab", "raw");
+    setFileViewMode(state, "a.prefab", "raw");
     setDefault(state, "semantic", persist);
     expect(persisted).toEqual(["semantic"]);
     expect(notified).toEqual(["semantic", "semantic"]);
@@ -60,8 +60,8 @@ describe("view state", () => {
   it("applies an external change and ignores its same-value echo", () => {
     const { notified, listener } = sinks();
     const state = getDefault("raw");
-    subscribeDefault(state, listener);
-    setOverride(state, "a.prefab", "raw");
+    subscribe(state, listener);
+    setFileViewMode(state, "a.prefab", "raw");
 
     applyExternal(state, "semantic");
     expect(state.page).toBe("semantic");
@@ -76,7 +76,7 @@ describe("view state", () => {
   it("stops default notifications after unsubscribe", () => {
     const { notified, persist, listener } = sinks();
     const state = getDefault("raw");
-    const unsubscribe = subscribeDefault(state, listener);
+    const unsubscribe = subscribe(state, listener);
 
     setDefault(state, "semantic", persist);
     unsubscribe();

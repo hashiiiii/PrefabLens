@@ -43,7 +43,7 @@ export function applyExternal(state: ViewState, view: ViewMode): void {
   if (view !== state.page) change(state, view);
 }
 
-export function subscribe(state: ViewState, fn: (file: ViewMode) => void): () => void {
+export function subscribe(state: ViewState, fn: (page: ViewMode) => void): () => void {
   state.listeners.add(fn);
   return () => state.listeners.delete(fn);
 }

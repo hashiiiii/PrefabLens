@@ -2,6 +2,13 @@ const std = @import("std");
 const model = @import("model.zig");
 const testing = std.testing;
 
+test "inspector: joined scalar node formats tuple values" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const node = try joinedScalarNode(arena_state.allocator(), &.{ "2", "3", "1" });
+    try testing.expectEqualStrings("(2, 3, 1)", node.scalar);
+}
+
 test "inspector: shouldEmitNameOverride for added and modified renames" {
     var before_n = model.Node{ .scalar = "Head" };
     var after_n = model.Node{ .scalar = "Sensor" };
@@ -97,6 +104,19 @@ pub fn displayPath(arena: std.mem.Allocator, path: []const u8) ![]const u8 {
         try appendSegment(arena, &out, seg);
     }
     return out.toOwnedSlice(arena);
+}
+
+pub fn joinedScalarNode(arena: std.mem.Allocator, values: []const []const u8) std.mem.Allocator.Error!*model.Node {
+    var output: std.ArrayList(u8) = .empty;
+    try output.append(arena, '(');
+    for (values, 0..) |value, index| {
+        if (index != 0) try output.appendSlice(arena, ", ");
+        try output.appendSlice(arena, value);
+    }
+    try output.append(arena, ')');
+    const node = try arena.create(model.Node);
+    node.* = .{ .scalar = try output.toOwnedSlice(arena) };
+    return node;
 }
 
 // Keep the "[N]" index as-is after the name part.

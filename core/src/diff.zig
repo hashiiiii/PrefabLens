@@ -576,7 +576,7 @@ fn diffNode(
     prefix: []const u8,
     a: *const Node,
     b: *const Node,
-) anyerror!void {
+) std.mem.Allocator.Error!void {
     // Recurse if the same kind.
     if (a.* == .map and b.* == .map) {
         try diffMap(arena, out, prefix, a.map, b.map);
@@ -598,7 +598,7 @@ fn diffMap(
     prefix: []const u8,
     a: []model.Entry,
     b: []model.Entry,
-) anyerror!void {
+) std.mem.Allocator.Error!void {
     // Keys in a: modified/removed or recurse
     for (a) |ea| {
         const path = try joinKey(arena, prefix, ea.key);
@@ -623,7 +623,7 @@ fn diffSeq(
     prefix: []const u8,
     a: []*Node,
     b: []*Node,
-) anyerror!void {
+) std.mem.Allocator.Error!void {
     const n = @min(a.len, b.len);
     for (a[0..n], b[0..n], 0..) |ea, eb, i| {
         const path = try std.fmt.allocPrint(arena, "{s}[{d}]", .{ prefix, i });
@@ -654,25 +654,10 @@ fn isVectorMap(entries: []model.Entry) bool {
     return true;
 }
 
-// Synthesized scalar Node of the form "(a, b, c)" (for single-row display like "Position: (2, 3, 1)").
-// pub: diff_overrides synthesizes its placement summary rows with it too.
-pub fn parenJoinNode(arena: std.mem.Allocator, vals: []const []const u8) !*Node {
-    var out: std.ArrayList(u8) = .empty;
-    try out.append(arena, '(');
-    for (vals, 0..) |v, i| {
-        if (i != 0) try out.appendSlice(arena, ", ");
-        try out.appendSlice(arena, v);
-    }
-    try out.append(arena, ')');
-    const n = try arena.create(Node);
-    n.* = .{ .scalar = try out.toOwnedSlice(arena) };
-    return n;
-}
-
 fn vectorNode(arena: std.mem.Allocator, entries: []model.Entry) !*Node {
     var vals: [4][]const u8 = undefined;
     for (entries, 0..) |e, i| vals[i] = e.value.scalar;
-    return parenJoinNode(arena, vals[0..entries.len]);
+    return inspector.joinedScalarNode(arena, vals[0..entries.len]);
 }
 
 fn appendLeaf(arena: std.mem.Allocator, out: *std.ArrayList(FieldDiff), path: []const u8, status: Status, node: *const Node) !void {
@@ -690,7 +675,7 @@ fn flattenSubtree(
     prefix: []const u8,
     node: *const Node,
     status: Status,
-) anyerror!void {
+) std.mem.Allocator.Error!void {
     switch (node.*) {
         .map => |entries| {
             if (isVectorMap(entries)) {
@@ -709,7 +694,7 @@ fn flattenSubtree(
 
 // ---- guid collection ----
 
-fn collectGuids(arena: std.mem.Allocator, set: *std.StringArrayHashMapUnmanaged(void), node: *const Node) anyerror!void {
+fn collectGuids(arena: std.mem.Allocator, set: *std.StringArrayHashMapUnmanaged(void), node: *const Node) std.mem.Allocator.Error!void {
     switch (node.*) {
         .ref => |r| if (r.guid) |g| try set.put(arena, g, {}),
         .map => |entries| for (entries) |e| try collectGuids(arena, set, e.value),

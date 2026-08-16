@@ -5,7 +5,7 @@
 const std = @import("std");
 const testing = std.testing;
 
-const Assets = @import("instantiate.zig").Assets;
+const Assets = @import("prefab.zig").Assets;
 
 // A broken TLV returns error.TruncatedAssets; the wasm wrapper turns it
 // into the error.v1 payload (no trap).

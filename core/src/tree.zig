@@ -9,20 +9,13 @@ const testing = std.testing;
 
 const diffmod = @import("diff.zig");
 const inspector = @import("inspector.zig");
+const prefab = @import("prefab.zig");
 const tree_chain = @import("tree_chain.zig");
 const tree_order = @import("tree_order.zig");
 
 const ComponentDiff = model.ComponentDiff;
 const ObjectDiff = model.ObjectDiff;
 const Index = tree_chain.Index;
-
-fn sourcePrefabGuid(doc: *const model.Document) ?[]const u8 {
-    const s = model.findValue(doc.body.map, "m_SourcePrefab") orelse return null;
-    return switch (s.*) {
-        .ref => |r| r.guid,
-        else => null,
-    };
-}
 
 // Pick up the m_Name override as the instance name.
 fn instanceName(idx: *Index, pi_id: i64) []const u8 {
@@ -146,7 +139,7 @@ pub fn build(arena: std.mem.Allocator, fd: diffmod.FlatDiff) !model.DiffResult {
             .kind = .prefab_instance,
             .file_id = pi_id,
             .name = instanceName(&idx, pi_id),
-            .source_guid = if (doc) |dc| sourcePrefabGuid(dc) else null,
+            .source_guid = if (doc) |value| prefab.sourceGuid(value) else null,
             .status = dd.status,
             .overrides = dd.overrides,
             .components = comps,
@@ -210,7 +203,7 @@ fn materialize(
     obj_by_id: *std.AutoHashMap(i64, ObjectDiff),
     children_of: *std.AutoHashMap(i64, std.ArrayList(i64)),
     go_id: i64,
-) anyerror!?ObjectDiff {
+) std.mem.Allocator.Error!?ObjectDiff {
     var self = obj_by_id.get(go_id).?;
     var kept_children: std.ArrayList(ObjectDiff) = .empty;
     if (children_of.get(go_id)) |kids| {

@@ -13,29 +13,50 @@ const tree_order = @import("tree_order.zig");
 const inspector = @import("inspector.zig");
 const perf = @import("perf.zig");
 const instantiate = @import("instantiate.zig");
+const prefab = @import("prefab.zig");
 
-pub const Assets = instantiate.Assets;
+pub const Assets = prefab.Assets;
 pub const isUnityYaml = parser.isUnityYaml;
+pub const DiffError = parser.Error;
+pub const JsonError = DiffError || std.Io.Writer.Error;
 const no_assets: Assets = .empty;
 
-pub fn diffBytes(arena: std.mem.Allocator, before_src: []const u8, after_src: []const u8) !model.DiffResult {
+pub fn diffBytes(
+    arena: std.mem.Allocator,
+    before_src: []const u8,
+    after_src: []const u8,
+) DiffError!model.DiffResult {
     return diffBytesWithAssets(arena, before_src, after_src, &no_assets);
 }
 
 // A sole-status instance supplied with assets (guid -> source prefab bytes) is
 // expanded into the merged tree. Guids with no supply go into needed_sources.
-pub fn diffBytesWithAssets(arena: std.mem.Allocator, before_src: []const u8, after_src: []const u8, assets: *const Assets) !model.DiffResult {
+pub fn diffBytesWithAssets(
+    arena: std.mem.Allocator,
+    before_src: []const u8,
+    after_src: []const u8,
+    assets: *const Assets,
+) DiffError!model.DiffResult {
     const fd = try diff.compute(arena, before_src, after_src);
     var res = try tree.build(arena, fd);
     try instantiate.expand(arena, &res, fd, assets);
     return res;
 }
 
-pub fn diffToJson(arena: std.mem.Allocator, before_src: []const u8, after_src: []const u8) ![]u8 {
+pub fn diffToJson(
+    arena: std.mem.Allocator,
+    before_src: []const u8,
+    after_src: []const u8,
+) JsonError![]u8 {
     return diffToJsonWithAssets(arena, before_src, after_src, &no_assets);
 }
 
-pub fn diffToJsonWithAssets(arena: std.mem.Allocator, before_src: []const u8, after_src: []const u8, assets: *const Assets) ![]u8 {
+pub fn diffToJsonWithAssets(
+    arena: std.mem.Allocator,
+    before_src: []const u8,
+    after_src: []const u8,
+    assets: *const Assets,
+) JsonError![]u8 {
     const res = try diffBytesWithAssets(arena, before_src, after_src, assets);
     return json.serialize(arena, res, null);
 }
@@ -55,5 +76,6 @@ test {
     _ = inspector;
     _ = perf;
     _ = instantiate;
+    _ = prefab;
     _ = @import("fixture_test.zig");
 }

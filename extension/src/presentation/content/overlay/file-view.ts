@@ -11,7 +11,7 @@ import type { DiffV2 } from "../../../domain/diff/types";
 import { createFileViewController } from "../../internal/file-view-controller";
 import { render, renderError, renderLoading, renderTooLarge } from "../../internal/render";
 import type { ViewMode } from "../../internal/view-mode";
-import { resolve, setFileViewMode, type ViewState } from "../../internal/view-state";
+import type { ViewState } from "../../internal/view-state";
 import type { DiffPage, FileEntry } from "../detect";
 
 const ERROR_TEXT: Record<Exclude<BackgroundError, AuthError>, string> = {
@@ -58,7 +58,7 @@ export function createFileView(
   const authListeners = new Set<(root: ShadowRoot, error: AuthError) => void>();
 
   const controller = createFileViewController(
-    resolve(viewState, entry.path),
+    viewState.resolve(entry.path),
     entry.setRawHidden,
     entry.attachHost,
     () => !entry.collapsed(),
@@ -71,7 +71,7 @@ export function createFileView(
     status: "idle",
     start: controller.start,
     apply: controller.apply,
-    sync: () => controller.sync(resolve(viewState, entry.path)),
+    sync: () => controller.sync(viewState.resolve(entry.path)),
     request: async () => {
       if (!root || file.status === "loading" || file.status === "pending") return;
       file.status = "loading";
@@ -140,7 +140,7 @@ export function createFileView(
     }, WATCHDOG_MS);
   }
 
-  controller.subscribeSelection((view) => setFileViewMode(viewState, entry.path, view));
+  controller.subscribeSelection((view) => viewState.setFile(entry.path, view));
   controller.subscribeSemantic((semanticRoot) => {
     root = semanticRoot;
     if (!json && file.status !== "loading" && file.status !== "pending") void file.request();

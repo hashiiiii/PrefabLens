@@ -43,7 +43,7 @@ Presentation -> Application -> Domain
               (implements gateway + repository)
 ```
 
-`test/architecture/layering.test.ts` enforces these rules:
+`test/architecture/` enforces these rules:
 
 - the import direction
 - the domain isolation
@@ -52,6 +52,8 @@ Presentation -> Application -> Domain
 - `infrastructure/clients/` holds only `*-client.ts` interface implementations
 - an `internal/` directory is private: only files under its parent directory
   import it (`src/internal/` is under the root, so every file can use it)
+- a presentation object type has no `Map` or `Set` field
+- a presentation value has no exported function that takes the value and mutates it
 
 Two modules sit outside the four layers:
 
@@ -159,6 +161,26 @@ presentation/
 - Register subscriptions before initial activation.
 - If two or more presentation contexts share a helper (render, the toggle,
   the view state), put it in `presentation/internal/`.
+- Presentation types are values or objects.
+- Do not mix the two shapes in one type.
+- This split applies to `presentation/` only.
+- A value is data. Construction is a literal or a parser
+  (`ViewMode`, `DiffPage`, `parseDiffUrl`).
+- If construction is only a literal, build the value in presentation.
+  Do not add a factory.
+- Do not put value queries under `fn/`. That layout is for `domain/` only.
+- An object is the return value of a factory
+  (`Toggle`, `FileView`, `FileViewController`, `ViewState`).
+- A method is a function on the object type. Methods are the public surface.
+- Keep `Map`, `Set`, and listener collections inside the factory.
+- A public `Map` or `Set` field lets a caller change working memory and skip
+  the methods.
+- If a caller must change working memory, call a method on the object.
+- A type alias that is a `Map` is not an object field (`FileRegistry`).
+- If an object only wraps nodes that a scan already holds, the scan can build
+  that adapter inline (`FileEntry`).
+- Do not export a function that takes a value and mutates that value.
+  That shape belongs to domain types and `domain/<area>/fn/`.
 
 #### Tests
 

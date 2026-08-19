@@ -5,15 +5,7 @@ import { targetKey } from "../../domain/diff/fn/target-key";
 import { renderSignIn, renderSignInPending } from "../internal/render";
 import { mountGlobalBar, type Toggle } from "../internal/toggle";
 import type { ViewMode } from "../internal/view-mode";
-import {
-  applyExternal,
-  clearFilesViewMode,
-  getDefault,
-  resolve,
-  setDefault,
-  subscribe,
-  type ViewState,
-} from "../internal/view-state";
+import { createViewState, type ViewState } from "../internal/view-state";
 import { type DiffPage, type FileEntry, parseDiffUrl, parsePrPage, scanUnityFiles } from "./detect";
 import { fillDeviceCode } from "./device-page";
 import { createFileView, type FileRegistry, fileKey } from "./overlay/file-view";
@@ -93,7 +85,7 @@ function attach(viewState: ViewState): void {
   const key = targetKey(page.owner, page.repo, page.target);
   if (key !== currentPage) {
     currentPage = key;
-    clearFilesViewMode(viewState);
+    viewState.clearFiles();
   }
   // A body remount keeps its header, so sync reattaches the semantic host before a pending push arrives.
   syncFiles();
@@ -116,7 +108,7 @@ function ensureGlobalToggle(viewState: ViewState, first: FileEntry): void {
   const anchor = first.globalAnchor();
   if (!anchor?.parentElement) return;
   const bar = mountGlobalBar(viewState.page);
-  bar.toggle.subscribe((view) => setDefault(viewState, view, persistView));
+  bar.toggle.subscribe((view) => viewState.setDefault(view));
   anchor.before(bar.element);
   globalToggle = bar.toggle;
 }
@@ -134,8 +126,8 @@ async function initDiffRuntime(): Promise<void> {
   } catch {
     // A storage failure must not stop the current page.
   }
-  const viewState = getDefault(initial);
-  subscribe(viewState, (view) => {
+  const viewState = createViewState(initial, persistView);
+  viewState.subscribe((view) => {
     globalToggle?.set(view);
     for (const file of syncFiles().values()) file.apply(view);
   });
@@ -143,10 +135,10 @@ async function initDiffRuntime(): Promise<void> {
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== "local") return;
     const next = changes.viewMode?.newValue;
-    if (next === "raw" || next === "semantic") applyExternal(viewState, next);
+    if (next === "raw" || next === "semantic") viewState.applyExternal(next);
     if (typeof changes.accessToken?.newValue === "string" && changes.accessToken.newValue) {
       for (const file of syncFiles().values()) {
-        if (file.status === "auth-blocked" && resolve(viewState, file.path) === "semantic") {
+        if (file.status === "auth-blocked" && viewState.resolve(file.path) === "semantic") {
           void file.request();
         }
       }

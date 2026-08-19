@@ -13,7 +13,7 @@ import { createFileViewController } from "../internal/file-view-controller";
 import { render, renderError, renderLoading } from "../internal/render";
 import { injectPageStyles, mountGlobalBar } from "../internal/toggle";
 import type { ViewMode } from "../internal/view-mode";
-import { getDefault, resolve, setDefault, setFileViewMode, subscribe } from "../internal/view-state";
+import { createViewState } from "../internal/view-state";
 
 function attachFile(
   header: HTMLElement,
@@ -76,19 +76,18 @@ async function main(): Promise<void> {
 
   // Semantic by default, like the extension after the user picks it. The
   // demo has no chrome.storage, so persistence is a no-op.
-  const state = getDefault("semantic");
-  const persist = (): void => {};
+  const state = createViewState("semantic", () => {});
   const appliers: Array<(view: ViewMode) => void> = [];
-  subscribe(state, (view) => {
+  state.subscribe((view) => {
     for (const apply of appliers) apply(view);
   });
 
   // Global bar above the first Unity file, same anchor rule as the content script.
   const firstFile = must(headers[0]?.closest(".file"));
   const bar = mountGlobalBar(state.page);
-  bar.toggle.subscribe((view) => setDefault(state, view, persist));
+  bar.toggle.subscribe((view) => state.setDefault(view));
   firstFile.before(bar.element);
-  subscribe(state, (view) => bar.toggle.set(view));
+  state.subscribe((view) => bar.toggle.set(view));
 
   for (const header of headers) {
     const path = header.dataset.path ?? "";
@@ -98,8 +97,8 @@ async function main(): Promise<void> {
       index,
       fixturesGateway.fetchBytes,
       fixturesGateway.fetchSource,
-      resolve(state, path),
-      (view) => setFileViewMode(state, path, view),
+      state.resolve(path),
+      (view) => state.setFile(path, view),
     );
     appliers.push(apply);
   }

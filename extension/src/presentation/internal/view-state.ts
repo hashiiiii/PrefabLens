@@ -1,49 +1,51 @@
 import type { ViewMode } from "./view-mode";
 
 export type ViewState = {
-  page: ViewMode;
-  files: Map<string, ViewMode>;
-  listeners: Set<(file: ViewMode) => void>;
+  readonly page: ViewMode;
+  resolve(path: string): ViewMode;
+  setFile(path: string, view: ViewMode): void;
+  clearFiles(): void;
+  setDefault(view: ViewMode): void;
+  applyExternal(view: ViewMode): void;
+  subscribe(fn: (page: ViewMode) => void): () => void;
 };
 
-export function getDefault(page: ViewMode): ViewState {
-  return { page: page, files: new Map(), listeners: new Set() };
-}
+export function createViewState(page: ViewMode, persist: (view: ViewMode) => void): ViewState {
+  let current = page;
+  const files = new Map<string, ViewMode>();
+  const listeners = new Set<(page: ViewMode) => void>();
 
-export function resolve(state: ViewState, path: string): ViewMode {
-  return state.files.get(path) ?? state.page;
-}
+  const change = (next: ViewMode): void => {
+    current = next;
+    files.clear();
+    for (const fn of listeners) fn(current);
+  };
 
-export function setFileViewMode(state: ViewState, path: string, file: ViewMode): void {
-  state.files.set(path, file);
-}
-
-export function clearFilesViewMode(state: ViewState): void {
-  state.files.clear();
-}
-
-function change(state: ViewState, page: ViewMode): void {
-  state.page = page;
-  state.files.clear();
-  for (const fn of state.listeners) fn(page);
-}
-
-export function setDefault(state: ViewState, view: ViewMode, persist: (view: ViewMode) => void): void {
-  if (view === state.page) {
-    // A same-value click still realigns: clear overrides and re-apply, but do not persist
-    if (state.files.size) change(state, view);
-    return;
-  }
-  change(state, view);
-  persist(view);
-}
-
-// storage.onChanged also fires on the originating tab. Ignore the same value and do not persist.
-export function applyExternal(state: ViewState, view: ViewMode): void {
-  if (view !== state.page) change(state, view);
-}
-
-export function subscribe(state: ViewState, fn: (page: ViewMode) => void): () => void {
-  state.listeners.add(fn);
-  return () => state.listeners.delete(fn);
+  return {
+    get page() {
+      return current;
+    },
+    resolve: (path) => files.get(path) ?? current,
+    setFile: (path, view) => {
+      files.set(path, view);
+    },
+    clearFiles: () => files.clear(),
+    setDefault: (view) => {
+      if (view === current) {
+        // A same-value click still realigns: clear overrides and re-apply, but do not persist
+        if (files.size) change(view);
+        return;
+      }
+      change(view);
+      persist(view);
+    },
+    // storage.onChanged also fires on the originating tab. Ignore the same value and do not persist.
+    applyExternal: (view) => {
+      if (view !== current) change(view);
+    },
+    subscribe: (fn) => {
+      listeners.add(fn);
+      return () => listeners.delete(fn);
+    },
+  };
 }

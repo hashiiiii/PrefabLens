@@ -25,33 +25,41 @@ class MemoryStorageArea implements StorageArea {
 }
 
 describe("createChromeGuidRepository", () => {
-  it("stores GUID paths by repository and merges later saves", async () => {
+  it("returns an empty map for a repository without stored GUIDs", async () => {
     const guids = createChromeGuidRepository(new MemoryStorageArea());
 
     expect(await guids.load("api/o/r")).toEqual({});
+  });
+
+  it("merges new GUID paths with stored paths", async () => {
+    const guids = createChromeGuidRepository(new MemoryStorageArea());
+
     await guids.save("api/o/r", { g0: "Assets/Stored.cs" });
     await guids.save("api/o/r", { g1: "Assets/A.cs" });
+
     expect(await guids.load("api/o/r")).toEqual({
       g0: "Assets/Stored.cs",
       g1: "Assets/A.cs",
     });
+  });
 
-    await guids.save("api/o/r", { g2: "Assets/B.mat" });
-    expect(await guids.load("api/o/r")).toEqual({
-      g0: "Assets/Stored.cs",
-      g1: "Assets/A.cs",
-      g2: "Assets/B.mat",
-    });
+  it("keeps GUID paths in separate repository maps", async () => {
+    const guids = createChromeGuidRepository(new MemoryStorageArea());
 
+    await guids.save("api/o/r", { g1: "Assets/A.cs" });
     await guids.save("api/o/second", { g3: "Assets/C.prefab" });
+
+    expect(await guids.load("api/o/r")).toEqual({ g1: "Assets/A.cs" });
     expect(await guids.load("api/o/second")).toEqual({ g3: "Assets/C.prefab" });
+  });
+
+  it("replaces the stored path for the same GUID", async () => {
+    const guids = createChromeGuidRepository(new MemoryStorageArea());
+
+    await guids.save("api/o/r", { g1: "Assets/A.cs" });
     await guids.save("api/o/r", { g1: "Assets/New.cs" });
-    expect(await guids.load("api/o/r")).toEqual({
-      g0: "Assets/Stored.cs",
-      g1: "Assets/New.cs",
-      g2: "Assets/B.mat",
-    });
-    expect(await guids.load("api/o/second")).toEqual({ g3: "Assets/C.prefab" });
+
+    expect(await guids.load("api/o/r")).toEqual({ g1: "Assets/New.cs" });
   });
 
   it("rejects a write when the complete next state exceeds capacity", async () => {

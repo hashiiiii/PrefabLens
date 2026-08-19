@@ -3,93 +3,93 @@ import type { ViewMode } from "../../../src/presentation/internal/view-mode";
 import { createViewState } from "../../../src/presentation/internal/view-state";
 
 describe("view state", () => {
-  it("resolve uses the page default when the file has no override", () => {
+  it("getFile uses the page default when the file has no override", () => {
     const state = createViewState("semantic", () => {});
-    expect(state.resolve("a.prefab")).toBe("semantic");
+    expect(state.getFile("a.prefab")).toBe("semantic");
   });
 
   it("setFile overrides the page default for that path only", () => {
     const state = createViewState("semantic", () => {});
     state.setFile("a.prefab", "raw");
-    expect(state.resolve("a.prefab")).toBe("raw");
-    expect(state.resolve("b.prefab")).toBe("semantic");
+    expect(state.getFile("a.prefab")).toBe("raw");
+    expect(state.getFile("b.prefab")).toBe("semantic");
   });
 
   it("clearFiles drops overrides and keeps the page default", () => {
     const state = createViewState("semantic", () => {});
     state.setFile("a.prefab", "raw");
     state.clearFiles();
-    expect(state.resolve("a.prefab")).toBe("semantic");
+    expect(state.getFile("a.prefab")).toBe("semantic");
     expect(state.page).toBe("semantic");
   });
 
-  it("setDefault to a new view persists, notifies, and clears overrides", () => {
-    const persisted: ViewMode[] = [];
+  it("savePage to a new view saves, notifies, and clears overrides", () => {
+    const saved: ViewMode[] = [];
     const notified: ViewMode[] = [];
-    const state = createViewState("raw", (view) => void persisted.push(view));
+    const state = createViewState("raw", (view) => void saved.push(view));
     state.subscribe((view) => void notified.push(view));
     state.setFile("a.prefab", "raw");
 
-    state.setDefault("semantic");
+    state.savePage("semantic");
 
-    expect(persisted).toEqual(["semantic"]);
+    expect(saved).toEqual(["semantic"]);
     expect(notified).toEqual(["semantic"]);
-    expect(state.resolve("a.prefab")).toBe("semantic");
+    expect(state.getFile("a.prefab")).toBe("semantic");
   });
 
-  // A same-value click still realigns files. Persist only on a real change.
-  it("setDefault to the current view still clears overrides and does not persist", () => {
-    const persisted: ViewMode[] = [];
+  // A same-value click still realigns files. Save only on a real change.
+  it("savePage to the current view still clears overrides and does not save", () => {
+    const saved: ViewMode[] = [];
     const notified: ViewMode[] = [];
-    const state = createViewState("semantic", (view) => void persisted.push(view));
+    const state = createViewState("semantic", (view) => void saved.push(view));
     state.subscribe((view) => void notified.push(view));
     state.setFile("a.prefab", "raw");
 
-    state.setDefault("semantic");
+    state.savePage("semantic");
 
-    expect(persisted).toEqual([]);
+    expect(saved).toEqual([]);
     expect(notified).toEqual(["semantic"]);
-    expect(state.resolve("a.prefab")).toBe("semantic");
+    expect(state.getFile("a.prefab")).toBe("semantic");
   });
 
-  it("setDefault to the current view with no overrides does nothing", () => {
-    const persisted: ViewMode[] = [];
+  it("savePage to the current view with no overrides does nothing", () => {
+    const saved: ViewMode[] = [];
     const notified: ViewMode[] = [];
-    const state = createViewState("semantic", (view) => void persisted.push(view));
+    const state = createViewState("semantic", (view) => void saved.push(view));
     state.subscribe((view) => void notified.push(view));
 
-    state.setDefault("semantic");
+    state.savePage("semantic");
 
-    expect(persisted).toEqual([]);
+    expect(saved).toEqual([]);
     expect(notified).toEqual([]);
   });
 
-  it("applyExternal changes the page and clears overrides without persisting", () => {
-    const persisted: ViewMode[] = [];
+  it("setPage changes the page and clears overrides without saving", () => {
+    const saved: ViewMode[] = [];
     const notified: ViewMode[] = [];
-    const state = createViewState("raw", (view) => void persisted.push(view));
+    const state = createViewState("raw", (view) => void saved.push(view));
     state.subscribe((view) => void notified.push(view));
     state.setFile("a.prefab", "raw");
 
-    state.applyExternal("semantic");
+    state.setPage("semantic");
 
     expect(state.page).toBe("semantic");
-    expect(state.resolve("a.prefab")).toBe("semantic");
+    expect(state.getFile("a.prefab")).toBe("semantic");
     expect(notified).toEqual(["semantic"]);
-    expect(persisted).toEqual([]);
+    expect(saved).toEqual([]);
   });
 
   // storage.onChanged also fires on the originating tab.
-  it("applyExternal ignores the same value", () => {
-    const persisted: ViewMode[] = [];
+  it("setPage ignores the same value", () => {
+    const saved: ViewMode[] = [];
     const notified: ViewMode[] = [];
-    const state = createViewState("semantic", (view) => void persisted.push(view));
+    const state = createViewState("semantic", (view) => void saved.push(view));
     state.subscribe((view) => void notified.push(view));
 
-    state.applyExternal("semantic");
+    state.setPage("semantic");
 
     expect(notified).toEqual([]);
-    expect(persisted).toEqual([]);
+    expect(saved).toEqual([]);
   });
 
   it("unsubscribe stops later notifications", () => {
@@ -97,9 +97,9 @@ describe("view state", () => {
     const state = createViewState("raw", () => {});
     const unsubscribe = state.subscribe((view) => void notified.push(view));
 
-    state.setDefault("semantic");
+    state.savePage("semantic");
     unsubscribe();
-    state.setDefault("raw");
+    state.savePage("raw");
 
     expect(notified).toEqual(["semantic"]);
   });

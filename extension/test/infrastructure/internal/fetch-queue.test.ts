@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { isRateLimited } from "../../../src/application/gateway/github";
 import { createQueue } from "../../../src/infrastructure/internal/fetch-queue";
 
-// Line up manually-resolvable deferreds to observe execution order and concurrency
+// Manual deferreds expose the task order and concurrency.
 function deferred(): { promise: Promise<void>; resolve: () => void } {
   let resolve!: () => void;
   const promise = new Promise<void>((r) => {
@@ -26,14 +26,15 @@ describe("createQueue", () => {
       }),
     );
     await new Promise((r) => setTimeout(r, 0));
-    expect(maxActive).toBe(2); // avoids the secondary rate limit: never exceeds 2 concurrent
+    // GitHub applies a secondary rate limit above two concurrent requests.
+    expect(maxActive).toBe(2);
     gate.resolve();
     await Promise.all(tasks);
     expect(maxActive).toBe(2);
   });
 
   it("runs front tasks before queued ones", async () => {
-    // A user click does not wait behind the prefetch queue
+    // A user click must not wait behind the prefetch queue.
     const queue = createQueue(1);
     const order: string[] = [];
     const gate = deferred();
@@ -56,7 +57,7 @@ describe("createQueue", () => {
   });
 
   it("keeps pumping after a task rejects", async () => {
-    // If one failure jams the queue, every subsequent fetch waits forever
+    // If one failure stops the queue, every later fetch waits forever.
     const queue = createQueue(1);
     await expect(
       queue(async () => {
@@ -67,7 +68,8 @@ describe("createQueue", () => {
   });
 
   it("normalizes a synchronous throw into a rejection without losing a slot", async () => {
-    // Even if task() throws before it returns a Promise, active does not leak. With limit 1, a following task can run only if nothing leaked.
+    // A synchronous throw can occur before task() returns a Promise.
+    // The next task runs only when the active slot returns to the queue.
     const queue = createQueue(1);
     const syncThrow = (() => {
       throw new Error("sync boom");
@@ -77,7 +79,8 @@ describe("createQueue", () => {
   });
 
   it("keeps pumping when a queued task throws synchronously on dispatch", async () => {
-    // A synchronous throw from a task dispatched inside pump()'s .finally does not become an unhandled rejection, and the caller's Promise settles
+    // pump() dispatches this task from a Promise callback.
+    // The synchronous throw must reject the task and release the queue.
     const queue = createQueue(1);
     const gate = deferred();
     const first = queue(async () => {
@@ -142,10 +145,10 @@ describe("createQueue rate limit backoff", () => {
     expect(timeline).toEqual(["ok"]);
   });
 
-  it("caps the advised wait and falls back when no advice is given", async () => {
+  it("caps each rate-limit wait at sixty seconds", async () => {
     const clock = new VirtualClock();
     const queue = createQueue(1, clock.sleep);
-    // A 10-minute primary-limit advice is capped: a fast failure into the manual message beats a hang until the reset
+    // A ten-minute wait prevents the UI from showing the manual retry message.
     const capped = queue(async () => {
       throw { kind: "rate-limited", retryAfterMs: 600_000 };
     });
@@ -157,17 +160,21 @@ describe("createQueue rate limit backoff", () => {
     expect(clock.now).toBe(120_000);
     clock.advanceTo(120_000);
     await cappedRejects;
-    // A secondary limit without headers gets the fallback wait
+  });
+
+  it("uses thirty seconds when a response has no retry advice", async () => {
+    const clock = new VirtualClock();
+    const queue = createQueue(1, clock.sleep);
     const noAdvice = queue(async () => {
       throw { kind: "rate-limited" };
     });
     const noAdviceRejects = expect(noAdvice).rejects.toSatisfy(isRateLimited);
     await flush();
-    expect(clock.now).toBe(150_000);
-    clock.advanceTo(150_000);
+    expect(clock.now).toBe(30_000);
+    clock.advanceTo(30_000);
     await flush();
-    expect(clock.now).toBe(180_000);
-    clock.advanceTo(180_000);
+    expect(clock.now).toBe(60_000);
+    clock.advanceTo(60_000);
     await noAdviceRejects;
   });
 
@@ -221,7 +228,7 @@ describe("createQueue rate limit backoff", () => {
       order.push("prefetch-retry");
     });
     await flush();
-    // The user clicks while the queue is backing off: their request must not starve
+    // The user request must not starve while the queue waits to retry prefetch work.
     const user = queue(
       async () => {
         order.push("user");

@@ -14,7 +14,7 @@ beforeAll(async () => {
 });
 
 describe("getLocalDiff", () => {
-  it("diffs fixture files and applies names from the fixture index", async () => {
+  it("returns a local diff with names from the fixture index", async () => {
     const files = new Map([
       ["before.prefab", BEFORE_PREFAB],
       ["after.prefab", AFTER_PREFAB],
@@ -103,7 +103,7 @@ describe("getLocalDiff", () => {
     expect(instance.components[0]?.fields.find((field) => field.path === "Scale")?.after).toBe("(1, 2, 1)");
   });
 
-  it("keeps the first diff when a source path is unresolved or absent", async () => {
+  it("keeps the first diff when a source path is unresolved", async () => {
     const files = new Map([["variant.prefab", VARIANT_PREFAB]]);
     const sources = new Map<string, Uint8Array<ArrayBuffer>>();
     const fetchBytes = async (url: string): Promise<Uint8Array<ArrayBuffer>> => {
@@ -114,8 +114,26 @@ describe("getLocalDiff", () => {
     const fetchSource = async (side: "before" | "after", path: string): Promise<Uint8Array> =>
       sources.get(`${side}/${path}`) ?? new Uint8Array();
 
-    const unresolved = await getLocalDiff(differ, new Map(), fetchBytes, fetchSource, undefined, "variant.prefab");
-    const absent = await getLocalDiff(
+    const result = await getLocalDiff(differ, new Map(), fetchBytes, fetchSource, undefined, "variant.prefab");
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.neededSources).toEqual([{ guid: "src0", side: "after" }]);
+    expect(result.value.resolved).toEqual({});
+  });
+
+  it("keeps the first diff when a resolved source file is absent", async () => {
+    const files = new Map([["variant.prefab", VARIANT_PREFAB]]);
+    const sources = new Map<string, Uint8Array<ArrayBuffer>>();
+    const fetchBytes = async (url: string): Promise<Uint8Array<ArrayBuffer>> => {
+      const bytes = files.get(url);
+      if (bytes === undefined) throw new Error(`${url}: HTTP 404`);
+      return bytes;
+    };
+    const fetchSource = async (side: "before" | "after", path: string): Promise<Uint8Array> =>
+      sources.get(`${side}/${path}`) ?? new Uint8Array();
+
+    const result = await getLocalDiff(
       differ,
       new Map([["src0", "Assets/Missing.prefab"]]),
       fetchBytes,
@@ -124,12 +142,9 @@ describe("getLocalDiff", () => {
       "variant.prefab",
     );
 
-    expect(unresolved.ok).toBe(true);
-    expect(absent.ok).toBe(true);
-    if (!unresolved.ok || !absent.ok) return;
-    expect(unresolved.value.neededSources).toEqual([{ guid: "src0", side: "after" }]);
-    expect(unresolved.value.resolved).toEqual({});
-    expect(absent.value.neededSources).toEqual([{ guid: "src0", side: "after" }]);
-    expect(absent.value.resolved).toEqual({ src0: "Assets/Missing.prefab" });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.neededSources).toEqual([{ guid: "src0", side: "after" }]);
+    expect(result.value.resolved).toEqual({ src0: "Assets/Missing.prefab" });
   });
 });

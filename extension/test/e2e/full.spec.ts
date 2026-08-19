@@ -1,8 +1,8 @@
 /// <reference types="node" />
-// Runs detection → real background → real WASM → render end-to-end with the actual extension (--load-extension).
-// Uses a local HTTP server as "GitHub": the --e2e build bakes __API_BASE__ and __GITHUB_ORIGIN__ to this
-// fixed port and statically registers the content script for it (see build.mjs), so no dynamic
-// permission grant is needed. Auth is the PR-panel device flow against the local OAuth routes.
+// This suite runs detection, background work, WASM, and rendering through the loaded extension.
+// The local server replaces GitHub. The E2E build uses its fixed port for both origins.
+// Static content-script registration removes the need for a dynamic permission grant.
+// The local OAuth routes exercise the PR-panel device flow.
 
 import { readFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
@@ -13,7 +13,7 @@ const DIST = fileURLToPath(new URL("../../dist", import.meta.url));
 const fixture = readFileSync(new URL("./fixtures/pr-files.html", import.meta.url), "utf8");
 const reactFixture = readFileSync(new URL("./fixtures/pr-files-react.html", import.meta.url), "utf8");
 
-// Matches the port baked into __API_BASE__ by build.mjs --e2e
+// build.mjs --e2e puts this port in __API_BASE__.
 const PORT = 8471;
 
 type ServerState = {
@@ -47,7 +47,7 @@ function releaseHeldGuidSearch(): void {
   releaseGuidSearch = undefined;
 }
 
-// Same minimal prefab as core/tests/wasm_golden.test.mjs: the output is pinned by the golden
+// This prefab matches the golden WASM input and keeps the expected diff stable.
 const BEFORE = `--- !u!114 &11400000
 MonoBehaviour:
   m_Script: {fileID: 0, guid: def, type: 3}
@@ -57,12 +57,12 @@ const AFTER = BEFORE.replace("0.5", "0.8");
 const LARGE_PADDING = `\n#${"x".repeat(13 * 1024 * 1024)}`;
 const LARGE_BEFORE = BEFORE + LARGE_PADDING;
 const LARGE_AFTER = AFTER + LARGE_PADDING;
-// 26MB with a UnityYAML head but no documents trips the 25MB guard. After
-// force, the content sniff passes and it finishes cheaply with an empty diff.
+// A 26 MB UnityYAML header exceeds the 25 MB guard.
+// The empty document list keeps the forced diff fast.
 const BIG = `%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n${"x".repeat(26 * 1024 * 1024)}`;
 
 function startServer(): Promise<Server> {
-  // One-shot 429 for the backoff test: a new server instance resets it
+  // A new server resets the single HTTP 429 response for the backoff test.
   let servedRateLimit = false;
   const server = createServer(async (req, res) => {
     const url = new URL(req.url ?? "/", "http://127.0.0.1");
@@ -72,7 +72,7 @@ function startServer(): Promise<Server> {
       res.end(body);
     };
     const json = (body: unknown): void => send(JSON.stringify(body), "application/json");
-    // Every ref pair shares one empty tree: blob fetches then use the contents API below instead
+    // Empty trees make each ref pair use the contents API.
     if (url.pathname.startsWith("/repos/o/r/git/trees/")) return json({ truncated: false, tree: [] });
     switch (url.pathname) {
       case "/o/r/pull/1/files":
@@ -93,7 +93,7 @@ function startServer(): Promise<Server> {
         return json({ base: { sha: "B" }, head: { sha: "H" } });
       case "/repos/o/r/compare/B...H":
         return json({ merge_base_commit: { sha: "MB" } });
-      // Commit page: same classic DOM, but discovery goes through the commit API (base = first parent)
+      // Commit discovery uses the first parent as the base.
       case "/o/r/commit/abcdef0":
         return send(fixture, "text/html");
       case "/repos/o/r/commits/abcdef0":
@@ -126,7 +126,7 @@ function startServer(): Promise<Server> {
           parents: [{ sha: "P700" }],
           files: [{ filename: "Assets/Big.unity", status: "modified" }],
         });
-      // Compare page: merge base from the compare API, head resolved via the sha media type
+      // Compare discovery gets the merge base and resolves the head SHA.
       case "/o/r/compare/main...topic":
         return send(fixture, "text/html");
       case "/repos/o/r/compare/main...topic":
@@ -136,7 +136,7 @@ function startServer(): Promise<Server> {
         });
       case "/repos/o/r/commits/topic":
         return send("HT\n", "application/vnd.github.sha");
-      // Backoff commit: commit pages have no prefetch, so the toggle's own attempt receives the 429
+      // Commit pages have no prefetch. Thus, the toggle request receives the HTTP 429 response.
       case "/o/r/commit/e2e4290":
         return send(fixture, "text/html");
       case "/repos/o/r/commits/e2e4290":
@@ -151,7 +151,7 @@ function startServer(): Promise<Server> {
           res.writeHead(500);
           return res.end();
         }
-        // MB/PC/MC/P429 are the base side of the pull/commit/compare/backoff flows respectively
+        // These refs are the base side of the pull, commit, compare, and backoff flows.
         const ref = url.searchParams.get("ref") ?? "";
         if (ref === "H429" && !servedRateLimit) {
           servedRateLimit = true;
@@ -177,8 +177,7 @@ function startServer(): Promise<Server> {
         }
         return send(BIG, "application/vnd.github.raw+json");
       }
-      // A binary-serialized .asset (for example LightingDataAsset): it passes the
-      // path prefilter, and the real wasm content sniff must reject it.
+      // A binary .asset passes the path filter. The WASM content check must reject it.
       case "/repos/o/r/contents/Assets/Baked.asset":
         return send("\x00\x01PK-binary-payload", "application/vnd.github.raw+json");
       case "/search/code":
@@ -226,7 +225,7 @@ async function clearLocalStorage(): Promise<void> {
   await worker.evaluate(() => chrome.storage.local.clear());
 }
 
-// A retry must cross a new service worker and empty session storage so neither cache can hide its request path.
+// A new service worker and empty session storage prevent caches from hiding the retry request.
 async function restartDiffRuntime(page: Page): Promise<void> {
   const worker = context.serviceWorkers()[0] ?? (await context.waitForEvent("serviceworker"));
   await worker.evaluate(() => chrome.storage.session.clear());
@@ -258,8 +257,9 @@ test.beforeEach(async () => {
   state.deviceAuthorized = false;
   state.rateLimitGuidSearch = false;
   state.largePendingDiff = false;
+  // The Chromium channel supports loaded extensions in headless mode.
   context = await chromium.launchPersistentContext("", {
-    channel: "chromium", // the chromium channel is required to use extensions headlessly
+    channel: "chromium",
     args: [`--disable-extensions-except=${DIST}`, `--load-extension=${DIST}`],
   });
   if (!context.serviceWorkers()[0]) await context.waitForEvent("serviceworker");
@@ -285,7 +285,7 @@ test("starts PR prefetch before a manual semantic request", async () => {
   await page.close();
 });
 
-test("renders a real wasm diff with code-search guid resolution", async () => {
+test("renders a real WASM diff with Code Search GUID resolution", async () => {
   state.requests = [];
   const page = await context.newPage();
   await page.goto(`http://127.0.0.1:${PORT}/o/r/pull/1/files`);
@@ -294,7 +294,7 @@ test("renders a real wasm diff with code-search guid resolution", async () => {
   await header.getByRole("button", { name: "Semantic" }).click();
 
   const view = page.locator("[data-prefablens-view]");
-  // Via Code Search, guid def resolves to Sound.cs, so the script name shows instead of the type name
+  // Code Search resolves GUID def to Sound.cs. Thus, the view shows the script name.
   await expect(view).toContainText("Sound");
   await expect(view).toContainText("Volume");
   await expect(view).toContainText("0.5");
@@ -312,7 +312,7 @@ test("serves a commit page against the commit API", async () => {
   await header.getByRole("button", { name: "Semantic" }).click();
 
   const view = page.locator("[data-prefablens-view]");
-  // BEFORE at the first parent, AFTER at the commit itself: the same real-wasm diff as the PR flow
+  // The first parent supplies the before value. The commit supplies the after value.
   await expect(view).toContainText("0.5");
   await expect(view).toContainText("0.8");
   await page.close();
@@ -331,7 +331,7 @@ test("serves a compare page from the merge base", async () => {
   await page.close();
 });
 
-test("rejects a binary .asset through the real wasm sniff", async () => {
+test("rejects a binary .asset through the real WASM sniff", async () => {
   const page = await context.newPage();
   await page.goto(`http://127.0.0.1:${PORT}/o/r/pull/1/files`);
 
@@ -344,10 +344,8 @@ test("rejects a binary .asset through the real wasm sniff", async () => {
 });
 
 test("recovers from a 429 through the real queue backoff", async () => {
-  // The wiring regression that this test pins: bare fetch resolved on a 429.
-  // The queue's backoff never ran, and the panel showed the rate-limit error.
-  // The server returns one 429 for the head blob (retry-after: 1). The shipped
-  // pipeline (background → container → createQueuedFetch → queue) must pause and retry.
+  // A bare fetch once treated HTTP 429 as success and bypassed the queue.
+  // The head blob returns one HTTP 429 response. The complete pipeline must pause and retry.
   const page = await context.newPage();
   await page.goto(`http://127.0.0.1:${PORT}/o/r/commit/e2e4290`);
 

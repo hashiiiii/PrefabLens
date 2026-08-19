@@ -94,7 +94,7 @@ describe("createFileViewController", () => {
 
     host?.remove();
     semanticVisible = false;
-    controller.sync("semantic");
+    controller.update("semantic");
 
     expect(host?.isConnected).toBe(true);
     expect(files.querySelector("[data-prefablens-view]")).toBe(host);
@@ -103,13 +103,13 @@ describe("createFileViewController", () => {
     expect(raw.style.display).toBe("none");
     expect(semanticRoots).toEqual([root]);
 
-    controller.apply("raw");
+    controller.setView("raw");
     expect(pressed(controller.element, "raw")).toBe("true");
     expect(pressed(controller.element, "semantic")).toBe("false");
     expect(selected).toEqual([]);
 
     semanticVisible = true;
-    controller.apply("semantic");
+    controller.setView("semantic");
     expect(pressed(controller.element, "raw")).toBe("false");
     expect(pressed(controller.element, "semantic")).toBe("true");
     expect(files.querySelector("[data-prefablens-view]")).toBe(host);

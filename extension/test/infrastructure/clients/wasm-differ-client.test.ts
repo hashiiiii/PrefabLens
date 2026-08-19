@@ -68,13 +68,19 @@ describe("createDifferGateway", () => {
     expect(result).toEqual({ ok: false, error: { kind: "diff-failed", message: "NestingTooDeep" } });
   });
 
-  it("isUnityYaml sniffs content, not paths", () => {
-    // The BEFORE fixture is a bare "--- !u!" document head.
+  it("accepts a UnityYAML document head", () => {
     expect(differ.isUnityYaml(BEFORE)).toBe(true);
-    // .meta-style plain YAML and binary bytes are both rejected.
+  });
+
+  it("rejects plain YAML metadata", () => {
     expect(differ.isUnityYaml(enc.encode("fileFormatVersion: 2\nguid: abc\n"))).toBe(false);
+  });
+
+  it("rejects binary data", () => {
     expect(differ.isUnityYaml(new Uint8Array([0, 1, 2, 255]))).toBe(false);
-    // An absent side (added/removed file) is empty bytes: never UnityYAML.
+  });
+
+  it("rejects an empty file side", () => {
     expect(differ.isUnityYaml(new Uint8Array(0))).toBe(false);
   });
 
@@ -84,6 +90,23 @@ describe("createDifferGateway", () => {
       expect(result.ok).toBe(true);
       if (result.ok) expect(result.value.schema).toBe("prefablens.diff.v2");
     }
+  });
+
+  it("requests a source prefab when the source is absent", () => {
+    const variant = enc.encode(`--- !u!1001 &1001
+PrefabInstance:
+  m_Modification:
+    m_Modifications:
+    - target: {fileID: 40, guid: srcguid, type: 3}
+      propertyPath: m_LocalScale.y
+      value: 2
+  m_SourcePrefab: {fileID: 100100000, guid: srcguid, type: 3}`);
+
+    const result = differ.diff(new Uint8Array(0), variant);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.neededSources).toEqual([{ guid: "srcguid", side: "after" }]);
   });
 
   it("diffWithAssets merges a source prefab into the instance node", () => {
@@ -105,13 +128,6 @@ Transform:
   m_GameObject: {fileID: 10}
   m_LocalScale: {x: 1, y: 1, z: 1}`);
 
-    // Without assets: core requests the supply.
-    const first = differ.diff(new Uint8Array(0), variant);
-    expect(first.ok).toBe(true);
-    if (!first.ok) return;
-    expect(first.value.neededSources).toEqual([{ guid: "srcguid", side: "after" }]);
-
-    // With assets: merged, so neededSources disappears and it becomes a full enumeration with overrides applied.
     const merged = differ.diffWithAssets(new Uint8Array(0), variant, new Map([["srcguid", source]]));
     expect(merged.ok).toBe(true);
     if (!merged.ok) return;

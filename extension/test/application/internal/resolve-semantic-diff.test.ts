@@ -1,9 +1,8 @@
 /// <reference types="node" />
 import { readFileSync } from "node:fs";
 import { beforeAll, describe, expect, it } from "vitest";
-import { createDiffSession, type DiffContext } from "../../../src/application/diff/create-diff-session";
+import { createDiffSession } from "../../../src/application/diff/create-diff-session";
 import type { DifferGateway } from "../../../src/application/gateway/differ";
-import type { SemanticDiffRequest } from "../../../src/application/gateway/messenger";
 import { resolveSemanticDiff } from "../../../src/application/internal/resolve-semantic-diff";
 import { type DiffV2, emptyDiff } from "../../../src/domain/diff/types";
 import type { GuidRepository } from "../../../src/domain/guid/guid-repository";
@@ -14,18 +13,7 @@ import { createDifferGateway } from "../../../src/infrastructure/clients/wasm-di
 import { SOURCE_PREFAB, VARIANT_PREFAB } from "../../fixtures/unity";
 
 const API_BASE = "https://api.github.test";
-const OWNER = "o";
-const REPO = "r";
-const REPO_KEY = `${API_BASE}:${OWNER}/${REPO}`;
-const MAIN_PATH = "Assets/Foo.prefab";
-const SOURCE_PATH = "Assets/Source.prefab";
-const REQUEST: SemanticDiffRequest = {
-  type: "semanticDiff",
-  owner: OWNER,
-  repo: REPO,
-  target: { kind: "pull", prNumber: 1 },
-  path: MAIN_PATH,
-};
+
 class MemoryGuidRepository implements GuidRepository {
   storageAvailable = true;
 
@@ -93,15 +81,6 @@ function raw(bytes: Uint8Array): Response {
   return new Response(body, { status: 200 });
 }
 
-function context(): DiffContext {
-  return {
-    refs: { baseSha: "base-sha", headSha: "head-sha" },
-    files: [{ path: MAIN_PATH, status: "added" }],
-    guidIndex: new Map(),
-    baseShas: new Map(),
-  };
-}
-
 function sourceDiff(resolved?: Record<string, string>): DiffV2 {
   const result = differ.diff(new Uint8Array(), VARIANT_PREFAB);
   if (!result.ok) throw new Error(result.error.message);
@@ -141,11 +120,22 @@ describe("resolveSemanticDiff", () => {
       async () => differ,
       createDiffSession(),
       client,
-      context(),
-      REPO_KEY,
+      {
+        refs: { baseSha: "base-sha", headSha: "head-sha" },
+        files: [{ path: "Assets/Foo.prefab", status: "added" }],
+        guidIndex: new Map(),
+        baseShas: new Map(),
+      },
+      "https://api.github.test:o/r",
       { ...emptyDiff(), unresolvedGuids: ["indexed"], resolved: {} },
       ["indexed"],
-      REQUEST,
+      {
+        type: "semanticDiff",
+        owner: "o",
+        repo: "r",
+        target: { kind: "pull", prNumber: 1 },
+        path: "Assets/Foo.prefab",
+      },
     );
 
     expect(typeof (operation as unknown as AsyncIterable<unknown>)[Symbol.asyncIterator]).toBe("function");
@@ -185,11 +175,22 @@ describe("resolveSemanticDiff", () => {
         async () => differ,
         createDiffSession(),
         client,
-        context(),
-        REPO_KEY,
+        {
+          refs: { baseSha: "base-sha", headSha: "head-sha" },
+          files: [{ path: "Assets/Foo.prefab", status: "added" }],
+          guidIndex: new Map(),
+          baseShas: new Map(),
+        },
+        "https://api.github.test:o/r",
         { ...emptyDiff(), unresolvedGuids: ["indexed", "searched"], resolved: {} },
         ["indexed", "searched"],
-        REQUEST,
+        {
+          type: "semanticDiff",
+          owner: "o",
+          repo: "r",
+          target: { kind: "pull", prNumber: 1 },
+          path: "Assets/Foo.prefab",
+        },
       ),
     );
 
@@ -215,20 +216,33 @@ describe("resolveSemanticDiff", () => {
       }
       return new Response(null, { status: 500 });
     });
-    const first = sourceDiff({ src0: SOURCE_PATH });
+    const first = sourceDiff({ src0: "Assets/Source.prefab" });
     first.unresolvedGuids = [...first.unresolvedGuids, "limited"];
     const messages = await collect(
       resolveSemanticDiff(
-        new MemoryGuidRepository({ [REPO_KEY]: { src0: SOURCE_PATH } }),
+        new MemoryGuidRepository({
+          "https://api.github.test:o/r": { src0: "Assets/Source.prefab" },
+        }),
         new MemoryRepoIndexRepository(),
         async () => differ,
         createDiffSession(),
         client,
-        context(),
-        REPO_KEY,
+        {
+          refs: { baseSha: "base-sha", headSha: "head-sha" },
+          files: [{ path: "Assets/Foo.prefab", status: "added" }],
+          guidIndex: new Map(),
+          baseShas: new Map(),
+        },
+        "https://api.github.test:o/r",
         first,
         ["limited"],
-        REQUEST,
+        {
+          type: "semanticDiff",
+          owner: "o",
+          repo: "r",
+          target: { kind: "pull", prNumber: 1 },
+          path: "Assets/Foo.prefab",
+        },
       ),
     );
 
@@ -236,7 +250,9 @@ describe("resolveSemanticDiff", () => {
   });
 
   it("keeps rateLimited after a later rejection", async () => {
-    const guidRepository = new MemoryGuidRepository({ [REPO_KEY]: { src0: SOURCE_PATH } });
+    const guidRepository = new MemoryGuidRepository({
+      "https://api.github.test:o/r": { src0: "Assets/Source.prefab" },
+    });
     const { client } = githubRoutes(({ url }) => {
       if (url.pathname === "/repos/o/r/git/trees/head-sha") {
         return json({ truncated: false, tree: [] });
@@ -249,7 +265,7 @@ describe("resolveSemanticDiff", () => {
       if (url.pathname === "/repos/o/r/contents/Assets/Source.prefab") return raw(SOURCE_PREFAB);
       return new Response(null, { status: 500 });
     });
-    const first = sourceDiff({ src0: SOURCE_PATH });
+    const first = sourceDiff({ src0: "Assets/Source.prefab" });
     first.unresolvedGuids = [...first.unresolvedGuids, "limited"];
     const messages = await collect(
       resolveSemanticDiff(
@@ -258,11 +274,22 @@ describe("resolveSemanticDiff", () => {
         async () => differ,
         createDiffSession(),
         client,
-        context(),
-        REPO_KEY,
+        {
+          refs: { baseSha: "base-sha", headSha: "head-sha" },
+          files: [{ path: "Assets/Foo.prefab", status: "added" }],
+          guidIndex: new Map(),
+          baseShas: new Map(),
+        },
+        "https://api.github.test:o/r",
         first,
         ["limited"],
-        REQUEST,
+        {
+          type: "semanticDiff",
+          owner: "o",
+          repo: "r",
+          target: { kind: "pull", prNumber: 1 },
+          path: "Assets/Foo.prefab",
+        },
       ),
     );
 
@@ -279,16 +306,29 @@ describe("resolveSemanticDiff", () => {
     });
     const messages = await collect(
       resolveSemanticDiff(
-        new MemoryGuidRepository({ [REPO_KEY]: { src0: SOURCE_PATH } }),
+        new MemoryGuidRepository({
+          "https://api.github.test:o/r": { src0: "Assets/Source.prefab" },
+        }),
         new MemoryRepoIndexRepository(),
         async () => differ,
         createDiffSession(),
         client,
-        context(),
-        REPO_KEY,
-        sourceDiff({ src0: SOURCE_PATH }),
+        {
+          refs: { baseSha: "base-sha", headSha: "head-sha" },
+          files: [{ path: "Assets/Foo.prefab", status: "added" }],
+          guidIndex: new Map(),
+          baseShas: new Map(),
+        },
+        "https://api.github.test:o/r",
+        sourceDiff({ src0: "Assets/Source.prefab" }),
         [],
-        REQUEST,
+        {
+          type: "semanticDiff",
+          owner: "o",
+          repo: "r",
+          target: { kind: "pull", prNumber: 1 },
+          path: "Assets/Foo.prefab",
+        },
       ),
     );
 
@@ -318,18 +358,29 @@ describe("resolveSemanticDiff", () => {
         async () => differ,
         createDiffSession(),
         client,
-        context(),
-        REPO_KEY,
+        {
+          refs: { baseSha: "base-sha", headSha: "head-sha" },
+          files: [{ path: "Assets/Foo.prefab", status: "added" }],
+          guidIndex: new Map(),
+          baseShas: new Map(),
+        },
+        "https://api.github.test:o/r",
         sourceDiff(),
         ["src0"],
-        REQUEST,
+        {
+          type: "semanticDiff",
+          owner: "o",
+          repo: "r",
+          target: { kind: "pull", prNumber: 1 },
+          path: "Assets/Foo.prefab",
+        },
       ),
     );
 
     const final = messages.at(-1);
     expect(final).toMatchObject({ done: true, status: "complete" });
     expect(final?.json?.neededSources).toBeUndefined();
-    expect(final?.json?.resolved).toEqual({ src0: SOURCE_PATH });
+    expect(final?.json?.resolved).toEqual({ src0: "Assets/Source.prefab" });
   });
 
   it("sends a final push after an unexpected rejection", async () => {
@@ -343,11 +394,22 @@ describe("resolveSemanticDiff", () => {
         async () => differ,
         createDiffSession(),
         client,
-        context(),
-        REPO_KEY,
+        {
+          refs: { baseSha: "base-sha", headSha: "head-sha" },
+          files: [{ path: "Assets/Foo.prefab", status: "added" }],
+          guidIndex: new Map(),
+          baseShas: new Map(),
+        },
+        "https://api.github.test:o/r",
         { ...emptyDiff(), unresolvedGuids: ["unknown"], resolved: {} },
         ["unknown"],
-        REQUEST,
+        {
+          type: "semanticDiff",
+          owner: "o",
+          repo: "r",
+          target: { kind: "pull", prNumber: 1 },
+          path: "Assets/Foo.prefab",
+        },
       ),
     );
 
@@ -355,10 +417,10 @@ describe("resolveSemanticDiff", () => {
     expect(messages).toEqual([
       {
         type: "guidResolved",
-        owner: OWNER,
-        repo: REPO,
-        target: REQUEST.target,
-        path: MAIN_PATH,
+        owner: "o",
+        repo: "r",
+        target: { kind: "pull", prNumber: 1 },
+        path: "Assets/Foo.prefab",
         resolved: {},
         done: true,
         status: "failed",

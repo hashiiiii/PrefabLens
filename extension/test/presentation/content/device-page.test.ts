@@ -3,8 +3,6 @@ import { describe, expect, it } from "vitest";
 import { must } from "../../../src/internal/must";
 import { fillDeviceCode } from "../../../src/presentation/content/device-page";
 
-const PENDING = { userCode: "ABCD-1234", expiresAt: 10_000 };
-
 const FORM =
   '<form action="/login/device/confirmation" method="post">' +
   '<input type="hidden" name="authenticity_token" value="tok">' +
@@ -29,39 +27,46 @@ function boxes(): HTMLInputElement[] {
 }
 
 describe("fillDeviceCode", () => {
-  it("fills eight code boxes in order, skips the hyphen, and fires input on each box", () => {
+  it("fills the eight code boxes and omits the hyphen", () => {
+    document.body.innerHTML = FORM;
+    fillDeviceCode(document, { userCode: "ABCD-1234", expiresAt: 10_000 }, 5_000);
+
+    expect(boxes().map((box) => box.value)).toEqual(["A", "B", "C", "D", "1", "2", "3", "4"]);
+  });
+
+  it("dispatches one input event for each filled box", () => {
     document.body.innerHTML = FORM;
     let fired = 0;
-    for (const b of boxes()) {
-      // GitHub adds JS to the boxes for auto-advance with data-next.
-      // The input events keep the page in sync.
-      b.addEventListener("input", () => {
-        fired += 1;
-      });
-    }
-    fillDeviceCode(document, PENDING, 5_000);
-    expect(boxes().map((b) => b.value)).toEqual(["A", "B", "C", "D", "1", "2", "3", "4"]);
+    // GitHub uses input events to advance to the next box.
+    must(document.querySelector("form")).addEventListener("input", () => {
+      fired += 1;
+    });
+
+    fillDeviceCode(document, { userCode: "ABCD-1234", expiresAt: 10_000 }, 5_000);
+
     expect(fired).toBe(8);
   });
 
   it("does not change the form when the pending code expired", () => {
     document.body.innerHTML = FORM;
-    fillDeviceCode(document, PENDING, 10_001);
-    expect(boxes().map((b) => b.value)).toStrictEqual(["", "", "", "", "", "", "", ""]);
+    fillDeviceCode(document, { userCode: "ABCD-1234", expiresAt: 10_000 }, 10_001);
+
+    expect(boxes().map((box) => box.value)).toStrictEqual(["", "", "", "", "", "", "", ""]);
   });
 
-  it("does not change a box that the user already filled", () => {
+  it("does not fill any box when one box has a value", () => {
     document.body.innerHTML = FORM;
     must(boxes()[2]).value = "X";
-    fillDeviceCode(document, PENDING, 5_000);
-    expect(must(boxes()[0]).value).toBe("");
-    expect(must(boxes()[2]).value).toBe("X");
+    fillDeviceCode(document, { userCode: "ABCD-1234", expiresAt: 10_000 }, 5_000);
+
+    expect(boxes().map((box) => box.value)).toEqual(["", "", "X", "", "", "", "", ""]);
   });
 
-  it("does nothing when the box count does not match the code length", () => {
+  it("does not fill boxes when their count differs from the code length", () => {
     document.body.innerHTML = FORM;
     must(boxes()[7]).remove();
-    fillDeviceCode(document, PENDING, 5_000);
-    expect(boxes().every((b) => b.value === "")).toBe(true);
+    fillDeviceCode(document, { userCode: "ABCD-1234", expiresAt: 10_000 }, 5_000);
+
+    expect(boxes().map((box) => box.value)).toEqual(["", "", "", "", "", "", ""]);
   });
 });

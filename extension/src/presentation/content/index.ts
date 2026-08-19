@@ -27,9 +27,9 @@ let currentPage = ""; // drop overrides when leaving this diff page
 let prefetchedPr = ""; // prefetch once per PR across conversation + files tabs
 
 // SPA navigation can remove a complete file view or only its body.
-function syncFiles(): FileRegistry {
+function updateFiles(): FileRegistry {
   for (const [key, file] of files) {
-    if (file.header.isConnected) file.sync();
+    if (file.header.isConnected) file.update();
     else {
       file.dispose();
       files.delete(key);
@@ -47,7 +47,7 @@ const signInState = { inFlight: false };
 const openTab = (url: string) => void window.open(url, "_blank", "noopener");
 const now = () => Date.now();
 
-const persistView = async (view: ViewMode): Promise<void> => {
+const saveViewMode = async (view: ViewMode): Promise<void> => {
   try {
     await chrome.storage.local.set({ viewMode: view });
   } catch {
@@ -87,8 +87,8 @@ function attach(viewState: ViewState): void {
     currentPage = key;
     viewState.clearFiles();
   }
-  // A body remount keeps its header, so sync reattaches the semantic host before a pending push arrives.
-  syncFiles();
+  // A body remount keeps its header, so update reattaches the semantic host before a pending push arrives.
+  updateFiles();
   const entries = scanUnityFiles(document);
   const first = entries[0];
   if (first) ensureGlobalToggle(viewState, first);
@@ -108,7 +108,7 @@ function ensureGlobalToggle(viewState: ViewState, first: FileEntry): void {
   const anchor = first.globalAnchor();
   if (!anchor?.parentElement) return;
   const bar = mountGlobalBar(viewState.page);
-  bar.toggle.subscribe((view) => viewState.setDefault(view));
+  bar.toggle.subscribe((view) => viewState.savePage(view));
   anchor.before(bar.element);
   globalToggle = bar.toggle;
 }
@@ -126,20 +126,19 @@ async function initDiffRuntime(): Promise<void> {
   } catch {
     // A storage failure must not stop the current page.
   }
-  const viewState = createViewState(initial, persistView);
+  const viewState = createViewState(initial, saveViewMode);
   viewState.subscribe((view) => {
     globalToggle?.set(view);
-    for (const file of syncFiles().values()) file.apply(view);
+    for (const file of updateFiles().values()) file.setView(view);
   });
-  // Cross-tab default sync. applyExternal ignores the originating tab's echo.
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== "local") return;
     const next = changes.viewMode?.newValue;
-    if (next === "raw" || next === "semantic") viewState.applyExternal(next);
+    if (next === "raw" || next === "semantic") viewState.setPage(next);
     if (typeof changes.accessToken?.newValue === "string" && changes.accessToken.newValue) {
-      for (const file of syncFiles().values()) {
-        if (file.status === "auth-blocked" && viewState.resolve(file.path) === "semantic") {
-          void file.request();
+      for (const file of updateFiles().values()) {
+        if (file.status === "auth-blocked" && viewState.getFile(file.path) === "semantic") {
+          void file.loadDiff();
         }
       }
     }
@@ -148,7 +147,7 @@ async function initDiffRuntime(): Promise<void> {
   chrome.runtime.onMessage.addListener((msg: GuidResolvedPush) => {
     if (msg?.type !== "guidResolved") return;
     const page: DiffPage = { owner: msg.owner, repo: msg.repo, target: msg.target };
-    files.get(fileKey(page, msg.path))?.resolve(msg);
+    files.get(fileKey(page, msg.path))?.setResolved(msg);
   });
 
   // SPA: MutationObserver + 50ms debounce follows lazy loads and stays under the

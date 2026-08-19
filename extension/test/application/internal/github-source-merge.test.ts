@@ -67,10 +67,6 @@ function context(baseShas: Map<string, string> | null = new Map()): DiffContext 
   };
 }
 
-function cached(paths: Record<string, string>): MemoryGuidRepository {
-  return new MemoryGuidRepository({ [REPO_KEY]: paths });
-}
-
 let differ: DifferGateway;
 
 beforeAll(async () => {
@@ -80,18 +76,16 @@ beforeAll(async () => {
 
 describe("mergeGithubSources", () => {
   it("fetches a resolved source from the head and merges it", async () => {
-    const path = "Assets/Source.prefab";
     const { client, requests } = githubRoutes((request) =>
-      request.pathname === `/repos/${OWNER}/${REPO}/contents/Assets/Source.prefab` &&
-      request.searchParams.get("ref") === "head-sha"
+      request.pathname === "/repos/o/r/contents/Assets/Source.prefab" && request.searchParams.get("ref") === "head-sha"
         ? raw(SOURCE_PREFAB)
         : new Response(null, { status: 404 }),
     );
-    const first = firstDiff(differ, new Uint8Array(), VARIANT_PREFAB, { src0: path });
+    const first = firstDiff(differ, new Uint8Array(), VARIANT_PREFAB, { src0: "Assets/Source.prefab" });
 
     const result = await mergeGithubSources(
       differ,
-      cached({ src0: path }),
+      new MemoryGuidRepository({ [REPO_KEY]: { src0: "Assets/Source.prefab" } }),
       createDiffSession(),
       client,
       OWNER,
@@ -105,30 +99,29 @@ describe("mergeGithubSources", () => {
 
     expect(result.status).toBe("complete");
     expect(result.json.neededSources).toBeUndefined();
-    expect(result.json.resolved).toEqual({ src0: path });
+    expect(result.json.resolved).toEqual({ src0: "Assets/Source.prefab" });
     expect(requests.map((request) => `${request.pathname}${request.search}`)).toEqual([
       "/repos/o/r/contents/Assets/Source.prefab?ref=head-sha",
     ]);
   });
 
   it("fetches a removed source from the base", async () => {
-    const path = "Assets/Source.prefab";
     const { client, requests } = githubRoutes((request) =>
       request.pathname === "/repos/o/r/git/blobs/source-base-blob"
         ? raw(SOURCE_PREFAB)
         : new Response(null, { status: 404 }),
     );
-    const first = firstDiff(differ, VARIANT_PREFAB, new Uint8Array(), { src0: path });
+    const first = firstDiff(differ, VARIANT_PREFAB, new Uint8Array(), { src0: "Assets/Source.prefab" });
 
     const result = await mergeGithubSources(
       differ,
-      cached({ src0: path }),
+      new MemoryGuidRepository({ [REPO_KEY]: { src0: "Assets/Source.prefab" } }),
       createDiffSession(),
       client,
       OWNER,
       REPO,
       REPO_KEY,
-      context(new Map([[path, "source-base-blob"]])),
+      context(new Map([["Assets/Source.prefab", "source-base-blob"]])),
       VARIANT_PREFAB,
       new Uint8Array(),
       first,
@@ -140,13 +133,12 @@ describe("mergeGithubSources", () => {
   });
 
   it("skips a binary source and keeps the available diff", async () => {
-    const path = "Assets/Source.prefab";
     const { client, requests } = githubRoutes(() => raw(BINARY_ASSET));
-    const first = firstDiff(differ, new Uint8Array(), VARIANT_PREFAB, { src0: path });
+    const first = firstDiff(differ, new Uint8Array(), VARIANT_PREFAB, { src0: "Assets/Source.prefab" });
 
     const result = await mergeGithubSources(
       differ,
-      cached({ src0: path }),
+      new MemoryGuidRepository({ [REPO_KEY]: { src0: "Assets/Source.prefab" } }),
       createDiffSession(),
       client,
       OWNER,
@@ -163,12 +155,6 @@ describe("mergeGithubSources", () => {
   });
 
   it("stops after three source rounds", async () => {
-    const paths = {
-      src0: "Assets/S0.prefab",
-      src1: "Assets/S1.prefab",
-      src2: "Assets/S2.prefab",
-      src3: "Assets/S3.prefab",
-    };
     const sources: Record<string, Uint8Array> = {
       "/repos/o/r/contents/Assets/S0.prefab": nestedSource(100, "src1"),
       "/repos/o/r/contents/Assets/S1.prefab": nestedSource(200, "src2"),
@@ -178,11 +164,18 @@ describe("mergeGithubSources", () => {
       const source = sources[request.pathname];
       return source ? raw(source) : new Response(null, { status: 404 });
     });
-    const first = firstDiff(differ, new Uint8Array(), VARIANT_PREFAB, { src0: paths.src0 });
+    const first = firstDiff(differ, new Uint8Array(), VARIANT_PREFAB, { src0: "Assets/S0.prefab" });
 
     const result = await mergeGithubSources(
       differ,
-      cached(paths),
+      new MemoryGuidRepository({
+        [REPO_KEY]: {
+          src0: "Assets/S0.prefab",
+          src1: "Assets/S1.prefab",
+          src2: "Assets/S2.prefab",
+          src3: "Assets/S3.prefab",
+        },
+      }),
       createDiffSession(),
       client,
       OWNER,
@@ -204,13 +197,12 @@ describe("mergeGithubSources", () => {
   });
 
   it("does not repeat a source that makes no progress", async () => {
-    const path = "Assets/Missing.prefab";
     const { client, requests } = githubRoutes(() => new Response(null, { status: 404 }));
-    const first = firstDiff(differ, new Uint8Array(), VARIANT_PREFAB, { src0: path });
+    const first = firstDiff(differ, new Uint8Array(), VARIANT_PREFAB, { src0: "Assets/Missing.prefab" });
 
     const result = await mergeGithubSources(
       differ,
-      cached({ src0: path }),
+      new MemoryGuidRepository({ [REPO_KEY]: { src0: "Assets/Missing.prefab" } }),
       createDiffSession(),
       client,
       OWNER,
@@ -232,7 +224,7 @@ describe("mergeGithubSources", () => {
 
     const result = await mergeGithubSources(
       differ,
-      cached({}),
+      new MemoryGuidRepository(),
       createDiffSession(),
       client,
       OWNER,

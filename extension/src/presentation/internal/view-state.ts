@@ -2,15 +2,15 @@ import type { ViewMode } from "./view-mode";
 
 export type ViewState = {
   readonly page: ViewMode;
-  resolve(path: string): ViewMode;
+  getFile(path: string): ViewMode;
   setFile(path: string, view: ViewMode): void;
   clearFiles(): void;
-  setDefault(view: ViewMode): void;
-  applyExternal(view: ViewMode): void;
+  savePage(view: ViewMode): void;
+  setPage(view: ViewMode): void;
   subscribe(fn: (page: ViewMode) => void): () => void;
 };
 
-export function createViewState(page: ViewMode, persist: (view: ViewMode) => void): ViewState {
+export function createViewState(page: ViewMode, save: (view: ViewMode) => void): ViewState {
   let current = page;
   const files = new Map<string, ViewMode>();
   const listeners = new Set<(page: ViewMode) => void>();
@@ -25,22 +25,22 @@ export function createViewState(page: ViewMode, persist: (view: ViewMode) => voi
     get page() {
       return current;
     },
-    resolve: (path) => files.get(path) ?? current,
+    getFile: (path) => files.get(path) ?? current,
     setFile: (path, view) => {
       files.set(path, view);
     },
     clearFiles: () => files.clear(),
-    setDefault: (view) => {
+    savePage: (view) => {
       if (view === current) {
-        // A same-value click still realigns: clear overrides and re-apply, but do not persist
+        // A same-value click still realigns: clear overrides and re-apply, but do not save
         if (files.size) change(view);
         return;
       }
       change(view);
-      persist(view);
+      save(view);
     },
-    // storage.onChanged also fires on the originating tab. Ignore the same value and do not persist.
-    applyExternal: (view) => {
+    // storage.onChanged also fires on the originating tab. Ignore the same value and do not save.
+    setPage: (view) => {
       if (view !== current) change(view);
     },
     subscribe: (fn) => {

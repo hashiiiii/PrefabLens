@@ -358,15 +358,52 @@ describe("createGithubGateway", () => {
     expect(result).toEqual(ok({ sha1: "guid: g1\n", sha2: null }));
   });
 
-  it.each([
-    ["429", 429, {}, ""],
-    ["retry-after", 403, { "retry-after": "60" }, ""],
-    ["zero remaining", 403, { "x-ratelimit-remaining": "0" }, ""],
-    ["body advice", 403, { "x-ratelimit-remaining": "4999" }, '{"message":"Secondary rate limit"}'],
-  ])("classifies %s REST responses as rate-limited", async (_name, status, headers, body) => {
+  it("classifies an HTTP 429 response as rate-limited", async () => {
     const fetchFn = (async (input: RequestInfo | URL, init?: RequestInit) => {
       if (requestKey(input, init) !== `GET ${API}/repos/o/r/pulls/1`) return unexpectedRequest(input, init);
-      return new Response(body, { status, headers });
+      return new Response("", { status: 429 });
+    }) as typeof fetch;
+
+    const result = await createGithubGateway(API, "tok", fetchFn).getPrRefs("o", "r", 1);
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(isRateLimited(result.error)).toBe(true);
+  });
+
+  it("classifies Retry-After on HTTP 403 as rate-limited", async () => {
+    const fetchFn = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (requestKey(input, init) !== `GET ${API}/repos/o/r/pulls/1`) return unexpectedRequest(input, init);
+      return new Response("", { status: 403, headers: { "retry-after": "60" } });
+    }) as typeof fetch;
+
+    const result = await createGithubGateway(API, "tok", fetchFn).getPrRefs("o", "r", 1);
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(isRateLimited(result.error)).toBe(true);
+  });
+
+  it("classifies an exhausted REST quota as rate-limited", async () => {
+    const fetchFn = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (requestKey(input, init) !== `GET ${API}/repos/o/r/pulls/1`) return unexpectedRequest(input, init);
+      return new Response("", { status: 403, headers: { "x-ratelimit-remaining": "0" } });
+    }) as typeof fetch;
+
+    const result = await createGithubGateway(API, "tok", fetchFn).getPrRefs("o", "r", 1);
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(isRateLimited(result.error)).toBe(true);
+  });
+
+  it("classifies a secondary rate-limit message as rate-limited", async () => {
+    const fetchFn = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (requestKey(input, init) !== `GET ${API}/repos/o/r/pulls/1`) return unexpectedRequest(input, init);
+      return new Response('{"message":"Secondary rate limit"}', {
+        status: 403,
+        headers: { "x-ratelimit-remaining": "4999" },
+      });
     }) as typeof fetch;
 
     const result = await createGithubGateway(API, "tok", fetchFn).getPrRefs("o", "r", 1);

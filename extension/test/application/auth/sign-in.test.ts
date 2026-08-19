@@ -3,20 +3,8 @@ import { type SignInEvent, signIn } from "../../../src/application/auth/sign-in"
 import { createChromeAuthRepository } from "../../../src/infrastructure/clients/chrome-auth-client";
 import { createGithubDeviceFlowGateway } from "../../../src/infrastructure/clients/github-device-flow-client";
 
-const DEVICE_CODE_URL = "https://github.com/login/device/code";
-const TOKEN_URL = "https://github.com/login/oauth/access_token";
-
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
-
-const deviceCodeResponse = () =>
-  json({
-    device_code: "dc1",
-    user_code: "ABCD-1234",
-    verification_uri: "https://github.com/login/device",
-    interval: 5,
-    expires_in: 900,
-  });
 
 class MemoryStorageArea {
   private values: Record<string, unknown>;
@@ -60,14 +48,24 @@ async function collect(events: AsyncGenerator<SignInEvent>): Promise<SignInEvent
 }
 
 describe("signIn", () => {
-  it("emits code then success, stores the token, and removes pending sign-in data", async () => {
+  it("completes sign-in after it emits the device code", async () => {
     const area = new MemoryStorageArea();
     const authRepository = createChromeAuthRepository(area);
     const clock = new VirtualClock();
     const route = (async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
-      if (url === DEVICE_CODE_URL) return deviceCodeResponse();
-      if (url === TOKEN_URL && clock.now === 5_000) return json({ access_token: "tok123" });
+      if (url === "https://github.com/login/device/code") {
+        return json({
+          device_code: "dc1",
+          user_code: "ABCD-1234",
+          verification_uri: "https://github.com/login/device",
+          interval: 5,
+          expires_in: 900,
+        });
+      }
+      if (url === "https://github.com/login/oauth/access_token" && clock.now === 5_000) {
+        return json({ access_token: "tok123" });
+      }
       throw new Error(`Unexpected request: ${init?.method ?? "GET"} ${url} at ${clock.now}`);
     }) as typeof fetch;
     const auth = createGithubDeviceFlowGateway(route, clock.sleep);
@@ -94,7 +92,7 @@ describe("signIn", () => {
     const authRepository = createChromeAuthRepository(new MemoryStorageArea());
     const route = (async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
-      if (url === DEVICE_CODE_URL) return json({}, 500);
+      if (url === "https://github.com/login/device/code") return json({}, 500);
       throw new Error(`Unexpected request: ${init?.method ?? "GET"} ${url}`);
     }) as typeof fetch;
     const state = { inFlight: false };
@@ -110,8 +108,18 @@ describe("signIn", () => {
     const clock = new VirtualClock();
     const route = (async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
-      if (url === DEVICE_CODE_URL) return deviceCodeResponse();
-      if (url === TOKEN_URL && clock.now === 5_000) return json({ error: "access_denied" });
+      if (url === "https://github.com/login/device/code") {
+        return json({
+          device_code: "dc1",
+          user_code: "ABCD-1234",
+          verification_uri: "https://github.com/login/device",
+          interval: 5,
+          expires_in: 900,
+        });
+      }
+      if (url === "https://github.com/login/oauth/access_token" && clock.now === 5_000) {
+        return json({ error: "access_denied" });
+      }
       throw new Error(`Unexpected request: ${init?.method ?? "GET"} ${url} at ${clock.now}`);
     }) as typeof fetch;
     const state = { inFlight: false };
@@ -133,8 +141,18 @@ describe("signIn", () => {
     const clock = new VirtualClock();
     const route = (async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
-      if (url === DEVICE_CODE_URL) return deviceCodeResponse();
-      if (url === TOKEN_URL && clock.now === 5_000) throw new Error("token request rejected");
+      if (url === "https://github.com/login/device/code") {
+        return json({
+          device_code: "dc1",
+          user_code: "ABCD-1234",
+          verification_uri: "https://github.com/login/device",
+          interval: 5,
+          expires_in: 900,
+        });
+      }
+      if (url === "https://github.com/login/oauth/access_token" && clock.now === 5_000) {
+        throw new Error("token request rejected");
+      }
       throw new Error(`Unexpected request: ${init?.method ?? "GET"} ${url} at ${clock.now}`);
     }) as typeof fetch;
     const state = { inFlight: false };
@@ -163,8 +181,10 @@ describe("signIn", () => {
     const codeRequest = Promise.withResolvers<Response>();
     const route = (async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
-      if (url === DEVICE_CODE_URL) return codeRequest.promise;
-      if (url === TOKEN_URL && clock.now === 5_000) return json({ access_token: "tok123" });
+      if (url === "https://github.com/login/device/code") return codeRequest.promise;
+      if (url === "https://github.com/login/oauth/access_token" && clock.now === 5_000) {
+        return json({ access_token: "tok123" });
+      }
       throw new Error(`Unexpected request: ${init?.method ?? "GET"} ${url} at ${clock.now}`);
     }) as typeof fetch;
     const auth = createGithubDeviceFlowGateway(route, clock.sleep);
@@ -176,7 +196,15 @@ describe("signIn", () => {
     expect(state.inFlight).toBe(true);
     expect(await collect(signIn(auth, authRepository, () => 1_000, state))).toEqual([]);
 
-    codeRequest.resolve(deviceCodeResponse());
+    codeRequest.resolve(
+      json({
+        device_code: "dc1",
+        user_code: "ABCD-1234",
+        verification_uri: "https://github.com/login/device",
+        interval: 5,
+        expires_in: 900,
+      }),
+    );
     expect(await first).toEqual([
       { status: "pending", userCode: "ABCD-1234", verificationUri: "https://github.com/login/device" },
       { status: "ok" },

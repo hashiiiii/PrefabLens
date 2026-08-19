@@ -5,8 +5,8 @@ import type { ViewMode } from "./view-mode";
 export type FileViewController = {
   element: HTMLElement;
   start(): void;
-  apply(view: ViewMode): void;
-  sync(view: ViewMode): void;
+  setView(view: ViewMode): void;
+  update(view: ViewMode): void;
   subscribeSelection(listener: (view: ViewMode) => void): () => void;
   subscribeSemantic(listener: (root: ShadowRoot) => void): () => void;
 };
@@ -33,7 +33,7 @@ export function createFileViewController(
     return { host, root };
   };
 
-  const sync = (view: ViewMode): void => {
+  const update = (view: ViewMode): void => {
     if (view === "raw") {
       setRawHidden(false);
       if (host) {
@@ -48,7 +48,7 @@ export function createFileViewController(
   };
 
   const activate = (view: ViewMode): void => {
-    sync(view);
+    update(view);
     if (view === "semantic") {
       const semanticRoot = ensureHost().root;
       for (const listener of semanticListeners) listener(semanticRoot);
@@ -68,11 +68,11 @@ export function createFileViewController(
       started = true;
       activate(initial);
     },
-    apply: (view) => {
+    setView: (view) => {
       toggle.set(view);
       activate(view);
     },
-    sync,
+    update,
     subscribeSelection: (listener) => {
       selectionListeners.add(listener);
       return () => selectionListeners.delete(listener);

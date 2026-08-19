@@ -47,15 +47,6 @@ function raw(bytes: Uint8Array): Response {
   return new Response(body, { status: 200 });
 }
 
-function expectVolumeChange(json: DiffV2): void {
-  expect(json.loose[0]?.fields[0]).toEqual({
-    path: "Volume",
-    status: "modified",
-    before: "0.5",
-    after: "0.8",
-  });
-}
-
 let differ: DifferGateway;
 
 beforeAll(async () => {
@@ -192,7 +183,13 @@ describe("raw diff", () => {
     );
 
     expect(result.ok).toBe(true);
-    if (result.ok) expectVolumeChange(result.json);
+    if (!result.ok) return;
+    expect(result.json.loose[0]?.fields[0]).toEqual({
+      path: "Volume",
+      status: "modified",
+      before: "0.5",
+      after: "0.8",
+    });
   });
 
   it("reads a renamed base file from previousPath", async () => {
@@ -245,7 +242,13 @@ describe("raw diff", () => {
     );
 
     expect(result.ok).toBe(true);
-    if (result.ok) expectVolumeChange(result.json);
+    if (!result.ok) return;
+    expect(result.json.loose[0]?.fields[0]).toEqual({
+      path: "Volume",
+      status: "modified",
+      before: "0.5",
+      after: "0.8",
+    });
     expect(
       requests.some(
         (request) =>
@@ -456,7 +459,13 @@ describe("raw diff", () => {
     );
 
     expect(result.ok).toBe(true);
-    if (result.ok) expectVolumeChange(result.json);
+    if (!result.ok) return;
+    expect(result.json.loose[0]?.fields[0]).toEqual({
+      path: "Volume",
+      status: "modified",
+      before: "0.5",
+      after: "0.8",
+    });
     expect(requests.map((request) => request.pathname)).toContain("/repos/o/r/git/blobs/base-blob");
     expect(requests.map((request) => request.pathname)).toContain("/repos/o/r/git/blobs/head-blob");
     expect(
@@ -469,57 +478,118 @@ describe("raw diff", () => {
     expect(requests.some((request) => request.searchParams.get("ref") === "base-sha")).toBe(false);
   });
 
-  it("uses the contents API after a truncated or failed base tree", async () => {
-    for (const treeResponse of [json({ truncated: true, tree: [] }), new Response(null, { status: 500 })]) {
-      const requests: URL[] = [];
-      const client = githubClient((request) => {
-        requests.push(request);
-        if (request.pathname === "/repos/o/r/pulls/1") {
-          return json({ base: { sha: "base-tip" }, head: { sha: "head-sha" } });
-        }
-        if (request.pathname === "/repos/o/r/compare/base-tip...head-sha") {
-          return json({ merge_base_commit: { sha: "base-sha" }, files: [] });
-        }
-        if (request.pathname === "/repos/o/r/pulls/1/files") {
-          return json([{ filename: PATH, status: "modified", sha: "head-blob" }]);
-        }
-        if (request.pathname === "/repos/o/r/git/trees/base-sha") return treeResponse.clone();
-        if (
+  it("uses the contents API after a truncated base tree", async () => {
+    const requests: URL[] = [];
+    const client = githubClient((request) => {
+      requests.push(request);
+      if (request.pathname === "/repos/o/r/pulls/1") {
+        return json({ base: { sha: "base-tip" }, head: { sha: "head-sha" } });
+      }
+      if (request.pathname === "/repos/o/r/compare/base-tip...head-sha") {
+        return json({ merge_base_commit: { sha: "base-sha" }, files: [] });
+      }
+      if (request.pathname === "/repos/o/r/pulls/1/files") {
+        return json([{ filename: PATH, status: "modified", sha: "head-blob" }]);
+      }
+      if (request.pathname === "/repos/o/r/git/trees/base-sha") return json({ truncated: true, tree: [] });
+      if (
+        request.pathname === "/repos/o/r/contents/Assets/Foo.prefab" &&
+        request.searchParams.get("ref") === "base-sha"
+      ) {
+        return raw(BEFORE_PREFAB);
+      }
+      if (request.pathname === "/repos/o/r/git/blobs/head-blob") return raw(AFTER_PREFAB);
+      return new Response(null, { status: 500 });
+    });
+    const session = createDiffSession();
+    const context = await getContext(session, client, OWNER, REPO, PULL);
+    expect(context.ok).toBe(true);
+    if (!context.ok) return;
+
+    const result = await getDiff(
+      async () => differ,
+      new MemoryDiffRepository(),
+      session,
+      client,
+      context.value,
+      OWNER,
+      REPO,
+      PATH,
+      false,
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.json.loose[0]?.fields[0]).toEqual({
+      path: "Volume",
+      status: "modified",
+      before: "0.5",
+      after: "0.8",
+    });
+    expect(
+      requests.some(
+        (request) =>
           request.pathname === "/repos/o/r/contents/Assets/Foo.prefab" &&
-          request.searchParams.get("ref") === "base-sha"
-        ) {
-          return raw(BEFORE_PREFAB);
-        }
-        if (request.pathname === "/repos/o/r/git/blobs/head-blob") return raw(AFTER_PREFAB);
-        return new Response(null, { status: 500 });
-      });
-      const session = createDiffSession();
-      const context = await getContext(session, client, OWNER, REPO, PULL);
-      expect(context.ok).toBe(true);
-      if (!context.ok) continue;
+          request.searchParams.get("ref") === "base-sha",
+      ),
+    ).toBe(true);
+  });
 
-      const result = await getDiff(
-        async () => differ,
-        new MemoryDiffRepository(),
-        session,
-        client,
-        context.value,
-        OWNER,
-        REPO,
-        PATH,
-        false,
-      );
+  it("uses the contents API after a failed base tree request", async () => {
+    const requests: URL[] = [];
+    const client = githubClient((request) => {
+      requests.push(request);
+      if (request.pathname === "/repos/o/r/pulls/1") {
+        return json({ base: { sha: "base-tip" }, head: { sha: "head-sha" } });
+      }
+      if (request.pathname === "/repos/o/r/compare/base-tip...head-sha") {
+        return json({ merge_base_commit: { sha: "base-sha" }, files: [] });
+      }
+      if (request.pathname === "/repos/o/r/pulls/1/files") {
+        return json([{ filename: PATH, status: "modified", sha: "head-blob" }]);
+      }
+      if (request.pathname === "/repos/o/r/git/trees/base-sha") return new Response(null, { status: 500 });
+      if (
+        request.pathname === "/repos/o/r/contents/Assets/Foo.prefab" &&
+        request.searchParams.get("ref") === "base-sha"
+      ) {
+        return raw(BEFORE_PREFAB);
+      }
+      if (request.pathname === "/repos/o/r/git/blobs/head-blob") return raw(AFTER_PREFAB);
+      return new Response(null, { status: 500 });
+    });
+    const session = createDiffSession();
+    const context = await getContext(session, client, OWNER, REPO, PULL);
+    expect(context.ok).toBe(true);
+    if (!context.ok) return;
 
-      expect(result.ok).toBe(true);
-      if (result.ok) expectVolumeChange(result.json);
-      expect(
-        requests.some(
-          (request) =>
-            request.pathname === "/repos/o/r/contents/Assets/Foo.prefab" &&
-            request.searchParams.get("ref") === "base-sha",
-        ),
-      ).toBe(true);
-    }
+    const result = await getDiff(
+      async () => differ,
+      new MemoryDiffRepository(),
+      session,
+      client,
+      context.value,
+      OWNER,
+      REPO,
+      PATH,
+      false,
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.json.loose[0]?.fields[0]).toEqual({
+      path: "Volume",
+      status: "modified",
+      before: "0.5",
+      after: "0.8",
+    });
+    expect(
+      requests.some(
+        (request) =>
+          request.pathname === "/repos/o/r/contents/Assets/Foo.prefab" &&
+          request.searchParams.get("ref") === "base-sha",
+      ),
+    ).toBe(true);
   });
 
   it("propagates a base-tree rate limit", async () => {

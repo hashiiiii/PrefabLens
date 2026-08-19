@@ -133,7 +133,7 @@ describe("render", () => {
     document.documentElement.removeAttribute("data-color-mode");
   });
 
-  it("renders hierarchy, components, overrides, and field values", () => {
+  it("nests child game objects under their parent", () => {
     const root = freshRoot();
     render(root, DIFF);
 
@@ -143,6 +143,11 @@ describe("render", () => {
     expect(player.tagName).toBe("DETAILS");
     expect(weapon.tagName).toBe("DETAILS");
     expect(player.contains(weapon)).toBe(true);
+  });
+
+  it("renders component names and modified field values", () => {
+    const root = freshRoot();
+    render(root, DIFF);
 
     const text = must(root.querySelector("div")?.textContent);
     expect(text).toContain("components (4)");
@@ -150,14 +155,31 @@ describe("render", () => {
     expect(text).toContain("NameHero→Player");
     expect(text).toContain("Sound‹Script: Assets/Scripts/Sound.cs›");
     expect(text).toContain("volume0.5→0.8");
+  });
+
+  it("renders added fields without an empty before value", () => {
+    const root = freshRoot();
+    render(root, DIFF);
 
     const added = must([...root.querySelectorAll("div")].find((row) => row.textContent === "newField1"));
     expect(added.textContent).toBe("newField1");
+  });
+
+  it("renders structural overrides", () => {
+    const root = freshRoot();
+    render(root, DIFF);
+
     const structural = must(
       [...root.querySelectorAll("div")].find((row) => row.textContent === "Added Components (1)"),
     );
     expect(structural.textContent).toBe("Added Components (1)");
+  });
 
+  it("opens each component card by default", () => {
+    const root = freshRoot();
+    render(root, DIFF);
+
+    const summaries = [...root.querySelectorAll("summary")];
     const componentGroups = summaries
       .filter((summary) => summary.textContent?.startsWith("components ("))
       .map((summary) => must(summary.parentElement));
@@ -327,9 +349,12 @@ describe("render", () => {
 });
 
 describe("detectTheme", () => {
-  it("uses an explicit document theme", () => {
+  it("uses an explicit dark document theme", () => {
     document.documentElement.setAttribute("data-color-mode", "dark");
     expect(detectTheme(document)).toBe("dark");
+  });
+
+  it("uses an explicit light document theme", () => {
     document.documentElement.setAttribute("data-color-mode", "light");
     expect(detectTheme(document)).toBe("light");
   });

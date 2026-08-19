@@ -3,21 +3,34 @@ import { applyResolved } from "../../../../src/domain/diff/fn/apply-resolved";
 import { type DiffV2, emptyDiff } from "../../../../src/domain/diff/types";
 
 describe("applyResolved", () => {
-  const diff: DiffV2 = {
-    ...emptyDiff(),
-    unresolvedGuids: ["aaa", "bbb"],
-    roots: [],
-    loose: [],
-  };
+  it("attaches names only for GUIDs that the diff references", () => {
+    const result = applyResolved(
+      {
+        ...emptyDiff(),
+        unresolvedGuids: ["aaa", "bbb"],
+        roots: [],
+        loose: [],
+      },
+      new Map([
+        ["aaa", "Assets/A.cs"],
+        ["zzz", "Assets/Z.cs"],
+      ]),
+    );
 
-  it("attaches only referenced-and-resolvable guids (scoped like core)", () => {
-    const index = new Map([
-      ["aaa", "Assets/A.cs"],
-      ["zzz", "Assets/Z.cs"],
-    ]);
-    const out = applyResolved(diff, index);
-    expect(out.resolved).toEqual({ aaa: "Assets/A.cs" }); // bbb unresolved, zzz not referenced
-    expect(out).not.toBe(diff); // does not mutate the input
-    expect(diff.resolved).toBeUndefined();
+    expect(result.resolved).toEqual({ aaa: "Assets/A.cs" });
+  });
+
+  it("returns a new diff without changing the input", () => {
+    const input: DiffV2 = {
+      ...emptyDiff(),
+      unresolvedGuids: ["aaa"],
+      roots: [],
+      loose: [],
+    };
+
+    const result = applyResolved(input, new Map([["aaa", "Assets/A.cs"]]));
+
+    expect(result).not.toBe(input);
+    expect(input.resolved).toBeUndefined();
   });
 });

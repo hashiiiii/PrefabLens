@@ -31,10 +31,10 @@ export type FileView = {
   header: HTMLElement;
   status: FileStatus;
   start(): void;
-  apply(view: ViewMode): void;
-  sync(): void;
-  request(): Promise<void>;
-  resolve(message: GuidResolvedPush): void;
+  setView(view: ViewMode): void;
+  update(): void;
+  loadDiff(): Promise<void>;
+  setResolved(message: GuidResolvedPush): void;
   subscribeAuth(listener: (root: ShadowRoot, error: AuthError) => void): () => void;
   dispose(): void;
 };
@@ -58,7 +58,7 @@ export function createFileView(
   const authListeners = new Set<(root: ShadowRoot, error: AuthError) => void>();
 
   const controller = createFileViewController(
-    viewState.resolve(entry.path),
+    viewState.getFile(entry.path),
     entry.setRawHidden,
     entry.attachHost,
     () => !entry.collapsed(),
@@ -70,9 +70,9 @@ export function createFileView(
     header: entry.header,
     status: "idle",
     start: controller.start,
-    apply: controller.apply,
-    sync: () => controller.sync(viewState.resolve(entry.path)),
-    request: async () => {
+    setView: controller.setView,
+    update: () => controller.update(viewState.getFile(entry.path)),
+    loadDiff: async () => {
       if (!root || file.status === "loading" || file.status === "pending") return;
       file.status = "loading";
       renderLoading(root);
@@ -97,11 +97,11 @@ export function createFileView(
       file.status = "idle";
       if (json) {
         await render(root, json, { incomplete: true });
-        await file.request();
+        await file.loadDiff();
       } else if (response.error === "too-large") {
         await renderTooLarge(root, response.bytes);
         force = true;
-        await file.request();
+        await file.loadDiff();
       } else if (isAuthError(response.error)) {
         file.status = "auth-blocked";
         for (const listener of authListeners) listener(root, response.error);
@@ -109,13 +109,13 @@ export function createFileView(
         renderError(root, ERROR_TEXT[response.error]);
       }
     },
-    resolve: (message) => {
+    setResolved: (message) => {
       if (!root || !json) return;
       clearTimeout(watchdog);
       json = message.json ?? { ...json, resolved: { ...json.resolved, ...message.resolved } };
       if (message.done && message.status !== undefined && message.status !== "complete") {
         file.status = "idle";
-        void render(root, json, { incomplete: true }).then(file.request);
+        void render(root, json, { incomplete: true }).then(file.loadDiff);
         return;
       }
       file.status = message.done ? "idle" : "pending";
@@ -136,14 +136,14 @@ export function createFileView(
     watchdog = window.setTimeout(() => {
       if (!root || !json || file.status !== "pending") return;
       file.status = "idle";
-      void render(root, json, { incomplete: true }).then(file.request);
+      void render(root, json, { incomplete: true }).then(file.loadDiff);
     }, WATCHDOG_MS);
   }
 
   controller.subscribeSelection((view) => viewState.setFile(entry.path, view));
   controller.subscribeSemantic((semanticRoot) => {
     root = semanticRoot;
-    if (!json && file.status !== "loading" && file.status !== "pending") void file.request();
+    if (!json && file.status !== "loading" && file.status !== "pending") void file.loadDiff();
   });
   entry.header.setAttribute("data-prefablens", "");
   entry.header.append(controller.element);

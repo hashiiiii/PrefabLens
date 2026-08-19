@@ -4,7 +4,6 @@ import { beforeAll, describe, expect, it } from "vitest";
 import { createDiffSession } from "../../../src/application/diff/create-diff-session";
 import { getSemanticDiff } from "../../../src/application/diff/get-semantic-diff";
 import type { DifferGateway } from "../../../src/application/gateway/differ";
-import type { SemanticDiffRequest } from "../../../src/application/gateway/messenger";
 import type { AuthRepository } from "../../../src/domain/auth/auth-repository";
 import type { PendingSignIn } from "../../../src/domain/auth/pending-sign-in";
 import type { DiffRepository } from "../../../src/domain/diff/diff-repository";
@@ -15,16 +14,6 @@ import type { RepoIndexRepository } from "../../../src/domain/guid/repo-index-re
 import { createGithubGateway } from "../../../src/infrastructure/clients/github-client";
 import { createDifferGateway } from "../../../src/infrastructure/clients/wasm-differ-client";
 import { AFTER_PREFAB, BEFORE_PREFAB } from "../../fixtures/unity";
-
-const OWNER = "o";
-const REPO = "r";
-const REQUEST: SemanticDiffRequest = {
-  type: "semanticDiff",
-  owner: OWNER,
-  repo: REPO,
-  target: { kind: "pull", prNumber: 1 },
-  path: "Assets/Foo.prefab",
-};
 
 class MemoryAuthRepository implements AuthRepository {
   private pendingSignIn: PendingSignIn | undefined;
@@ -125,7 +114,13 @@ describe("getSemanticDiff", () => {
       new MemoryDiffRepository(),
       new MemoryRepoIndexRepository(),
       createDiffSession(),
-      REQUEST,
+      {
+        type: "semanticDiff",
+        owner: "o",
+        repo: "r",
+        target: { kind: "pull", prNumber: 1 },
+        path: "Assets/Foo.prefab",
+      },
     );
 
     expect(typeof (stream as unknown as AsyncIterable<unknown>)[Symbol.asyncIterator]).toBe("function");
@@ -185,7 +180,13 @@ describe("getSemanticDiff", () => {
         new MemoryDiffRepository(),
         new MemoryRepoIndexRepository(),
         createDiffSession(),
-        REQUEST,
+        {
+          type: "semanticDiff",
+          owner: "o",
+          repo: "r",
+          target: { kind: "pull", prNumber: 1 },
+          path: "Assets/Foo.prefab",
+        },
       ),
     );
 
@@ -267,7 +268,13 @@ describe("getSemanticDiff", () => {
       new MemoryDiffRepository(),
       new MemoryRepoIndexRepository(),
       createDiffSession(),
-      REQUEST,
+      {
+        type: "semanticDiff",
+        owner: "o",
+        repo: "r",
+        target: { kind: "pull", prNumber: 1 },
+        path: "Assets/Foo.prefab",
+      },
     );
 
     const first = await stream.next();

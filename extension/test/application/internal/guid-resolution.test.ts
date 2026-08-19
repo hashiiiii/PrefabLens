@@ -4,8 +4,6 @@ import { resolveGuids } from "../../../src/application/internal/guid-resolution"
 import type { GuidRepository } from "../../../src/domain/guid/guid-repository";
 import { createGithubGateway } from "../../../src/infrastructure/clients/github-client";
 
-const REPO_KEY = "https://api.github.test:o/r";
-
 class MemoryGuidRepository implements GuidRepository {
   constructor(private readonly cached: Record<string, Record<string, string>> = {}) {}
 
@@ -28,29 +26,42 @@ function searchRoutes(respond: (request: URL) => Response | Promise<Response>) {
   return { requests, client: createGithubGateway("https://api.github.test", "token", fetchRoute) };
 }
 
-function searchSuccess(): Response {
-  return new Response(JSON.stringify({ items: [{ path: "Assets/Sound.prefab.meta" }] }), {
-    status: 200,
-    headers: { "content-type": "application/json" },
-  });
-}
-
 describe("resolveGuids", () => {
   it("uses the persistent GUID cache before Code Search", async () => {
-    const repository = new MemoryGuidRepository({ [REPO_KEY]: { cached: "Assets/Cached.prefab" } });
+    const repository = new MemoryGuidRepository({
+      "https://api.github.test:o/r": { cached: "Assets/Cached.prefab" },
+    });
     const { client, requests } = searchRoutes(() => new Response(null, { status: 500 }));
 
-    const result = await resolveGuids(repository, createDiffSession(), client, "o", "r", REPO_KEY, ["cached"]);
+    const result = await resolveGuids(
+      repository,
+      createDiffSession(),
+      client,
+      "o",
+      "r",
+      "https://api.github.test:o/r",
+      ["cached"],
+    );
 
     expect(result).toEqual({ resolved: { cached: "Assets/Cached.prefab" }, rateLimited: false });
     expect(requests).toHaveLength(0);
   });
 
   it("does not read Object.prototype values as cached GUIDs", async () => {
-    const repository = new MemoryGuidRepository({ [REPO_KEY]: { other: "Assets/Other.prefab" } });
-    const { client, requests } = searchRoutes(() => searchSuccess());
+    const repository = new MemoryGuidRepository({
+      "https://api.github.test:o/r": { other: "Assets/Other.prefab" },
+    });
+    const { client, requests } = searchRoutes(() => Response.json({ items: [{ path: "Assets/Sound.prefab.meta" }] }));
 
-    const result = await resolveGuids(repository, createDiffSession(), client, "o", "r", REPO_KEY, ["constructor"]);
+    const result = await resolveGuids(
+      repository,
+      createDiffSession(),
+      client,
+      "o",
+      "r",
+      "https://api.github.test:o/r",
+      ["constructor"],
+    );
 
     expect(result).toEqual({ resolved: { constructor: "Assets/Sound.prefab" }, rateLimited: false });
     expect(requests).toHaveLength(1);
@@ -58,27 +69,64 @@ describe("resolveGuids", () => {
 
   it("stops after ten Code Search requests", async () => {
     const repository = new MemoryGuidRepository();
-    const { client, requests } = searchRoutes(() => searchSuccess());
-    const guids = Array.from({ length: 12 }, (_, index) => `guid-${index}`);
+    const { client, requests } = searchRoutes(() => Response.json({ items: [{ path: "Assets/Sound.prefab.meta" }] }));
 
-    const result = await resolveGuids(repository, createDiffSession(), client, "o", "r", REPO_KEY, guids);
+    const result = await resolveGuids(
+      repository,
+      createDiffSession(),
+      client,
+      "o",
+      "r",
+      "https://api.github.test:o/r",
+      [
+        "guid-0",
+        "guid-1",
+        "guid-2",
+        "guid-3",
+        "guid-4",
+        "guid-5",
+        "guid-6",
+        "guid-7",
+        "guid-8",
+        "guid-9",
+        "guid-10",
+        "guid-11",
+      ],
+    );
 
     expect(requests).toHaveLength(10);
-    expect(Object.keys(result.resolved)).toEqual(guids.slice(0, 10));
+    expect(Object.keys(result.resolved)).toEqual([
+      "guid-0",
+      "guid-1",
+      "guid-2",
+      "guid-3",
+      "guid-4",
+      "guid-5",
+      "guid-6",
+      "guid-7",
+      "guid-8",
+      "guid-9",
+    ]);
   });
 
   it("reports a Code Search rate limit without dropping resolved names", async () => {
     const repository = new MemoryGuidRepository();
     const { client, requests } = searchRoutes((request) => {
-      if (request.searchParams.get("q")?.includes('"first"')) return searchSuccess();
+      if (request.searchParams.get("q")?.includes('"first"')) {
+        return Response.json({ items: [{ path: "Assets/Sound.prefab.meta" }] });
+      }
       return new Response(null, { status: 429, headers: { "retry-after": "1" } });
     });
 
-    const result = await resolveGuids(repository, createDiffSession(), client, "o", "r", REPO_KEY, [
-      "first",
-      "second",
-      "third",
-    ]);
+    const result = await resolveGuids(
+      repository,
+      createDiffSession(),
+      client,
+      "o",
+      "r",
+      "https://api.github.test:o/r",
+      ["first", "second", "third"],
+    );
 
     expect(result).toEqual({ resolved: { first: "Assets/Sound.prefab" }, rateLimited: true });
     expect(requests).toHaveLength(2);
@@ -97,13 +145,13 @@ describe("resolveGuids", () => {
     const { client, requests } = searchRoutes(async () => {
       startRoute();
       await routeReleased;
-      return searchSuccess();
+      return Response.json({ items: [{ path: "Assets/Sound.prefab.meta" }] });
     });
     const session = createDiffSession();
 
-    const first = resolveGuids(repository, session, client, "o", "r", REPO_KEY, ["shared"]);
+    const first = resolveGuids(repository, session, client, "o", "r", "https://api.github.test:o/r", ["shared"]);
     await routeStarted;
-    const second = resolveGuids(repository, session, client, "o", "r", REPO_KEY, ["shared"]);
+    const second = resolveGuids(repository, session, client, "o", "r", "https://api.github.test:o/r", ["shared"]);
     await Promise.resolve();
     releaseRoute();
 

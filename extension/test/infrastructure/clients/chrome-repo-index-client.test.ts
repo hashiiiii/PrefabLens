@@ -26,18 +26,32 @@ class MemoryStorageArea implements StorageArea {
 }
 
 describe("createChromeRepoIndexRepository", () => {
-  it("stores metadata and index data in separate namespaces", async () => {
+  it("returns an empty metadata map for an unknown repository", async () => {
     const repoIndex = createChromeRepoIndexRepository(new MemoryStorageArea());
 
     expect(await repoIndex.loadGuids("api/o/r")).toEqual({});
-    const nextIndex: RepoGuidIndex = { treeSha: "tree-2", guids: { g2: "Assets/B.mat" } };
+  });
+
+  it("merges metadata GUIDs from later saves", async () => {
+    const repoIndex = createChromeRepoIndexRepository(new MemoryStorageArea());
 
     await repoIndex.saveGuids("api/o/r", { sha1: "g1" });
     await repoIndex.saveGuids("api/o/r", { sha2: "g2" });
-    await repoIndex.saveIndex("api/o/r", nextIndex);
 
     expect(await repoIndex.loadGuids("api/o/r")).toEqual({ sha1: "g1", sha2: "g2" });
-    expect(await repoIndex.loadIndex("api/o/r")).toEqual(nextIndex);
+  });
+
+  it("stores index data separately from metadata GUIDs", async () => {
+    const repoIndex = createChromeRepoIndexRepository(new MemoryStorageArea());
+
+    await repoIndex.saveGuids("api/o/r", { sha1: "g1" });
+    await repoIndex.saveIndex("api/o/r", { treeSha: "tree-2", guids: { g2: "Assets/B.mat" } });
+
+    expect(await repoIndex.loadGuids("api/o/r")).toEqual({ sha1: "g1" });
+    expect(await repoIndex.loadIndex("api/o/r")).toEqual({
+      treeSha: "tree-2",
+      guids: { g2: "Assets/B.mat" },
+    });
   });
 
   it("ignores a failed metadata write and keeps the prior value", async () => {
@@ -59,6 +73,9 @@ describe("createChromeRepoIndexRepository", () => {
         guids: { g2: "Assets/B.mat" },
       }),
     ).resolves.toBeUndefined();
-    expect(await repoIndex.loadIndex("api/o/r")).toEqual(prior);
+    expect(await repoIndex.loadIndex("api/o/r")).toEqual({
+      treeSha: "tree-1",
+      guids: { g1: "Assets/A.cs" },
+    });
   });
 });

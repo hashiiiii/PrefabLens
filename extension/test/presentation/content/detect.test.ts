@@ -30,51 +30,75 @@ describe("parseDiffUrl", () => {
       repo: "repo",
       target: { kind: "pull", prNumber: 42 },
     });
+  });
+
+  it("matches a file anchor on the PR files tab", () => {
     expect(parseDiffUrl("/owner/repo/pull/42/files/abc123")?.target).toEqual({ kind: "pull", prNumber: 42 });
   });
-  it("matches the react ui changes tab and its commit range view", () => {
+
+  it("matches the React changes tab", () => {
     expect(parseDiffUrl("/owner/repo/pull/42/changes")?.target).toEqual({ kind: "pull", prNumber: 42 });
-    // "Between commit A and B" range view, same shape github-url-detection accepts
+  });
+
+  it("matches a commit range on the React changes tab", () => {
     expect(parseDiffUrl("/owner/repo/pull/42/changes/1e27d799..e1aba6f")?.target).toEqual({
       kind: "pull",
       prNumber: 42,
     });
   });
-  it("maps single-commit views inside a PR to a commit target", () => {
-    // react ui: /changes/SHA, classic: /commits/SHA. Both show one commit against its parent.
+
+  it("maps a single commit on the React changes tab to a commit target", () => {
     expect(parseDiffUrl("/owner/repo/pull/42/changes/1e27d7998afdd3608d9fc3bf95ccf27fa5010641")?.target).toEqual({
       kind: "commit",
       sha: "1e27d7998afdd3608d9fc3bf95ccf27fa5010641",
     });
+  });
+
+  it("maps a single commit on the classic commits tab to a commit target", () => {
     expect(parseDiffUrl("/owner/repo/pull/42/commits/1e27d79")?.target).toEqual({ kind: "commit", sha: "1e27d79" });
   });
+
   it("matches commit pages", () => {
     expect(parseDiffUrl("/owner/repo/commit/1e27d7998afdd3608d9fc3bf95ccf27fa5010641")).toEqual({
       owner: "owner",
       repo: "repo",
       target: { kind: "commit", sha: "1e27d7998afdd3608d9fc3bf95ccf27fa5010641" },
     });
+  });
+
+  it("matches a commit page with a trailing slash", () => {
     expect(parseDiffUrl("/owner/repo/commit/1e27d79/")?.target).toEqual({ kind: "commit", sha: "1e27d79" });
+  });
+
+  it("rejects a commit page without a SHA", () => {
     expect(parseDiffUrl("/owner/repo/commit/not-a-sha")).toBeNull();
   });
+
   it("matches same-repo three-dot compare pages", () => {
     expect(parseDiffUrl("/owner/repo/compare/main...feature")).toEqual({
       owner: "owner",
       repo: "repo",
       target: { kind: "compare", base: "main", head: "feature" },
     });
-    // branch names keep their slashes. Encoded characters are decoded per side.
+  });
+
+  it("preserves slashes in compare branch names", () => {
     expect(parseDiffUrl("/owner/repo/compare/feat/a...feat/b")?.target).toEqual({
       kind: "compare",
       base: "feat/a",
       head: "feat/b",
     });
+  });
+
+  it("decodes each compare ref", () => {
     expect(parseDiffUrl("/owner/repo/compare/v1%2E0...main")?.target).toEqual({
       kind: "compare",
       base: "v1.0",
       head: "main",
     });
-    // A manually typed trailing slash must not leak into the head ref (git refs cannot end with /)
+  });
+
+  it("removes a trailing slash from the compare head ref", () => {
     expect(parseDiffUrl("/owner/repo/compare/main...topic/")?.target).toEqual({
       kind: "compare",
       base: "main",
@@ -83,35 +107,48 @@ describe("parseDiffUrl", () => {
   });
 
   it("survives malformed percent escapes instead of throwing", () => {
-    // Browsers pass invalid %-sequences through pathname verbatim. decodeURIComponent throws
-    // URIError there, and attach() runs this unguarded before the MutationObserver is installed
+    // Browsers keep invalid percent sequences in pathname. decodeURIComponent throws for this input.
     expect(parseDiffUrl("/owner/repo/compare/50%discount...main")?.target).toEqual({
       kind: "compare",
       base: "50%discount",
       head: "main",
     });
   });
-  it("rejects compare pages this extension cannot serve", () => {
-    expect(parseDiffUrl("/owner/repo/compare/main...other:branch")).toBeNull(); // cross-fork
-    expect(parseDiffUrl("/owner/repo/compare/main")).toBeNull(); // single ref
-    expect(parseDiffUrl("/owner/repo/compare")).toBeNull(); // picker page
+
+  it("rejects a cross-repository compare page", () => {
+    expect(parseDiffUrl("/owner/repo/compare/main...other:branch")).toBeNull();
   });
-  it("rejects other pages", () => {
+
+  it("rejects a compare page with one ref", () => {
+    expect(parseDiffUrl("/owner/repo/compare/main")).toBeNull();
+  });
+
+  it("rejects the compare picker page", () => {
+    expect(parseDiffUrl("/owner/repo/compare")).toBeNull();
+  });
+
+  it("rejects a PR conversation page", () => {
     expect(parseDiffUrl("/owner/repo/pull/42")).toBeNull();
-    expect(parseDiffUrl("/owner/repo/pull/42/commits")).toBeNull(); // commit list, no diff
+  });
+
+  it("rejects a PR commit list", () => {
+    expect(parseDiffUrl("/owner/repo/pull/42/commits")).toBeNull();
+  });
+
+  it("rejects a repository file page", () => {
     expect(parseDiffUrl("/owner/repo/blob/main/a.prefab")).toBeNull();
   });
 });
 
 describe("parsePrPage", () => {
-  it("matches every pr tab, not just files", () => {
-    // Prefetch starts on arrival at the conversation tab
+  it("matches every PR tab, not only the files tab", () => {
+    // Prefetch starts when the user opens the conversation tab.
     expect(parsePrPage("/o/r/pull/12")).toEqual({ owner: "o", repo: "r", prNumber: 12 });
     expect(parsePrPage("/o/r/pull/12/commits")).toEqual({ owner: "o", repo: "r", prNumber: 12 });
     expect(parsePrPage("/o/r/pull/12/files")).toEqual({ owner: "o", repo: "r", prNumber: 12 });
   });
 
-  it("rejects non-pr pages", () => {
+  it("rejects pages outside a PR", () => {
     expect(parsePrPage("/o/r/pulls")).toBeNull();
     expect(parsePrPage("/o/r/issues/12")).toBeNull();
     expect(parsePrPage("/o/r/pull/notanumber")).toBeNull();
@@ -119,7 +156,7 @@ describe("parsePrPage", () => {
 });
 
 describe("scanUnityFiles", () => {
-  it("finds .prefab/.unity/.asset containers and skips other files", () => {
+  it("finds Unity file containers and skips other files", () => {
     document.body.innerHTML = FIXTURE;
     const entries = scanUnityFiles(document);
     expect(entries.map((e) => e.path)).toEqual([
@@ -127,34 +164,60 @@ describe("scanUnityFiles", () => {
       "Assets/Scenes/Main.unity",
       "Assets/Data/Config.asset",
     ]);
-    // Behavior replaces the old `content` field: the hide acts on the .js-file-content element
+  });
+
+  it("hides and restores the raw file content", () => {
+    document.body.innerHTML = FIXTURE;
+    const entry = must(scanUnityFiles(document)[0]);
     const content = must(document.querySelector<HTMLElement>(".file .js-file-content"));
-    const entry = must(entries[0]);
+
     entry.setRawHidden(true);
     expect(content.style.display).toBe("none");
     entry.setRawHidden(false);
     expect(content.style.display).toBe("");
-    // Classic collapse is handled by Primer's Details CSS, not by us
+  });
+
+  it("uses the classic file container as the global anchor", () => {
+    document.body.innerHTML = FIXTURE;
+    const entry = must(scanUnityFiles(document)[0]);
+
+    // Primer CSS controls the collapsed state for classic file containers.
     expect(entry.collapsed()).toBe(false);
     expect(entry.globalAnchor()).toBe(document.querySelector(".file"));
-    // The host lands right after the content and opts into the Details collapse CSS
+  });
+
+  it("attaches the semantic host after the raw content", () => {
+    document.body.innerHTML = FIXTURE;
+    const entry = must(scanUnityFiles(document)[0]);
+    const content = must(document.querySelector<HTMLElement>(".file .js-file-content"));
     const host = document.createElement("div");
+
     entry.attachHost(host);
+
     expect(content.nextElementSibling).toBe(host);
     expect(host.classList.contains("Details-content--hidden")).toBe(true);
   });
 
-  it("skips YAML-but-not-UnityYAML and JSON assets", () => {
-    // .meta is not !u! document format, and .asmdef/.shadergraph are JSON.
-    const paths = ["Assets/Foo.prefab.meta", "Assets/Code.asmdef", "Assets/S.shadergraph", "Assets/T.png"];
-    document.body.innerHTML = paths
-      .map(
-        (p) => `<div class="file">
-          <div class="file-header" data-path="${p}"></div>
+  it("skips files that do not contain UnityYAML", () => {
+    document.body.innerHTML = `
+        <div class="file">
+          <div class="file-header" data-path="Assets/Foo.prefab.meta"></div>
           <div class="js-file-content">raw diff</div>
-        </div>`,
-      )
-      .join("");
+        </div>
+        <div class="file">
+          <div class="file-header" data-path="Assets/Code.asmdef"></div>
+          <div class="js-file-content">raw diff</div>
+        </div>
+        <div class="file">
+          <div class="file-header" data-path="Assets/S.shadergraph"></div>
+          <div class="js-file-content">raw diff</div>
+        </div>
+        <div class="file">
+          <div class="file-header" data-path="Assets/T.png"></div>
+          <div class="js-file-content">raw diff</div>
+        </div>
+      `;
+
     expect(scanUnityFiles(document)).toEqual([]);
   });
 
@@ -164,8 +227,7 @@ describe("scanUnityFiles", () => {
   });
 });
 
-// Captured shape of GitHub's react diff UI (login-gated rollout): hashed CSS-module classes,
-// path only as LRM-wrapped header text, no data-path attribute anywhere.
+// GitHub React diff markup uses hashed classes and LRM-wrapped header text.
 const REACT_FIXTURE = `
   <div data-testid="diff-content">
     <div data-testid="progressive-diffs-list">
@@ -195,16 +257,15 @@ const REACT_FIXTURE = `
   </div>
 `;
 
-describe("scanUnityFiles (react ui)", () => {
-  it("finds unity files by header text and strips bidi marks", () => {
+describe("scanUnityFiles (React UI)", () => {
+  it("finds Unity files by header text and removes bidi marks", () => {
     document.body.innerHTML = REACT_FIXTURE;
     const entries = scanUnityFiles(document);
     expect(entries.map((e) => e.path)).toEqual(["Assets/Foo.prefab"]);
   });
 
   it("reads the renamed-to path from the visually hidden span", () => {
-    // Renames concatenate visible text and sr-only "OLD renamed to NEW" in textContent,
-    // so the sr-only form must win when present.
+    // GitHub rename text contains both paths. The accessible text identifies the final path.
     document.body.innerHTML = REACT_FIXTURE.replace(
       "<code>‎Assets/Foo.prefab‎</code>",
       '<code>‎Assets/{Old.prefab → New.prefab}‎<span class="sr-only">Assets/Old.prefab renamed to Assets/New.prefab</span></code>',
@@ -216,8 +277,7 @@ describe("scanUnityFiles (react ui)", () => {
     document.body.innerHTML = REACT_FIXTURE;
     const entry = must(scanUnityFiles(document)[0]);
     entry.setRawHidden(true);
-    // Simulate a react remount whose body does NOT carry today's border classes:
-    // the inline-style loop is the markup-drift fallback and must still hide it
+    // React can replace the body and change its CSS classes. The fallback must hide this replacement.
     const region = must(document.querySelector("#diff-aaa111"));
     must(region.querySelector(".border.rounded-bottom-2")).remove();
     const fresh = document.createElement("div");

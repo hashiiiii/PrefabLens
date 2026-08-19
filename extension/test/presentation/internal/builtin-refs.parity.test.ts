@@ -19,7 +19,7 @@ function zigEntries(section: string): Record<string, string> {
   return out;
 }
 
-it("Zig table keeps the same (guid, fileID) → name entries as the TS table", () => {
+it("Zig table keeps the same (GUID, fileID) → name entries as the TS table", () => {
   const zigPath = fileURLToPath(new URL("../../../../cli/src/builtin_refs.zig", import.meta.url));
   const zig = readFileSync(zigPath, "utf8");
   // The file declares the default_resources array first, builtin_extra second.
@@ -29,7 +29,7 @@ it("Zig table keeps the same (guid, fileID) → name entries as the TS table", (
   expect(zigEntries(zig.slice(extraStart))).toEqual(BUILTIN_REFS[BUILTIN_EXTRA_GUID]);
 });
 
-it("guid constants match between the Zig and TS tables", () => {
+it("GUID constants match between the Zig and TS tables", () => {
   const zigPath = fileURLToPath(new URL("../../../../cli/src/builtin_refs.zig", import.meta.url));
   const zig = readFileSync(zigPath, "utf8");
   expect(zig).toContain(`pub const default_resources_guid = "${DEFAULT_RESOURCES_GUID}";`);
@@ -44,7 +44,7 @@ function csEntries(section: string): Record<string, string> {
   return out;
 }
 
-it("C# table keeps the same (guid, fileID) → name entries as the TS table", () => {
+it("C# table keeps the same (GUID, fileID) → name entries as the TS table", () => {
   const csPath = fileURLToPath(new URL("../../../../editor/Editor/BuiltinRefs.cs", import.meta.url));
   const cs = readFileSync(csPath, "utf8");
   // The file declares the DefaultResources dictionary first, BuiltinExtra second.
@@ -54,7 +54,7 @@ it("C# table keeps the same (guid, fileID) → name entries as the TS table", ()
   expect(csEntries(cs.slice(extraStart))).toEqual(BUILTIN_REFS[BUILTIN_EXTRA_GUID]);
 });
 
-it("guid constants match between the C# and TS tables", () => {
+it("GUID constants match between the C# and TS tables", () => {
   const csPath = fileURLToPath(new URL("../../../../editor/Editor/BuiltinRefs.cs", import.meta.url));
   const cs = readFileSync(csPath, "utf8");
   expect(cs).toContain(`public const string DefaultResourcesGuid = "${DEFAULT_RESOURCES_GUID}";`);

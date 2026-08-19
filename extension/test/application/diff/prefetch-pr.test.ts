@@ -15,13 +15,6 @@ import { createGithubGateway } from "../../../src/infrastructure/clients/github-
 import { createDifferGateway } from "../../../src/infrastructure/clients/wasm-differ-client";
 import { AFTER_PREFAB, BEFORE_PREFAB } from "../../fixtures/unity";
 
-const REQUEST = {
-  type: "prefetch" as const,
-  owner: "o",
-  repo: "r",
-  prNumber: 1,
-};
-
 class MemoryAuthRepository implements AuthRepository {
   private accessToken = "token";
   private pendingSignIn: PendingSignIn | undefined;
@@ -122,7 +115,7 @@ describe("prefetchPr", () => {
       repository,
       new MemoryRepoIndexRepository(),
       createDiffSession(),
-      REQUEST,
+      { type: "prefetch", owner: "o", repo: "r", prNumber: 1 },
     );
 
     const stored = await repository.load("base-sha:head-sha:Assets/Foo.prefab");
@@ -172,7 +165,7 @@ describe("prefetchPr", () => {
       repository,
       indexRepository,
       createDiffSession(),
-      REQUEST,
+      { type: "prefetch", owner: "o", repo: "r", prNumber: 1 },
     );
     const blobRequestsAfterFirstWorker = requests.filter((request) => request.pathname.includes("/git/blobs/")).length;
 
@@ -183,7 +176,7 @@ describe("prefetchPr", () => {
       repository,
       indexRepository,
       createDiffSession(),
-      REQUEST,
+      { type: "prefetch", owner: "o", repo: "r", prNumber: 1 },
     );
 
     await expect(repository.load("base-sha:head-sha:Assets/Foo.prefab")).resolves.toBeDefined();
@@ -236,7 +229,7 @@ describe("prefetchPr", () => {
       repository,
       new MemoryRepoIndexRepository(),
       createDiffSession(),
-      REQUEST,
+      { type: "prefetch", owner: "o", repo: "r", prNumber: 1 },
     );
 
     expect(repository.data.size).toBe(100);
@@ -280,7 +273,7 @@ describe("prefetchPr", () => {
       repository,
       new MemoryRepoIndexRepository(),
       createDiffSession(),
-      REQUEST,
+      { type: "prefetch", owner: "o", repo: "r", prNumber: 1 },
     );
 
     expect(repository.data.size).toBe(0);
@@ -329,7 +322,7 @@ describe("prefetchPr", () => {
         repository,
         new MemoryRepoIndexRepository(),
         createDiffSession(),
-        REQUEST,
+        { type: "prefetch", owner: "o", repo: "r", prNumber: 1 },
       ),
     ).resolves.toBeUndefined();
 

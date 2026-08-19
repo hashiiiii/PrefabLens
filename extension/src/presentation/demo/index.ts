@@ -53,7 +53,7 @@ function attachFile(
   controller.start();
 
   header.append(controller.element);
-  return controller.apply;
+  return controller.setView;
 }
 
 async function main(): Promise<void> {
@@ -75,32 +75,32 @@ async function main(): Promise<void> {
   }
 
   // Semantic by default, like the extension after the user picks it. The
-  // demo has no chrome.storage, so persistence is a no-op.
+  // demo has no chrome.storage, so save is a no-op.
   const state = createViewState("semantic", () => {});
-  const appliers: Array<(view: ViewMode) => void> = [];
+  const setViews: Array<(view: ViewMode) => void> = [];
   state.subscribe((view) => {
-    for (const apply of appliers) apply(view);
+    for (const setView of setViews) setView(view);
   });
 
   // Global bar above the first Unity file, same anchor rule as the content script.
   const firstFile = must(headers[0]?.closest(".file"));
   const bar = mountGlobalBar(state.page);
-  bar.toggle.subscribe((view) => state.setDefault(view));
+  bar.toggle.subscribe((view) => state.savePage(view));
   firstFile.before(bar.element);
   state.subscribe((view) => bar.toggle.set(view));
 
   for (const header of headers) {
     const path = header.dataset.path ?? "";
-    const apply = attachFile(
+    const setView = attachFile(
       header,
       differ,
       index,
       fixturesGateway.fetchBytes,
       fixturesGateway.fetchSource,
-      state.resolve(path),
+      state.getFile(path),
       (view) => state.setFile(path, view),
     );
-    appliers.push(apply);
+    setViews.push(setView);
   }
 }
 

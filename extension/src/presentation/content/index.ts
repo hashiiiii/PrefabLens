@@ -126,11 +126,14 @@ async function initDiffRuntime(): Promise<void> {
   } catch {
     // A storage failure must not stop the current page.
   }
+
   const viewState = createViewState(initial, saveViewMode);
+
   viewState.subscribe((view) => {
     globalToggle?.set(view);
     for (const file of updateFiles().values()) file.setView(view);
   });
+
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== "local") return;
     const next = changes.viewMode?.newValue;

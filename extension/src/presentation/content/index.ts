@@ -135,7 +135,7 @@ async function initDiffRuntime(): Promise<void> {
     if (area !== "local") return;
     const next = changes.viewMode?.newValue;
     if (next === "raw" || next === "semantic") viewState.setPage(next);
-    if (typeof changes.accessToken?.newValue === "string" && changes.accessToken.newValue) {
+    if (typeof changes.accessToken?.newValue === "string") {
       for (const file of updateFiles().values()) {
         if (file.status === "auth-blocked" && viewState.getFile(file.path) === "semantic") {
           void file.loadDiff();

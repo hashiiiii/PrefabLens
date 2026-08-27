@@ -26,7 +26,6 @@ let globalToggle: Toggle | undefined;
 let currentPage = ""; // drop overrides when leaving this diff page
 let prefetchedPr = ""; // prefetch once per PR across conversation + files tabs
 
-// SPA navigation can remove a complete file view or only its body.
 function updateFiles(): FileRegistry {
   for (const [key, file] of files) {
     if (file.header.isConnected) file.update();
@@ -76,19 +75,21 @@ function attach(viewState: ViewState): void {
     const prKey = targetKey(prPage.owner, prPage.repo, { kind: "pull", prNumber: prPage.prNumber });
     if (prKey !== prefetchedPr) {
       prefetchedPr = prKey;
-      // Fire-and-forget. If prefetch fails, the manual toggle stays available.
       void messengerGateway.prefetch({ type: "prefetch", ...prPage });
     }
   }
+
   const page = parseDiffUrl(location.pathname);
   if (!page) return;
+
   const key = targetKey(page.owner, page.repo, page.target);
   if (key !== currentPage) {
     currentPage = key;
     viewState.clearFiles();
   }
-  // A body remount keeps its header, so update reattaches the semantic host before a pending push arrives.
+
   updateFiles();
+
   const entries = scanUnityFiles(document);
   const first = entries[0];
   if (first) ensureGlobalToggle(viewState, first);
@@ -113,12 +114,18 @@ function ensureGlobalToggle(viewState: ViewState, first: FileEntry): void {
   globalToggle = bar.toggle;
 }
 
-async function initDeviceActivationPage(): Promise<void> {
-  const pending = await authRepository.loadPendingSignIn();
-  if (pending) fillDeviceCode(document, pending, Date.now());
-}
+async function init(): Promise<void> {
+  // The device activation page opens in a new tab.
+  // The PR (pull request) tab already starts the main runtime.
+  // This tab's only job is to fill in the activation code.
+  // If you use soft navigation, it does not reload this script.
+  // All other pages also start the runtime, but do nothing until on a diff or PR URL.
+  if (location.pathname === "/login/device") {
+    const pending = await authRepository.loadPendingSignIn();
+    if (pending) fillDeviceCode(document, pending, Date.now());
+    return;
+  }
 
-async function initDiffRuntime(): Promise<void> {
   let initial: ViewMode = "raw";
   try {
     const stored = await chrome.storage.local.get(["viewMode"]);
@@ -153,9 +160,8 @@ async function initDiffRuntime(): Promise<void> {
     files.get(fileKey(page, msg.path))?.setResolved(msg);
   });
 
-  // SPA: MutationObserver + 50ms debounce follows lazy loads and stays under the
-  // ~100ms sluggish threshold. Scans are fetch-free (~0.75ms), so storms stay cheap.
   attach(viewState);
+
   let scheduled = false;
   new MutationObserver(() => {
     if (scheduled) return;
@@ -165,19 +171,6 @@ async function initDiffRuntime(): Promise<void> {
       attach(viewState);
     }, 50);
   }).observe(document.body, { childList: true, subtree: true });
-}
-
-async function init(): Promise<void> {
-  // The device activation page opens in a new tab.
-  // The PR (pull request) tab already starts the main runtime.
-  // This tab's only job is to fill in the activation code.
-  // If you use soft navigation, it does not reload this script.
-  // All other pages also start the runtime, but do nothing until on a diff or PR URL.
-  if (location.pathname === "/login/device") {
-    await initDeviceActivationPage();
-    return;
-  }
-  await initDiffRuntime();
 }
 
 void init();

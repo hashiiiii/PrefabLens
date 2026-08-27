@@ -150,10 +150,10 @@ function scanReact(root: ParentNode): FileEntry[] {
   return out;
 }
 
-// The function always runs both scans: one matches, and the other yields [].
-// There is no layout probe, so A/B flips do not break detection. The function
-// returns only headers without the data-prefablens mark. Attached files keep
-// their existing appliers.
+// There is no layout check, so a GitHub layout change does not stop detection.
+// The function always runs the two scans. One scan finds files, and the other
+// scan returns []. The function returns only headers that do not have the
+// data-prefablens mark. Attached files keep their appliers.
 export function scanUnityFiles(root: ParentNode): FileEntry[] {
   return [...scanClassic(root), ...scanReact(root)];
 }

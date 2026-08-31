@@ -63,12 +63,20 @@ namespace UnityEngine.UIElements
         StyleLength marginRight { get; set; }
         StyleLength paddingLeft { get; set; }
         StyleLength paddingRight { get; set; }
+        StyleLength paddingTop { get; set; }
+        StyleLength paddingBottom { get; set; }
+        StyleLength borderTopLeftRadius { get; set; }
+        StyleLength borderTopRightRadius { get; set; }
+        StyleLength borderBottomLeftRadius { get; set; }
+        StyleLength borderBottomRightRadius { get; set; }
         StyleFloat flexGrow { get; set; }
         StyleEnum<TextAnchor> unityTextAlign { get; set; }
+        StyleEnum<FontStyle> unityFontStyleAndWeight { get; set; }
         StyleEnum<Align> alignSelf { get; set; }
         StyleEnum<Align> alignItems { get; set; }
         StyleEnum<WhiteSpace> whiteSpace { get; set; }
         StyleColor color { get; set; }
+        StyleColor backgroundColor { get; set; }
     }
 
     sealed class Style : IStyle
@@ -83,12 +91,20 @@ namespace UnityEngine.UIElements
         public StyleLength marginRight { get; set; }
         public StyleLength paddingLeft { get; set; }
         public StyleLength paddingRight { get; set; }
+        public StyleLength paddingTop { get; set; }
+        public StyleLength paddingBottom { get; set; }
+        public StyleLength borderTopLeftRadius { get; set; }
+        public StyleLength borderTopRightRadius { get; set; }
+        public StyleLength borderBottomLeftRadius { get; set; }
+        public StyleLength borderBottomRightRadius { get; set; }
         public StyleFloat flexGrow { get; set; }
         public StyleEnum<TextAnchor> unityTextAlign { get; set; }
+        public StyleEnum<FontStyle> unityFontStyleAndWeight { get; set; }
         public StyleEnum<Align> alignSelf { get; set; }
         public StyleEnum<Align> alignItems { get; set; }
         public StyleEnum<WhiteSpace> whiteSpace { get; set; }
         public StyleColor color { get; set; }
+        public StyleColor backgroundColor { get; set; }
     }
 
     public class VisualElement
@@ -152,9 +168,17 @@ namespace UnityEngine.UIElements
         public TreeViewItemData(int id, T data, List<TreeViewItemData<T>> children = null) { }
     }
 
+    public enum SelectionType
+    {
+        None,
+        Single,
+        Multiple,
+    }
+
     public class TreeView : VisualElement
     {
         public float fixedItemHeight { get; set; }
+        public SelectionType selectionType { get; set; }
         public Func<VisualElement> makeItem { get; set; }
         public Action<VisualElement, int> bindItem { get; set; }
 

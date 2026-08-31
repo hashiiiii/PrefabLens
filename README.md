@@ -12,21 +12,19 @@ A [live demo](https://prefablens.hashiiiii.workers.dev/) is available.
 ## Chrome extension (Chrome Web Store)
 
 <p align="center">
-  <img width="1271" height="734" alt="extension-01" src="docs/images/extension-01.gif" />
-
-  <img src="docs/images/extension-02.png" alt="extension-02" />
+  <img width="924" src="docs/images/extension.png" alt="extension" />
 </p>
 
 ## Unity Editor
 
 <p align="center">
-  <img width="717" height="495" src="docs/images/editor-01.gif" alt="editor-01" />
+  <img width="924" src="docs/images/editor.png" alt="editor" />
 </p>
 
 ## CLI
 
 <p align="center">
-  <img width="840" height="720" src="docs/images/cli-01.png" alt="cli-01" />
+  <img width="924" src="docs/images/cli.png" alt="cli" />
 </p>
 
 ## Components

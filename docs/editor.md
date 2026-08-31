@@ -45,9 +45,10 @@ project root.
 
 Important types under `Editor/`:
 
-- `PrefabLensWindow.cs` — Window UI and refresh flow
+- `PrefabLensWindow.cs` — Window layout and refresh flow
 - `Cli.cs`, `Cli.Download.cs`, `Cli.Run.cs` — locate, download, and run the CLI
-- `BulkModel.cs`, `DiffModel.cs`, `DiffTree.cs` — JSON models and tree view
+- `BulkModel.cs`, `DiffModel.cs`, `DiffTree.cs` — JSON models and display row tree
+- `DiffTreeView.cs` — UI Toolkit rows, status badges, and TreeView wiring
 - `RefreshGate.cs` — one in-flight CLI run, with a queue for later Base edits
 - `PrefabLensSettings.cs` — Preferences UI for the CLI path override
 - `BuiltinRefs.cs`, `ValueFormat.cs` — built-in names and field text

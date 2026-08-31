@@ -43,6 +43,14 @@ namespace UnityEngine
         LowerRight,
     }
 
+    public enum FontStyle
+    {
+        Normal,
+        Bold,
+        Italic,
+        BoldAndItalic,
+    }
+
     public static class Debug
     {
         public static void LogException(System.Exception exception) { }

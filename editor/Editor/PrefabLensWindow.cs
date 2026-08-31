@@ -33,19 +33,14 @@ namespace PrefabLens
                 style =
                 {
                     flexDirection = FlexDirection.Row,
-                    marginTop = 4,
-                    marginBottom = 4,
+                    alignItems = Align.Center,
+                    paddingTop = 4,
+                    paddingBottom = 4,
+                    paddingLeft = 6,
+                    paddingRight = 6,
                 },
             };
-            status = new Label
-            {
-                style =
-                {
-                    flexGrow = 1,
-                    unityTextAlign = TextAnchor.MiddleLeft,
-                    marginLeft = 6,
-                },
-            };
+            status = new Label { style = { flexGrow = 1, unityTextAlign = TextAnchor.MiddleLeft } };
             toolbar.Add(status);
             baseRef = new TextField("Base")
             {
@@ -53,27 +48,21 @@ namespace PrefabLens
                 // edit triggers exactly one CLI run.
                 isDelayed = true,
                 tooltip = "Git ref to compare against: branch, tag, or commit. Empty = HEAD.",
-                style = { width = 220 },
+                style = { width = 220, marginRight = 4 },
             };
             baseRef.RegisterValueChangedCallback(_ => Refresh());
             toolbar.Add(baseRef);
             toolbar.Add(new Button(Refresh) { text = "Refresh" });
             rootVisualElement.Add(toolbar);
 
-            var split = new TwoPaneSplitView(0, 240, TwoPaneSplitViewOrientation.Horizontal);
-            list = new ListView { fixedItemHeight = 20, style = { marginTop = 2 } };
-            list.makeItem = () =>
-                new VisualElement
-                {
-                    style =
-                    {
-                        flexDirection = FlexDirection.Row,
-                        alignItems = Align.Center,
-                        paddingLeft = 6,
-                        paddingRight = 6,
-                    },
-                };
-            list.bindItem = (e, i) => RenderRow(e, EntryRow(bulk.Entries[i]));
+            var split = new TwoPaneSplitView(0, 280, TwoPaneSplitViewOrientation.Horizontal)
+            {
+                style = { flexGrow = 1 },
+            };
+            list = new ListView { fixedItemHeight = DiffTreeView.ListItemHeight };
+            list.makeItem = DiffTreeView.MakeListRow;
+            list.bindItem = (element, index) =>
+                DiffTreeView.BindRow(element, DiffTreeView.EntryRow(bulk.Entries[index]));
             list.selectionChanged += OnSelectionChanged;
             split.Add(list);
             content = new VisualElement { style = { flexGrow = 1 } };
@@ -218,10 +207,11 @@ namespace PrefabLens
             selectedPath = entry.Path;
             content.Clear();
             entry.Diff.ResolveWith(AssetDatabase.GUIDToAssetPath);
+            content.Add(DiffTreeView.BuildHeader(entry));
             if (entry.Diff.IsEmpty)
                 Note("No semantic changes");
             else
-                content.Add(BuildTree(entry.Diff));
+                content.Add(DiffTreeView.BuildTree(entry.Diff));
         }
 
         /// Clears the list pane and status; the missing-CLI screen and the download
@@ -324,81 +314,11 @@ namespace PrefabLens
                     style =
                     {
                         marginLeft = 6,
-                        marginTop = 2,
+                        marginTop = 6,
                         whiteSpace = WhiteSpace.Normal,
                     },
                 }
             );
-        }
-
-        static Row EntryRow(BulkEntry entry) =>
-            DiffTree
-                .Badge(BulkModel.AggregateStatus(entry.Diff))
-                .WithIcon(AssetDatabase.GetCachedIcon(entry.Path))
-                .Add(entry.Path);
-
-        static void RenderRow(VisualElement e, Row row)
-        {
-            e.Clear();
-            for (var i = 0; i < row.Spans.Count; i++)
-            {
-                var span = row.Spans[i];
-                var l = new Label(span.Text)
-                {
-                    style =
-                    {
-                        marginLeft = 0,
-                        marginRight = 0,
-                        paddingLeft = 0,
-                        paddingRight = 0,
-                    },
-                };
-                if (span.Tint is Color tint)
-                    l.style.color = tint;
-                e.Add(l);
-                // The icon sits between the badge (always the first span) and the name.
-                if (i == 0 && row.Icon != null)
-                    e.Add(
-                        new Image
-                        {
-                            image = row.Icon,
-                            style =
-                            {
-                                width = 16,
-                                height = 16,
-                                marginRight = 2,
-                                flexShrink = 0,
-                            },
-                        }
-                    );
-            }
-        }
-
-        // ---- Tree rendering: DiffTree builds the rows; only the UIElements wiring lives here ----
-
-        static TreeView BuildTree(DiffModel model)
-        {
-            var id = 0;
-            var items = new List<TreeViewItemData<Row>>();
-            foreach (var item in DiffTree.Build(model))
-                items.Add(ToViewItem(item, ref id));
-
-            var tree = new TreeView { fixedItemHeight = 18, style = { flexGrow = 1 } };
-            tree.SetRootItems(items);
-            tree.makeItem = () =>
-                new VisualElement { style = { flexDirection = FlexDirection.Row, alignItems = Align.Center } };
-            tree.bindItem = (e, i) => RenderRow(e, tree.GetItemDataForIndex<Row>(i));
-            tree.ExpandAll();
-            return tree;
-        }
-
-        /// Ids only need to be unique within one TreeView; each ShowEntry builds a fresh one.
-        static TreeViewItemData<Row> ToViewItem(DiffTree.Item item, ref int id)
-        {
-            var children = new List<TreeViewItemData<Row>>();
-            foreach (var ch in item.Children)
-                children.Add(ToViewItem(ch, ref id));
-            return new TreeViewItemData<Row>(id++, item.Row, children);
         }
     }
 }

@@ -32,11 +32,26 @@ namespace PrefabLens
         }
     }
 
+    public enum RowKind
+    {
+        Summary,
+        Group,
+        Field,
+    }
+
     /// One rendered line: spans plus an optional leading icon.
     public sealed class Row
     {
+        public readonly DiffStatus Status;
+        public readonly RowKind Kind;
         public Texture Icon;
         public readonly List<Span> Spans = new();
+
+        public Row(DiffStatus status = DiffStatus.Unchanged, RowKind kind = RowKind.Summary)
+        {
+            Status = status;
+            Kind = kind;
+        }
 
         public Row Add(string text, Color? tint = null)
         {
@@ -53,7 +68,7 @@ namespace PrefabLens
     }
 
     /// Maps a DiffModel to the row tree the window renders (same notation as the Chrome
-    /// renderer). Pure with respect to UIElements — PrefabLensWindow owns the TreeView
+    /// renderer). Pure with respect to UIElements — DiffTreeView owns the TreeView
     /// wiring — so `dotnet test` covers it via the DotNetTests~ stubs.
     public static class DiffTree
     {
@@ -71,18 +86,25 @@ namespace PrefabLens
             var items = new List<Item>();
             foreach (var n in model.Roots)
                 items.Add(NodeItem(n, model));
-            foreach (var c in model.Loose)
-                items.Add(ComponentItem(c, model));
+            if (model.Loose.Count > 0)
+            {
+                var group = new Item(
+                    Badge(DiffStatus.Unchanged, RowKind.Group).Add($"COMPONENTS ({model.Loose.Count})", Palette.Muted)
+                );
+                foreach (var c in model.Loose)
+                    group.Children.Add(ComponentItem(c, model));
+                items.Add(group);
+            }
             return items;
         }
 
-        public static Row Badge(DiffStatus s) =>
+        public static Row Badge(DiffStatus s, RowKind kind = RowKind.Summary) =>
             s switch
             {
-                DiffStatus.Added => new Row().Add("+ ", Palette.Added),
-                DiffStatus.Removed => new Row().Add("− ", Palette.Removed),
-                DiffStatus.Modified => new Row().Add("~ ", Palette.Modified),
-                _ => new Row().Add("  "),
+                DiffStatus.Added => new Row(s, kind).Add("+ ", Palette.Added),
+                DiffStatus.Removed => new Row(s, kind).Add("− ", Palette.Removed),
+                DiffStatus.Modified => new Row(s, kind).Add("~ ", Palette.Modified),
+                _ => new Row(kind: kind).Add("  "),
             };
 
         static Item NodeItem(NodeDiff n, DiffModel m)
@@ -95,14 +117,24 @@ namespace PrefabLens
                     Palette.Muted
                 );
             var item = new Item(row);
-            foreach (var ov in n.Overrides)
-                item.Children.Add(new Item(OverrideRow(ov, m)));
-            if (n.Components.Count > 0)
+            var cards = new List<Item>();
+            for (var start = 0; start < n.Overrides.Count; )
             {
-                // Components fold as their own group one level below the object row (extension parity).
-                var group = new Item(Badge(DiffStatus.Unchanged).Add("Components", Palette.Muted));
-                foreach (var c in n.Components)
-                    group.Children.Add(ComponentItem(c, m));
+                var end = start + 1;
+                while (end < n.Overrides.Count && n.Overrides[end].Group == n.Overrides[start].Group)
+                    end++;
+                cards.Add(OverrideGroupItem(n.Overrides, start, end, m));
+                start = end;
+            }
+            foreach (var c in n.Components)
+                cards.Add(ComponentItem(c, m));
+            if (cards.Count > 0)
+            {
+                // Override cards and components share one group because Unity displays both in the Inspector.
+                var group = new Item(
+                    Badge(DiffStatus.Unchanged, RowKind.Group).Add($"COMPONENTS ({cards.Count})", Palette.Muted)
+                );
+                group.Children.AddRange(cards);
                 item.Children.Add(group);
             }
             foreach (var ch in n.Children)
@@ -113,10 +145,10 @@ namespace PrefabLens
         static Item ComponentItem(ComponentDiff c, DiffModel m)
         {
             var row = Badge(c.Status).WithIcon(ComponentIcon(c));
-            if (!string.IsNullOrEmpty(c.ClassName))
+            if (c.ScriptGuid != null && m.Resolved.TryGetValue(c.ScriptGuid, out var p))
+                row.Add(Stem(p)).Add(" ‹Script: " + p + "›", Palette.Muted);
+            else if (!string.IsNullOrEmpty(c.ClassName))
                 row.Add(c.ClassName).Add(" ‹Script›", Palette.Muted);
-            else if (c.ScriptGuid != null && m.Resolved.TryGetValue(c.ScriptGuid, out var p))
-                row.Add(Stem(p)).Add(" ‹Script›", Palette.Muted);
             else
                 row.Add(c.TypeName);
             var item = new Item(row);
@@ -125,15 +157,31 @@ namespace PrefabLens
             return item;
         }
 
-        static Row OverrideRow(OverrideDiff ov, DiffModel m)
+        static Item OverrideGroupItem(List<OverrideDiff> overrides, int start, int end, DiffModel m)
         {
-            var label = ov.Group.Length > 0 && ov.Group != "Overrides" ? ov.Group + " / " + ov.Label : ov.Label;
-            return FieldRow(label, ov.Status, ov.Before, ov.After, m);
+            var status = overrides[start].Status;
+            for (var i = start + 1; i < end; i++)
+                if (overrides[i].Status != status)
+                {
+                    status = DiffStatus.Modified;
+                    break;
+                }
+            var name = string.IsNullOrEmpty(overrides[start].Group) ? "Overrides" : overrides[start].Group;
+            var item = new Item(Badge(status).WithIcon(FindIcon(name + " Icon")).Add(name));
+            for (var i = start; i < end; i++)
+            {
+                var ov = overrides[i];
+                item.Children.Add(new Item(FieldRow(ov.Label, ov.Status, ov.Before, ov.After, m)));
+            }
+            return item;
         }
 
         static Row FieldRow(string label, DiffStatus status, Value before, Value after, DiffModel m)
         {
-            var row = Badge(status).Add(label + " ", Palette.Muted);
+            if ((before == null || before.IsNull) && (after == null || after.IsNull))
+                return Badge(status).Add(label, Palette.Muted);
+
+            var row = Badge(status, RowKind.Field).Add(label + " ", Palette.Muted);
             var b = ValueFormat.Format(before, m);
             var a = ValueFormat.Format(after, m);
             if (status == DiffStatus.Modified)

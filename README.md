@@ -4,10 +4,10 @@
 [![Release](https://img.shields.io/github/v/release/hashiiiii/PrefabLens)](https://github.com/hashiiiii/PrefabLens/releases)
 [![CI](https://img.shields.io/github/actions/workflow/status/hashiiiii/PrefabLens/ci.yml?branch=main&label=CI)](https://github.com/hashiiiii/PrefabLens/actions/workflows/ci.yml)
 
-PrefabLens shows human-readable diffs for UnityYAML assets.
-It shows changes at the GameObject, component, and field level.
+PrefabLens shows human readable diffs of UnityYAML assets.
+A semantic diff shows changes at the GameObject, component, and field level.
 
-Try the [live demo](https://prefablens.hashiiiii.workers.dev/).
+A [live demo](https://prefablens.hashiiiii.workers.dev/) is available.
 
 ## Chrome extension (Chrome Web Store)
 
@@ -31,13 +31,13 @@ Try the [live demo](https://prefablens.hashiiiii.workers.dev/).
 
 ## Components
 
-| Directory | Description |
-|---|---|
-| `core/` | Diff engine in Zig (shared by the CLI and WASM) |
-| `cli/` | `prefablens` command-line tool |
-| `extension/` | Chrome extension for semantic diffs on GitHub pull requests |
-| `editor/` | Unity Editor package for semantic UnityYAML diffs |
-| `site/` | Live demo site on Cloudflare Workers, built from the CLI and extension artifacts |
+| Directory    | Description                                                                              |
+| ------------ | ---------------------------------------------------------------------------------------- |
+| `core/`      | Zig diff engine for the CLI and WASM                                                     |
+| `cli/`       | `prefablens` CLI tool                                                                    |
+| `extension/` | Chrome extension. The extension shows semantic diffs on GitHub pull requests.            |
+| `editor/`    | Unity Editor package for semantic diffs                                                  |
+| `site/`      | Live demo on Cloudflare Workers. The demo uses artifacts from the CLI and the extension. |
 
 ## Installation
 
@@ -79,15 +79,15 @@ openupm add com.hashiiiii.prefablens
 ```
 
 If you do not use [openupm-cli](https://github.com/openupm/openupm-cli), add the scoped registry as described on the [package page](https://openupm.com/packages/com.hashiiiii.prefablens/).
-You can also install from the Package Manager git URL: `https://github.com/hashiiiii/PrefabLens.git?path=editor`.
+Alternatively, in the Package Manager, install from the git URL `https://github.com/hashiiiii/PrefabLens.git?path=editor`.
 
 ## Usage
 
 ### Chrome extension
 
-The extension shows UnityYAML diffs in a human-readable format on GitHub pull requests.
+The extension shows human readable diffs of UnityYAML assets on GitHub pull requests.
 You can authenticate with the GitHub Device Flow from the diff panel.
-You do not need to set a token by hand.
+You do not need to set a token.
 
 > [!NOTE]
 > The extension works on github.com only.
@@ -106,7 +106,7 @@ prefablens --html main                  # self-contained HTML report on stdout
 prefablens --open main                  # write the report to a temp file and open it
 ```
 
-Operands that end in a Unity YAML extension (`.prefab`, `.unity`, `.asset`, and more) are paths.
+Operands with a Unity YAML extension (`.prefab`, `.unity`, `.asset`, and more) are paths.
 All other operands are git refs.
 
 The project must use text asset serialization (Edit > Project Settings > Editor >
@@ -122,36 +122,43 @@ Requirements:
 - Text asset serialization (Force Text)
 
 Open `Window > PrefabLens`.
-The left pane lists every changed UnityYAML asset against the **Base** ref
-(empty means HEAD).
+
+The left pane lists every changed UnityYAML asset against the **Base** ref.
+An empty **Base** ref means HEAD.
 The right pane shows the semantic diff for the selected asset.
-The window refreshes on focus and via **Refresh**.
+The window refreshes on focus.
+The **Refresh** control also refreshes the window.
 
 On first use, the package downloads the pinned `prefablens` CLI from GitHub
-Releases into `Library/PrefabLens/` (not version-controlled).
+Releases into `Library/PrefabLens/`.
+Git does not track this directory.
 
-To use your own binary:
+To use a local binary:
 
 1. Open Preferences > PrefabLens.
 2. Set **CLI path override** to an absolute path.
-3. Or set the `PrefabLens.CliPath` EditorPrefs key to that path.
 
-| Symptom | What to do |
-|---|---|
-| `Download failed: …` | Retry. Or download the release zip by hand and set the CLI path override. |
-| `prefablens exited with N` / one-line CLI error | Most often the project is not in a git repo, or git timed out. |
-| `Could not parse CLI output (CLI version mismatch?):` | Clear a stale CLI path override, or update the binary. |
-| `prefablens timed out after 90s and was killed` | Make sure that `git status` is fast in that repository. |
-| Changed assets never appear | Switch Asset Serialization to Force Text. |
+Alternatively, set the `PrefabLens.CliPath` EditorPrefs key to an absolute path.
+
+| Symptom                                               | What to do                                                                                         |
+| ----------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| `Download failed: …`                                  | Retry. If the retry fails, download the release zip. Then set the CLI path override.               |
+| `prefablens exited with N` / one-line CLI error       | Make sure that the project is in a git repository. Make sure that git finishes within the timeout. |
+| `Could not parse CLI output (CLI version mismatch?):` | Clear the CLI path override. Or update the binary.                                                 |
+| `prefablens timed out after 90s and was killed`       | Make sure that `git status` is fast in the repository.                                             |
+| Changed assets never appear                           | Switch Asset Serialization to Force Text.                                                          |
 
 ## Supported files
 
-PrefabLens supports text-serialized Unity assets such as `.prefab`, `.unity`, `.asset`, `.mat`, `.anim`, and `.controller`.
-It does not support `.meta`, `.asmdef`, and other non-UnityYAML formats.
+PrefabLens supports text-serialized Unity assets.
+The supported extensions are `.prefab`, `.unity`, `.asset`, `.mat`, `.anim`, and `.controller`.
+PrefabLens does not support `.meta`, `.asmdef`, or other formats that are not UnityYAML.
 
 ## Development
 
-Use [mise](https://mise.jdx.dev/) to manage the toolchain (Zig 0.16, Node 24, pnpm 11, .NET 10).
+Install [mise](https://mise.jdx.dev/).
+
+The toolchain is Zig 0.16, Node 24, pnpm 11, and .NET 10.
 
 ```bash
 mise install
@@ -173,7 +180,7 @@ cd editor && dotnet test DotNetTests~/Tests
 cd site && node build.mjs
 ```
 
-Documents (why, design, verification, deploy):
+Related documents:
 
 - [CLI](docs/cli.md)
 - [Chrome extension](docs/extension.md)
@@ -182,8 +189,8 @@ Documents (why, design, verification, deploy):
 ## Contributing
 
 Open an issue first.
-Wait for the `approved` label before you open a pull request.
-See [CONTRIBUTING.md](CONTRIBUTING.md).
+If the issue does not have the `approved` label, do not open a pull request.
+Read [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 

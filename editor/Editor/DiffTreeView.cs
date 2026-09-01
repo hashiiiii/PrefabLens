@@ -82,7 +82,12 @@ namespace PrefabLens
                 },
             };
             tree.SetRootItems(items);
-            tree.makeItem = () => MakeRow(2);
+            tree.makeItem = () =>
+            {
+                var row = MakeRow(2);
+                row.style.height = TreeRowHeight;
+                return row;
+            };
             tree.bindItem = (element, index) => BindRow(element, tree.GetItemDataForIndex<Row>(index));
             tree.ExpandAll();
             return tree;
@@ -109,8 +114,6 @@ namespace PrefabLens
                 };
                 if (span.Tint is Color tint)
                     label.style.color = tint;
-                if (row.Kind == RowKind.Group)
-                    label.style.unityFontStyleAndWeight = FontStyle.Bold;
                 element.Add(label);
             }
 

@@ -89,7 +89,7 @@ namespace PrefabLens
             if (model.Loose.Count > 0)
             {
                 var group = new Item(
-                    Badge(DiffStatus.Unchanged, RowKind.Group).Add($"COMPONENTS ({model.Loose.Count})", Palette.Muted)
+                    Badge(DiffStatus.Unchanged, RowKind.Group).Add($"Components ({model.Loose.Count})", Palette.Muted)
                 );
                 foreach (var c in model.Loose)
                     group.Children.Add(ComponentItem(c, model));
@@ -132,7 +132,7 @@ namespace PrefabLens
             {
                 // Override cards and components share one group because Unity displays both in the Inspector.
                 var group = new Item(
-                    Badge(DiffStatus.Unchanged, RowKind.Group).Add($"COMPONENTS ({cards.Count})", Palette.Muted)
+                    Badge(DiffStatus.Unchanged, RowKind.Group).Add($"Components ({cards.Count})", Palette.Muted)
                 );
                 group.Children.AddRange(cards);
                 item.Children.Add(group);

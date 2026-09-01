@@ -49,7 +49,7 @@ namespace PrefabLens.Tests
             var items = Build(json);
             Assert.AreEqual(2, items.Count);
             AssertSpan(items[0].Row.Spans[1], "Plane", null);
-            AssertSpan(items[1].Row.Spans[1], "COMPONENTS (1)", Palette.Muted);
+            AssertSpan(items[1].Row.Spans[1], "Components (1)", Palette.Muted);
             AssertSpan(items[1].Children[0].Row.Spans[0], "+ ", Palette.Added);
             AssertSpan(items[1].Children[0].Row.Spans[1], "SphereCollider", null);
         }
@@ -70,7 +70,7 @@ namespace PrefabLens.Tests
             AssertSpan(items[0].Row.Spans[0], "~ ", Palette.Modified);
             var group = items[0].Children[0];
             AssertSpan(group.Row.Spans[0], "  ", null);
-            AssertSpan(group.Row.Spans[1], "COMPONENTS (1)", Palette.Muted);
+            AssertSpan(group.Row.Spans[1], "Components (1)", Palette.Muted);
             AssertSpan(group.Children[0].Row.Spans[1], "Transform", null);
         }
 
@@ -95,7 +95,7 @@ namespace PrefabLens.Tests
 
             Assert.AreEqual(1, root.Children.Count);
             var components = root.Children[0];
-            AssertSpan(components.Row.Spans[1], "COMPONENTS (3)", Palette.Muted);
+            AssertSpan(components.Row.Spans[1], "Components (3)", Palette.Muted);
             Assert.AreEqual(3, components.Children.Count);
             AssertSpan(components.Children[0].Row.Spans[1], "GameObject", null);
             AssertSpan(components.Children[0].Children[0].Row.Spans[1], "Name ", Palette.Muted);
@@ -259,7 +259,7 @@ namespace PrefabLens.Tests
                 ""loose"":[]
             }";
             var components = Build(json)[0].Children[0];
-            AssertSpan(components.Row.Spans[1], "COMPONENTS (1)", Palette.Muted);
+            AssertSpan(components.Row.Spans[1], "Components (1)", Palette.Muted);
             var card = components.Children[0];
             AssertSpan(card.Row.Spans[1], "Overrides", null);
             AssertSpan(card.Children[0].Row.Spans[1], "Name ", Palette.Muted);
@@ -283,7 +283,7 @@ namespace PrefabLens.Tests
             }";
             var children = Build(json)[0].Children;
             Assert.AreEqual(2, children.Count);
-            AssertSpan(children[0].Row.Spans[1], "COMPONENTS (2)", Palette.Muted);
+            AssertSpan(children[0].Row.Spans[1], "Components (2)", Palette.Muted);
             AssertSpan(children[0].Children[0].Row.Spans[1], "Transform", null);
             AssertSpan(children[0].Children[1].Row.Spans[1], "Transform", null);
             AssertSpan(children[1].Row.Spans[1], "Cap", null);

@@ -43,6 +43,30 @@ const ComponentOwnerIndexes = struct {
     theirs: merge_identity.ComponentOwnerIndex,
 };
 
+pub const GameObjectBundle = struct {
+    game_object: merge_model.DocumentId,
+    transform: merge_model.DocumentId,
+    components: []const merge_model.DocumentId,
+    component_items: []const merge_model.SemanticId,
+    parent_child_item: ?merge_model.SemanticId,
+    father_field: merge_model.SemanticId,
+};
+
+pub const ReparentChange = struct {
+    child: merge_model.DocumentId,
+    old_parent: ?merge_model.DocumentId,
+    new_parent: ?merge_model.DocumentId,
+    father_field: merge_model.SemanticId,
+    old_parent_item: ?merge_model.SemanticId,
+    new_parent_item: ?merge_model.SemanticId,
+};
+
+const MergeIndexes = struct {
+    base: merge_identity.Index,
+    ours: merge_identity.Index,
+    theirs: merge_identity.Index,
+};
+
 pub fn build(
     arena: std.mem.Allocator,
     base: source.ParsedFile,
@@ -63,6 +87,11 @@ pub fn build(
     try validateComponentOwners(base, component_owners.base);
     try validateComponentOwners(ours, component_owners.ours);
     try validateComponentOwners(theirs, component_owners.theirs);
+    const indexes = MergeIndexes{
+        .base = try merge_identity.Index.init(arena, base),
+        .ours = try merge_identity.Index.init(arena, ours),
+        .theirs = try merge_identity.Index.init(arena, theirs),
+    };
 
     for (base.documents) |base_document| {
         const ours_document = findDocument(ours.documents, base_document.class_id, base_document.file_id) orelse continue;
@@ -86,6 +115,22 @@ pub fn build(
         );
     }
 
+    try collectGameObjectOperations(
+        arena,
+        &operations,
+        &atomic_operations,
+        base,
+        ours,
+        theirs,
+        indexes,
+    );
+    try collectReparentOperations(
+        arena,
+        &operations,
+        &atomic_operations,
+        indexes,
+    );
+
     return .{
         .base = base,
         .ours = ours,
@@ -93,6 +138,650 @@ pub fn build(
         .operations = try operations.toOwnedSlice(arena),
         .atomic_operations = try atomic_operations.toOwnedSlice(arena),
     };
+}
+
+fn collectReparentOperations(
+    arena: std.mem.Allocator,
+    operations: *std.ArrayList(merge_model.Operation),
+    atomic_operations: *std.ArrayList(merge_model.AtomicOperation),
+    indexes: MergeIndexes,
+) merge_model.Error!void {
+    var document_iterator = indexes.base.documents.iterator();
+    while (document_iterator.next()) |entry| {
+        const document = entry.value_ptr.*;
+        if (document.class_id != 4 and document.class_id != 224) continue;
+        const child = merge_identity.documentId(document.*);
+        if (indexes.ours.document(child) == null or indexes.theirs.document(child) == null) continue;
+        const base_parent = try transformParent(&indexes.base, child);
+        const ours_parent = try transformParent(&indexes.ours, child);
+        const theirs_parent = try transformParent(&indexes.theirs, child);
+        if (std.meta.eql(base_parent, ours_parent) and std.meta.eql(base_parent, theirs_parent)) continue;
+        const ours_change = if (std.meta.eql(base_parent, ours_parent)) null else makeReparentChange(child, base_parent, ours_parent);
+        const theirs_change = if (std.meta.eql(base_parent, theirs_parent)) null else makeReparentChange(child, base_parent, theirs_parent);
+
+        const father_identity = merge_model.SemanticId{
+            .document = child,
+            .property_path = "m_Father",
+        };
+        const father_operation_id = findOperationBySemantic(
+            operations.items,
+            father_identity,
+            .field,
+        ) orelse return error.InvalidMerge;
+        const atomic_id = operations.items[father_operation_id].atomic_id;
+        var operation_ids: std.ArrayList(merge_model.OperationId) = .empty;
+        try operation_ids.append(arena, father_operation_id);
+
+        var membership_identities: std.ArrayList(merge_model.SemanticId) = .empty;
+        for ([_]?ReparentChange{ ours_change, theirs_change }) |optional_change| {
+            const change = optional_change orelse continue;
+            if (change.old_parent_item) |identity| {
+                try appendUniqueSemanticId(arena, &membership_identities, identity);
+            }
+            if (change.new_parent_item) |identity| {
+                try appendUniqueSemanticId(arena, &membership_identities, identity);
+            }
+        }
+        for (membership_identities.items) |identity| {
+            const membership_id = findOperationBySemantic(
+                operations.items,
+                identity,
+                .sequence_membership,
+            ) orelse return error.InvalidMerge;
+            try adoptOperation(arena, operations, atomic_operations, membership_id, atomic_id);
+            try operation_ids.append(arena, membership_id);
+        }
+        if (operation_ids.items.len < 2) return error.InvalidMerge;
+
+        const resolution: merge_model.Resolution = switch (decideReparent(
+            base_parent,
+            ours_parent,
+            theirs_parent,
+        )) {
+            .ours, .common => .{ .take = .ours },
+            .theirs => .{ .take = .theirs },
+            .conflict => .unresolved,
+        };
+        for (operation_ids.items) |operation_id| {
+            operations.items[operation_id].resolution = resolution;
+        }
+        operations.items[father_operation_id].kind = .reparent;
+        atomic_operations.items[atomic_id] = .{
+            .id = atomic_id,
+            .kind = .reparent,
+            .operation_ids = try operation_ids.toOwnedSlice(arena),
+        };
+    }
+}
+
+fn makeReparentChange(
+    child: merge_model.DocumentId,
+    old_parent: ?merge_model.DocumentId,
+    new_parent: ?merge_model.DocumentId,
+) ReparentChange {
+    return .{
+        .child = child,
+        .old_parent = old_parent,
+        .new_parent = new_parent,
+        .father_field = .{ .document = child, .property_path = "m_Father" },
+        .old_parent_item = if (old_parent) |parent| .{
+            .document = parent,
+            .property_path = "m_Children",
+            .item_ref = .{ .file_id = child.file_id, .guid = null, .type_id = null },
+        } else null,
+        .new_parent_item = if (new_parent) |parent| .{
+            .document = parent,
+            .property_path = "m_Children",
+            .item_ref = .{ .file_id = child.file_id, .guid = null, .type_id = null },
+        } else null,
+    };
+}
+
+fn transformParent(
+    index: *const merge_identity.Index,
+    child: merge_model.DocumentId,
+) merge_model.Error!?merge_model.DocumentId {
+    const document = index.document(child) orelse return error.UnsupportedStructure;
+    const father = model.findValue(document.body.map, "m_Father") orelse return null;
+    if (father.* != .ref or father.ref.guid != null) return error.UnsupportedStructure;
+    if (father.ref.file_id == 0) return null;
+    const parent = try indexedDocumentByFileId(index, father.ref.file_id);
+    if (parent.class_id != 4 and parent.class_id != 224) return error.UnsupportedStructure;
+    return merge_identity.documentId(parent.*);
+}
+
+fn decideReparent(
+    base_parent: ?merge_model.DocumentId,
+    ours_parent: ?merge_model.DocumentId,
+    theirs_parent: ?merge_model.DocumentId,
+) Decision {
+    if (std.meta.eql(ours_parent, base_parent)) return .theirs;
+    if (std.meta.eql(theirs_parent, base_parent)) return .ours;
+    if (std.meta.eql(ours_parent, theirs_parent)) return .common;
+    return .conflict;
+}
+
+pub fn gameObjectBundle(
+    arena: std.mem.Allocator,
+    index: *const merge_identity.Index,
+    game_object_file_id: i64,
+) merge_model.Error!GameObjectBundle {
+    const game_object = index.document(.{ .class_id = 1, .file_id = game_object_file_id }) orelse
+        return error.UnsupportedStructure;
+    const component_node = model.findValue(game_object.body.map, "m_Component") orelse
+        return error.UnsupportedStructure;
+    if (component_node.* != .seq) return error.UnsupportedStructure;
+
+    var components: std.ArrayList(merge_model.DocumentId) = .empty;
+    var component_items: std.ArrayList(merge_model.SemanticId) = .empty;
+    var transform: ?merge_model.DocumentId = null;
+    for (component_node.seq) |item| {
+        const item_id = merge_identity.sequenceItemId(.components, item) orelse
+            return error.UnsupportedStructure;
+        const component = try indexedDocumentByFileId(index, item_id.target.file_id);
+        const component_id = merge_identity.documentId(component.*);
+        if (component.class_id == 4 or component.class_id == 224) {
+            if (transform != null) return error.InvalidMerge;
+            transform = component_id;
+        } else {
+            try components.append(arena, component_id);
+        }
+        try component_items.append(arena, .{
+            .document = merge_identity.documentId(game_object.*),
+            .property_path = "m_Component",
+            .item_ref = item_id.target,
+        });
+    }
+    const transform_id = transform orelse return error.UnsupportedStructure;
+    const transform_document = index.document(transform_id) orelse return error.UnsupportedStructure;
+    const father = model.findValue(transform_document.body.map, "m_Father") orelse
+        return error.UnsupportedStructure;
+    if (father.* != .ref or father.ref.guid != null) return error.UnsupportedStructure;
+
+    var parent_child_item: ?merge_model.SemanticId = null;
+    if (father.ref.file_id != 0) {
+        const parent = try indexedDocumentByFileId(index, father.ref.file_id);
+        if (parent.class_id != 4 and parent.class_id != 224) return error.UnsupportedStructure;
+        const children = model.findValue(parent.body.map, "m_Children") orelse
+            return error.UnsupportedStructure;
+        if (children.* != .seq) return error.UnsupportedStructure;
+        var matches: usize = 0;
+        for (children.seq) |child| {
+            const child_id = merge_identity.sequenceItemId(.children, child) orelse
+                return error.UnsupportedStructure;
+            if (child_id.target.file_id == transform_id.file_id) matches += 1;
+        }
+        if (matches != 1) return error.InvalidMerge;
+        parent_child_item = .{
+            .document = merge_identity.documentId(parent.*),
+            .property_path = "m_Children",
+            .item_ref = .{ .file_id = transform_id.file_id, .guid = null, .type_id = null },
+        };
+    }
+    return .{
+        .game_object = merge_identity.documentId(game_object.*),
+        .transform = transform_id,
+        .components = try components.toOwnedSlice(arena),
+        .component_items = try component_items.toOwnedSlice(arena),
+        .parent_child_item = parent_child_item,
+        .father_field = .{ .document = transform_id, .property_path = "m_Father" },
+    };
+}
+
+fn indexedDocumentByFileId(
+    index: *const merge_identity.Index,
+    file_id: i64,
+) merge_model.Error!*const model.Document {
+    var found: ?*const model.Document = null;
+    var iterator = index.documents.iterator();
+    while (iterator.next()) |entry| {
+        if (entry.key_ptr.file_id != file_id) continue;
+        if (found != null) return error.InvalidMerge;
+        found = entry.value_ptr.*;
+    }
+    return found orelse error.UnsupportedStructure;
+}
+
+const SubtreeBundles = struct {
+    base: []const GameObjectBundle,
+    ours: []const GameObjectBundle,
+    theirs: []const GameObjectBundle,
+};
+
+fn collectGameObjectOperations(
+    arena: std.mem.Allocator,
+    operations: *std.ArrayList(merge_model.Operation),
+    atomic_operations: *std.ArrayList(merge_model.AtomicOperation),
+    base: source.ParsedFile,
+    ours: source.ParsedFile,
+    theirs: source.ParsedFile,
+    indexes: MergeIndexes,
+) merge_model.Error!void {
+    var game_object_ids: std.ArrayList(i64) = .empty;
+    var seen: std.AutoHashMapUnmanaged(i64, void) = .empty;
+    inline for (.{ base, ours, theirs }) |file| {
+        for (file.documents) |document| {
+            if (document.class_id != 1) continue;
+            const entry = try seen.getOrPut(arena, document.file_id);
+            if (!entry.found_existing) try game_object_ids.append(arena, document.file_id);
+        }
+    }
+
+    for (game_object_ids.items) |game_object_file_id| {
+        const presence = .{
+            indexes.base.document(.{ .class_id = 1, .file_id = game_object_file_id }) != null,
+            indexes.ours.document(.{ .class_id = 1, .file_id = game_object_file_id }) != null,
+            indexes.theirs.document(.{ .class_id = 1, .file_id = game_object_file_id }) != null,
+        };
+        if (presence[0] == presence[1] and presence[0] == presence[2]) continue;
+        if (!gameObjectChangeHasFather(indexes, game_object_file_id)) continue;
+        if (try changedGameObjectParent(arena, indexes, game_object_file_id)) continue;
+        const bundles = SubtreeBundles{
+            .base = if (presence[0]) try gameObjectSubtree(arena, &indexes.base, game_object_file_id) else &.{},
+            .ours = if (presence[1]) try gameObjectSubtree(arena, &indexes.ours, game_object_file_id) else &.{},
+            .theirs = if (presence[2]) try gameObjectSubtree(arena, &indexes.theirs, game_object_file_id) else &.{},
+        };
+        var decision = decideGameObject(
+            base,
+            ours,
+            theirs,
+            bundles,
+        );
+        if (bundles.base.len == 0 and (subtreeCollidesWithFile(base, bundles.ours) or
+            subtreeCollidesWithFile(base, bundles.theirs))) decision = .conflict;
+        try appendGameObjectAtomic(
+            arena,
+            operations,
+            atomic_operations,
+            base,
+            ours,
+            theirs,
+            bundles,
+            decision,
+        );
+    }
+}
+
+fn subtreeCollidesWithFile(
+    file: source.ParsedFile,
+    bundles: []const GameObjectBundle,
+) bool {
+    for (bundles) |bundle| {
+        if (fileIdExists(file, bundle.game_object.file_id)) return true;
+        if (fileIdExists(file, bundle.transform.file_id)) return true;
+        for (bundle.components) |component| {
+            if (fileIdExists(file, component.file_id)) return true;
+        }
+    }
+    return false;
+}
+
+fn fileIdExists(file: source.ParsedFile, file_id: i64) bool {
+    for (file.documents) |document| if (document.file_id == file_id) return true;
+    return false;
+}
+
+fn changedGameObjectParent(
+    arena: std.mem.Allocator,
+    indexes: MergeIndexes,
+    game_object_file_id: i64,
+) merge_model.Error!bool {
+    for ([_]*const merge_identity.Index{ &indexes.base, &indexes.ours, &indexes.theirs }) |index| {
+        if (index.document(.{ .class_id = 1, .file_id = game_object_file_id }) == null) continue;
+        const bundle = try gameObjectBundle(arena, index, game_object_file_id);
+        const parent_item = bundle.parent_child_item orelse return false;
+        const parent_transform = index.document(parent_item.document) orelse return error.UnsupportedStructure;
+        const parent_game_object = model.findValue(parent_transform.body.map, "m_GameObject") orelse
+            return error.UnsupportedStructure;
+        if (parent_game_object.* != .ref or parent_game_object.ref.guid != null) return error.UnsupportedStructure;
+        const parent_file_id = parent_game_object.ref.file_id;
+        const base_present = indexes.base.document(.{ .class_id = 1, .file_id = parent_file_id }) != null;
+        const ours_present = indexes.ours.document(.{ .class_id = 1, .file_id = parent_file_id }) != null;
+        const theirs_present = indexes.theirs.document(.{ .class_id = 1, .file_id = parent_file_id }) != null;
+        return base_present != ours_present or base_present != theirs_present;
+    }
+    return false;
+}
+
+fn gameObjectSubtree(
+    arena: std.mem.Allocator,
+    index: *const merge_identity.Index,
+    game_object_file_id: i64,
+) merge_model.Error![]const GameObjectBundle {
+    var bundles: std.ArrayList(GameObjectBundle) = .empty;
+    var visited: std.AutoHashMapUnmanaged(i64, void) = .empty;
+    try appendGameObjectSubtree(arena, index, game_object_file_id, &visited, &bundles);
+    return bundles.toOwnedSlice(arena);
+}
+
+fn appendGameObjectSubtree(
+    arena: std.mem.Allocator,
+    index: *const merge_identity.Index,
+    game_object_file_id: i64,
+    visited: *std.AutoHashMapUnmanaged(i64, void),
+    bundles: *std.ArrayList(GameObjectBundle),
+) merge_model.Error!void {
+    const entry = try visited.getOrPut(arena, game_object_file_id);
+    if (entry.found_existing) return error.InvalidMerge;
+    const bundle = try gameObjectBundle(arena, index, game_object_file_id);
+    try bundles.append(arena, bundle);
+    const transform = index.document(bundle.transform) orelse return error.UnsupportedStructure;
+    const children = model.findValue(transform.body.map, "m_Children") orelse return;
+    if (children.* != .seq) return error.UnsupportedStructure;
+    for (children.seq) |child_node| {
+        if (child_node.* != .ref or child_node.ref.guid != null) return error.UnsupportedStructure;
+        const child_transform = try indexedDocumentByFileId(index, child_node.ref.file_id);
+        if (child_transform.class_id != 4 and child_transform.class_id != 224)
+            return error.UnsupportedStructure;
+        const child_game_object = model.findValue(child_transform.body.map, "m_GameObject") orelse
+            return error.UnsupportedStructure;
+        if (child_game_object.* != .ref or child_game_object.ref.guid != null)
+            return error.UnsupportedStructure;
+        try appendGameObjectSubtree(
+            arena,
+            index,
+            child_game_object.ref.file_id,
+            visited,
+            bundles,
+        );
+    }
+}
+
+fn gameObjectChangeHasFather(indexes: MergeIndexes, game_object_file_id: i64) bool {
+    for ([_]*const merge_identity.Index{ &indexes.base, &indexes.ours, &indexes.theirs }) |index| {
+        const game_object = index.document(.{ .class_id = 1, .file_id = game_object_file_id }) orelse continue;
+        const components = model.findValue(game_object.body.map, "m_Component") orelse continue;
+        if (components.* != .seq) continue;
+        for (components.seq) |item| {
+            const item_id = merge_identity.sequenceItemId(.components, item) orelse continue;
+            var iterator = index.documents.iterator();
+            while (iterator.next()) |entry| {
+                const component = entry.value_ptr.*;
+                if (component.file_id != item_id.target.file_id or
+                    (component.class_id != 4 and component.class_id != 224)) continue;
+                if (model.findValue(component.body.map, "m_Father") != null) return true;
+            }
+        }
+    }
+    return false;
+}
+
+fn decideGameObject(
+    base: source.ParsedFile,
+    ours: source.ParsedFile,
+    theirs: source.ParsedFile,
+    bundles: SubtreeBundles,
+) Decision {
+    if (equalBundleLists(ours, bundles.ours, base, bundles.base)) return .theirs;
+    if (equalBundleLists(theirs, bundles.theirs, base, bundles.base)) return .ours;
+    if (equalBundleLists(ours, bundles.ours, theirs, bundles.theirs)) return .common;
+    return .conflict;
+}
+
+fn equalBundleLists(
+    a_file: source.ParsedFile,
+    a: []const GameObjectBundle,
+    b_file: source.ParsedFile,
+    b: []const GameObjectBundle,
+) bool {
+    if (a.len != b.len) return false;
+    for (a) |a_bundle| {
+        const b_bundle = for (b) |candidate| {
+            if (std.meta.eql(a_bundle.game_object, candidate.game_object)) break candidate;
+        } else return false;
+        if (!equalBundles(a_file, a_bundle, b_file, b_bundle)) return false;
+    }
+    return true;
+}
+
+fn equalBundles(
+    a_file: source.ParsedFile,
+    a: GameObjectBundle,
+    b_file: source.ParsedFile,
+    b: GameObjectBundle,
+) bool {
+    const a_bundle = a;
+    const b_bundle = b;
+    if (!std.meta.eql(a_bundle.game_object, b_bundle.game_object) or
+        !std.meta.eql(a_bundle.transform, b_bundle.transform) or
+        a_bundle.components.len != b_bundle.components.len) return false;
+    if (!equalDocumentBodies(a_file, a_bundle.game_object, b_file, b_bundle.game_object) or
+        !equalDocumentBodies(a_file, a_bundle.transform, b_file, b_bundle.transform)) return false;
+    for (a_bundle.components, b_bundle.components) |a_component, b_component| {
+        if (!std.meta.eql(a_component, b_component) or
+            !equalDocumentBodies(a_file, a_component, b_file, b_component)) return false;
+    }
+    return true;
+}
+
+fn equalDocumentBodies(
+    a_file: source.ParsedFile,
+    a_id: merge_model.DocumentId,
+    b_file: source.ParsedFile,
+    b_id: merge_model.DocumentId,
+) bool {
+    const a = findDocument(a_file.documents, a_id.class_id, a_id.file_id) orelse return false;
+    const b = findDocument(b_file.documents, b_id.class_id, b_id.file_id) orelse return false;
+    return model.Node.eql(a.body, b.body);
+}
+
+fn appendGameObjectAtomic(
+    arena: std.mem.Allocator,
+    operations: *std.ArrayList(merge_model.Operation),
+    atomic_operations: *std.ArrayList(merge_model.AtomicOperation),
+    base: source.ParsedFile,
+    ours: source.ParsedFile,
+    theirs: source.ParsedFile,
+    bundles: SubtreeBundles,
+    decision: Decision,
+) merge_model.Error!void {
+    const atomic_id: merge_model.AtomicId = @intCast(atomic_operations.items.len);
+    try atomic_operations.append(arena, .{
+        .id = atomic_id,
+        .kind = .game_object,
+        .operation_ids = &.{},
+    });
+    var operation_ids: std.ArrayList(merge_model.OperationId) = .empty;
+    var document_ids: std.ArrayList(merge_model.DocumentId) = .empty;
+    var semantic_ids: std.ArrayList(merge_model.SemanticId) = .empty;
+    inline for (.{ bundles.base, bundles.ours, bundles.theirs }) |side_bundles| {
+        for (side_bundles) |bundle| {
+            try appendUniqueDocumentId(arena, &document_ids, bundle.game_object);
+            try appendUniqueDocumentId(arena, &document_ids, bundle.transform);
+            for (bundle.components) |component| try appendUniqueDocumentId(arena, &document_ids, component);
+            for (bundle.component_items) |item| try appendUniqueSemanticId(arena, &semantic_ids, item);
+            if (bundle.parent_child_item) |item| try appendUniqueSemanticId(arena, &semantic_ids, item);
+            try appendUniqueSemanticId(arena, &semantic_ids, bundle.father_field);
+        }
+    }
+    const resolution = resolutionForSubtree(decision, bundles.ours, bundles.theirs);
+    for (document_ids.items) |document_id| {
+        try operations.append(arena, .{
+            .id = @intCast(operations.items.len),
+            .atomic_id = atomic_id,
+            .kind = .game_object,
+            .identity = .{ .document = document_id, .property_path = "" },
+            .hierarchy_path = documentTypeName(base, ours, theirs, document_id),
+            .property_path = "",
+            .values = .{
+                .base = documentValue(base, findDocumentPointer(base.documents, document_id)),
+                .ours = documentValue(ours, findDocumentPointer(ours.documents, document_id)),
+                .theirs = documentValue(theirs, findDocumentPointer(theirs.documents, document_id)),
+            },
+            .resolution = resolution,
+        });
+        try operation_ids.append(arena, @intCast(operations.items.len - 1));
+    }
+    for (semantic_ids.items) |semantic_id| {
+        if (findOperationBySemantic(operations.items, semantic_id, .sequence_membership)) |operation_id| {
+            try adoptOperation(
+                arena,
+                operations,
+                atomic_operations,
+                operation_id,
+                atomic_id,
+            );
+            operations.items[operation_id].resolution = resolution;
+            try operation_ids.append(arena, operation_id);
+            continue;
+        }
+        try operations.append(arena, .{
+            .id = @intCast(operations.items.len),
+            .atomic_id = atomic_id,
+            .kind = if (semantic_id.item_ref == null) .sequence_content else .sequence_membership,
+            .identity = semantic_id,
+            .hierarchy_path = documentTypeName(base, ours, theirs, semantic_id.document),
+            .property_path = semantic_id.property_path,
+            .values = .{
+                .base = semanticValue(base, semantic_id),
+                .ours = semanticValue(ours, semantic_id),
+                .theirs = semanticValue(theirs, semantic_id),
+            },
+            .resolution = resolution,
+        });
+        try operation_ids.append(arena, @intCast(operations.items.len - 1));
+    }
+    atomic_operations.items[atomic_id].operation_ids = try operation_ids.toOwnedSlice(arena);
+}
+
+fn resolutionForSubtree(
+    decision: Decision,
+    ours: []const GameObjectBundle,
+    theirs: []const GameObjectBundle,
+) merge_model.Resolution {
+    return switch (decision) {
+        .ours, .common => if (ours.len == 0) .remove else .{ .take = .ours },
+        .theirs => if (theirs.len == 0) .remove else .{ .take = .theirs },
+        .conflict => .unresolved,
+    };
+}
+
+fn appendUniqueDocumentId(
+    arena: std.mem.Allocator,
+    ids: *std.ArrayList(merge_model.DocumentId),
+    id: merge_model.DocumentId,
+) std.mem.Allocator.Error!void {
+    for (ids.items) |candidate| if (std.meta.eql(candidate, id)) return;
+    try ids.append(arena, id);
+}
+
+fn appendUniqueSemanticId(
+    arena: std.mem.Allocator,
+    ids: *std.ArrayList(merge_model.SemanticId),
+    id: merge_model.SemanticId,
+) std.mem.Allocator.Error!void {
+    for (ids.items) |candidate| if (semanticIdEql(candidate, id)) return;
+    try ids.append(arena, id);
+}
+
+fn semanticIdEql(a: merge_model.SemanticId, b: merge_model.SemanticId) bool {
+    if (!std.meta.eql(a.document, b.document) or
+        !std.mem.eql(u8, a.property_path, b.property_path) or
+        a.override_kind != b.override_kind) return false;
+    if (a.item_ref == null or b.item_ref == null) return a.item_ref == null and b.item_ref == null;
+    return merge_identity.refEql(a.item_ref.?, b.item_ref.?);
+}
+
+fn findOperationBySemantic(
+    operations: []const merge_model.Operation,
+    identity: merge_model.SemanticId,
+    kind: merge_model.OperationKind,
+) ?merge_model.OperationId {
+    for (operations) |operation| {
+        if (operation.kind == kind and semanticIdEql(operation.identity, identity)) return operation.id;
+    }
+    return null;
+}
+
+fn adoptOperation(
+    arena: std.mem.Allocator,
+    operations: *std.ArrayList(merge_model.Operation),
+    atomic_operations: *std.ArrayList(merge_model.AtomicOperation),
+    operation_id: merge_model.OperationId,
+    atomic_id: merge_model.AtomicId,
+) merge_model.Error!void {
+    const operation = &operations.items[operation_id];
+    const previous_atomic_id = operation.atomic_id;
+    if (previous_atomic_id == atomic_id) return;
+    const previous_atomic = &atomic_operations.items[previous_atomic_id];
+    var remaining: std.ArrayList(merge_model.OperationId) = .empty;
+    for (previous_atomic.operation_ids) |candidate| {
+        if (candidate != operation_id) try remaining.append(arena, candidate);
+    }
+    previous_atomic.operation_ids = try remaining.toOwnedSlice(arena);
+    previous_atomic.kind = atomicKindForOperations(operations.items, previous_atomic.operation_ids);
+    try appendAtomicDependency(arena, previous_atomic, atomic_id);
+    operation.atomic_id = atomic_id;
+}
+
+fn appendAtomicDependency(
+    arena: std.mem.Allocator,
+    atomic: *merge_model.AtomicOperation,
+    dependency: merge_model.AtomicId,
+) std.mem.Allocator.Error!void {
+    for (atomic.dependencies) |candidate| if (candidate == dependency) return;
+    const dependencies = try arena.alloc(merge_model.AtomicId, atomic.dependencies.len + 1);
+    @memcpy(dependencies[0..atomic.dependencies.len], atomic.dependencies);
+    dependencies[atomic.dependencies.len] = dependency;
+    atomic.dependencies = dependencies;
+}
+
+fn atomicKindForOperations(
+    operations: []const merge_model.Operation,
+    operation_ids: []const merge_model.OperationId,
+) merge_model.OperationKind {
+    for (operation_ids) |operation_id| if (operations[operation_id].kind == .sequence_membership)
+        return .sequence_membership;
+    for (operation_ids) |operation_id| if (operations[operation_id].kind == .sequence_content)
+        return .sequence_content;
+    return .sequence_order;
+}
+
+fn findDocumentPointer(
+    documents: []const model.Document,
+    id: merge_model.DocumentId,
+) ?*const model.Document {
+    for (documents) |*document| {
+        if (document.class_id == id.class_id and document.file_id == id.file_id) return document;
+    }
+    return null;
+}
+
+fn documentTypeName(
+    base: source.ParsedFile,
+    ours: source.ParsedFile,
+    theirs: source.ParsedFile,
+    id: merge_model.DocumentId,
+) []const u8 {
+    inline for (.{ ours, base, theirs }) |file| {
+        if (findDocumentPointer(file.documents, id)) |document| return document.type_name;
+    }
+    return "";
+}
+
+fn semanticValue(
+    file: source.ParsedFile,
+    identity: merge_model.SemanticId,
+) ?merge_model.SideValue {
+    const document = findDocumentPointer(file.documents, identity.document) orelse return null;
+    var node = document.body;
+    var path = std.mem.splitScalar(u8, identity.property_path, '.');
+    while (path.next()) |field| {
+        if (field.len == 0) continue;
+        if (node.* != .map) return null;
+        node = model.findValue(node.map, field) orelse return null;
+    }
+    const item_ref = identity.item_ref orelse return sideValue(file, node);
+    if (node.* != .seq) return null;
+    for (node.seq) |item| {
+        const kind = merge_identity.sequenceKind(identity.document.class_id, identity.property_path) orelse
+            return null;
+        const item_id = merge_identity.sequenceItemId(kind, item) orelse return null;
+        if (!merge_identity.refEql(item_id.target, item_ref)) continue;
+        const span = file.sequence_item_spans.get(item) orelse return null;
+        return .{ .node = item, .bytes = span.bytes(file.bytes), .span = span };
+    }
+    return null;
 }
 
 fn validateComponentOwners(
@@ -451,7 +1140,12 @@ fn collectSequence(
         }
 
         if (selected != null) try final_ids.append(arena, id);
-        if (kind == .children) {
+        if (kind == .children and !childHasFather(
+            base_file,
+            ours_file,
+            theirs_file,
+            firstSequenceItem(base_item, ours_item, theirs_item).identity.target.file_id,
+        )) {
             const child_operation_start = operations.items.len;
             if (selected) |value| try appendChildDocumentsOperation(
                 arena,
@@ -520,6 +1214,19 @@ fn collectSequence(
         .operation_ids = operation_ids,
         .dependencies = try component_atomic_ids.toOwnedSlice(arena),
     };
+}
+
+fn childHasFather(
+    base: source.ParsedFile,
+    ours: source.ParsedFile,
+    theirs: source.ParsedFile,
+    transform_file_id: i64,
+) bool {
+    for ([_]source.ParsedFile{ base, ours, theirs }) |file| {
+        const transform = findDocumentByFileId(file.documents, transform_file_id) orelse continue;
+        if (model.findValue(transform.body.map, "m_Father") != null) return true;
+    }
+    return false;
 }
 
 fn identifiedItems(

@@ -57,7 +57,7 @@ pub fn applyResolved(
         dependency_path.clearRetainingCapacity();
         if (!try atomicIsReady(arena, plan, atomic, &dependency_path)) {
             if (require_all) return error.InvalidResolution;
-            if (atomic.kind == .component) {
+            if (atomic.kind == .component or atomic.kind == .game_object) {
                 for (atomic.operation_ids) |operation_id| {
                     const stored = merge_model.operationByIdConst(plan, operation_id) orelse return error.InvalidMerge;
                     var operation = stored.*;
@@ -75,6 +75,8 @@ pub fn applyResolved(
     for (plan.operations) |*operation| {
         if (isComponentSequenceOrder(plan, operation)) {
             try appendComposedComponentSequencePatch(arena, &patches, plan, operation);
+        } else if (isHierarchySequenceOrder(plan, operation)) {
+            try appendComposedHierarchySequencePatch(arena, &patches, plan, operation);
         }
     }
     return applyPatches(arena, plan.ours.bytes, patches.items);
@@ -118,7 +120,7 @@ fn appendPatch(
 ) merge_model.Error!void {
     if (operation.kind == .sequence_membership) return;
     if (operation.kind == .sequence_content) return;
-    if (isComponentSequenceOrder(plan, operation)) return;
+    if (isComponentSequenceOrder(plan, operation) or isHierarchySequenceOrder(plan, operation)) return;
     if (operation.kind == .component or operation.kind == .game_object) {
         return appendDocumentPatch(arena, patches, plan, operation);
     }
@@ -184,7 +186,236 @@ fn isComponentSequenceOrder(
     return false;
 }
 
-const ComponentChoice = struct {
+fn isHierarchySequenceOrder(
+    plan: *const merge_model.MergePlan,
+    operation: *const merge_model.Operation,
+) bool {
+    if (operation.kind != .sequence_order or
+        !std.mem.eql(u8, operation.property_path, "m_Children")) return false;
+    const atomic = atomicByIdConst(plan, operation.atomic_id) orelse return false;
+    for (atomic.dependencies) |dependency_id| {
+        const dependency = atomicByIdConst(plan, dependency_id) orelse return false;
+        if (dependency.kind == .game_object or dependency.kind == .reparent) return true;
+    }
+    return false;
+}
+
+fn appendComposedHierarchySequencePatch(
+    arena: std.mem.Allocator,
+    patches: *std.ArrayList(Patch),
+    plan: *const merge_model.MergePlan,
+    order_operation: *const merge_model.Operation,
+) merge_model.Error!void {
+    const ours_sequence = findSequence(plan.ours, order_operation) orelse return error.UnsupportedStructure;
+    if (ours_sequence.* != .seq) return error.UnsupportedStructure;
+    const selected_order = switch (order_operation.resolution) {
+        .unresolved => if (order_operation.values.ours) |value|
+            SelectedValue{ .side = .ours, .value = value }
+        else
+            return error.InvalidResolution,
+        .take => |side| SelectedValue{
+            .side = side,
+            .value = valueForSide(order_operation, side) orelse return error.InvalidResolution,
+        },
+        .remove, .custom => return error.InvalidResolution,
+    };
+    var order: std.ArrayList(i64) = .empty;
+    try order.appendSlice(arena, try hierarchyOrder(arena, selected_order.value.bytes));
+    var choices: std.ArrayList(SequenceChoice) = .empty;
+    for (plan.operations) |*operation| {
+        if (operation.kind != .sequence_membership or
+            operation.identity.document.class_id != order_operation.identity.document.class_id or
+            operation.identity.document.file_id != order_operation.identity.document.file_id or
+            !std.mem.eql(u8, operation.property_path, order_operation.property_path)) continue;
+        const atomic = atomicByIdConst(plan, operation.atomic_id) orelse return error.InvalidMerge;
+        if (atomic.kind != .game_object and atomic.kind != .reparent) continue;
+        const file_id = (operation.identity.item_ref orelse return error.InvalidMerge).file_id;
+        const selected = try effectiveHierarchyChoice(operation, atomic.kind);
+        try choices.append(arena, .{ .file_id = file_id, .selected = selected });
+        if (selected == null) {
+            removeComponentId(&order, file_id);
+        } else if (!containsComponentId(order.items, file_id)) {
+            try insertHierarchyId(arena, &order, plan, order_operation, selected.?.side, file_id);
+        }
+    }
+
+    const destination_indent = sequenceIndent(plan.ours, ours_sequence) orelse
+        (sequenceFieldIndent(plan.ours, ours_sequence) orelse return error.UnsupportedStructure);
+    const merged_bytes = try renderHierarchySequence(
+        arena,
+        plan,
+        order_operation,
+        ours_sequence,
+        order.items,
+        choices.items,
+        destination_indent,
+    );
+    const replacement = try merge_planner.sequenceReplacement(arena, plan.ours, ours_sequence, merged_bytes);
+    var ours_value = order_operation.values.ours orelse return error.UnsupportedStructure;
+    if (order.items.len == 0 and ours_sequence.seq.len != 0) {
+        const entry = plan.ours.entry_spans.get(ours_sequence) orelse return error.UnsupportedStructure;
+        const span = plan.ours.node_spans.get(ours_sequence) orelse return error.UnsupportedStructure;
+        ours_value.span = .{ .start = entry.value.start, .end = span.end };
+        ours_value.bytes = ours_value.span.?.bytes(plan.ours.bytes);
+    }
+    const patch_span = ours_value.span orelse return error.UnsupportedStructure;
+    if (std.mem.eql(u8, patch_span.bytes(plan.ours.bytes), replacement)) return;
+    try patches.append(arena, .{
+        .span = patch_span,
+        .replacement = replacement,
+        .atomic_id = order_operation.atomic_id,
+        .order = order_operation.id,
+    });
+}
+
+fn effectiveHierarchyChoice(
+    operation: *const merge_model.Operation,
+    atomic_kind: merge_model.OperationKind,
+) merge_model.Error!?SelectedValue {
+    return switch (operation.resolution) {
+        .unresolved => switch (atomic_kind) {
+            .game_object => if (operation.values.base) |value| .{ .side = .base, .value = value } else null,
+            .reparent => if (operation.values.ours) |value| .{ .side = .ours, .value = value } else null,
+            else => return error.InvalidMerge,
+        },
+        .remove => null,
+        .take => |side| if (valueForSide(operation, side)) |value|
+            .{ .side = side, .value = value }
+        else
+            null,
+        .custom => error.InvalidResolution,
+    };
+}
+
+fn hierarchyOrder(arena: std.mem.Allocator, bytes: []const u8) merge_model.Error![]const i64 {
+    var wrapped: std.ArrayList(u8) = .empty;
+    try wrapped.appendSlice(arena, "--- !u!4 &1\nTransform:\n  m_Children:");
+    const trimmed = std.mem.trimStart(u8, bytes, " ");
+    if (std.mem.startsWith(u8, trimmed, "[")) {
+        try wrapped.appendSlice(arena, " ");
+        try wrapped.appendSlice(arena, trimmed);
+        if (!std.mem.endsWith(u8, trimmed, "\n")) try wrapped.appendSlice(arena, "\n");
+    } else {
+        try wrapped.appendSlice(arena, "\n");
+        try wrapped.appendSlice(arena, bytes);
+    }
+    const parsed = try parser.parseSpanned(arena, wrapped.items);
+    if (parsed.diagnostics.len != 0 or parsed.documents.len != 1) return error.UnsupportedStructure;
+    const sequence = model.findValue(parsed.documents[0].body.map, "m_Children") orelse
+        return error.UnsupportedStructure;
+    if (sequence.* != .seq) return error.UnsupportedStructure;
+    var result: std.ArrayList(i64) = .empty;
+    for (sequence.seq) |item| {
+        const file_id = hierarchyFileId(item) orelse return error.UnsupportedStructure;
+        if (containsComponentId(result.items, file_id)) return error.InvalidMerge;
+        try result.append(arena, file_id);
+    }
+    return result.toOwnedSlice(arena);
+}
+
+fn insertHierarchyId(
+    arena: std.mem.Allocator,
+    order: *std.ArrayList(i64),
+    plan: *const merge_model.MergePlan,
+    operation: *const merge_model.Operation,
+    selected_side: merge_model.Side,
+    file_id: i64,
+) merge_model.Error!void {
+    const selected_file = fileForSide(plan, selected_side);
+    const selected_sequence = findSequence(selected_file, operation) orelse return error.UnsupportedStructure;
+    if (selected_sequence.* != .seq) return error.UnsupportedStructure;
+    const selected_index = for (selected_sequence.seq, 0..) |item, index| {
+        if (hierarchyFileId(item) == file_id) break index;
+    } else return error.UnsupportedStructure;
+    for (selected_sequence.seq[selected_index + 1 ..]) |next| {
+        const next_id = hierarchyFileId(next) orelse return error.UnsupportedStructure;
+        if (componentIndex(order.items, next_id)) |index| {
+            try order.insert(arena, index, file_id);
+            return;
+        }
+    }
+    try order.append(arena, file_id);
+}
+
+fn renderHierarchySequence(
+    arena: std.mem.Allocator,
+    plan: *const merge_model.MergePlan,
+    operation: *const merge_model.Operation,
+    ours_sequence: *const model.Node,
+    order: []const i64,
+    choices: []const SequenceChoice,
+    destination_indent: usize,
+) merge_model.Error![]const u8 {
+    var output: std.ArrayList(u8) = .empty;
+    for (order) |file_id| {
+        const selected = hierarchyItem(plan, operation, choices, file_id) orelse
+            return error.UnsupportedStructure;
+        if (selected.side == .ours) {
+            try output.appendSlice(arena, selected.value.bytes);
+            try appendOursHierarchyGap(arena, &output, plan.ours, ours_sequence, file_id);
+        } else {
+            try output.appendSlice(arena, try merge_planner.reindentSequenceItem(
+                arena,
+                selected.value.bytes,
+                destination_indent,
+                plan.ours.lineEndingAt((operation.values.ours orelse return error.UnsupportedStructure).span.?.start),
+            ));
+        }
+    }
+    return output.toOwnedSlice(arena);
+}
+
+fn hierarchyItem(
+    plan: *const merge_model.MergePlan,
+    operation: *const merge_model.Operation,
+    choices: []const SequenceChoice,
+    file_id: i64,
+) ?SelectedValue {
+    for (choices) |choice| if (choice.file_id == file_id) return choice.selected;
+    for ([_]merge_model.Side{ .ours, .base, .theirs }) |side| {
+        const file = fileForSide(plan, side);
+        const sequence = findSequence(file, operation) orelse continue;
+        if (sequence.* != .seq) continue;
+        const item = findHierarchyItem(sequence.seq, file_id) orelse continue;
+        const span = file.sequence_item_spans.get(item) orelse continue;
+        return .{
+            .side = side,
+            .value = .{ .node = item, .bytes = span.bytes(file.bytes), .span = span },
+        };
+    }
+    return null;
+}
+
+fn hierarchyFileId(item: *const model.Node) ?i64 {
+    if (item.* != .ref or item.ref.guid != null) return null;
+    return item.ref.file_id;
+}
+
+fn findHierarchyItem(items: []const *model.Node, file_id: i64) ?*const model.Node {
+    for (items) |item| if (hierarchyFileId(item) == file_id) return item;
+    return null;
+}
+
+fn appendOursHierarchyGap(
+    arena: std.mem.Allocator,
+    output: *std.ArrayList(u8),
+    file: source.ParsedFile,
+    sequence: *const model.Node,
+    file_id: i64,
+) merge_model.Error!void {
+    const ours_index = for (sequence.seq, 0..) |item, index| {
+        if (hierarchyFileId(item) == file_id) break index;
+    } else return;
+    if (ours_index + 1 == sequence.seq.len) return;
+    const current_span = file.sequence_item_spans.get(sequence.seq[ours_index]) orelse
+        return error.UnsupportedStructure;
+    const next_item = sequence.seq[ours_index + 1];
+    const next_span = file.sequence_item_spans.get(next_item) orelse return error.UnsupportedStructure;
+    if (next_span.start < current_span.end) return error.UnsupportedStructure;
+    try output.appendSlice(arena, file.bytes[current_span.end..next_span.start]);
+}
+
+const SequenceChoice = struct {
     file_id: i64,
     selected: ?SelectedValue,
 };
@@ -211,7 +442,7 @@ fn appendComposedComponentSequencePatch(
     };
     var order: std.ArrayList(i64) = .empty;
     try order.appendSlice(arena, try componentOrder(arena, selected_order.value.bytes));
-    var choices: std.ArrayList(ComponentChoice) = .empty;
+    var choices: std.ArrayList(SequenceChoice) = .empty;
     for (plan.operations) |*operation| {
         if (operation.kind != .sequence_membership or
             operation.identity.document.class_id != order_operation.identity.document.class_id or
@@ -344,7 +575,7 @@ fn renderComponentSequence(
     operation: *const merge_model.Operation,
     ours_sequence: *const model.Node,
     order: []const i64,
-    choices: []const ComponentChoice,
+    choices: []const SequenceChoice,
     destination_indent: usize,
 ) merge_model.Error![]const u8 {
     var output: std.ArrayList(u8) = .empty;
@@ -369,7 +600,7 @@ fn renderComponentSequence(
 fn componentItem(
     plan: *const merge_model.MergePlan,
     operation: *const merge_model.Operation,
-    choices: []const ComponentChoice,
+    choices: []const SequenceChoice,
     file_id: i64,
 ) ?SelectedValue {
     for (choices) |choice| {

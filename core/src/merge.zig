@@ -2,6 +2,7 @@ const std = @import("std");
 const merge_apply = @import("merge_apply.zig");
 const merge_model = @import("merge_model.zig");
 const merge_planner = @import("merge_planner.zig");
+const merge_validate = @import("merge_validate.zig");
 const model = @import("model.zig");
 
 pub const Error = merge_model.Error;
@@ -28,9 +29,11 @@ pub fn build(
         try merge_planner.parseMergeSide(arena, ours),
         try merge_planner.parseMergeSide(arena, theirs),
     );
+    const partial = try merge_apply.applyResolved(arena, &plan, false);
+    try merge_validate.validate(arena, partial);
     return .{
         .plan = plan,
-        .partial = try merge_apply.applyResolved(arena, &plan, false),
+        .partial = partial,
     };
 }
 
@@ -73,7 +76,11 @@ pub fn resolve(
             merge_model.operationById(plan, id).?.resolution = old_resolution;
         }
     }
-    _ = try merge_apply.applyResolved(arena, plan, false);
+    const candidate = try merge_apply.applyResolved(arena, plan, false);
+    merge_validate.validate(arena, candidate) catch |validation_error| switch (validation_error) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return error.InvalidResolution,
+    };
 }
 
 fn valueForSide(operation: *const Operation, side: merge_model.Side) ?SideValue {
@@ -108,11 +115,14 @@ fn equalOptionalValues(a: ?SideValue, b: ?SideValue) bool {
 }
 
 pub fn finish(arena: std.mem.Allocator, plan: *const MergePlan) Error![]const u8 {
-    return merge_apply.applyResolved(arena, plan, true);
+    const output = try merge_apply.applyResolved(arena, plan, true);
+    try merge_validate.validate(arena, output);
+    return output;
 }
 
 test {
     _ = merge_apply;
+    _ = merge_validate;
 }
 
 test "partial merge holds all members of an unresolved atomic operation" {

@@ -762,9 +762,7 @@ fn parseValue(p: *Parser, raw: []const u8, depth: usize) Error!*Node {
     const s = std.mem.trim(u8, raw, " ");
     if (s.len == 0) return makeNode(arena, .{ .scalar = "" });
     const span = spanForSlice(p.source_bytes, s);
-    const n = if (s[0] == '{') try parseFlow(p, s, depth)
-        else if (s[0] == '[') try parseFlowSeq(p, s, depth)
-        else try makeNode(arena, .{ .scalar = try unquote(arena, s) });
+    const n = if (s[0] == '{') try parseFlow(p, s, depth) else if (s[0] == '[') try parseFlowSeq(p, s, depth) else try makeNode(arena, .{ .scalar = try unquote(arena, s) });
     try p.node_spans.put(arena, n, span);
     return n;
 }

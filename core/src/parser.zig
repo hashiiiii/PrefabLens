@@ -1,5 +1,6 @@
 const std = @import("std");
 const model = @import("model.zig");
+const source_map = @import("source.zig");
 const Node = model.Node;
 const Entry = model.Entry;
 const Document = model.Document;
@@ -36,6 +37,55 @@ test "parse: single document header + flat scalar fields" {
     try testing.expectEqualStrings("Player", name.scalar);
     const active = model.findValue(doc.body.map, "m_IsActive").?;
     try testing.expectEqualStrings("1", active.scalar);
+}
+
+test "parseSpanned: retains exact source slices" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const src =
+        "%YAML 1.1\r\n" ++
+        "%TAG !u! tag:unity3d.com,2011:\r\n" ++
+        "--- !u!1 &1\r\n" ++
+        "GameObject:\r\n" ++
+        "  # Keep this comment.\r\n" ++
+        "  m_Name: \"Robot\\\"A\"\r\n" ++
+        "  m_Component:\r\n" ++
+        "  - component: {fileID: 4}\r\n" ++
+        "\r\n" ++
+        "--- !u!4 &4\r\n" ++
+        "Transform:\r\n" ++
+        "  m_GameObject: {fileID: 1}\r\n";
+
+    const parsed = try parseSpanned(arena_state.allocator(), src);
+    try testing.expectEqual(source_map.LineEnding.crlf, parsed.line_ending);
+    try testing.expectEqual(@as(usize, 2), parsed.documents.len);
+    try testing.expectEqualStrings(
+        "--- !u!1 &1\r\nGameObject:\r\n  # Keep this comment.\r\n  m_Name: \"Robot\\\"A\"\r\n  m_Component:\r\n  - component: {fileID: 4}\r\n\r\n",
+        parsed.documentBytes(0),
+    );
+    try testing.expectEqualStrings("1", parsed.document_spans[0].class_id.bytes(src));
+    try testing.expectEqualStrings("1", parsed.document_spans[0].file_id.bytes(src));
+    const components = model.findValue(parsed.documents[0].body.map, "m_Component").?;
+    const item = components.seq[0];
+    try testing.expectEqualStrings(
+        "  - component: {fileID: 4}\r\n",
+        parsed.sequenceItemBytes(item).?,
+    );
+    const component_ref = model.findValue(item.map, "component").?;
+    try testing.expectEqualStrings("{fileID: 4}", parsed.nodeBytes(component_ref).?);
+    const name = model.findValue(parsed.documents[0].body.map, "m_Name").?;
+    try testing.expectEqualStrings("\"Robot\\\"A\"", parsed.nodeBytes(name).?);
+}
+
+test "parseSpanned: reports malformed syntax without changing parse" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const src = "--- !u!bad &oops\nGameObject:\n  missing colon\n";
+
+    const parsed = try parseSpanned(arena_state.allocator(), src);
+    try testing.expect(parsed.diagnostics.len >= 2);
+    const docs = try parse(arena_state.allocator(), src);
+    try testing.expectEqual(@as(usize, 1), docs.len);
 }
 
 test "parse: multiple documents" {
@@ -348,12 +398,23 @@ test "parse: single-quoted scalar is unquoted" {
     try testing.expectEqualStrings("Hello: World", model.findValue(doc.body.map, "m_Name").?.scalar);
 }
 
-const Line = struct { indent: usize, text: []const u8 };
+const Line = struct {
+    indent: usize,
+    text: []const u8,
+    whole: source_map.Span,
+    content: source_map.Span,
+};
 
 const Parser = struct {
     arena: std.mem.Allocator,
     lines: []const Line,
+    source_bytes: []const u8,
     pos: usize = 0,
+    node_spans: std.AutoHashMapUnmanaged(*const Node, source_map.Span) = .empty,
+    entry_spans: std.AutoHashMapUnmanaged(*const Node, source_map.EntrySpan) = .empty,
+    sequence_item_spans: std.AutoHashMapUnmanaged(*const Node, source_map.Span) = .empty,
+    document_spans: std.ArrayList(source_map.DocumentSpan) = .empty,
+    diagnostics: std.ArrayList(source_map.Diagnostic) = .empty,
 
     fn peek(self: *const Parser) ?Line {
         return if (self.pos < self.lines.len) self.lines[self.pos] else null;
@@ -367,34 +428,64 @@ const Parser = struct {
 
 // Break into meaningful logical lines (indent + content). Drop blank lines, `%` directives,
 // and `#` comments.
-fn tokenize(arena: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error![]Line {
+fn tokenize(arena: std.mem.Allocator, source_bytes: []const u8) std.mem.Allocator.Error![]Line {
     var lines: std.ArrayList(Line) = .empty;
-    var it = std.mem.splitScalar(u8, source, '\n');
-    while (it.next()) |raw0| {
-        var raw = raw0;
-        if (raw.len > 0 and raw[raw.len - 1] == '\r') raw = raw[0 .. raw.len - 1];
+    var start: usize = 0;
+    while (start <= source_bytes.len) {
+        const end = std.mem.indexOfScalarPos(u8, source_bytes, start, '\n') orelse source_bytes.len;
+        const whole_end = if (end < source_bytes.len) end + 1 else end;
+        const raw_end = if (end > start and source_bytes[end - 1] == '\r') end - 1 else end;
+        const raw = source_bytes[start..raw_end];
         var indent: usize = 0;
         while (indent < raw.len and raw[indent] == ' ') indent += 1;
         const content = raw[indent..];
-        if (content.len == 0) continue;
-        if (content[0] == '%') continue;
-        if (content[0] == '#') continue;
-        try lines.append(arena, .{ .indent = indent, .text = content });
+        if (content.len != 0 and content[0] != '%' and content[0] != '#') {
+            try lines.append(arena, .{
+                .indent = indent,
+                .text = content,
+                .whole = .{ .start = start, .end = whole_end },
+                .content = .{ .start = start + indent, .end = raw_end },
+            });
+        }
+        if (end == source_bytes.len) break;
+        start = whole_end;
     }
     return lines.toOwnedSlice(arena);
 }
 
-pub fn parse(arena: std.mem.Allocator, source: []const u8) Error![]Document {
-    var p = Parser{ .arena = arena, .lines = try tokenize(arena, source) };
+pub fn parse(arena: std.mem.Allocator, source_bytes: []const u8) Error![]Document {
+    return (try parseSpanned(arena, source_bytes)).documents;
+}
+
+pub fn parseSpanned(arena: std.mem.Allocator, source_bytes: []const u8) Error!source_map.ParsedFile {
+    var p = Parser{ .arena = arena, .source_bytes = source_bytes, .lines = try tokenize(arena, source_bytes) };
     var docs: std.ArrayList(Document) = .empty;
     while (p.peek()) |line| {
         if (!std.mem.startsWith(u8, line.text, "---")) {
             _ = p.advance();
             continue;
         }
+        const doc_start = line.whole.start;
+        const header = line;
         try docs.append(arena, try parseDocument(&p));
+        const doc_end = if (p.peek()) |next| next.whole.start else source_bytes.len;
+        try p.document_spans.append(arena, .{
+            .whole = .{ .start = doc_start, .end = doc_end },
+            .header = header.content,
+            .class_id = spanToken(source_bytes, header.text, header.content.start, "!u!"),
+            .file_id = spanToken(source_bytes, header.text, header.content.start, "&"),
+        });
     }
-    return docs.toOwnedSlice(arena);
+    return .{
+        .bytes = source_bytes,
+        .documents = try docs.toOwnedSlice(arena),
+        .document_spans = try p.document_spans.toOwnedSlice(arena),
+        .node_spans = p.node_spans,
+        .entry_spans = p.entry_spans,
+        .sequence_item_spans = p.sequence_item_spans,
+        .diagnostics = try p.diagnostics.toOwnedSlice(arena),
+        .line_ending = if (std.mem.indexOf(u8, source_bytes, "\r\n") != null) .crlf else .lf,
+    };
 }
 
 fn parseDocument(p: *Parser) Error!Document {
@@ -402,22 +493,28 @@ fn parseDocument(p: *Parser) Error!Document {
     var class_id: u32 = 0;
     var file_id: i64 = 0;
     var stripped = false;
+    var valid_class = false;
+    var valid_file = false;
     var toks = std.mem.tokenizeScalar(u8, header.text, ' ');
     while (toks.next()) |t| {
         if (std.mem.startsWith(u8, t, "!u!")) {
             class_id = std.fmt.parseInt(u32, t[3..], 10) catch 0;
+            valid_class = std.fmt.parseInt(u32, t[3..], 10) catch null != null;
         } else if (std.mem.startsWith(u8, t, "&")) {
             file_id = std.fmt.parseInt(i64, t[1..], 10) catch 0;
+            valid_file = std.fmt.parseInt(i64, t[1..], 10) catch null != null;
         } else if (std.mem.eql(u8, t, "stripped")) {
             stripped = true;
         }
     }
+    if (!valid_class or !valid_file) try p.diagnostics.append(p.arena, .invalid_document_header);
 
     var type_name: []const u8 = "";
     var body: *Node = undefined;
     if (p.peek()) |first| {
         if (!std.mem.startsWith(u8, first.text, "---")) {
             _ = p.advance(); // the "TypeName:" line at indent 0
+            if (!std.mem.endsWith(u8, first.text, ":")) try p.diagnostics.append(p.arena, .missing_type_name);
             type_name = stripTrailingColon(first.text);
             body = try parseBlock(p, indentOfNext(p, 2), 0);
             // Downstream reads body.map unconditionally. A malformed body parsed as a
@@ -437,6 +534,19 @@ fn parseDocument(p: *Parser) Error!Document {
         .stripped = stripped,
         .body = body,
     };
+}
+
+fn spanToken(source_bytes: []const u8, text: []const u8, text_start: usize, marker: []const u8) source_map.Span {
+    const at = std.mem.indexOf(u8, text, marker) orelse return .{ .start = text_start, .end = text_start };
+    const start = text_start + at + marker.len;
+    var end = start;
+    while (end < source_bytes.len and source_bytes[end] != ' ' and source_bytes[end] != '\r' and source_bytes[end] != '\n') end += 1;
+    return .{ .start = start, .end = end };
+}
+
+fn spanForSlice(source_bytes: []const u8, slice: []const u8) source_map.Span {
+    const start = @intFromPtr(slice.ptr) - @intFromPtr(source_bytes.ptr);
+    return .{ .start = start, .end = start + slice.len };
 }
 
 // Indent of the body's first field (Unity uses 2, handled leniently): peek at the next line,
@@ -469,10 +579,16 @@ fn parseMap(p: *Parser, indent: usize, depth: usize) Error!*Node {
         if (std.mem.startsWith(u8, line.text, "- ") or std.mem.eql(u8, line.text, "-")) break;
         _ = p.advance();
         const kv = splitKeyValue(line.text);
+        if (!kv.has_colon) try p.diagnostics.append(p.arena, .invalid_map_entry);
         const value = if (kv.value.len == 0)
             try parseNestedValue(p, indent, depth)
         else
-            try parseValue(p.arena, kv.value, depth);
+            try parseValue(p, kv.value, depth);
+        if (kv.has_colon) {
+            const key_start = line.content.start + (@intFromPtr(kv.key.ptr) - @intFromPtr(line.text.ptr));
+            const value_start = line.content.start + (@intFromPtr(kv.value.ptr) - @intFromPtr(line.text.ptr));
+            try p.entry_spans.put(p.arena, value, .{ .whole = line.whole, .key = .{ .start = key_start, .end = key_start + kv.key.len }, .value = .{ .start = value_start, .end = value_start + kv.value.len } });
+        }
         try entries.append(p.arena, .{ .key = kv.key, .value = value });
     }
     return makeNode(p.arena, .{ .map = try entries.toOwnedSlice(p.arena) });
@@ -502,12 +618,18 @@ fn parseSeq(p: *Parser, indent: usize, depth: usize) Error!*Node {
         if (rest.len == 0) {
             // Lone "-": this item's nested block continues at a deeper indent.
             const ci = indentOfNext(p, indent + 2);
-            try items.append(p.arena, try parseBlock(p, ci, depth + 1));
+            const item = try parseBlock(p, ci, depth + 1);
+            try p.sequence_item_spans.put(p.arena, item, line.whole);
+            try items.append(p.arena, item);
         } else if (looksLikeMapEntry(rest)) {
             // Compact map item: the first entry is on the dash line, the rest at indent+2.
-            try items.append(p.arena, try parseSeqMapItem(p, indent, rest, depth));
+            const item = try parseSeqMapItem(p, indent, rest, depth);
+            try p.sequence_item_spans.put(p.arena, item, line.whole);
+            try items.append(p.arena, item);
         } else {
-            try items.append(p.arena, try parseValue(p.arena, rest, depth));
+            const item = try parseValue(p, rest, depth);
+            try p.sequence_item_spans.put(p.arena, item, line.whole);
+            try items.append(p.arena, item);
         }
     }
     return makeNode(p.arena, .{ .seq = try items.toOwnedSlice(p.arena) });
@@ -525,7 +647,7 @@ fn parseSeqMapItem(p: *Parser, dash_indent: usize, first_line: []const u8, depth
     if (kv.value.len == 0) {
         try entries.append(p.arena, .{ .key = kv.key, .value = try parseNestedValue(p, key_indent, depth) });
     } else {
-        try entries.append(p.arena, .{ .key = kv.key, .value = try parseValue(p.arena, kv.value, depth) });
+        try entries.append(p.arena, .{ .key = kv.key, .value = try parseValue(p, kv.value, depth) });
     }
     // Continuation entries are 2 deeper than the dash (aligned right after "- ").
     while (p.peek()) |line| {
@@ -537,7 +659,7 @@ fn parseSeqMapItem(p: *Parser, dash_indent: usize, first_line: []const u8, depth
         const value = if (e.value.len == 0)
             try parseNestedValue(p, key_indent, depth)
         else
-            try parseValue(p.arena, e.value, depth);
+            try parseValue(p, e.value, depth);
         try entries.append(p.arena, .{ .key = e.key, .value = value });
     }
     return makeNode(p.arena, .{ .map = try entries.toOwnedSlice(p.arena) });
@@ -583,24 +705,29 @@ fn looksLikeMapEntry(s: []const u8) bool {
     return kv.has_colon and kv.key.len > 0;
 }
 
-fn parseValue(arena: std.mem.Allocator, raw: []const u8, depth: usize) Error!*Node {
+fn parseValue(p: *Parser, raw: []const u8, depth: usize) Error!*Node {
+    const arena = p.arena;
     if (depth > max_nesting_depth) return error.NestingTooDeep;
     const s = std.mem.trim(u8, raw, " ");
     if (s.len == 0) return makeNode(arena, .{ .scalar = "" });
-    if (s[0] == '{') return parseFlow(arena, s, depth);
-    if (s[0] == '[') return parseFlowSeq(arena, s, depth);
-    return makeNode(arena, .{ .scalar = try unquote(arena, s) });
+    const span = spanForSlice(p.source_bytes, s);
+    const n = if (s[0] == '{') try parseFlow(p, s, depth)
+        else if (s[0] == '[') try parseFlowSeq(p, s, depth)
+        else try makeNode(arena, .{ .scalar = try unquote(arena, s) });
+    try p.node_spans.put(arena, n, span);
+    return n;
 }
 
 // Parse a flow mapping `{a: b, c: d}`. Returns a Ref node if it has a `fileID` key.
-fn parseFlow(arena: std.mem.Allocator, s: []const u8, depth: usize) Error!*Node {
+fn parseFlow(p: *Parser, s: []const u8, depth: usize) Error!*Node {
+    const arena = p.arena;
     const inner = stripBrackets(s, '{', '}');
     var entries: std.ArrayList(Entry) = .empty;
     var it = splitTopLevel(inner);
     while (it.next()) |part| {
         const kv = splitKeyValue(part);
         if (kv.key.len == 0) continue;
-        const value = try parseValue(arena, kv.value, depth + 1);
+        const value = try parseValue(p, kv.value, depth + 1);
         try entries.append(arena, .{ .key = kv.key, .value = value });
     }
     const es = try entries.toOwnedSlice(arena);
@@ -621,14 +748,15 @@ fn scalarString(n: *const Node) ?[]const u8 {
     };
 }
 
-fn parseFlowSeq(arena: std.mem.Allocator, s: []const u8, depth: usize) Error!*Node {
+fn parseFlowSeq(p: *Parser, s: []const u8, depth: usize) Error!*Node {
+    const arena = p.arena;
     const inner = std.mem.trim(u8, stripBrackets(s, '[', ']'), " ");
     var items: std.ArrayList(*Node) = .empty;
     if (inner.len != 0) {
         var it = splitTopLevel(inner);
         while (it.next()) |part| {
             const t = std.mem.trim(u8, part, " ");
-            if (t.len != 0) try items.append(arena, try parseValue(arena, t, depth + 1));
+            if (t.len != 0) try items.append(arena, try parseValue(p, t, depth + 1));
         }
     }
     return makeNode(arena, .{ .seq = try items.toOwnedSlice(arena) });

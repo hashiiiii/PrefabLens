@@ -1,5 +1,6 @@
 const std = @import("std");
 pub const model = @import("model.zig");
+pub const source = @import("source.zig");
 pub const json = @import("json.zig");
 
 const assets_tlv = @import("assets_tlv.zig");

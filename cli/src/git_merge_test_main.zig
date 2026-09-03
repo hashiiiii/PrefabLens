@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 
 pub const AttributeMode = enum { local, tracked };
 const RevisionSide = enum { base, ours, theirs };
@@ -108,10 +109,16 @@ pub fn main(init: std.process.Init) !u8 {
     var arena_state = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
+    try testGitShellExecutablePath(arena);
     const io = init.io;
     const args = try init.minimal.args.toSlice(arena);
     try require(args.len == 2, "expected the prefablens executable path");
-    const prefablens = try std.Io.Dir.cwd().realPathFileAlloc(io, args[1], arena);
+    const native_prefablens = try std.Io.Dir.cwd().realPathFileAlloc(io, args[1], arena);
+    const prefablens = try normalizeExecutablePathForGitShell(
+        arena,
+        native_prefablens,
+        builtin.os.tag == .windows,
+    );
 
     const scratch = try scratchDirectory(io, arena, "git");
     defer std.Io.Dir.cwd().deleteTree(io, scratch) catch {};
@@ -136,6 +143,27 @@ pub fn main(init: std.process.Init) !u8 {
 
     try std.Io.File.stdout().writeStreamingAll(io, "git merge integration: passed\n");
     return 0;
+}
+
+fn testGitShellExecutablePath(arena: std.mem.Allocator) !void {
+    const windows_path = "C:\\Prefab Lens\\prefablens's.exe";
+    const normalized = try normalizeExecutablePathForGitShell(arena, windows_path, true);
+    try require(
+        std.mem.eql(u8, normalized, "C:/Prefab Lens/prefablens's.exe"),
+        "Windows executable path was not normalized for Git's POSIX shell",
+    );
+    const quoted = try shellQuote(arena, normalized);
+    try require(
+        std.mem.eql(u8, quoted, "'C:/Prefab Lens/prefablens'\\''s.exe'"),
+        "normalized executable path lost shell quoting",
+    );
+
+    const posix_path = "/tmp/prefablens\\literal";
+    const preserved = try normalizeExecutablePathForGitShell(arena, posix_path, false);
+    try require(
+        std.mem.eql(u8, preserved, posix_path),
+        "non-Windows executable path was modified",
+    );
 }
 
 fn testAutomaticMerge(
@@ -292,6 +320,9 @@ fn configureHermeticRepository(io: std.Io, arena: std.mem.Allocator, repo: []con
     try gitOk(io, arena, repo, &.{ "config", "core.excludesFile", empty_excludes });
     try gitOk(io, arena, repo, &.{ "config", "core.hooksPath", disabled_hooks });
     try gitOk(io, arena, repo, &.{ "config", "commit.gpgSign", "false" });
+    try gitOk(io, arena, repo, &.{ "config", "merge.default", "text" });
+    try gitOk(io, arena, repo, &.{ "config", "rerere.enabled", "false" });
+    try gitOk(io, arena, repo, &.{ "config", "rerere.autoupdate", "false" });
 }
 
 fn installAttributes(
@@ -363,6 +394,19 @@ pub fn shellQuote(arena: std.mem.Allocator, value: []const u8) ![]const u8 {
     }
     try quoted.append(arena, '\'');
     return quoted.toOwnedSlice(arena);
+}
+
+fn normalizeExecutablePathForGitShell(
+    arena: std.mem.Allocator,
+    executable_path: []const u8,
+    is_windows: bool,
+) ![]const u8 {
+    if (!is_windows) return executable_path;
+    const normalized = try arena.alloc(u8, executable_path.len);
+    for (executable_path, 0..) |byte, index| {
+        normalized[index] = if (byte == '\\') '/' else byte;
+    }
+    return normalized;
 }
 
 fn writeFile(

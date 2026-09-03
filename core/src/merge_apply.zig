@@ -1221,6 +1221,40 @@ test "merge apply: parses an object reference custom value" {
     try testing.expectEqual(@as(i64, 3), value.object_reference.type_id.?);
 }
 
+test "merge apply: rejects nested object reference members" {
+    const nested_values = [_][]const u8{
+        "{fileID: 1, extra: {value: 2}}",
+        "{fileID: 1, extra: [2]}",
+    };
+    for (nested_values) |nested| {
+        var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+        defer arena_state.deinit();
+
+        try testing.expectError(
+            error.InvalidResolution,
+            parseCustomValue(arena_state.allocator(), nested),
+        );
+    }
+}
+
+test "merge apply: rejects invalid double-quoted escapes" {
+    const invalid_values = [_][]const u8{
+        "\"bad\\q\"",
+        "\"bad\\x1\"",
+        "{fileID: 0, guid: \"bad\\q\", type: 3}",
+        "{fileID: 0, guid: \"bad\\u12\", type: 3}",
+    };
+    for (invalid_values) |invalid| {
+        var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+        defer arena_state.deinit();
+
+        try testing.expectError(
+            error.InvalidResolution,
+            parseCustomValue(arena_state.allocator(), invalid),
+        );
+    }
+}
+
 test "merge apply: rejects a multiline custom value" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();

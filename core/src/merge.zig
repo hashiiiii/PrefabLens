@@ -189,3 +189,67 @@ test "merge build rejects a malformed flow entry" {
         build(arena_state.allocator(), valid, malformed, valid),
     );
 }
+
+test "merge build rejects invalid double-quoted escapes" {
+    const invalid_values = [_][]const u8{
+        "\"bad\\q\"",
+        "{fileID: 0, guid: \"bad\\u12\", type: 3}",
+    };
+    for (invalid_values) |invalid| {
+        var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena_state.deinit();
+        const arena = arena_state.allocator();
+        const valid = "--- !u!114 &1\nMonoBehaviour:\n  m_Value: 1\n";
+        const malformed = try std.fmt.allocPrint(
+            arena,
+            "--- !u!114 &1\nMonoBehaviour:\n  m_Value: {s}\n",
+            .{invalid},
+        );
+
+        try std.testing.expectError(error.MalformedInput, build(arena, valid, malformed, valid));
+    }
+}
+
+test "merge resolve rejects nested object reference members" {
+    const nested_values = [_][]const u8{
+        "{fileID: 1, extra: {value: 2}}",
+        "{fileID: 1, extra: [2]}",
+    };
+    for (nested_values) |nested| {
+        var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena_state.deinit();
+        const arena = arena_state.allocator();
+        const base = "--- !u!114 &1\nMonoBehaviour:\n  m_Value: 1\n";
+        const ours = "--- !u!114 &1\nMonoBehaviour:\n  m_Value: 2\n";
+        const theirs = "--- !u!114 &1\nMonoBehaviour:\n  m_Value: 3\n";
+        var built = try build(arena, base, ours, theirs);
+
+        try std.testing.expectError(
+            error.InvalidResolution,
+            resolve(arena, &built.plan, 0, .{ .custom = nested }),
+        );
+        try std.testing.expect(built.plan.operations[0].resolution == .unresolved);
+    }
+}
+
+test "merge resolve rejects invalid double-quoted escapes" {
+    const invalid_values = [_][]const u8{
+        "\"bad\\q\"",
+        "{fileID: 0, guid: \"bad\\u12\", type: 3}",
+    };
+    for (invalid_values) |invalid| {
+        var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena_state.deinit();
+        const arena = arena_state.allocator();
+        const base = "--- !u!114 &1\nMonoBehaviour:\n  m_Value: 1\n";
+        const ours = "--- !u!114 &1\nMonoBehaviour:\n  m_Value: 2\n";
+        const theirs = "--- !u!114 &1\nMonoBehaviour:\n  m_Value: 3\n";
+        var built = try build(arena, base, ours, theirs);
+
+        try std.testing.expectError(
+            error.InvalidResolution,
+            resolve(arena, &built.plan, 0, .{ .custom = invalid }),
+        );
+        try std.testing.expect(built.plan.operations[0].resolution == .unresolved);
+    }
+}

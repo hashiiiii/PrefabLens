@@ -441,6 +441,26 @@ test "merge UI state: a nested collection custom input returns a status" {
     try testing.expectEqualStrings("The result is not valid Unity YAML.", state.status);
 }
 
+test "merge UI state: nested object reference members remain unresolved" {
+    const nested_values = [_][]const u8{
+        "{fileID: 0, extra: {value: 2}}",
+        "{fileID: 0, extra: [2]}",
+    };
+    for (nested_values) |nested| {
+        var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+        defer arena_state.deinit();
+        const arena = arena_state.allocator();
+        var fixture = try conflictPlan(arena, 1);
+        var state = try State.init(arena, &fixture.plan);
+
+        try state.handle(.{ .edit_result = nested });
+        try state.handle(.apply_result);
+
+        try testing.expectEqual(@as(usize, 1), state.unresolvedCount());
+        try testing.expectEqualStrings("The result is not valid Unity YAML.", state.status);
+    }
+}
+
 test "merge UI state: a sequence custom input returns a status" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
@@ -498,6 +518,28 @@ test "merge UI state: unterminated quoted scalar remains unresolved" {
 
     try testing.expectEqual(@as(usize, 1), state.unresolvedCount());
     try testing.expectEqualStrings("The result is not valid Unity YAML.", state.status);
+}
+
+test "merge UI state: invalid double-quoted escapes remain unresolved" {
+    const invalid_values = [_][]const u8{
+        "\"bad\\q\"",
+        "\"bad\\x1\"",
+        "{fileID: 0, guid: \"bad\\q\", type: 3}",
+        "{fileID: 0, guid: \"bad\\u12\", type: 3}",
+    };
+    for (invalid_values) |invalid| {
+        var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+        defer arena_state.deinit();
+        const arena = arena_state.allocator();
+        var fixture = try conflictPlan(arena, 1);
+        var state = try State.init(arena, &fixture.plan);
+
+        try state.handle(.{ .edit_result = invalid });
+        try state.handle(.apply_result);
+
+        try testing.expectEqual(@as(usize, 1), state.unresolvedCount());
+        try testing.expectEqualStrings("The result is not valid Unity YAML.", state.status);
+    }
 }
 
 test "merge UI state: edit input is copied before apply" {

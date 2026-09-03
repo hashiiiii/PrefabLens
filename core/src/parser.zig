@@ -444,6 +444,80 @@ test "parseSpanned: quoted punctuation stays in one flow entry" {
     try testing.expectEqualStrings("a,b{c}'d", single.ref.guid.?);
 }
 
+test "parseSpanned: nested object reference members produce diagnostics" {
+    const nested_values = [_][]const u8{
+        "{fileID: 1, extra: {value: 2}}",
+        "{fileID: 1, extra: [2]}",
+    };
+    for (nested_values) |nested| {
+        var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+        defer arena_state.deinit();
+        const src = try std.fmt.allocPrint(
+            arena_state.allocator(),
+            "--- !u!114 &1\nMonoBehaviour:\n  value: {s}\n",
+            .{nested},
+        );
+
+        const parsed = try parseSpanned(arena_state.allocator(), src);
+
+        try testing.expect(parsed.diagnostics.len != 0);
+    }
+}
+
+test "parseSpanned: object reference fileID must be an integer scalar" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const parsed = try parseSpanned(
+        arena_state.allocator(),
+        "--- !u!114 &1\nMonoBehaviour:\n  value: {fileID: invalid}\n",
+    );
+
+    try testing.expect(parsed.diagnostics.len != 0);
+}
+
+test "parseSpanned: invalid double-quoted escapes produce diagnostics" {
+    const invalid_values = [_][]const u8{
+        "\"bad\\q\"",
+        "\"bad\\x1\"",
+        "{fileID: 0, guid: \"bad\\q\", type: 3}",
+        "{fileID: 0, guid: \"bad\\u12\", type: 3}",
+    };
+    for (invalid_values) |invalid| {
+        var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+        defer arena_state.deinit();
+        const src = try std.fmt.allocPrint(
+            arena_state.allocator(),
+            "--- !u!114 &1\nMonoBehaviour:\n  value: {s}\n",
+            .{invalid},
+        );
+
+        const parsed = try parseSpanned(arena_state.allocator(), src);
+
+        try testing.expect(parsed.diagnostics.len != 0);
+    }
+}
+
+test "parseSpanned: quotes inside plain flow scalars stay plain" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const src =
+        \\--- !u!114 &1
+        \\MonoBehaviour:
+        \\  m_Single: {x: can't, y: 2}
+        \\  m_Double: {x: a"b, y: 2}
+    ;
+
+    const parsed = try parseSpanned(arena_state.allocator(), src);
+
+    try testing.expectEqual(@as(usize, 0), parsed.diagnostics.len);
+    const single = model.findValue(parsed.documents[0].body.map, "m_Single").?;
+    try testing.expectEqualStrings("can't", model.findValue(single.map, "x").?.scalar);
+    try testing.expectEqualStrings("2", model.findValue(single.map, "y").?.scalar);
+    const double = model.findValue(parsed.documents[0].body.map, "m_Double").?;
+    try testing.expectEqualStrings("a\"b", model.findValue(double.map, "x").?.scalar);
+    try testing.expectEqualStrings("2", model.findValue(double.map, "y").?.scalar);
+}
+
 test "parseSpanned: malformed flow values produce diagnostics and valid spans" {
     const malformed_values = [_][]const u8{
         "{fileID: 1, bad}",
@@ -887,6 +961,11 @@ fn parseFlow(p: *Parser, s: []const u8, depth: usize) Error!*Node {
     if (it.invalid and !iterator_error_reported) try p.diagnostics.append(arena, .invalid_flow_value);
     const es = try entries.toOwnedSlice(arena);
     if (model.findValue(es, "fileID")) |fid_node| {
+        var valid_reference = scalarToI64(fid_node) != null;
+        for (es) |entry| {
+            if (entry.value.* != .scalar) valid_reference = false;
+        }
+        if (!valid_reference) try p.diagnostics.append(arena, .invalid_flow_value);
         return makeNode(arena, .{ .ref = .{
             .file_id = scalarToI64(fid_node) orelse 0,
             .guid = if (model.findValue(es, "guid")) |g| scalarString(g) else null,
@@ -946,6 +1025,7 @@ fn quotedScalarIsValid(s: []const u8) bool {
     while (index < s.len) {
         if (quote == '"' and s[index] == '\\') {
             if (index + 1 >= s.len) return false;
+            if (!supportedDoubleQuoteEscape(s[index + 1])) return false;
             index += 2;
             continue;
         }
@@ -959,6 +1039,10 @@ fn quotedScalarIsValid(s: []const u8) bool {
         index += 1;
     }
     return false;
+}
+
+fn supportedDoubleQuoteEscape(byte: u8) bool {
+    return byte == '"' or byte == '\\';
 }
 
 // Strip enclosing quotes. Double-quoted scalars also resolve YAML backslash
@@ -1007,6 +1091,7 @@ const TopLevelIter = struct {
         var bracket_stack: [max_nesting_depth + 1]u8 = undefined;
         var depth: usize = 0;
         var quote: ?u8 = null;
+        var scalar_start = true;
         const start = self.i;
         while (self.i < self.s.len) {
             const c = self.s[self.i];
@@ -1016,6 +1101,7 @@ const TopLevelIter = struct {
                         self.invalid = true;
                         self.i += 1;
                     } else {
+                        if (!supportedDoubleQuoteEscape(self.s[self.i + 1])) self.invalid = true;
                         self.i += 2;
                     }
                     continue;
@@ -1026,12 +1112,18 @@ const TopLevelIter = struct {
                         continue;
                     }
                     quote = null;
+                    scalar_start = false;
                 }
                 self.i += 1;
                 continue;
             }
             switch (c) {
-                '\'', '"' => quote = c,
+                '\'', '"' => if (scalar_start) {
+                    quote = c;
+                } else {
+                    scalar_start = false;
+                },
+                ':' => scalar_start = true,
                 '{' => {
                     if (depth == bracket_stack.len) {
                         self.invalid = true;
@@ -1039,6 +1131,7 @@ const TopLevelIter = struct {
                         bracket_stack[depth] = '}';
                         depth += 1;
                     }
+                    scalar_start = true;
                 },
                 '[' => {
                     if (depth == bracket_stack.len) {
@@ -1047,6 +1140,7 @@ const TopLevelIter = struct {
                         bracket_stack[depth] = ']';
                         depth += 1;
                     }
+                    scalar_start = true;
                 },
                 '}', ']' => {
                     if (depth == 0 or bracket_stack[depth - 1] != c) {
@@ -1054,14 +1148,18 @@ const TopLevelIter = struct {
                     } else {
                         depth -= 1;
                     }
+                    scalar_start = false;
                 },
                 ',' => if (depth == 0) {
                     const part = self.s[start..self.i];
                     self.i += 1;
                     if (self.i == self.s.len) self.invalid = true;
                     return part;
+                } else {
+                    scalar_start = true;
                 },
-                else => {},
+                ' ', '\t' => {},
+                else => scalar_start = false,
             }
             self.i += 1;
         }

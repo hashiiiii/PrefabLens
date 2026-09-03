@@ -99,6 +99,7 @@ pub const View = struct {
     vertical_offset: usize = 0,
     selected_value: ValueColumn = .result,
     last_size: vxfw.Size = .{},
+    live_screen: ?*const vaxis.Screen = null,
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -125,6 +126,11 @@ pub const View = struct {
             .eventHandler = handleEvent,
             .drawFn = draw,
         };
+    }
+
+    fn eventSize(self: *const View) vxfw.Size {
+        const screen = self.live_screen orelse return self.last_size;
+        return .{ .width = screen.width, .height = screen.height };
     }
 
     fn dispatch(self: *View, ctx: *vxfw.EventContext, action: merge_ui_state.Action) !void {
@@ -500,17 +506,19 @@ fn writeClipped(
     width: u16,
     text: []const u8,
 ) void {
-    var col = start;
+    var col: usize = start;
+    const end: usize = @as(usize, start) + width;
     var graphemes = vaxis.unicode.graphemeIterator(text);
     while (graphemes.next()) |grapheme| {
         const bytes = grapheme.bytes(text);
         const cell_width = vaxis.gwidth.gwidth(bytes, .unicode);
-        if (col + cell_width > start + width) break;
-        surface.writeCell(col, row, .{ .char = .{
+        const next_col = col + cell_width;
+        if (next_col > end) break;
+        surface.writeCell(@intCast(col), row, .{ .char = .{
             .grapheme = bytes,
             .width = @intCast(cell_width),
         } });
-        col += cell_width;
+        col = next_col;
     }
 }
 
@@ -533,7 +541,7 @@ fn captureEvent(
     event: vxfw.Event,
 ) !void {
     const self: *View = @ptrCast(@alignCast(userdata));
-    if (!isUsableSize(self.last_size)) switch (event) {
+    if (!isUsableSize(self.eventSize())) switch (event) {
         .key_press, .mouse => ctx.consumeEvent(),
         else => {},
     };
@@ -547,21 +555,24 @@ fn handleEvent(
     const self: *View = @ptrCast(@alignCast(userdata));
     switch (event) {
         .winsize => return ctx.consumeAndRedraw(),
-        .key_press, .mouse => if (!isUsableSize(self.last_size)) return ctx.consumeEvent(),
+        .key_press, .mouse => if (!isUsableSize(self.eventSize())) return ctx.consumeEvent(),
         else => {},
     }
-    if (self.editing) switch (event) {
-        .key_press => |key| {
-            if (key.matches(vaxis.Key.escape, .{})) {
-                self.editor.clearRetainingCapacity();
-                self.editing = false;
-                try ctx.requestFocus(self.widget());
-                return ctx.consumeAndRedraw();
-            }
-            return self.editor.handleEvent(ctx, event);
-        },
-        else => return self.editor.handleEvent(ctx, event),
-    };
+    if (self.editing) {
+        switch (event) {
+            .key_press => |key| {
+                if (key.matches(vaxis.Key.escape, .{})) {
+                    self.editor.clearRetainingCapacity();
+                    self.editing = false;
+                    try ctx.requestFocus(self.widget());
+                    return ctx.consumeAndRedraw();
+                }
+            },
+            else => {},
+        }
+        if (ctx.phase == .at_target) return self.editor.handleEvent(ctx, event);
+        return;
+    }
 
     switch (event) {
         .mouse => |mouse| try self.handleMouse(ctx, mouse),
@@ -612,6 +623,7 @@ pub fn run(
     defer app.deinit();
     var view = View.init(allocator, state, path);
     defer view.deinit();
+    view.live_screen = &app.vx.screen;
     try app.run(view.widget(), .{});
 }
 
@@ -862,6 +874,23 @@ test "merge TUI: clips a long value before the next column" {
     try testing.expectEqualStrings(" 12345 ", (try rowText(arena, surface, 0))[0..7]);
 }
 
+test "merge TUI: clips a wide grapheme at the maximum terminal boundary" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var fixture = try screenPlan(arena);
+    var state = try merge_ui_state.State.init(arena, &fixture.plan);
+    var view = View.init(arena, &state, "A.prefab");
+    defer view.deinit();
+    const surface = try vxfw.Surface.init(arena, view.widget(), .{ .width = 65535, .height = 1 });
+    surface.writeCell(65534, 0, .{ .char = .{ .grapheme = "│", .width = 1 } });
+
+    // A two-cell grapheme cannot fit in the final cell and must not overflow u16.
+    writeClipped(surface, 65534, 0, 1, "🙂");
+
+    try testing.expectEqualStrings("│", surface.readCell(65534, 0).char.grapheme);
+}
+
 test "merge TUI: keyboard and mouse choose ours through the same state action" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
@@ -1065,6 +1094,140 @@ test "merge TUI: focused editor survives a small resize without accepting hidden
         .custom => |value| try testing.expectEqualStrings("7", value),
         else => return error.TestUnexpectedResult,
     }
+}
+
+test "merge TUI: live screen gates queued shrink input before redraw" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var edit_fixture = try screenPlan(arena);
+    var edit_state = try merge_ui_state.State.init(arena, &edit_fixture.plan);
+    var edit_view = View.init(arena, &edit_state, "A.prefab");
+    defer edit_view.deinit();
+    var edit_screen: vaxis.Screen = .{ .width = 80, .height = 10 };
+    edit_view.live_screen = &edit_screen;
+    _ = try drawForTest(arena, edit_view.widget(), 80, 10);
+    var edit_ctx = eventContext(arena);
+    try edit_view.widget().handleEvent(&edit_ctx, .{ .key_press = .{ .codepoint = vaxis.Key.enter } });
+    const focused_surface = try drawForTest(arena, edit_view.widget(), 80, 10);
+
+    // App updates this real Screen during queue drain, before it draws the small surface.
+    edit_screen.width = 79;
+    edit_screen.height = 9;
+    try routeFocusedEventForTest(
+        arena,
+        focused_surface,
+        edit_view.editor.widget(),
+        &edit_ctx,
+        .{ .key_press = .{ .codepoint = '9', .text = "9" } },
+    );
+
+    edit_screen.width = 80;
+    edit_screen.height = 10;
+    try routeFocusedEventForTest(
+        arena,
+        focused_surface,
+        edit_view.editor.widget(),
+        &edit_ctx,
+        .{ .key_press = .{ .codepoint = '7', .text = "7" } },
+    );
+    try routeFocusedEventForTest(
+        arena,
+        focused_surface,
+        edit_view.editor.widget(),
+        &edit_ctx,
+        .{ .key_press = .{ .codepoint = vaxis.Key.enter } },
+    );
+    switch (edit_state.pending.?) {
+        .custom => |value| try testing.expectEqualStrings("7", value),
+        else => return error.TestUnexpectedResult,
+    }
+
+    var action_fixture = try screenPlan(arena);
+    var action_state = try merge_ui_state.State.init(arena, &action_fixture.plan);
+    var action_view = View.init(arena, &action_state, "A.prefab");
+    defer action_view.deinit();
+    var action_screen: vaxis.Screen = .{ .width = 80, .height = 10 };
+    action_view.live_screen = &action_screen;
+    _ = try drawForTest(arena, action_view.widget(), 80, 10);
+    var action_ctx = eventContext(arena);
+    action_screen.width = 79;
+    action_screen.height = 9;
+
+    const blocked_events = [_]vxfw.Event{
+        .{ .key_press = .{ .codepoint = 'o', .text = "o" } },
+        .{ .mouse = .{
+            .col = 0,
+            .row = 3,
+            .button = .wheel_down,
+            .mods = .{},
+            .type = .press,
+        } },
+        .{ .key_press = .{ .codepoint = 'q', .text = "q" } },
+    };
+    for (blocked_events) |event| {
+        action_ctx.consume_event = false;
+        try action_view.widget().handleEvent(&action_ctx, event);
+    }
+    try testing.expectEqual(@as(?core.merge.Resolution, null), action_state.pending);
+    try testing.expectEqual(@as(usize, 0), action_state.selected_conflict);
+    try testing.expectEqual(merge_ui_state.Outcome.active, action_state.outcome);
+
+    // Recovery also happens before redraw when App drains a later grow event first.
+    action_screen.width = 80;
+    action_screen.height = 10;
+    action_ctx.consume_event = false;
+    try action_view.widget().handleEvent(&action_ctx, .{ .key_press = .{ .codepoint = 'o', .text = "o" } });
+    try testing.expect(action_state.pending.? == .take and action_state.pending.?.take == .ours);
+    action_ctx.consume_event = false;
+    try action_view.widget().handleEvent(&action_ctx, .{ .mouse = .{
+        .col = 0,
+        .row = 3,
+        .button = .wheel_down,
+        .mods = .{},
+        .type = .press,
+    } });
+    try testing.expectEqual(@as(usize, 1), action_state.selected_conflict);
+    action_ctx.consume_event = false;
+    try action_view.widget().handleEvent(&action_ctx, .{ .key_press = .{ .codepoint = 'q', .text = "q" } });
+    try testing.expectEqual(merge_ui_state.Outcome.aborted, action_state.outcome);
+}
+
+test "merge TUI: root delegates an unconsumed editor event only as target" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var fixture = try screenPlan(arena);
+    var state = try merge_ui_state.State.init(arena, &fixture.plan);
+    var view = View.init(arena, &state, "A.prefab");
+    defer view.deinit();
+    _ = try drawForTest(arena, view.widget(), 80, 10);
+    var ctx = eventContext(arena);
+    try view.widget().handleEvent(&ctx, .{ .key_press = .{ .codepoint = vaxis.Key.enter } });
+
+    // Before App settles the focus request, root is the target and must delegate once.
+    ctx.phase = .at_target;
+    ctx.consume_event = false;
+    ctx.redraw = false;
+    try view.widget().handleEvent(&ctx, .focus_in);
+    try testing.expect(!ctx.consume_event);
+    try testing.expect(ctx.redraw);
+
+    // After focus settles, the real TextField receives this unconsumed event at target.
+    ctx.phase = .at_target;
+    ctx.consume_event = false;
+    ctx.redraw = false;
+    try view.editor.widget().handleEvent(&ctx, .focus_in);
+    try testing.expect(!ctx.consume_event);
+    try testing.expect(ctx.redraw);
+
+    // App then bubbles to root. A second TextField delivery would set redraw again.
+    ctx.phase = .bubbling;
+    ctx.redraw = false;
+    try view.widget().handleEvent(&ctx, .focus_in);
+    try testing.expect(!ctx.consume_event);
+    try testing.expect(!ctx.redraw);
 }
 
 test "merge TUI: pre-draw and undersized views block all merge actions" {

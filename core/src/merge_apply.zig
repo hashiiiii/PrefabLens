@@ -50,8 +50,10 @@ pub fn applyResolved(
     require_all: bool,
 ) merge_model.Error![]const u8 {
     var patches: std.ArrayList(Patch) = .empty;
+    var dependency_path: std.ArrayList(merge_model.AtomicId) = .empty;
     for (plan.atomic_operations) |atomic| {
-        if (!try atomicIsReady(plan, atomic)) {
+        dependency_path.clearRetainingCapacity();
+        if (!try atomicIsReady(arena, plan, atomic, &dependency_path)) {
             if (require_all) return error.InvalidResolution;
             continue;
         }
@@ -64,32 +66,33 @@ pub fn applyResolved(
 }
 
 fn atomicIsReady(
+    arena: std.mem.Allocator,
     plan: *const merge_model.MergePlan,
     atomic: merge_model.AtomicOperation,
+    path: *std.ArrayList(merge_model.AtomicId),
 ) merge_model.Error!bool {
+    for (path.items) |ancestor_id| {
+        if (ancestor_id == atomic.id) return error.InvalidMerge;
+    }
+    try path.append(arena, atomic.id);
+    defer _ = path.pop();
+
     if (atomic.operation_ids.len == 0) return error.InvalidMerge;
-    if (!try dependenciesAreResolved(plan, atomic.dependencies)) return false;
+    var ready = true;
+    for (atomic.dependencies) |dependency_id| {
+        const dependency = atomicByIdConst(plan, dependency_id) orelse return error.InvalidMerge;
+        if (!try atomicIsReady(arena, plan, dependency.*, path)) ready = false;
+    }
     for (atomic.operation_ids) |operation_id| {
         const operation = merge_model.operationByIdConst(plan, operation_id) orelse return error.InvalidMerge;
         if (operation.atomic_id != atomic.id) return error.InvalidMerge;
-        if (operation.resolution == .unresolved) return false;
-        if (!try dependenciesAreResolved(plan, operation.dependencies)) return false;
-    }
-    return true;
-}
-
-fn dependenciesAreResolved(
-    plan: *const merge_model.MergePlan,
-    dependencies: []const merge_model.AtomicId,
-) merge_model.Error!bool {
-    for (dependencies) |dependency_id| {
-        const dependency = atomicByIdConst(plan, dependency_id) orelse return error.InvalidMerge;
-        for (dependency.operation_ids) |operation_id| {
-            const operation = merge_model.operationByIdConst(plan, operation_id) orelse return error.InvalidMerge;
-            if (operation.resolution == .unresolved) return false;
+        if (operation.resolution == .unresolved) ready = false;
+        for (operation.dependencies) |dependency_id| {
+            const dependency = atomicByIdConst(plan, dependency_id) orelse return error.InvalidMerge;
+            if (!try atomicIsReady(arena, plan, dependency.*, path)) ready = false;
         }
     }
-    return true;
+    return ready;
 }
 
 fn appendPatch(
@@ -306,4 +309,53 @@ test "merge apply: rejects overlapping patches" {
         .{ .span = .{ .start = 4, .end = 7 }, .replacement = "b", .atomic_id = 2 },
     };
     try testing.expectError(error.InvalidMerge, applyPatches(arena_state.allocator(), "0123456789", &patches));
+}
+
+fn threeFieldPlan(arena: std.mem.Allocator) !merge_model.MergePlan {
+    const base = "--- !u!114 &1\nMonoBehaviour:\n  first: 0\n  second: 0\n  third: 0\n";
+    const ours = "--- !u!114 &1\nMonoBehaviour:\n  first: 1\n  second: 1\n  third: 1\n";
+    const theirs = "--- !u!114 &1\nMonoBehaviour:\n  first: 2\n  second: 2\n  third: 2\n";
+    return merge_planner.build(
+        arena,
+        try merge_planner.parseMergeSide(arena, base),
+        try merge_planner.parseMergeSide(arena, ours),
+        try merge_planner.parseMergeSide(arena, theirs),
+    );
+}
+
+test "merge apply: follows a two-hop dependency in partial and final modes" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var plan = try threeFieldPlan(arena);
+    plan.operations[0].resolution = .{ .take = .theirs };
+    plan.operations[1].resolution = .{ .take = .theirs };
+    plan.atomic_operations[0].dependencies = try arena.dupe(merge_model.AtomicId, &.{1});
+    plan.operations[1].dependencies = try arena.dupe(merge_model.AtomicId, &.{2});
+
+    try testing.expectEqualStrings(plan.ours.bytes, try applyResolved(arena, &plan, false));
+    try testing.expectError(error.InvalidResolution, applyResolved(arena, &plan, true));
+}
+
+test "merge apply: rejects a missing dependency identifier" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var plan = try threeFieldPlan(arena);
+    plan.atomic_operations[0].dependencies = try arena.dupe(merge_model.AtomicId, &.{99});
+
+    try testing.expectError(error.InvalidMerge, applyResolved(arena, &plan, false));
+}
+
+test "merge apply: rejects a dependency cycle" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var plan = try threeFieldPlan(arena);
+    plan.operations[0].resolution = .{ .take = .theirs };
+    plan.operations[1].resolution = .{ .take = .theirs };
+    plan.atomic_operations[0].dependencies = try arena.dupe(merge_model.AtomicId, &.{1});
+    plan.atomic_operations[1].dependencies = try arena.dupe(merge_model.AtomicId, &.{0});
+
+    try testing.expectError(error.InvalidMerge, applyResolved(arena, &plan, false));
 }

@@ -491,3 +491,36 @@ test "merge facade: restores an atomic operation when its patches overlap" {
     try testing.expect(built.plan.operations[0].resolution == .unresolved);
     try testing.expect(built.plan.operations[1].resolution == .unresolved);
 }
+
+test "merge facade: rejects a custom value for an automatically resolved field" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const base = try yamlWithValue(arena, "1");
+    const ours = try yamlWithValue(arena, "1");
+    const theirs = try yamlWithValue(arena, "2");
+    var built = try @import("merge.zig").build(arena, base, ours, theirs);
+
+    try testing.expectError(
+        error.InvalidResolution,
+        @import("merge.zig").resolve(arena, &built.plan, 0, .{ .custom = "3" }),
+    );
+    try testing.expectEqualStrings(theirs, try @import("merge.zig").finish(arena, &built.plan));
+}
+
+test "merge facade: permits a revised custom value for an original conflict" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const base = try yamlWithValue(arena, "1");
+    const ours = try yamlWithValue(arena, "2");
+    const theirs = try yamlWithValue(arena, "3");
+    var built = try @import("merge.zig").build(arena, base, ours, theirs);
+
+    try @import("merge.zig").resolve(arena, &built.plan, 0, .{ .custom = "4" });
+    try @import("merge.zig").resolve(arena, &built.plan, 0, .{ .custom = "5" });
+    try testing.expectEqualStrings(
+        try yamlWithValue(arena, "5"),
+        try @import("merge.zig").finish(arena, &built.plan),
+    );
+}

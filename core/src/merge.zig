@@ -2,6 +2,7 @@ const std = @import("std");
 const merge_apply = @import("merge_apply.zig");
 const merge_model = @import("merge_model.zig");
 const merge_planner = @import("merge_planner.zig");
+const model = @import("model.zig");
 
 pub const Error = merge_model.Error;
 pub const MergePlan = merge_model.MergePlan;
@@ -50,7 +51,7 @@ pub fn resolve(
             return error.InvalidResolution,
         .custom => |value| {
             if (operation.kind != .field or atomic.operation_ids.len != 1 or
-                !supportsCustomValue(operation)) return error.InvalidResolution;
+                !supportsCustomValue(operation) or !wasConflict(operation)) return error.InvalidResolution;
             _ = try merge_apply.parseCustomValue(arena, value);
             stored_resolution = .{ .custom = try arena.dupe(u8, value) };
         },
@@ -91,6 +92,19 @@ fn supportsCustomValue(operation: *const Operation) bool {
         }
     }
     return true;
+}
+
+fn wasConflict(operation: *const Operation) bool {
+    return !equalOptionalValues(operation.values.ours, operation.values.base) and
+        !equalOptionalValues(operation.values.theirs, operation.values.base) and
+        !equalOptionalValues(operation.values.ours, operation.values.theirs);
+}
+
+fn equalOptionalValues(a: ?SideValue, b: ?SideValue) bool {
+    if (a == null or b == null) return a == null and b == null;
+    const a_node = a.?.node orelse return false;
+    const b_node = b.?.node orelse return false;
+    return model.Node.eql(a_node, b_node);
 }
 
 pub fn finish(arena: std.mem.Allocator, plan: *const MergePlan) Error![]const u8 {

@@ -49,7 +49,7 @@ pub fn transformOf(idx: *Index, go_id: i64) ?*model.Document {
 }
 
 fn isTransformClass(id: u32) bool {
-    return id == 4 or id == 224;
+    return prefab.isTransformClass(id);
 }
 
 // Read one m_Modifications override value from the after-preferred structural doc.

@@ -1,6 +1,8 @@
 const std = @import("std");
+const merge_identity = @import("merge_identity.zig");
 const merge_model = @import("merge_model.zig");
 const model = @import("model.zig");
+const parser = @import("parser.zig");
 const source = @import("source.zig");
 
 const testing = std.testing;
@@ -19,9 +21,9 @@ pub fn build(
     ours: source.ParsedFile,
     theirs: source.ParsedFile,
 ) merge_model.Error!merge_model.MergePlan {
-    if (base.diagnostics.len != 0 or ours.diagnostics.len != 0 or theirs.diagnostics.len != 0) {
-        return error.MalformedInput;
-    }
+    try validateMergeSide(arena, base);
+    try validateMergeSide(arena, ours);
+    try validateMergeSide(arena, theirs);
 
     var operations: std.ArrayList(merge_model.Operation) = .empty;
     var atomic_operations: std.ArrayList(merge_model.AtomicOperation) = .empty;
@@ -162,7 +164,10 @@ fn collectField(
             theirs_file,
         );
     }
-    if (hasSequence(nodes)) return;
+    if (hasSequence(nodes)) {
+        if (equalOptional(nodes.base, nodes.ours) and equalOptional(nodes.base, nodes.theirs)) return;
+        return error.UnsupportedStructure;
+    }
     if (equalOptional(nodes.base, nodes.ours) and equalOptional(nodes.base, nodes.theirs)) return;
 
     const decision = decide(nodes.base, nodes.ours, nodes.theirs);
@@ -260,6 +265,19 @@ fn decide(base: ?*const model.Node, ours: ?*const model.Node, theirs: ?*const mo
     return .conflict;
 }
 
+pub fn parseMergeSide(arena: std.mem.Allocator, bytes: []const u8) merge_model.Error!source.ParsedFile {
+    if (bytes.len != 0 and !parser.isUnityYaml(bytes)) return error.MalformedInput;
+    const parsed = try parser.parseSpanned(arena, bytes);
+    try validateMergeSide(arena, parsed);
+    return parsed;
+}
+
+fn validateMergeSide(arena: std.mem.Allocator, parsed: source.ParsedFile) merge_model.Error!void {
+    if (parsed.bytes.len != 0 and !parser.isUnityYaml(parsed.bytes)) return error.MalformedInput;
+    if (parsed.diagnostics.len != 0) return error.MalformedInput;
+    try merge_identity.rejectDuplicateDocuments(arena, parsed.documents);
+}
+
 fn yamlWithValue(arena: std.mem.Allocator, value: []const u8) ![]const u8 {
     return std.fmt.allocPrint(
         arena,
@@ -313,6 +331,67 @@ test "merge planner: compares the complete object reference" {
     const theirs = try yamlWithValue(arena, "{fileID: 7, guid: ccc, type: 3}");
     const built = try @import("merge.zig").build(arena, base, ours, theirs);
     try testing.expectEqual(@as(usize, 1), built.plan.unresolvedCount());
+}
+
+test "merge planner: rejects a changed sequence without a safe identity" {
+    const base = "--- !u!114 &1\nMonoBehaviour:\n  m_Unknown:\n  - 1\n  - 2\n";
+    const ours = "--- !u!114 &1\nMonoBehaviour:\n  m_Unknown:\n  - 1\n  - 3\n";
+    const theirs = "--- !u!114 &1\nMonoBehaviour:\n  m_Unknown:\n  - 1\n  - 2\n";
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    try testing.expectError(error.UnsupportedStructure, @import("merge.zig").build(arena_state.allocator(), base, ours, theirs));
+}
+
+test "merge planner: keeps an unchanged unknown sequence byte-for-byte" {
+    const yaml = "--- !u!114 &1\nMonoBehaviour:\n  # Keep this order and spelling.\n  m_Unknown:\n  - 01\n  - 2\n";
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const built = try @import("merge.zig").build(arena_state.allocator(), yaml, yaml, yaml);
+    try testing.expectEqualStrings(yaml, built.partial);
+}
+
+test "merge planner: rejects a non-Unity merge side" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    try testing.expectError(error.MalformedInput, parseMergeSide(arena_state.allocator(), "value: 1\n"));
+}
+
+test "merge planner: rejects a merge side with parser diagnostics" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const malformed = "--- !u!114 &bad\nMonoBehaviour:\n  value: 1\n";
+    try testing.expectError(error.MalformedInput, parseMergeSide(arena_state.allocator(), malformed));
+}
+
+test "merge planner: rejects duplicate document identifiers" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const duplicate =
+        "--- !u!1 &7\nGameObject:\n  m_Name: First\n" ++
+        "--- !u!1 &7\nGameObject:\n  m_Name: Second\n";
+    try testing.expectError(error.MalformedInput, parseMergeSide(arena_state.allocator(), duplicate));
+}
+
+test "merge planner: rejects malformed input through the merge facade" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const unity = "--- !u!114 &1\nMonoBehaviour:\n  value: 1\n";
+    try testing.expectError(
+        error.MalformedInput,
+        @import("merge.zig").build(arena_state.allocator(), "value: 1\n", unity, unity),
+    );
+}
+
+test "merge planner: rejects duplicate documents through the merge facade" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const duplicate =
+        "--- !u!1 &7\nGameObject:\n  m_Name: First\n" ++
+        "--- !u!1 &7\nGameObject:\n  m_Name: Second\n";
+    try testing.expectError(
+        error.MalformedInput,
+        @import("merge.zig").build(arena_state.allocator(), duplicate, duplicate, duplicate),
+    );
 }
 
 test "merge planner: adds a field to its matching document" {

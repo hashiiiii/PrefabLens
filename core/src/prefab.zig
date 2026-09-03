@@ -5,6 +5,18 @@ const testing = std.testing;
 
 pub const Assets = std.StringHashMapUnmanaged([]const u8);
 
+pub fn isTransformClass(class_id: u32) bool {
+    return class_id == 4 or class_id == 224;
+}
+
+pub fn reference(node: ?*const model.Node) ?model.Ref {
+    const value = node orelse return null;
+    return switch (value.*) {
+        .ref => |ref_value| ref_value,
+        else => null,
+    };
+}
+
 pub const Modification = struct {
     target: ?model.Ref,
     property_path: []const u8,
@@ -71,9 +83,9 @@ pub fn modifications(doc: *const model.Document) ModificationIterator {
 }
 
 fn setObjectReference(node: ?*Node) ?*Node {
-    const reference = node orelse return null;
-    return switch (reference.*) {
-        .ref => |value| if (value.file_id != 0 or value.guid != null) reference else null,
+    const value_node = node orelse return null;
+    return switch (value_node.*) {
+        .ref => |value| if (value.file_id != 0 or value.guid != null) value_node else null,
         else => null,
     };
 }
@@ -138,6 +150,18 @@ test "prefab: effective value prefers a set object reference" {
     const ref_mod = Modification.init(null, "reference", &scalar, &set_ref);
     try testing.expect(scalar_mod.effectiveValue() == &scalar);
     try testing.expect(ref_mod.effectiveValue() == &set_ref);
+}
+
+test "prefab: merge helpers classify transforms and references" {
+    var ref_node = Node{ .ref = .{ .file_id = 42, .guid = "abc", .type_id = 3 } };
+    var scalar_node = Node{ .scalar = "42" };
+
+    try testing.expect(isTransformClass(4));
+    try testing.expect(isTransformClass(224));
+    try testing.expect(!isTransformClass(1));
+    try testing.expectEqual(@as(i64, 42), reference(&ref_node).?.file_id);
+    try testing.expect(reference(&scalar_node) == null);
+    try testing.expect(reference(null) == null);
 }
 
 test "prefab: source and scalar lookups keep serialized values" {

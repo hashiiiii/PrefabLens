@@ -684,7 +684,6 @@ fn renderPrefabSequence(
             return error.UnsupportedStructure;
         if (selected.side == .ours) {
             try output.appendSlice(arena, selected.value.bytes);
-            try appendOursPrefabGap(arena, &output, plan.ours, ours_sequence, id, kind);
         } else {
             try output.appendSlice(arena, try merge_planner.reindentSequenceItem(
                 arena,
@@ -695,6 +694,7 @@ fn renderPrefabSequence(
                 ),
             ));
         }
+        try appendOursPrefabGap(arena, &output, plan.ours, ours_sequence, id, kind);
     }
     return output.toOwnedSlice(arena);
 }

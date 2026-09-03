@@ -170,12 +170,13 @@ fn attachPrefabOverrides(
         const atomic_id = if (structuralOperationKind(override_kind)) |structural_kind| blk: {
             const object = overrideObject(operation, override_kind) orelse
                 return error.UnsupportedStructure;
-            const structural_atomic = findStructuralAtomic(
+            const structural_atomic = try findStructuralAtomic(
                 operations.items,
                 atomic_operations.items,
                 structural_kind,
                 object,
-            ) orelse return error.UnsupportedStructure;
+                operation.identity.document,
+            );
             break :blk structural_atomic.id;
         } else blk: {
             for (property_atomics.items) |group| {
@@ -247,22 +248,34 @@ fn findStructuralAtomic(
     atomic_operations: []merge_model.AtomicOperation,
     kind: merge_model.OperationKind,
     object: model.Ref,
-) ?*merge_model.AtomicOperation {
+    prefab_instance: merge_model.DocumentId,
+) merge_model.Error!*merge_model.AtomicOperation {
+    if (prefab_instance.class_id != 1001) return error.InvalidMerge;
+    var found: ?*merge_model.AtomicOperation = null;
     for (atomic_operations) |*atomic| {
         if (atomic.kind != kind) continue;
+        var atomic_matches = false;
         for (atomic.operation_ids) |operation_id| {
-            const operation = operationByIdConst(operations, operation_id) orelse return null;
+            const operation = operationByIdConst(operations, operation_id) orelse
+                return error.InvalidMerge;
             if (operation.kind != kind) continue;
             if (kind == .game_object and operation.identity.document.class_id != 1) continue;
-            if (!operationMatchesOverrideObject(operation, object)) continue;
-            return atomic;
+            if (!operationMatchesOverrideObject(operation, object, prefab_instance.file_id)) continue;
+            atomic_matches = true;
+            break;
         }
+        if (!atomic_matches) continue;
+        if (found != null) return error.UnsupportedStructure;
+        found = atomic;
     }
-    return null;
+    return found orelse error.UnsupportedStructure;
 }
 
-fn operationMatchesOverrideObject(operation: *const merge_model.Operation, object: model.Ref) bool {
-    if (object.guid == null and operation.identity.document.file_id == object.file_id) return true;
+fn operationMatchesOverrideObject(
+    operation: *const merge_model.Operation,
+    object: model.Ref,
+    prefab_instance: i64,
+) bool {
     for ([_]?merge_model.SideValue{
         operation.values.base,
         operation.values.ours,
@@ -270,6 +283,10 @@ fn operationMatchesOverrideObject(operation: *const merge_model.Operation, objec
     }) |value| {
         const body = (value orelse continue).node orelse continue;
         if (body.* != .map) continue;
+        const owner = prefab.reference(model.findValue(body.map, "m_PrefabInstance")) orelse
+            continue;
+        if (owner.guid != null or owner.file_id != prefab_instance) continue;
+        if (object.guid == null and operation.identity.document.file_id == object.file_id) return true;
         const corresponding = prefab.reference(
             model.findValue(body.map, "m_CorrespondingSourceObject"),
         ) orelse continue;
@@ -1355,8 +1372,8 @@ fn collectSequence(
     const theirs_ids = try presentIds(arena, items.theirs, final_ids.items);
     const order = try merge_order.merge(arena, base_ids, ours_ids, theirs_ids);
     if (order.conflicts.len != 0) {
-        sequence_has_conflict = true;
         order_has_conflict = true;
+        if (!isPrefabSequenceKind(kind)) sequence_has_conflict = true;
     }
     const merged_bytes = try renderSequence(
         arena,
@@ -1386,12 +1403,13 @@ fn collectSequence(
     try sequence_operation_ids.append(arena, @intCast(operations.items.len - 1));
 
     const operation_ids = try sequence_operation_ids.toOwnedSlice(arena);
-    if (sequence_has_conflict) {
+    if (isPrefabSequenceKind(kind) and order_has_conflict) {
         for (operation_ids) |operation_id| {
-            if (isPrefabSequenceKind(kind) and !order_has_conflict and
-                operations.items[operation_id].kind == .sequence_order) continue;
+            if (operations.items[operation_id].kind != .sequence_order) continue;
             operations.items[operation_id].resolution = .unresolved;
         }
+    } else if (sequence_has_conflict and !isPrefabSequenceKind(kind)) {
+        for (operation_ids) |operation_id| operations.items[operation_id].resolution = .unresolved;
     }
     const atomic_kind: merge_model.OperationKind = for (operation_ids) |operation_id| {
         const operation = operations.items[operation_id];
@@ -2737,6 +2755,310 @@ test "merge planner: matches removed prefab overrides through source object refe
         const built = try @import("merge.zig").build(arena, base, base, fixture.theirs);
         try testing.expectEqualStrings(fixture.expected, built.partial);
     }
+}
+
+fn findPrefabPropertyOperation(
+    plan: *const merge_model.MergePlan,
+    property_path: []const u8,
+) ?*merge_model.Operation {
+    for (plan.operations) |*operation| {
+        if (operation.kind == .prefab_override and
+            operation.identity.override_kind == .property and
+            std.mem.eql(u8, operation.identity.property_path, property_path)) return operation;
+    }
+    return null;
+}
+
+test "merge planner: keeps an independent item resolved during a Prefab order conflict" {
+    const support = @import("merge_test_support.zig");
+    const fixture = support.load("prefab-order-conflict", true);
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const added =
+        "    - target: {fileID: 100000, guid: 11111111111111111111111111111111, type: 3}\n" ++
+        "      propertyPath: m_StaticEditorFlags\n" ++
+        "      value: 1\n" ++
+        "      objectReference: {fileID: 0}\n";
+    const theirs = try std.mem.replaceOwned(
+        u8,
+        arena,
+        fixture.theirs,
+        "    m_RemovedComponents: []",
+        added ++ "    m_RemovedComponents: []",
+    );
+    const expected = try std.mem.replaceOwned(
+        u8,
+        arena,
+        fixture.expected,
+        "    m_RemovedComponents: []",
+        added ++ "    m_RemovedComponents: []",
+    );
+
+    var built = try @import("merge.zig").build(arena, fixture.base, fixture.ours, theirs);
+    const independent = findPrefabPropertyOperation(&built.plan, "m_StaticEditorFlags").?;
+    try testing.expect(independent.resolution != .unresolved);
+    try testing.expectEqual(@as(usize, 1), built.plan.unresolvedCount());
+    const order = support.findOperationByKind(&built.plan, .sequence_order).?;
+    try @import("merge.zig").resolve(arena, &built.plan, order.id, .{ .take = .ours });
+    try testing.expectEqualStrings(expected, try @import("merge.zig").finish(arena, &built.plan));
+}
+
+test "merge planner: keeps an unrelated item resolved during a Prefab item conflict" {
+    const fixture = @import("merge_test_support.zig").load("prefab-order-conflict", false);
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const ours = try std.mem.replaceOwned(u8, arena, fixture.base, "value: Root", "value: Ours Root");
+    const changed_theirs = try std.mem.replaceOwned(
+        u8,
+        arena,
+        fixture.base,
+        "value: Root",
+        "value: Theirs Root",
+    );
+    const added =
+        "    - target: {fileID: 100000, guid: 11111111111111111111111111111111, type: 3}\n" ++
+        "      propertyPath: m_StaticEditorFlags\n" ++
+        "      value: 1\n" ++
+        "      objectReference: {fileID: 0}\n";
+    const theirs = try std.mem.replaceOwned(
+        u8,
+        arena,
+        changed_theirs,
+        "    m_RemovedComponents: []",
+        added ++ "    m_RemovedComponents: []",
+    );
+    const expected = try std.mem.replaceOwned(
+        u8,
+        arena,
+        fixture.base,
+        "    m_RemovedComponents: []",
+        added ++ "    m_RemovedComponents: []",
+    );
+
+    const built = try @import("merge.zig").build(arena, fixture.base, ours, theirs);
+    try testing.expect(findPrefabPropertyOperation(&built.plan, "m_Name").?.resolution == .unresolved);
+    try testing.expect(findPrefabPropertyOperation(&built.plan, "m_StaticEditorFlags").?.resolution != .unresolved);
+    try testing.expectEqual(@as(usize, 1), built.plan.unresolvedCount());
+    try testing.expectEqualStrings(expected, built.partial);
+}
+
+test "merge planner: keeps an Ours gap when Prefab content comes from Theirs" {
+    const fixture = @import("merge_test_support.zig").load("prefab-order-conflict", false);
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const first_item_end =
+        "      propertyPath: m_Name\n" ++
+        "      value: Root\n" ++
+        "      objectReference: {fileID: 0}\n";
+    const ours = try std.mem.replaceOwned(
+        u8,
+        arena,
+        fixture.base,
+        first_item_end,
+        first_item_end ++ "    # Keep this Ours gap.\n\n",
+    );
+    const theirs = try std.mem.replaceOwned(
+        u8,
+        arena,
+        fixture.base,
+        "value: Root",
+        "value: Theirs Root",
+    );
+    const expected = try std.mem.replaceOwned(
+        u8,
+        arena,
+        ours,
+        "value: Root",
+        "value: Theirs Root",
+    );
+
+    const built = try @import("merge.zig").build(arena, fixture.base, ours, theirs);
+    try testing.expectEqualStrings(expected, built.partial);
+}
+
+fn removedComponentInstance(
+    arena: std.mem.Allocator,
+    bytes: []const u8,
+    prefab_instance: i64,
+    game_object: i64,
+    transform: i64,
+    component: i64,
+) std.mem.Allocator.Error![]const u8 {
+    var result = bytes;
+    result = try std.mem.replaceOwned(
+        u8,
+        arena,
+        result,
+        "--- !u!1001 &100100000",
+        try std.fmt.allocPrint(arena, "--- !u!1001 &{d}", .{prefab_instance}),
+    );
+    result = try std.mem.replaceOwned(
+        u8,
+        arena,
+        result,
+        "m_PrefabInstance: {fileID: 100100000}",
+        try std.fmt.allocPrint(arena, "m_PrefabInstance: {{fileID: {d}}}", .{prefab_instance}),
+    );
+    result = try std.mem.replaceOwned(
+        u8,
+        arena,
+        result,
+        "--- !u!1 &100000 stripped",
+        try std.fmt.allocPrint(arena, "--- !u!1 &{d} stripped", .{game_object}),
+    );
+    result = try std.mem.replaceOwned(
+        u8,
+        arena,
+        result,
+        "m_GameObject: {fileID: 100000}",
+        try std.fmt.allocPrint(arena, "m_GameObject: {{fileID: {d}}}", .{game_object}),
+    );
+    result = try std.mem.replaceOwned(
+        u8,
+        arena,
+        result,
+        "- component: {fileID: 300000}",
+        try std.fmt.allocPrint(arena, "- component: {{fileID: {d}}}", .{transform}),
+    );
+    result = try std.mem.replaceOwned(
+        u8,
+        arena,
+        result,
+        "--- !u!4 &300000 stripped",
+        try std.fmt.allocPrint(arena, "--- !u!4 &{d} stripped", .{transform}),
+    );
+    result = try std.mem.replaceOwned(
+        u8,
+        arena,
+        result,
+        "- component: {fileID: 11400000}",
+        try std.fmt.allocPrint(arena, "- component: {{fileID: {d}}}", .{component}),
+    );
+    return std.mem.replaceOwned(
+        u8,
+        arena,
+        result,
+        "--- !u!114 &11400000 stripped",
+        try std.fmt.allocPrint(arena, "--- !u!114 &{d} stripped", .{component}),
+    );
+}
+
+fn atomicHasComponentDocument(
+    plan: *merge_model.MergePlan,
+    atomic_id: merge_model.AtomicId,
+    component: i64,
+) bool {
+    const atomic = merge_model.atomicById(plan, atomic_id) orelse return false;
+    for (atomic.operation_ids) |operation_id| {
+        const operation = merge_model.operationByIdConst(plan, operation_id) orelse return false;
+        if (operation.kind == .component and operation.identity.document.file_id == component) return true;
+    }
+    return false;
+}
+
+test "merge planner: attaches removed overrides to their Prefab instance owner" {
+    const fixture = @import("merge_test_support.zig").load("prefab-removed-component", false);
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const base_first = try removedComponentInstance(arena, fixture.base, 100100001, 110000, 310000, 11400001);
+    const base_second = try removedComponentInstance(arena, fixture.base, 100100002, 120000, 320000, 21400001);
+    const theirs_first = try removedComponentInstance(arena, fixture.theirs, 100100001, 110000, 310000, 11400001);
+    const theirs_second = try removedComponentInstance(arena, fixture.theirs, 100100002, 120000, 320000, 21400001);
+    const base = try std.fmt.allocPrint(arena, "{s}{s}", .{ base_first, base_second });
+    const theirs = try std.fmt.allocPrint(arena, "{s}{s}", .{ theirs_first, theirs_second });
+
+    var built = try @import("merge.zig").build(arena, base, base, theirs);
+    var matched: usize = 0;
+    for (built.plan.operations) |*operation| {
+        if (operation.kind != .prefab_override or
+            operation.identity.override_kind != .removed_component) continue;
+        const component: i64 = switch (operation.identity.document.file_id) {
+            100100001 => 11400001,
+            100100002 => 21400001,
+            else => return error.TestUnexpectedResult,
+        };
+        try testing.expect(atomicHasComponentDocument(&built.plan, operation.atomic_id, component));
+        matched += 1;
+    }
+    try testing.expectEqual(@as(usize, 2), matched);
+}
+
+test "merge planner: rejects a missing scoped structural match" {
+    const fixture = @import("merge_test_support.zig").load("prefab-removed-component", false);
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const base_first = try removedComponentInstance(arena, fixture.base, 100100001, 110000, 310000, 11400001);
+    const base_second = try removedComponentInstance(arena, fixture.base, 100100002, 120000, 320000, 21400001);
+    const removed_first = try removedComponentInstance(arena, fixture.theirs, 100100001, 110000, 310000, 11400001);
+    const no_override_first = try std.mem.replaceOwned(
+        u8,
+        arena,
+        removed_first,
+        "m_RemovedComponents:\n    - {fileID: 11400000, guid: 11111111111111111111111111111111, type: 3}",
+        "m_RemovedComponents: []",
+    );
+    const override_only_second = try std.mem.replaceOwned(
+        u8,
+        arena,
+        base_second,
+        "m_RemovedComponents: []",
+        "m_RemovedComponents:\n    - {fileID: 11400000, guid: 11111111111111111111111111111111, type: 3}",
+    );
+    const base = try std.fmt.allocPrint(arena, "{s}{s}", .{ base_first, base_second });
+    const missing = try std.fmt.allocPrint(arena, "{s}{s}", .{ no_override_first, override_only_second });
+    try testing.expectError(
+        error.UnsupportedStructure,
+        @import("merge.zig").build(arena, base, base, missing),
+    );
+}
+
+test "merge planner: rejects an ambiguous scoped structural match" {
+    const fixture = @import("merge_test_support.zig").load("prefab-removed-component", false);
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const base_first = try removedComponentInstance(arena, fixture.base, 100100001, 110000, 310000, 11400001);
+    const component_start = std.mem.indexOf(
+        u8,
+        base_first,
+        "--- !u!114 &11400001 stripped",
+    ).?;
+    const second_component = try std.mem.replaceOwned(
+        u8,
+        arena,
+        base_first[component_start..],
+        "--- !u!114 &11400001 stripped",
+        "--- !u!114 &21400001 stripped",
+    );
+    const duplicate_reference = try std.mem.replaceOwned(
+        u8,
+        arena,
+        base_first,
+        "- component: {fileID: 11400001}\n  m_Name: Root",
+        "- component: {fileID: 11400001}\n  - component: {fileID: 21400001}\n  m_Name: Root",
+    );
+    const ambiguous_base = try std.fmt.allocPrint(
+        arena,
+        "{s}{s}",
+        .{ duplicate_reference, second_component },
+    );
+    const ambiguous_theirs = try removedComponentInstance(
+        arena,
+        fixture.theirs,
+        100100001,
+        110000,
+        310000,
+        11400001,
+    );
+    try testing.expectError(
+        error.UnsupportedStructure,
+        @import("merge.zig").build(arena, ambiguous_base, ambiguous_base, ambiguous_theirs),
+    );
 }
 
 fn expectAtomicDependency(

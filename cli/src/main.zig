@@ -9,6 +9,7 @@ const merge_driver = @import("merge_driver.zig");
 const merge_io = @import("merge_io.zig");
 const merge_tui = @import("merge_tui.zig");
 const merge_ui_state = @import("merge_ui_state.zig");
+const mergetool = @import("mergetool.zig");
 pub const resolve = @import("resolve.zig");
 pub const input = @import("input.zig");
 pub const display = @import("display.zig");
@@ -25,6 +26,7 @@ test {
     _ = merge_driver;
     _ = merge_tui;
     _ = merge_ui_state;
+    _ = mergetool;
     _ = resolve;
     _ = input;
     _ = display;
@@ -1335,7 +1337,19 @@ pub fn main(init: std.process.Init) !u8 {
             driver_args,
             stderr,
         ),
-        .mergetool => |tool_args| try merge_io.reportFailure(stderr, tool_args.merged),
+        .mergetool => |tool_args| blk: {
+            const stdin_tty = std.Io.File.stdin().isTty(init.io) catch false;
+            const stdout_tty = std.Io.File.stdout().isTty(init.io) catch false;
+            break :blk try mergetool.run(
+                init.io,
+                arena,
+                tool_args,
+                init.environ_map,
+                stdin_tty,
+                stdout_tty,
+                stderr,
+            );
+        },
     };
     try stdout.flush();
     try stderr.flush();

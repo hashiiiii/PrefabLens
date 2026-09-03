@@ -11,6 +11,7 @@ pub const Patch = struct {
     span: source.Span,
     replacement: []const u8,
     atomic_id: merge_model.AtomicId,
+    order: usize = 0,
 };
 
 pub const ResolutionValue = union(enum) {
@@ -28,7 +29,8 @@ pub fn applyPatches(
     std.mem.sort(Patch, patches, {}, struct {
         fn lessThan(_: void, a: Patch, b: Patch) bool {
             if (a.span.start != b.span.start) return a.span.start > b.span.start;
-            return a.atomic_id > b.atomic_id;
+            if (a.atomic_id != b.atomic_id) return a.atomic_id > b.atomic_id;
+            return a.order > b.order;
         }
     }.lessThan);
     var previous_start = original.len;
@@ -101,6 +103,10 @@ fn appendPatch(
     plan: *const merge_model.MergePlan,
     operation: *const merge_model.Operation,
 ) merge_model.Error!void {
+    if (operation.kind == .sequence_membership or operation.kind == .sequence_content) return;
+    if (operation.kind == .component or operation.kind == .game_object) {
+        return appendDocumentPatch(arena, patches, plan, operation);
+    }
     if (operation.resolution == .remove) {
         const ours = operation.values.ours orelse return;
         const node = ours.node orelse return error.InvalidMerge;
@@ -109,6 +115,7 @@ fn appendPatch(
             .span = entry.whole,
             .replacement = "",
             .atomic_id = operation.atomic_id,
+            .order = operation.id,
         });
     }
 
@@ -127,6 +134,7 @@ fn appendPatch(
             .span = span,
             .replacement = replacement,
             .atomic_id = operation.atomic_id,
+            .order = operation.id,
         });
     }
 
@@ -144,6 +152,39 @@ fn appendPatch(
         .span = .{ .start = insert_at, .end = insert_at },
         .replacement = inserted,
         .atomic_id = operation.atomic_id,
+        .order = operation.id,
+    });
+}
+
+fn appendDocumentPatch(
+    arena: std.mem.Allocator,
+    patches: *std.ArrayList(Patch),
+    plan: *const merge_model.MergePlan,
+    operation: *const merge_model.Operation,
+) merge_model.Error!void {
+    const selected = switch (operation.resolution) {
+        .unresolved => return error.InvalidResolution,
+        .remove => null,
+        .take => |side| valueForSide(operation, side),
+        .custom => return error.InvalidResolution,
+    };
+    if (operation.values.ours) |ours| {
+        const span = ours.span orelse return error.UnsupportedStructure;
+        const replacement = if (selected) |value| value.bytes else "";
+        if (std.mem.eql(u8, span.bytes(plan.ours.bytes), replacement)) return;
+        return patches.append(arena, .{
+            .span = span,
+            .replacement = replacement,
+            .atomic_id = operation.atomic_id,
+            .order = operation.id,
+        });
+    }
+    const inserted = selected orelse return;
+    try patches.append(arena, .{
+        .span = .{ .start = plan.ours.bytes.len, .end = plan.ours.bytes.len },
+        .replacement = inserted.bytes,
+        .atomic_id = operation.atomic_id,
+        .order = operation.id,
     });
 }
 
@@ -309,6 +350,17 @@ test "merge apply: rejects overlapping patches" {
         .{ .span = .{ .start = 4, .end = 7 }, .replacement = "b", .atomic_id = 2 },
     };
     try testing.expectError(error.InvalidMerge, applyPatches(arena_state.allocator(), "0123456789", &patches));
+}
+
+test "merge apply: keeps the declared order of inserts at one offset" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const patches = [_]Patch{
+        .{ .span = .{ .start = 0, .end = 0 }, .replacement = "a", .atomic_id = 1, .order = 1 },
+        .{ .span = .{ .start = 0, .end = 0 }, .replacement = "b", .atomic_id = 1, .order = 2 },
+    };
+
+    try testing.expectEqualStrings("ab", try applyPatches(arena_state.allocator(), "", &patches));
 }
 
 fn threeFieldPlan(arena: std.mem.Allocator) !merge_model.MergePlan {

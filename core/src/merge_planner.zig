@@ -1,5 +1,6 @@
 const std = @import("std");
 const merge_identity = @import("merge_identity.zig");
+const merge_order = @import("merge_order.zig");
 const merge_model = @import("merge_model.zig");
 const model = @import("model.zig");
 const parser = @import("parser.zig");
@@ -13,6 +14,23 @@ const DocumentNodes = struct {
     base: ?*const model.Node,
     ours: ?*const model.Node,
     theirs: ?*const model.Node,
+};
+
+const SequenceItem = struct {
+    id: []const u8,
+    identity: merge_identity.SequenceItemId,
+    node: *const model.Node,
+};
+
+const SequenceItems = struct {
+    base: []const SequenceItem,
+    ours: []const SequenceItem,
+    theirs: []const SequenceItem,
+};
+
+const SelectedItem = struct {
+    side: merge_model.Side,
+    node: *const model.Node,
 };
 
 pub fn build(
@@ -166,7 +184,21 @@ fn collectField(
     }
     if (hasSequence(nodes)) {
         if (equalOptional(nodes.base, nodes.ours) and equalOptional(nodes.base, nodes.theirs)) return;
-        return error.UnsupportedStructure;
+        const sequence_kind = merge_identity.sequenceKind(document_id.class_id, property_path) orelse
+            return error.UnsupportedStructure;
+        return collectSequence(
+            arena,
+            operations,
+            atomic_operations,
+            document_id,
+            hierarchy_path,
+            property_path,
+            sequence_kind,
+            nodes,
+            base_file,
+            ours_file,
+            theirs_file,
+        );
     }
     if (equalOptional(nodes.base, nodes.ours) and equalOptional(nodes.base, nodes.theirs)) return;
 
@@ -199,6 +231,684 @@ fn collectField(
         .kind = .field,
         .operation_ids = ids,
     });
+}
+
+fn collectSequence(
+    arena: std.mem.Allocator,
+    operations: *std.ArrayList(merge_model.Operation),
+    atomic_operations: *std.ArrayList(merge_model.AtomicOperation),
+    document_id: merge_model.DocumentId,
+    hierarchy_path: []const u8,
+    property_path: []const u8,
+    kind: merge_identity.SequenceKind,
+    nodes: DocumentNodes,
+    base_file: source.ParsedFile,
+    ours_file: source.ParsedFile,
+    theirs_file: source.ParsedFile,
+) merge_model.Error!void {
+    const items = SequenceItems{
+        .base = try identifiedItems(arena, kind, nodes.base),
+        .ours = try identifiedItems(arena, kind, nodes.ours),
+        .theirs = try identifiedItems(arena, kind, nodes.theirs),
+    };
+    const all_ids = try unionIds(arena, items);
+    const atomic_id: merge_model.AtomicId = @intCast(atomic_operations.items.len);
+    const operation_start = operations.items.len;
+    var has_conflict = false;
+    var final_ids: std.ArrayList([]const u8) = .empty;
+
+    for (all_ids) |id| {
+        const base_item = findSequenceItem(items.base, id);
+        const ours_item = findSequenceItem(items.ours, id);
+        const theirs_item = findSequenceItem(items.theirs, id);
+        const membership = decidePresence(base_item != null, ours_item != null, theirs_item != null);
+        var selected = selectedItem(base_item, ours_item, theirs_item, membership);
+        const delete_edit = base_item != null and ((ours_item == null and theirs_item != null and
+            !model.Node.eql(base_item.?.node, theirs_item.?.node)) or
+            (theirs_item == null and ours_item != null and !model.Node.eql(base_item.?.node, ours_item.?.node)));
+        if (delete_edit) has_conflict = true;
+
+        if (!samePresence(base_item, ours_item, theirs_item)) {
+            try appendSequenceOperation(
+                arena,
+                operations,
+                atomic_id,
+                .sequence_membership,
+                document_id,
+                hierarchy_path,
+                property_path,
+                base_file,
+                ours_file,
+                theirs_file,
+                base_item,
+                ours_item,
+                theirs_item,
+                if (delete_edit) .unresolved else resolutionForPresence(membership, ours_item, theirs_item),
+            );
+        }
+
+        if (base_item != null and ours_item != null and theirs_item != null and
+            (!model.Node.eql(base_item.?.node, ours_item.?.node) or
+                !model.Node.eql(base_item.?.node, theirs_item.?.node)))
+        {
+            const content_decision = decide(base_item.?.node, ours_item.?.node, theirs_item.?.node);
+            if (content_decision == .conflict) has_conflict = true;
+            try appendSequenceOperation(
+                arena,
+                operations,
+                atomic_id,
+                .sequence_content,
+                document_id,
+                hierarchy_path,
+                property_path,
+                base_file,
+                ours_file,
+                theirs_file,
+                base_item,
+                ours_item,
+                theirs_item,
+                resolutionForDecision(content_decision, ours_item, theirs_item),
+            );
+            selected = selectedItem(base_item, ours_item, theirs_item, content_decision);
+        } else if (base_item == null and ours_item != null and theirs_item != null and
+            !model.Node.eql(ours_item.?.node, theirs_item.?.node))
+        {
+            has_conflict = true;
+            try appendSequenceOperation(
+                arena,
+                operations,
+                atomic_id,
+                .sequence_content,
+                document_id,
+                hierarchy_path,
+                property_path,
+                base_file,
+                ours_file,
+                theirs_file,
+                base_item,
+                ours_item,
+                theirs_item,
+                .unresolved,
+            );
+        }
+
+        if (selected != null) try final_ids.append(arena, id);
+        if (kind == .components and !samePresence(base_item, ours_item, theirs_item) and
+            try appendComponentDocumentOperation(
+                arena,
+                operations,
+                atomic_id,
+                base_item,
+                ours_item,
+                theirs_item,
+                base_file,
+                ours_file,
+                theirs_file,
+            )) has_conflict = true;
+        if (kind == .children) {
+            if (selected) |value| try appendChildDocumentsOperation(
+                arena,
+                operations,
+                atomic_id,
+                value,
+                firstSequenceItem(base_item, ours_item, theirs_item).identity.target.file_id,
+                base_file,
+                ours_file,
+                theirs_file,
+            );
+        }
+    }
+
+    const base_ids = try presentIds(arena, items.base, final_ids.items);
+    const ours_ids = try presentIds(arena, items.ours, final_ids.items);
+    const theirs_ids = try presentIds(arena, items.theirs, final_ids.items);
+    const order = try merge_order.merge(arena, base_ids, ours_ids, theirs_ids);
+    if (order.conflicts.len != 0) has_conflict = true;
+    const merged_bytes = try renderSequence(
+        arena,
+        order.items,
+        items,
+        base_file,
+        ours_file,
+        theirs_file,
+        nodes,
+    );
+    try appendOrderOperation(
+        arena,
+        operations,
+        atomic_id,
+        document_id,
+        hierarchy_path,
+        property_path,
+        nodes,
+        base_file,
+        ours_file,
+        theirs_file,
+        merged_bytes,
+        has_conflict,
+    );
+
+    const operation_ids = try arena.alloc(merge_model.OperationId, operations.items.len - operation_start);
+    for (operation_ids, operation_start..) |*id, index| id.* = @intCast(index);
+    if (has_conflict) {
+        for (operations.items[operation_start..]) |*operation| operation.resolution = .unresolved;
+    }
+    const atomic_kind: merge_model.OperationKind = for (operations.items[operation_start..]) |operation| {
+        if (operation.kind == .sequence_membership) break .sequence_membership;
+    } else for (operations.items[operation_start..]) |operation| {
+        if (operation.kind == .sequence_content) break .sequence_content;
+    } else .sequence_order;
+    try atomic_operations.append(arena, .{
+        .id = atomic_id,
+        .kind = atomic_kind,
+        .operation_ids = operation_ids,
+    });
+}
+
+fn identifiedItems(
+    arena: std.mem.Allocator,
+    kind: merge_identity.SequenceKind,
+    node: ?*const model.Node,
+) merge_model.Error![]const SequenceItem {
+    const sequence = node orelse return &.{};
+    if (sequence.* != .seq) return error.UnsupportedStructure;
+    var result: std.ArrayList(SequenceItem) = .empty;
+    var seen: std.StringHashMapUnmanaged(void) = .empty;
+    for (sequence.seq) |item| {
+        const identity = merge_identity.sequenceItemId(kind, item) orelse return error.UnsupportedStructure;
+        const id = try sequenceId(arena, identity);
+        const entry = try seen.getOrPut(arena, id);
+        if (entry.found_existing) return error.MalformedInput;
+        try result.append(arena, .{ .id = id, .identity = identity, .node = item });
+    }
+    return result.toOwnedSlice(arena);
+}
+
+fn sequenceId(arena: std.mem.Allocator, identity: merge_identity.SequenceItemId) std.mem.Allocator.Error![]const u8 {
+    return std.fmt.allocPrint(
+        arena,
+        "{d}|{s}|{?d}|{s}|{?d}|{s}|{?d}|{?d}",
+        .{
+            identity.target.file_id,
+            identity.target.guid orelse "",
+            identity.target.type_id,
+            identity.property_path orelse "",
+            if (identity.added_object) |added| added.file_id else null,
+            if (identity.added_object) |added| added.guid orelse "" else "",
+            if (identity.added_object) |added| added.type_id else null,
+            if (identity.override_kind) |override_kind| @intFromEnum(override_kind) else null,
+        },
+    );
+}
+
+fn unionIds(arena: std.mem.Allocator, items: SequenceItems) std.mem.Allocator.Error![]const []const u8 {
+    var ids: std.ArrayList([]const u8) = .empty;
+    var seen: std.StringHashMapUnmanaged(void) = .empty;
+    inline for (.{ items.base, items.ours, items.theirs }) |side| {
+        for (side) |item| {
+            const entry = try seen.getOrPut(arena, item.id);
+            if (!entry.found_existing) try ids.append(arena, item.id);
+        }
+    }
+    return ids.toOwnedSlice(arena);
+}
+
+fn findSequenceItem(items: []const SequenceItem, id: []const u8) ?SequenceItem {
+    for (items) |item| if (std.mem.eql(u8, item.id, id)) return item;
+    return null;
+}
+
+fn decidePresence(base: bool, ours: bool, theirs: bool) Decision {
+    if (ours == base) return .theirs;
+    if (theirs == base) return .ours;
+    if (ours == theirs) return .common;
+    return .conflict;
+}
+
+fn samePresence(base: ?SequenceItem, ours: ?SequenceItem, theirs: ?SequenceItem) bool {
+    return (base != null) == (ours != null) and (base != null) == (theirs != null);
+}
+
+fn resolutionForPresence(
+    decision: Decision,
+    ours: ?SequenceItem,
+    theirs: ?SequenceItem,
+) merge_model.Resolution {
+    return switch (decision) {
+        .ours, .common => if (ours == null) .remove else .{ .take = .ours },
+        .theirs => if (theirs == null) .remove else .{ .take = .theirs },
+        .conflict => .unresolved,
+    };
+}
+
+fn resolutionForDecision(
+    decision: Decision,
+    ours: ?SequenceItem,
+    theirs: ?SequenceItem,
+) merge_model.Resolution {
+    return resolutionForPresence(decision, ours, theirs);
+}
+
+fn selectedItem(
+    base: ?SequenceItem,
+    ours: ?SequenceItem,
+    theirs: ?SequenceItem,
+    decision: Decision,
+) ?SelectedItem {
+    return switch (decision) {
+        .ours, .common => if (ours) |item| .{ .side = .ours, .node = item.node } else null,
+        .theirs => if (theirs) |item| .{ .side = .theirs, .node = item.node } else null,
+        .conflict => if (ours) |item| .{ .side = .ours, .node = item.node } else if (base) |item|
+            .{ .side = .base, .node = item.node }
+        else
+            null,
+    };
+}
+
+fn appendSequenceOperation(
+    arena: std.mem.Allocator,
+    operations: *std.ArrayList(merge_model.Operation),
+    atomic_id: merge_model.AtomicId,
+    operation_kind: merge_model.OperationKind,
+    document_id: merge_model.DocumentId,
+    hierarchy_path: []const u8,
+    property_path: []const u8,
+    base_file: source.ParsedFile,
+    ours_file: source.ParsedFile,
+    theirs_file: source.ParsedFile,
+    base_item: ?SequenceItem,
+    ours_item: ?SequenceItem,
+    theirs_item: ?SequenceItem,
+    resolution: merge_model.Resolution,
+) std.mem.Allocator.Error!void {
+    const identity = firstSequenceItem(base_item, ours_item, theirs_item).identity;
+    try operations.append(arena, .{
+        .id = @intCast(operations.items.len),
+        .atomic_id = atomic_id,
+        .kind = operation_kind,
+        .identity = .{ .document = document_id, .property_path = property_path, .item_ref = identity.target },
+        .hierarchy_path = hierarchy_path,
+        .property_path = property_path,
+        .values = .{
+            .base = sequenceItemValue(base_file, base_item),
+            .ours = sequenceItemValue(ours_file, ours_item),
+            .theirs = sequenceItemValue(theirs_file, theirs_item),
+        },
+        .resolution = resolution,
+    });
+}
+
+fn sequenceItemValue(file: source.ParsedFile, item: ?SequenceItem) ?merge_model.SideValue {
+    const present = item orelse return null;
+    const span = file.sequence_item_spans.get(present.node) orelse return null;
+    return .{ .node = present.node, .bytes = span.bytes(file.bytes), .span = span };
+}
+
+fn firstSequenceItem(base: ?SequenceItem, ours: ?SequenceItem, theirs: ?SequenceItem) SequenceItem {
+    if (base) |item| return item;
+    if (ours) |item| return item;
+    return theirs.?;
+}
+
+fn presentIds(
+    arena: std.mem.Allocator,
+    items: []const SequenceItem,
+    selected: []const []const u8,
+) std.mem.Allocator.Error![]const []const u8 {
+    var result: std.ArrayList([]const u8) = .empty;
+    for (items) |item| {
+        for (selected) |id| {
+            if (std.mem.eql(u8, item.id, id)) {
+                try result.append(arena, item.id);
+                break;
+            }
+        }
+    }
+    return result.toOwnedSlice(arena);
+}
+
+fn appendOrderOperation(
+    arena: std.mem.Allocator,
+    operations: *std.ArrayList(merge_model.Operation),
+    atomic_id: merge_model.AtomicId,
+    document_id: merge_model.DocumentId,
+    hierarchy_path: []const u8,
+    property_path: []const u8,
+    nodes: DocumentNodes,
+    base_file: source.ParsedFile,
+    ours_file: source.ParsedFile,
+    theirs_file: source.ParsedFile,
+    merged_bytes: []const u8,
+    has_conflict: bool,
+) std.mem.Allocator.Error!void {
+    var theirs_value = sequenceSideValue(theirs_file, nodes.theirs);
+    if (!has_conflict) {
+        if (theirs_value) |*value| value.bytes = try sequenceReplacement(arena, ours_file, nodes.ours, merged_bytes);
+    }
+    try operations.append(arena, .{
+        .id = @intCast(operations.items.len),
+        .atomic_id = atomic_id,
+        .kind = .sequence_order,
+        .identity = .{ .document = document_id, .property_path = property_path },
+        .hierarchy_path = hierarchy_path,
+        .property_path = property_path,
+        .values = .{
+            .base = sequenceSideValue(base_file, nodes.base),
+            .ours = sequenceSideValue(ours_file, nodes.ours),
+            .theirs = theirs_value,
+        },
+        .resolution = if (nodes.ours != null and std.mem.eql(u8, sequenceSideValue(ours_file, nodes.ours).?.bytes, merged_bytes))
+            .{ .take = .ours }
+        else
+            .{ .take = .theirs },
+    });
+}
+
+fn sequenceSideValue(file: source.ParsedFile, node: ?*const model.Node) ?merge_model.SideValue {
+    var value = sideValue(file, node) orelse return null;
+    const present = node.?;
+    if (present.* == .seq and present.seq.len == 0 and value.span.?.start > 0 and
+        file.bytes[value.span.?.start - 1] == ' ')
+    {
+        value.span.?.start -= 1;
+        value.bytes = value.span.?.bytes(file.bytes);
+    }
+    return value;
+}
+
+fn renderSequence(
+    arena: std.mem.Allocator,
+    order: []const []const u8,
+    items: SequenceItems,
+    base_file: source.ParsedFile,
+    ours_file: source.ParsedFile,
+    theirs_file: source.ParsedFile,
+    nodes: DocumentNodes,
+) merge_model.Error![]const u8 {
+    var output: std.ArrayList(u8) = .empty;
+    const destination_indent = sequenceIndent(ours_file, nodes.ours) orelse
+        sequenceFieldIndent(ours_file, nodes.ours) orelse
+        sequenceIndent(base_file, nodes.base) orelse
+        sequenceFieldIndent(base_file, nodes.base) orelse
+        sequenceIndent(theirs_file, nodes.theirs) orelse
+        sequenceFieldIndent(theirs_file, nodes.theirs) orelse 0;
+    for (order, 0..) |id, index| {
+        const base_item = findSequenceItem(items.base, id);
+        const ours_item = findSequenceItem(items.ours, id);
+        const theirs_item = findSequenceItem(items.theirs, id);
+        var selected = selectedItem(base_item, ours_item, theirs_item, decidePresence(
+            base_item != null,
+            ours_item != null,
+            theirs_item != null,
+        )) orelse continue;
+        if (base_item != null and ours_item != null and theirs_item != null) {
+            selected = selectedItem(base_item, ours_item, theirs_item, decide(
+                base_item.?.node,
+                ours_item.?.node,
+                theirs_item.?.node,
+            )) orelse selected;
+        }
+        const selected_file = switch (selected.side) {
+            .base => base_file,
+            .ours => ours_file,
+            .theirs => theirs_file,
+        };
+        const bytes = selected_file.sequenceItemBytes(selected.node) orelse return error.UnsupportedStructure;
+        if (selected.side == .ours) {
+            try output.appendSlice(arena, bytes);
+        } else {
+            const offset = insertionOffsetForItem(ours_file, items.ours, order, index, nodes.ours);
+            try output.appendSlice(arena, try reindentSequenceItem(
+                arena,
+                bytes,
+                destination_indent,
+                ours_file.lineEndingAt(offset),
+            ));
+        }
+    }
+    return output.toOwnedSlice(arena);
+}
+
+fn sequenceReplacement(
+    arena: std.mem.Allocator,
+    ours_file: source.ParsedFile,
+    ours_node: ?*const model.Node,
+    merged_bytes: []const u8,
+) std.mem.Allocator.Error![]const u8 {
+    const node = ours_node orelse return merged_bytes;
+    if (node.* != .seq or node.seq.len != 0) return merged_bytes;
+    if (merged_bytes.len == 0) return "[]";
+    const span = ours_file.node_spans.get(node) orelse return merged_bytes;
+    const line_ending = ours_file.lineEndingAt(span.end);
+    const item_bytes = if (std.mem.endsWith(u8, merged_bytes, line_ending))
+        merged_bytes[0 .. merged_bytes.len - line_ending.len]
+    else
+        merged_bytes;
+    return std.fmt.allocPrint(arena, "{s}{s}", .{ line_ending, item_bytes });
+}
+
+fn sequenceIndent(file: source.ParsedFile, node: ?*const model.Node) ?usize {
+    const sequence = node orelse return null;
+    if (sequence.* != .seq or sequence.seq.len == 0) return null;
+    const span = file.sequence_item_spans.get(sequence.seq[0]) orelse return null;
+    const end = std.mem.indexOfScalarPos(u8, file.bytes, span.start, '\n') orelse span.end;
+    return leadingSpaces(file.bytes[span.start..end]);
+}
+
+fn sequenceFieldIndent(file: source.ParsedFile, node: ?*const model.Node) ?usize {
+    const sequence = node orelse return null;
+    const entry = file.entry_spans.get(sequence) orelse return null;
+    const line_start = if (std.mem.lastIndexOfScalar(u8, file.bytes[0..entry.key.start], '\n')) |lf| lf + 1 else 0;
+    return entry.key.start - line_start;
+}
+
+fn insertionOffsetForItem(
+    file: source.ParsedFile,
+    ours_items: []const SequenceItem,
+    order: []const []const u8,
+    index: usize,
+    sequence_node: ?*const model.Node,
+) usize {
+    var previous = index;
+    while (previous > 0) {
+        previous -= 1;
+        if (findSequenceItem(ours_items, order[previous])) |item| {
+            if (file.sequence_item_spans.get(item.node)) |span| return span.end;
+        }
+    }
+    var next = index + 1;
+    while (next < order.len) : (next += 1) {
+        if (findSequenceItem(ours_items, order[next])) |item| {
+            if (file.sequence_item_spans.get(item.node)) |span| return span.start;
+        }
+    }
+    if (sequence_node) |node| if (file.node_spans.get(node)) |span| return span.end;
+    return file.bytes.len;
+}
+
+fn leadingSpaces(line: []const u8) usize {
+    var count: usize = 0;
+    while (count < line.len and line[count] == ' ') count += 1;
+    return count;
+}
+
+fn reindentSequenceItem(
+    arena: std.mem.Allocator,
+    source_item: []const u8,
+    destination_indent: usize,
+    line_ending: []const u8,
+) merge_model.Error![]const u8 {
+    const first_lf = std.mem.indexOfScalar(u8, source_item, '\n') orelse source_item.len;
+    const first_line = std.mem.trimEnd(u8, source_item[0..first_lf], "\r");
+    const source_indent = leadingSpaces(first_line);
+    var output: std.ArrayList(u8) = .empty;
+    var cursor: usize = 0;
+    while (cursor < source_item.len) {
+        const relative_lf = std.mem.indexOfScalar(u8, source_item[cursor..], '\n');
+        const end = if (relative_lf) |line_index| cursor + line_index else source_item.len;
+        const raw_line = source_item[cursor..end];
+        const line = std.mem.trimEnd(u8, raw_line, "\r");
+        const indent = leadingSpaces(line);
+        if (line.len != 0 and indent < source_indent) return error.UnsupportedStructure;
+        if (line.len != 0) {
+            try output.appendNTimes(arena, ' ', destination_indent + indent - source_indent);
+            try output.appendSlice(arena, line[indent..]);
+        }
+        if (relative_lf != null) try output.appendSlice(arena, line_ending);
+        cursor = if (relative_lf != null) end + 1 else end;
+    }
+    return output.toOwnedSlice(arena);
+}
+
+fn appendComponentDocumentOperation(
+    arena: std.mem.Allocator,
+    operations: *std.ArrayList(merge_model.Operation),
+    atomic_id: merge_model.AtomicId,
+    base_item: ?SequenceItem,
+    ours_item: ?SequenceItem,
+    theirs_item: ?SequenceItem,
+    base_file: source.ParsedFile,
+    ours_file: source.ParsedFile,
+    theirs_file: source.ParsedFile,
+) std.mem.Allocator.Error!bool {
+    const file_id = firstSequenceItem(base_item, ours_item, theirs_item).identity.target.file_id;
+    const base_document = findDocumentByFileId(base_file.documents, file_id);
+    const ours_document = findDocumentByFileId(ours_file.documents, file_id);
+    const theirs_document = findDocumentByFileId(theirs_file.documents, file_id);
+    if (equalOptionalDocuments(base_document, ours_document) and
+        equalOptionalDocuments(base_document, theirs_document)) return false;
+    const document_decision = decideDocument(base_document, ours_document, theirs_document);
+    const chosen_document = switch (document_decision) {
+        .ours, .common => ours_document,
+        .theirs => theirs_document,
+        .conflict => ours_document,
+    };
+    const document_id = if (chosen_document) |document| merge_identity.documentId(document.*) else merge_identity.documentId((base_document orelse ours_document orelse theirs_document).?.*);
+    try operations.append(arena, .{
+        .id = @intCast(operations.items.len),
+        .atomic_id = atomic_id,
+        .kind = .component,
+        .identity = .{ .document = document_id, .property_path = "" },
+        .hierarchy_path = if (chosen_document) |document| document.type_name else "",
+        .property_path = "",
+        .values = .{
+            .base = documentValue(base_file, base_document),
+            .ours = documentValue(ours_file, ours_document),
+            .theirs = documentValue(theirs_file, theirs_document),
+        },
+        .resolution = switch (document_decision) {
+            .ours, .common => if (ours_document == null) .remove else .{ .take = .ours },
+            .theirs => if (theirs_document == null) .remove else .{ .take = .theirs },
+            .conflict => .unresolved,
+        },
+    });
+    return document_decision == .conflict;
+}
+
+fn decideDocument(
+    base: ?*const model.Document,
+    ours: ?*const model.Document,
+    theirs: ?*const model.Document,
+) Decision {
+    if (equalOptionalDocuments(ours, base)) return .theirs;
+    if (equalOptionalDocuments(theirs, base)) return .ours;
+    if (equalOptionalDocuments(ours, theirs)) return .common;
+    return .conflict;
+}
+
+fn equalOptionalDocuments(a: ?*const model.Document, b: ?*const model.Document) bool {
+    if (a == null or b == null) return a == null and b == null;
+    return a.?.class_id == b.?.class_id and a.?.file_id == b.?.file_id and
+        model.Node.eql(a.?.body, b.?.body);
+}
+
+fn findDocumentByFileId(documents: []const model.Document, file_id: i64) ?*const model.Document {
+    for (documents) |*document| if (document.file_id == file_id) return document;
+    return null;
+}
+
+fn documentValue(file: source.ParsedFile, document: ?*const model.Document) ?merge_model.SideValue {
+    const present = document orelse return null;
+    for (file.documents, file.document_spans) |*candidate, span| {
+        if (candidate == present) return .{ .node = present.body, .bytes = span.whole.bytes(file.bytes), .span = span.whole };
+    }
+    return null;
+}
+
+fn appendChildDocumentsOperation(
+    arena: std.mem.Allocator,
+    operations: *std.ArrayList(merge_model.Operation),
+    atomic_id: merge_model.AtomicId,
+    selected: SelectedItem,
+    transform_file_id: i64,
+    base_file: source.ParsedFile,
+    ours_file: source.ParsedFile,
+    theirs_file: source.ParsedFile,
+) merge_model.Error!void {
+    const ours_value = try childDocumentValue(arena, ours_file, transform_file_id);
+    if (ours_value != null) return;
+    const base_value = try childDocumentValue(arena, base_file, transform_file_id);
+    const theirs_value = try childDocumentValue(arena, theirs_file, transform_file_id);
+    _ = switch (selected.side) {
+        .base => base_value,
+        .ours => ours_value,
+        .theirs => theirs_value,
+    } orelse return error.UnsupportedStructure;
+    const game_object_id = gameObjectId(selected.node, switch (selected.side) {
+        .base => base_file,
+        .ours => ours_file,
+        .theirs => theirs_file,
+    }, transform_file_id) orelse return error.UnsupportedStructure;
+    try operations.append(arena, .{
+        .id = @intCast(operations.items.len),
+        .atomic_id = atomic_id,
+        .kind = .game_object,
+        .identity = .{ .document = .{ .class_id = 1, .file_id = game_object_id }, .property_path = "" },
+        .hierarchy_path = "GameObject",
+        .property_path = "",
+        .values = .{ .base = base_value, .ours = ours_value, .theirs = theirs_value },
+        .resolution = switch (selected.side) {
+            .base => .{ .take = .base },
+            .ours => .{ .take = .ours },
+            .theirs => .{ .take = .theirs },
+        },
+    });
+}
+
+fn childDocumentValue(
+    arena: std.mem.Allocator,
+    file: source.ParsedFile,
+    transform_file_id: i64,
+) merge_model.Error!?merge_model.SideValue {
+    const transform = findDocumentByFileId(file.documents, transform_file_id) orelse return null;
+    const game_object_id = gameObjectId(transform.body, file, transform_file_id) orelse
+        return error.UnsupportedStructure;
+    const game_object = findDocument(file.documents, 1, game_object_id) orelse return error.UnsupportedStructure;
+    const game_object_value = documentValue(file, findDocumentByFileId(file.documents, game_object_id)) orelse
+        return error.UnsupportedStructure;
+    const transform_value = documentValue(file, transform) orelse return error.UnsupportedStructure;
+    var bytes: std.ArrayList(u8) = .empty;
+    try bytes.appendSlice(arena, game_object_value.bytes);
+    try bytes.appendSlice(arena, transform_value.bytes);
+    return .{
+        .node = game_object.body,
+        .bytes = try bytes.toOwnedSlice(arena),
+        .span = .{
+            .start = @min(game_object_value.span.?.start, transform_value.span.?.start),
+            .end = @max(game_object_value.span.?.end, transform_value.span.?.end),
+        },
+    };
+}
+
+fn gameObjectId(
+    _: *const model.Node,
+    file: source.ParsedFile,
+    transform_file_id: i64,
+) ?i64 {
+    const transform = findDocumentByFileId(file.documents, transform_file_id) orelse return null;
+    const game_object = model.findValue(transform.body.map, "m_GameObject") orelse return null;
+    if (game_object.* != .ref) return null;
+    return game_object.ref.file_id;
 }
 
 fn findDocument(documents: []const model.Document, class_id: u32, file_id: i64) ?model.Document {
@@ -340,6 +1050,143 @@ test "merge planner: rejects a changed sequence without a safe identity" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     try testing.expectError(error.UnsupportedStructure, @import("merge.zig").build(arena_state.allocator(), base, ours, theirs));
+}
+
+test "merge planner: combines independent component additions" {
+    const fixture = @import("merge_test_support.zig").load("sequence-add", false);
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var built = try @import("merge.zig").build(arena, fixture.base, fixture.ours, fixture.theirs);
+
+    try testing.expectEqualStrings(fixture.expected, built.partial);
+    try testing.expect(@import("merge_test_support.zig").findOperationByKind(&built.plan, .sequence_membership) != null);
+    try testing.expect(@import("merge_test_support.zig").findOperationByKind(&built.plan, .sequence_order) != null);
+    try @import("merge_test_support.zig").expectAtomicResolutionsAreWhole(&built.plan);
+}
+
+test "merge planner: keeps an existing component field edit separate from sequence membership" {
+    const base =
+        "--- !u!1 &100\nGameObject:\n  m_Component:\n  - component: {fileID: 400}\n" ++
+        "--- !u!4 &400\nTransform:\n  m_GameObject: {fileID: 100}\n  m_Value: 0\n";
+    const ours =
+        "--- !u!1 &100\nGameObject:\n  m_Component:\n  - component: {fileID: 400}\n  - component: {fileID: 540}\n" ++
+        "--- !u!4 &400\nTransform:\n  m_GameObject: {fileID: 100}\n  m_Value: 0\n" ++
+        "--- !u!54 &540\nRigidbody:\n  m_GameObject: {fileID: 100}\n";
+    const theirs =
+        "--- !u!1 &100\nGameObject:\n  m_Component:\n  - component: {fileID: 400}\n  - component: {fileID: 650}\n" ++
+        "--- !u!4 &400\nTransform:\n  m_GameObject: {fileID: 100}\n  m_Value: 1\n" ++
+        "--- !u!65 &650\nBoxCollider:\n  m_GameObject: {fileID: 100}\n";
+    const expected =
+        "--- !u!1 &100\nGameObject:\n  m_Component:\n  - component: {fileID: 400}\n  - component: {fileID: 540}\n  - component: {fileID: 650}\n" ++
+        "--- !u!4 &400\nTransform:\n  m_GameObject: {fileID: 100}\n  m_Value: 1\n" ++
+        "--- !u!54 &540\nRigidbody:\n  m_GameObject: {fileID: 100}\n" ++
+        "--- !u!65 &650\nBoxCollider:\n  m_GameObject: {fileID: 100}\n";
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+
+    const built = try @import("merge.zig").build(arena_state.allocator(), base, ours, theirs);
+
+    try testing.expectEqualStrings(expected, built.partial);
+}
+
+test "merge planner: holds a component delete and edit conflict" {
+    const support = @import("merge_test_support.zig");
+    const fixture = support.load("sequence-delete-edit", true);
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var built = try @import("merge.zig").build(arena, fixture.base, fixture.ours, fixture.theirs);
+
+    try testing.expectEqual(@as(usize, 1), built.plan.unresolvedCount());
+    try testing.expectEqualStrings(fixture.partial.?, built.partial);
+    try testing.expect(support.findOperationByKind(&built.plan, .sequence_membership) != null);
+    try testing.expect(support.findOperationByKind(&built.plan, .component) != null);
+    try support.expectAtomicResolutionsAreWhole(&built.plan);
+}
+
+test "merge planner: resolves a component delete and edit conflict with the selected side" {
+    const support = @import("merge_test_support.zig");
+    const fixture = support.load("sequence-delete-edit", true);
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var built = try @import("merge.zig").build(arena, fixture.base, fixture.ours, fixture.theirs);
+    const order = support.findOperationByKind(&built.plan, .sequence_order).?;
+
+    try @import("merge.zig").resolve(arena, &built.plan, order.id, .{ .take = .theirs });
+
+    try testing.expectEqualStrings(fixture.expected, try @import("merge.zig").finish(arena, &built.plan));
+}
+
+test "merge planner: applies an order change from one side" {
+    const support = @import("merge_test_support.zig");
+    const fixture = support.load("sequence-reorder-one-side", false);
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var built = try @import("merge.zig").build(arena, fixture.base, fixture.ours, fixture.theirs);
+
+    try testing.expectEqualStrings(fixture.expected, built.partial);
+    try testing.expect(support.findOperationByKind(&built.plan, .sequence_order) != null);
+    try testing.expect(support.findAtomicByKind(&built.plan, .sequence_order) != null);
+    try support.expectAtomicResolutionsAreWhole(&built.plan);
+}
+
+test "merge planner: combines a child addition with a compatible reorder" {
+    const support = @import("merge_test_support.zig");
+    const fixture = support.load("sequence-reorder-compatible", false);
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var built = try @import("merge.zig").build(arena, fixture.base, fixture.ours, fixture.theirs);
+
+    try testing.expectEqualStrings(fixture.expected, built.partial);
+    try testing.expect(support.findOperationByKind(&built.plan, .sequence_membership) != null);
+    try testing.expect(support.findOperationByKind(&built.plan, .sequence_order) != null);
+    try testing.expect(support.findOperationByKind(&built.plan, .game_object) != null);
+    try support.expectAtomicResolutionsAreWhole(&built.plan);
+}
+
+test "merge planner: adds a child to an inline empty sequence" {
+    const base =
+        "--- !u!1 &100\nGameObject:\n  m_Component:\n  - component: {fileID: 400}\n" ++
+        "--- !u!4 &400\nTransform:\n  m_GameObject: {fileID: 100}\n  m_Children: []\n";
+    const theirs =
+        "--- !u!1 &100\nGameObject:\n  m_Component:\n  - component: {fileID: 400}\n" ++
+        "--- !u!4 &400\nTransform:\n  m_GameObject: {fileID: 100}\n  m_Children:\n  - {fileID: 410}\n" ++
+        "--- !u!1 &110\nGameObject:\n  m_Component:\n  - component: {fileID: 410}\n" ++
+        "--- !u!4 &410\nTransform:\n  m_GameObject: {fileID: 110}\n  m_Children: []\n";
+    const expected =
+        "--- !u!1 &100\nGameObject:\n  m_Component:\n  - component: {fileID: 400}\n" ++
+        "--- !u!4 &400\nTransform:\n  m_GameObject: {fileID: 100}\n  m_Children:\n  - {fileID: 410}\n" ++
+        "--- !u!1 &110\nGameObject:\n  m_Component:\n  - component: {fileID: 410}\n" ++
+        "--- !u!4 &410\nTransform:\n  m_GameObject: {fileID: 110}\n  m_Children: []\n";
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+
+    const built = try @import("merge.zig").build(arena_state.allocator(), base, base, theirs);
+
+    try testing.expectEqualStrings(expected, built.partial);
+}
+
+test "merge planner: holds conflicting child orders" {
+    const support = @import("merge_test_support.zig");
+    const fixture = support.load("sequence-reorder-conflict", true);
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var built = try @import("merge.zig").build(arena, fixture.base, fixture.ours, fixture.theirs);
+
+    try testing.expectEqual(@as(usize, 1), built.plan.unresolvedCount());
+    try testing.expectEqualStrings(fixture.partial.?, built.partial);
+    try testing.expect(support.findOperationByKind(&built.plan, .sequence_order) != null);
+    try support.expectAtomicResolutionsAreWhole(&built.plan);
 }
 
 test "merge planner: keeps an unchanged unknown sequence byte-for-byte" {

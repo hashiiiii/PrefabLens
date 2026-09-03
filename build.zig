@@ -10,6 +10,10 @@ pub fn build(b: *std.Build) void {
     opts.addOption([]const u8, "version", zon.version);
     const build_options_mod = opts.createModule();
 
+    const test_opts = b.addOptions();
+    test_opts.addOption([]const u8, "fixture_root", b.pathFromRoot("core/src/testdata/merge"));
+    const test_options_mod = test_opts.createModule();
+
     const core_mod = b.addModule("core", .{
         .root_source_file = b.path("core/src/root.zig"),
         .target = target,
@@ -38,21 +42,38 @@ pub fn build(b: *std.Build) void {
     const core_tests = b.addTest(.{
         .root_module = core_mod,
     });
-    const cli_tests = b.addTest(.{
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("cli/src/main.zig"),
-            .target = target,
-            .optimize = optimize,
-            .imports = &.{
-                .{ .name = "core", .module = core_mod },
-                .{ .name = "build_options", .module = build_options_mod },
-            },
-        }),
+    const cli_test_mod = b.createModule(.{
+        .root_source_file = b.path("cli/src/main.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "core", .module = core_mod },
+            .{ .name = "build_options", .module = build_options_mod },
+            .{ .name = "test_options", .module = test_options_mod },
+        },
     });
+    const cli_tests = b.addTest(.{
+        .root_module = cli_test_mod,
+    });
+    const run_cli_tests = b.addRunArtifact(cli_tests);
+    run_cli_tests.setCwd(b.path("."));
+
+    const merge_driver_cwd_tests = b.addTest(.{
+        .name = "merge-driver-cwd-test",
+        .root_module = cli_test_mod,
+        .filters = &.{"merge driver: writes automatic and partial results"},
+    });
+    const run_merge_driver_cwd_tests = b.addRunArtifact(merge_driver_cwd_tests);
+    // The global cache is outside the checkout, so this run detects accidental ambient-cwd reads.
+    run_merge_driver_cwd_tests.setCwd(.{ .cwd_relative = b.graph.global_cache_root.path.? });
 
     const test_step = b.step("test", "Run all unit tests");
     test_step.dependOn(&b.addRunArtifact(core_tests).step);
-    test_step.dependOn(&b.addRunArtifact(cli_tests).step);
+    test_step.dependOn(&run_cli_tests.step);
+    test_step.dependOn(&run_merge_driver_cwd_tests.step);
+
+    const merge_driver_test_step = b.step("test-merge-driver", "Run merge-driver fixture tests outside the checkout");
+    merge_driver_test_step.dependOn(&run_merge_driver_cwd_tests.step);
 
     const perf_exe = b.addExecutable(.{
         .name = "perf",

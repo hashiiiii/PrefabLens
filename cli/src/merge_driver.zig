@@ -72,22 +72,42 @@ fn runDriverCase(
     );
 }
 
+fn fixturePath(arena: std.mem.Allocator, sub_path: []const u8) ![]const u8 {
+    const fixture_root = @import("test_options").fixture_root;
+    return std.fs.path.join(arena, &.{ fixture_root, sub_path });
+}
+
+fn readFixture(arena: std.mem.Allocator, sub_path: []const u8) ![]u8 {
+    return merge_io.readLimited(testing.io, arena, try fixturePath(arena, sub_path));
+}
+
+test "merge driver: fixture root does not depend on the process cwd" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    // Test runners can start outside this checkout, so ambient cwd must never select fixture bytes.
+    const path = try fixturePath(arena, "component-add/base.prefab");
+    try testing.expect(std.fs.path.isAbsolute(path));
+    try testing.expect(core.isUnityYaml(try merge_io.readLimited(testing.io, arena, path)));
+}
+
 test "merge driver: writes automatic and partial results with exact exit codes" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
     try runDriverCase(
-        try merge_io.readLimited(testing.io, arena, "core/src/testdata/merge/component-add/base.prefab"),
-        try merge_io.readLimited(testing.io, arena, "core/src/testdata/merge/component-add/ours.prefab"),
-        try merge_io.readLimited(testing.io, arena, "core/src/testdata/merge/component-add/theirs.prefab"),
-        try merge_io.readLimited(testing.io, arena, "core/src/testdata/merge/component-add/expected.prefab"),
+        try readFixture(arena, "component-add/base.prefab"),
+        try readFixture(arena, "component-add/ours.prefab"),
+        try readFixture(arena, "component-add/theirs.prefab"),
+        try readFixture(arena, "component-add/expected.prefab"),
         0,
     );
     try runDriverCase(
-        try merge_io.readLimited(testing.io, arena, "core/src/testdata/merge/component-delete-edit/base.prefab"),
-        try merge_io.readLimited(testing.io, arena, "core/src/testdata/merge/component-delete-edit/ours.prefab"),
-        try merge_io.readLimited(testing.io, arena, "core/src/testdata/merge/component-delete-edit/theirs.prefab"),
-        try merge_io.readLimited(testing.io, arena, "core/src/testdata/merge/component-delete-edit/partial.prefab"),
+        try readFixture(arena, "component-delete-edit/base.prefab"),
+        try readFixture(arena, "component-delete-edit/ours.prefab"),
+        try readFixture(arena, "component-delete-edit/theirs.prefab"),
+        try readFixture(arena, "component-delete-edit/partial.prefab"),
         1,
     );
 }

@@ -32,6 +32,26 @@ test "isUnityPath rejects git refs, .meta and unknown extensions" {
     for (no) |p| try testing.expect(!isUnityPath(p));
 }
 
+test "README merge attributes match the Unity extension allowlist" {
+    const readme = @import("test_options").readme;
+    var actual: std.ArrayList([]const u8) = .empty;
+    defer actual.deinit(testing.allocator);
+    var lines = std.mem.splitScalar(u8, readme, '\n');
+    const suffix = " merge=prefablens";
+    while (lines.next()) |line| {
+        if (!std.mem.endsWith(u8, line, suffix)) continue;
+        try testing.expect(std.mem.startsWith(u8, line, "*."));
+        try actual.append(
+            testing.allocator,
+            line[1 .. line.len - suffix.len],
+        );
+    }
+    try testing.expectEqual(@as(usize, extensions.len), actual.items.len);
+    for (extensions, actual.items) |expected, documented| {
+        try testing.expectEqualStrings(expected, documented);
+    }
+}
+
 // Same set as unityyamlmerge targets, i.e. the community Unity.gitattributes:
 // https://github.com/gitattributes/gitattributes/blob/master/Unity.gitattributes
 // Excludes .meta (not !u! document format) and JSON like .asmdef. This is a

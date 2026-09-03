@@ -115,6 +115,22 @@ test "parseSpanned: selects adjacent line ending at EOF" {
     try testing.expectEqualStrings("\n", parsed.lineEndingAt(src.len));
 }
 
+test "parseSpanned: recognizes a direct document header after a UTF-8 BOM" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const src = "\xEF\xBB\xBF--- !u!114 &1\nMonoBehaviour:\n  m_Name: Existing\n";
+
+    const parsed = try parseSpanned(arena_state.allocator(), src);
+
+    try testing.expectEqual(@as(usize, 1), parsed.documents.len);
+    try testing.expectEqual(@as(u32, 114), parsed.documents[0].class_id);
+    try testing.expectEqual(@as(i64, 1), parsed.documents[0].file_id);
+    try testing.expectEqualStrings(src, parsed.documentBytes(0));
+    try testing.expectEqualStrings("--- !u!114 &1", parsed.document_spans[0].header.bytes(src));
+    const name = model.findValue(parsed.documents[0].body.map, "m_Name").?;
+    try testing.expectEqualStrings("Existing", parsed.nodeBytes(name).?);
+}
+
 test "parse: multiple documents" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
@@ -594,7 +610,11 @@ fn tokenize(arena: std.mem.Allocator, source_bytes: []const u8) std.mem.Allocato
         const end = std.mem.indexOfScalarPos(u8, source_bytes, start, '\n') orelse source_bytes.len;
         const whole_end = if (end < source_bytes.len) end + 1 else end;
         const raw_end = if (end > start and source_bytes[end - 1] == '\r') end - 1 else end;
-        const raw = source_bytes[start..raw_end];
+        // Treat a leading UTF-8 BOM as metadata. Keep the original line span so
+        // source patches still include the BOM and retain all original offsets.
+        const bom_len: usize = if (start == 0 and std.mem.startsWith(u8, source_bytes, "\xEF\xBB\xBF")) 3 else 0;
+        const raw_start = start + bom_len;
+        const raw = source_bytes[raw_start..raw_end];
         var indent: usize = 0;
         while (indent < raw.len and raw[indent] == ' ') indent += 1;
         const content = raw[indent..];
@@ -603,7 +623,7 @@ fn tokenize(arena: std.mem.Allocator, source_bytes: []const u8) std.mem.Allocato
                 .indent = indent,
                 .text = content,
                 .whole = .{ .start = start, .end = whole_end },
-                .content = .{ .start = start + indent, .end = raw_end },
+                .content = .{ .start = raw_start + indent, .end = raw_end },
             });
         }
         if (end == source_bytes.len) break;

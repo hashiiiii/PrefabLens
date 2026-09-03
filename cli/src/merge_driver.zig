@@ -112,6 +112,15 @@ test "merge driver: writes automatic and partial results with exact exit codes" 
     );
 }
 
+test "merge driver: preserves a leading BOM when theirs changes a direct-header field" {
+    const base = "\xEF\xBB\xBF--- !u!114 &1\nMonoBehaviour:\n  m_Left: 1\n  m_Right: 1\n";
+    const ours = "\xEF\xBB\xBF--- !u!114 &1\nMonoBehaviour:\n  m_Left: 2\n  m_Right: 1\n";
+    const theirs = "\xEF\xBB\xBF--- !u!114 &1\nMonoBehaviour:\n  m_Left: 2\n  m_Right: 3\n";
+    const expected = "\xEF\xBB\xBF--- !u!114 &1\nMonoBehaviour:\n  m_Left: 2\n  m_Right: 3\n";
+
+    try runDriverCase(base, ours, theirs, expected, 0);
+}
+
 test "merge driver: keeps ours unchanged for malformed or unsupported input" {
     const valid = "--- !u!114 &1\nMonoBehaviour:\n  m_Value: 1\n";
     // A misleading extension must not let non-Unity content reach the merge engine.

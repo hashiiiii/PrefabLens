@@ -453,3 +453,41 @@ test "merge facade: retains a custom resolution" {
 
     try testing.expect(std.mem.indexOf(u8, result, "  m_Value: 42\n") != null);
 }
+
+test "merge facade: rejects an invalid custom value and keeps the atomic operation unresolved" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const base = try yamlWithValue(arena, "1");
+    const ours = try yamlWithValue(arena, "2");
+    const theirs = try yamlWithValue(arena, "3");
+    var built = try @import("merge.zig").build(arena, base, ours, theirs);
+
+    try testing.expectError(
+        error.InvalidResolution,
+        @import("merge.zig").resolve(arena, &built.plan, 0, .{ .custom = "{x: 1}" }),
+    );
+    try testing.expectEqual(@as(usize, 1), built.plan.unresolvedCount());
+}
+
+test "merge facade: restores an atomic operation when its patches overlap" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const base = "--- !u!114 &1\nMonoBehaviour:\n  first: 1\n  second: 1\n";
+    const ours = "--- !u!114 &1\nMonoBehaviour:\n  first: 2\n  second: 2\n";
+    const theirs = "--- !u!114 &1\nMonoBehaviour:\n  first: 3\n  second: 3\n";
+    var built = try @import("merge.zig").build(arena, base, ours, theirs);
+    const operation_ids = try arena.dupe(merge_model.OperationId, &.{ 0, 1 });
+    built.plan.operations[1].atomic_id = 0;
+    built.plan.operations[1].values.ours.?.span = built.plan.operations[0].values.ours.?.span;
+    built.plan.atomic_operations[0].operation_ids = operation_ids;
+    built.plan.atomic_operations = built.plan.atomic_operations[0..1];
+
+    try testing.expectError(
+        error.InvalidMerge,
+        @import("merge.zig").resolve(arena, &built.plan, 0, .{ .take = .theirs }),
+    );
+    try testing.expect(built.plan.operations[0].resolution == .unresolved);
+    try testing.expect(built.plan.operations[1].resolution == .unresolved);
+}

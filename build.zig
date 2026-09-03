@@ -74,6 +74,30 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_cli_tests.step);
     test_step.dependOn(&run_merge_driver_cwd_tests.step);
 
+    const git_merge_tests = b.addExecutable(.{
+        .name = "git-merge-tests",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("cli/src/git_merge_test_main.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    const run_git_merge_tests = b.addRunArtifact(git_merge_tests);
+    run_git_merge_tests.addArtifactArg(exe);
+    test_step.dependOn(&run_git_merge_tests.step);
+
+    const pty_smoke = b.addExecutable(.{
+        .name = "pty-smoke-tests",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("cli/src/pty_smoke_test_main.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    const run_pty_smoke = b.addRunArtifact(pty_smoke);
+    run_pty_smoke.addArtifactArg(exe);
+    test_step.dependOn(&run_pty_smoke.step);
+
     const merge_driver_test_step = b.step("test-merge-driver", "Run merge-driver fixture tests outside the checkout");
     merge_driver_test_step.dependOn(&run_merge_driver_cwd_tests.step);
 

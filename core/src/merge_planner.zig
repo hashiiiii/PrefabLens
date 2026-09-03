@@ -254,19 +254,15 @@ fn findStructuralAtomic(
     var found: ?*merge_model.AtomicOperation = null;
     for (atomic_operations) |*atomic| {
         if (atomic.kind != kind) continue;
-        var atomic_matches = false;
         for (atomic.operation_ids) |operation_id| {
             const operation = operationByIdConst(operations, operation_id) orelse
                 return error.InvalidMerge;
             if (operation.kind != kind) continue;
             if (kind == .game_object and operation.identity.document.class_id != 1) continue;
             if (!operationMatchesOverrideObject(operation, object, prefab_instance.file_id)) continue;
-            atomic_matches = true;
-            break;
+            if (found != null) return error.UnsupportedStructure;
+            found = atomic;
         }
-        if (!atomic_matches) continue;
-        if (found != null) return error.UnsupportedStructure;
-        found = atomic;
     }
     return found orelse error.UnsupportedStructure;
 }
@@ -3058,6 +3054,43 @@ test "merge planner: rejects an ambiguous scoped structural match" {
     try testing.expectError(
         error.UnsupportedStructure,
         @import("merge.zig").build(arena, ambiguous_base, ambiguous_base, ambiguous_theirs),
+    );
+}
+
+test "merge planner: rejects two scoped GameObject matches in one atomic operation" {
+    const fixture = @import("merge_test_support.zig").load("prefab-removed-game-object", false);
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const linked_child = try std.mem.replaceOwned(
+        u8,
+        arena,
+        fixture.base,
+        "  m_Children: []\n  m_Father: {fileID: 300000}",
+        "  m_Children:\n  - {fileID: 600000}\n  m_Father: {fileID: 300000}",
+    );
+    const grandchild =
+        "--- !u!1 &500000 stripped\n" ++
+        "GameObject:\n" ++
+        "  m_CorrespondingSourceObject: {fileID: 200000, guid: 11111111111111111111111111111111, type: 3}\n" ++
+        "  m_PrefabInstance: {fileID: 100100000}\n" ++
+        "  m_PrefabAsset: {fileID: 0}\n" ++
+        "  m_Component:\n" ++
+        "  - component: {fileID: 600000}\n" ++
+        "  m_Name: Ambiguous Grandchild\n" ++
+        "--- !u!4 &600000 stripped\n" ++
+        "Transform:\n" ++
+        "  m_CorrespondingSourceObject: {fileID: 600000, guid: 11111111111111111111111111111111, type: 3}\n" ++
+        "  m_PrefabInstance: {fileID: 100100000}\n" ++
+        "  m_PrefabAsset: {fileID: 0}\n" ++
+        "  m_GameObject: {fileID: 500000}\n" ++
+        "  m_Children: []\n" ++
+        "  m_Father: {fileID: 400000}\n";
+    const ambiguous_base = try std.fmt.allocPrint(arena, "{s}{s}", .{ linked_child, grandchild });
+
+    try testing.expectError(
+        error.UnsupportedStructure,
+        @import("merge.zig").build(arena, ambiguous_base, ambiguous_base, fixture.theirs),
     );
 }
 

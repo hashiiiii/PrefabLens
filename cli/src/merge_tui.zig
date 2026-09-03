@@ -6,6 +6,12 @@ const merge_ui_state = @import("merge_ui_state.zig");
 const testing = std.testing;
 const vxfw = vaxis.vxfw;
 
+const minimum_size: vxfw.Size = .{ .width = 80, .height = 10 };
+
+fn isUsableSize(size: vxfw.Size) bool {
+    return size.width >= minimum_size.width and size.height >= minimum_size.height;
+}
+
 const Range = struct {
     start: u16,
     end: u16,
@@ -56,7 +62,33 @@ const FooterGeometry = struct {
     }
 };
 
+const BodyGeometry = struct {
+    rows: Range,
+    status_row: u16,
+
+    fn init(height: u16) BodyGeometry {
+        const status_row = height - 2;
+        return .{
+            .rows = .{ .start = 3, .end = status_row },
+            .status_row = status_row,
+        };
+    }
+
+    fn visibleRows(self: BodyGeometry) usize {
+        return self.rows.end - self.rows.start;
+    }
+};
+
 const ValueColumn = enum { base, ours, theirs, result };
+
+fn valueRange(geometry: Geometry, column: ValueColumn) Range {
+    return switch (column) {
+        .base => geometry.base,
+        .ours => geometry.ours,
+        .theirs => geometry.theirs,
+        .result => geometry.result,
+    };
+}
 
 pub const View = struct {
     state: *merge_ui_state.State,
@@ -89,6 +121,7 @@ pub const View = struct {
         self.editor.onSubmit = submitCustom;
         return .{
             .userdata = self,
+            .captureHandler = captureEvent,
             .eventHandler = handleEvent,
             .drawFn = draw,
         };
@@ -100,8 +133,8 @@ pub const View = struct {
             else => {},
         }
         try self.state.handle(action);
-        if (self.last_size.height >= 10) {
-            const visible_rows: usize = self.last_size.height - 4;
+        if (isUsableSize(self.last_size)) {
+            const visible_rows = BodyGeometry.init(self.last_size.height).visibleRows();
             if (self.state.selected_conflict < self.vertical_offset) {
                 self.vertical_offset = self.state.selected_conflict;
             } else if (self.state.selected_conflict >= self.vertical_offset + visible_rows) {
@@ -128,34 +161,81 @@ pub const View = struct {
         ctx.consumeAndRedraw();
     }
 
+    fn selectedText(self: *const View) []const u8 {
+        if (self.state.selected_conflict >= self.state.conflict_indices.len) return "";
+        const operation_index = self.state.conflict_indices[self.state.selected_conflict];
+        const operation = &self.state.plan.operations[operation_index];
+        return switch (self.selected_value) {
+            .base => sideText(operation.values.base),
+            .ours => sideText(operation.values.ours),
+            .theirs => sideText(operation.values.theirs),
+            .result => resolutionText(
+                operation,
+                self.state.pending orelse operation.resolution,
+            ),
+        };
+    }
+
+    fn maxHorizontalOffset(self: *const View, geometry: Geometry) usize {
+        const text = self.selectedText();
+        const selected_range = valueRange(geometry, self.selected_value);
+        const viewport_width: usize = selected_range.end - selected_range.start;
+        var total_width: usize = 0;
+        var grapheme_count: usize = 0;
+        var graphemes = vaxis.unicode.graphemeIterator(text);
+        while (graphemes.next()) |grapheme| {
+            total_width +|= vaxis.gwidth.gwidth(grapheme.bytes(text), .unicode);
+            grapheme_count += 1;
+        }
+        if (total_width <= viewport_width or grapheme_count <= 1) return 0;
+
+        var removed_width: usize = 0;
+        var skipped: usize = 0;
+        graphemes = vaxis.unicode.graphemeIterator(text);
+        while (graphemes.next()) |grapheme| {
+            if (skipped + 1 >= grapheme_count) return skipped;
+            removed_width +|= vaxis.gwidth.gwidth(grapheme.bytes(text), .unicode);
+            skipped += 1;
+            if (total_width -| removed_width <= viewport_width) return skipped;
+        }
+        return skipped;
+    }
+
+    fn scrollLeft(self: *View, ctx: *vxfw.EventContext) void {
+        self.horizontal_offset -|= 1;
+        ctx.consumeAndRedraw();
+    }
+
+    fn scrollRight(self: *View, ctx: *vxfw.EventContext) void {
+        const geometry = Geometry.init(self.last_size.width);
+        self.horizontal_offset = @min(
+            self.horizontal_offset +| 1,
+            self.maxHorizontalOffset(geometry),
+        );
+        ctx.consumeAndRedraw();
+    }
+
     fn handleMouse(self: *View, ctx: *vxfw.EventContext, mouse: vaxis.Mouse) !void {
         if (mouse.type != .press) return;
         if (mouse.button == .wheel_up) return self.dispatch(ctx, .move_up);
         if (mouse.button == .wheel_down) return self.dispatch(ctx, .move_down);
-        if (mouse.button == .wheel_left) {
-            self.horizontal_offset -|= 1;
-            return ctx.consumeAndRedraw();
-        }
-        if (mouse.button == .wheel_right) {
-            self.horizontal_offset += 1;
-            return ctx.consumeAndRedraw();
-        }
+        if (mouse.button == .wheel_left) return self.scrollLeft(ctx);
+        if (mouse.button == .wheel_right) return self.scrollRight(ctx);
         if (mouse.button != .left or mouse.col < 0 or mouse.row < 0) return;
-        if (self.last_size.width < 80 or self.last_size.height < 10) return;
-
         const col: u16 = @intCast(mouse.col);
         const row: u16 = @intCast(mouse.row);
         const geometry = Geometry.init(self.last_size.width);
         const footer = FooterGeometry.init(self.last_size.width, self.last_size.height);
+        const body = BodyGeometry.init(self.last_size.height);
         if (row == footer.row and inRange(col, footer.apply)) {
             return self.dispatch(ctx, .apply_result);
         }
         if (row == footer.row and inRange(col, footer.abort)) {
             return self.dispatch(ctx, .abort);
         }
-        if (row < 3) return;
+        if (row < body.rows.start or row >= body.rows.end) return;
 
-        const conflict_index = self.vertical_offset + row - 3;
+        const conflict_index = self.vertical_offset + row - body.rows.start;
         if (conflict_index >= self.state.conflict_indices.len) return;
         try self.dispatch(ctx, .{ .select_conflict = conflict_index });
         if (inRange(col, geometry.ours)) {
@@ -220,7 +300,7 @@ fn draw(
     };
     var surface = try vxfw.Surface.init(ctx.arena, self.widget(), size);
     self.last_size = size;
-    if (size.width < 80 or size.height < 10) {
+    if (!isUsableSize(size)) {
         writeClipped(
             surface,
             0,
@@ -228,11 +308,21 @@ fn draw(
             size.width,
             "Needs 80 columns and 10 rows. Resize the terminal.",
         );
+        if (self.editing) {
+            const children = try ctx.arena.alloc(vxfw.SubSurface, 1);
+            children[0] = .{
+                .origin = .{ .row = 0, .col = 0 },
+                .surface = vxfw.Surface.empty(self.editor.widget()),
+            };
+            surface.children = children;
+        }
         return surface;
     }
 
     const geometry = Geometry.init(size.width);
     const footer = FooterGeometry.init(size.width, size.height);
+    const body = BodyGeometry.init(size.height);
+    self.horizontal_offset = @min(self.horizontal_offset, self.maxHorizontalOffset(geometry));
     const unresolved = try std.fmt.allocPrint(
         ctx.arena,
         "{d} unresolved",
@@ -240,13 +330,19 @@ fn draw(
     );
     writeClipped(surface, 0, 0, size.width - 20, self.path);
     writeClipped(surface, size.width - 20, 0, 20, unresolved);
-    writeClipped(surface, 0, 1, geometry.hierarchy.end, "Hierarchy");
+    writeClipped(
+        surface,
+        0,
+        1,
+        geometry.hierarchy.end,
+        if (self.state.pane == .hierarchy) "> Hierarchy" else "  Hierarchy",
+    );
     writeClipped(
         surface,
         geometry.inspector.start,
         1,
         geometry.inspector.end - geometry.inspector.start,
-        "Inspector",
+        if (self.state.pane == .inspector) "> Inspector" else "  Inspector",
     );
     inline for (.{
         .{ geometry.property, "Property" },
@@ -279,8 +375,8 @@ fn draw(
     }
     for (self.state.conflict_indices[self.vertical_offset..], 0..) |operation_index, visible_index| {
         const index = self.vertical_offset + visible_index;
-        const row = visible_index + 3;
-        if (row >= footer.row) break;
+        const row = visible_index + body.rows.start;
+        if (row >= body.rows.end) break;
         const operation = &self.state.plan.operations[operation_index];
         const pending = if (index == self.state.selected_conflict)
             self.state.pending orelse operation.resolution
@@ -296,7 +392,14 @@ fn draw(
             surface,
             geometry.hierarchy.start,
             @intCast(row),
-            geometry.hierarchy.end - geometry.hierarchy.start,
+            2,
+            if (index == self.state.selected_conflict) "> " else "  ",
+        );
+        writeClipped(
+            surface,
+            geometry.hierarchy.start + 2,
+            @intCast(row),
+            geometry.hierarchy.end - geometry.hierarchy.start - 2,
             operation.hierarchy_path,
         );
         writeClipped(
@@ -319,6 +422,11 @@ fn draw(
                 column[0].end - column[0].start,
                 text,
             );
+        }
+        if (index == self.state.selected_conflict) {
+            styleRange(surface, @intCast(row), valueRange(geometry, self.selected_value), .{
+                .reverse = true,
+            });
         }
     }
 
@@ -344,13 +452,14 @@ fn draw(
         "q Abort",
     );
     if (self.state.status.len != 0) {
-        writeClipped(surface, 0, footer.row - 1, size.width, self.state.status);
+        writeClipped(surface, 0, body.status_row, size.width, self.state.status);
     }
 
     if (self.editing and self.state.selected_conflict >= self.vertical_offset) {
         const visible_index = self.state.selected_conflict - self.vertical_offset;
-        const editor_row = visible_index + 3;
-        if (editor_row < footer.row) {
+        const editor_row = visible_index + body.rows.start;
+        if (editor_row < body.rows.end) {
+            self.editor.style = .{ .reverse = true };
             const editor_size: vxfw.Size = .{
                 .width = geometry.result.end - geometry.result.start,
                 .height = 1,
@@ -405,8 +514,29 @@ fn writeClipped(
     }
 }
 
+fn styleRange(surface: vxfw.Surface, row: u16, range: Range, style: vaxis.Style) void {
+    for (range.start..range.end) |col| {
+        var cell = surface.readCell(col, row);
+        cell.style = style;
+        cell.default = false;
+        surface.writeCell(@intCast(col), row, cell);
+    }
+}
+
 fn inRange(col: u16, range: Range) bool {
     return col >= range.start and col < range.end;
+}
+
+fn captureEvent(
+    userdata: *anyopaque,
+    ctx: *vxfw.EventContext,
+    event: vxfw.Event,
+) !void {
+    const self: *View = @ptrCast(@alignCast(userdata));
+    if (!isUsableSize(self.last_size)) switch (event) {
+        .key_press, .mouse => ctx.consumeEvent(),
+        else => {},
+    };
 }
 
 fn handleEvent(
@@ -415,6 +545,11 @@ fn handleEvent(
     event: vxfw.Event,
 ) !void {
     const self: *View = @ptrCast(@alignCast(userdata));
+    switch (event) {
+        .winsize => return ctx.consumeAndRedraw(),
+        .key_press, .mouse => if (!isUsableSize(self.last_size)) return ctx.consumeEvent(),
+        else => {},
+    }
     if (self.editing) switch (event) {
         .key_press => |key| {
             if (key.matches(vaxis.Key.escape, .{})) {
@@ -429,17 +564,10 @@ fn handleEvent(
     };
 
     switch (event) {
-        .winsize => ctx.consumeAndRedraw(),
         .mouse => |mouse| try self.handleMouse(ctx, mouse),
         .key_press => |key| {
-            if (key.matches(vaxis.Key.left, .{ .shift = true })) {
-                self.horizontal_offset -|= 1;
-                return ctx.consumeAndRedraw();
-            }
-            if (key.matches(vaxis.Key.right, .{ .shift = true })) {
-                self.horizontal_offset += 1;
-                return ctx.consumeAndRedraw();
-            }
+            if (key.matches(vaxis.Key.left, .{ .shift = true })) return self.scrollLeft(ctx);
+            if (key.matches(vaxis.Key.right, .{ .shift = true })) return self.scrollRight(ctx);
             if (key.matches(vaxis.Key.left, .{})) return self.dispatch(ctx, .pane_left);
             if (key.matches(vaxis.Key.right, .{})) return self.dispatch(ctx, .pane_right);
             if (key.matches(vaxis.Key.tab, .{})) {
@@ -505,6 +633,15 @@ fn longValuePlan(arena: std.mem.Allocator) !core.merge.BuildResult {
     );
 }
 
+fn unicodeValuePlan(arena: std.mem.Allocator) !core.merge.BuildResult {
+    return core.merge.build(
+        arena,
+        "--- !u!54 &54\nRigidbody:\n  m_Label: 漢字e\u{301}🙂終BASE\n",
+        "--- !u!54 &54\nRigidbody:\n  m_Label: 漢字e\u{301}🙂終OURS\n",
+        "--- !u!54 &54\nRigidbody:\n  m_Label: 漢字e\u{301}🙂終THEIRS\n",
+    );
+}
+
 fn tallPlan(arena: std.mem.Allocator) !core.merge.BuildResult {
     return core.merge.build(
         arena,
@@ -555,6 +692,49 @@ fn eventContext(arena: std.mem.Allocator) vxfw.EventContext {
     return .{ .io = testing.io, .alloc = arena, .cmds = .empty };
 }
 
+fn findFocusedPath(
+    arena: std.mem.Allocator,
+    surface: vxfw.Surface,
+    focused: vxfw.Widget,
+    path: *std.ArrayList(vxfw.Widget),
+) !bool {
+    try path.append(arena, surface.widget);
+    if (surface.widget.eql(focused)) return true;
+    for (surface.children) |child| {
+        if (try findFocusedPath(arena, child.surface, focused, path)) return true;
+    }
+    _ = path.pop();
+    return false;
+}
+
+fn routeFocusedEventForTest(
+    arena: std.mem.Allocator,
+    surface: vxfw.Surface,
+    focused: vxfw.Widget,
+    ctx: *vxfw.EventContext,
+    event: vxfw.Event,
+) !void {
+    var path: std.ArrayList(vxfw.Widget) = .empty;
+    if (!try findFocusedPath(arena, surface, focused, &path)) return error.FocusPathEmpty;
+
+    ctx.consume_event = false;
+    ctx.phase = .capturing;
+    for (path.items) |widget| {
+        try widget.captureEvent(ctx, event);
+        if (ctx.consume_event) return;
+    }
+    ctx.phase = .at_target;
+    try path.getLast().handleEvent(ctx, event);
+    if (ctx.consume_event) return;
+    ctx.phase = .bubbling;
+    var index = path.items.len - 1;
+    while (index > 0) {
+        index -= 1;
+        try path.items[index].handleEvent(ctx, event);
+        if (ctx.consume_event) return;
+    }
+}
+
 test "merge TUI: draws two panes and aligned value columns" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
@@ -591,6 +771,82 @@ test "merge TUI: draws two panes and aligned value columns" {
     }
 }
 
+test "merge TUI: active pane marker follows left and right navigation" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var fixture = try screenPlan(arena);
+    var state = try merge_ui_state.State.init(arena, &fixture.plan);
+    var view = View.init(arena, &state, "A.prefab");
+    defer view.deinit();
+    const geometry = Geometry.init(80);
+    var surface = try drawForTest(arena, view.widget(), 80, 10);
+    var ctx = eventContext(arena);
+
+    // A one-cell marker keeps pane focus visible without decorative chrome.
+    try testing.expectEqualStrings(">", surface.readCell(geometry.hierarchy.start, 1).char.grapheme);
+    try testing.expectEqualStrings(" ", surface.readCell(geometry.inspector.start, 1).char.grapheme);
+    try view.widget().handleEvent(&ctx, .{ .key_press = .{ .codepoint = vaxis.Key.right } });
+    surface = try drawForTest(arena, view.widget(), 80, 10);
+    try testing.expectEqualStrings(" ", surface.readCell(geometry.hierarchy.start, 1).char.grapheme);
+    try testing.expectEqualStrings(">", surface.readCell(geometry.inspector.start, 1).char.grapheme);
+    try view.widget().handleEvent(&ctx, .{ .key_press = .{ .codepoint = vaxis.Key.left } });
+    surface = try drawForTest(arena, view.widget(), 80, 10);
+    try testing.expectEqualStrings(">", surface.readCell(geometry.hierarchy.start, 1).char.grapheme);
+}
+
+test "merge TUI: selected row marker follows up and down navigation" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var fixture = try screenPlan(arena);
+    var state = try merge_ui_state.State.init(arena, &fixture.plan);
+    var view = View.init(arena, &state, "A.prefab");
+    defer view.deinit();
+    var surface = try drawForTest(arena, view.widget(), 80, 10);
+    var ctx = eventContext(arena);
+
+    // The marker identifies the row that side-selection keys will change.
+    try testing.expectEqualStrings(">", surface.readCell(0, 3).char.grapheme);
+    try testing.expectEqualStrings(" ", surface.readCell(0, 4).char.grapheme);
+    try view.widget().handleEvent(&ctx, .{ .key_press = .{ .codepoint = vaxis.Key.down } });
+    surface = try drawForTest(arena, view.widget(), 80, 10);
+    try testing.expectEqualStrings(" ", surface.readCell(0, 3).char.grapheme);
+    try testing.expectEqualStrings(">", surface.readCell(0, 4).char.grapheme);
+    try view.widget().handleEvent(&ctx, .{ .key_press = .{ .codepoint = vaxis.Key.up } });
+    surface = try drawForTest(arena, view.widget(), 80, 10);
+    try testing.expectEqualStrings(">", surface.readCell(0, 3).char.grapheme);
+}
+
+test "merge TUI: selected value style follows Ours Theirs and Result" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var fixture = try screenPlan(arena);
+    var state = try merge_ui_state.State.init(arena, &fixture.plan);
+    var view = View.init(arena, &state, "A.prefab");
+    defer view.deinit();
+    _ = try drawForTest(arena, view.widget(), 80, 10);
+    var ctx = eventContext(arena);
+    const geometry = Geometry.init(80);
+
+    try view.widget().handleEvent(&ctx, .{ .key_press = .{ .codepoint = 'o', .text = "o" } });
+    var surface = try drawForTest(arena, view.widget(), 80, 10);
+    try testing.expect(surface.readCell(geometry.ours.start, 3).style.reverse);
+    try testing.expect(!surface.readCell(geometry.theirs.start, 3).style.reverse);
+
+    try view.widget().handleEvent(&ctx, .{ .key_press = .{ .codepoint = 't', .text = "t" } });
+    surface = try drawForTest(arena, view.widget(), 80, 10);
+    try testing.expect(!surface.readCell(geometry.ours.start, 3).style.reverse);
+    try testing.expect(surface.readCell(geometry.theirs.start, 3).style.reverse);
+
+    try view.widget().handleEvent(&ctx, .{ .key_press = .{ .codepoint = vaxis.Key.enter } });
+    surface = try drawForTest(arena, view.widget(), 80, 10);
+    // The editor child is the visible Result cell while it owns focus.
+    try testing.expectEqual(@as(usize, 1), surface.children.len);
+    try testing.expect(surface.children[0].surface.readCell(0, 0).style.reverse);
+}
+
 test "merge TUI: clips a long value before the next column" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
@@ -618,6 +874,7 @@ test "merge TUI: keyboard and mouse choose ours through the same state action" {
     defer key_view.deinit();
     var mouse_view = View.init(arena, &mouse_state, "A.prefab");
     defer mouse_view.deinit();
+    _ = try drawForTest(arena, key_view.widget(), 100, 20);
     _ = try drawForTest(arena, mouse_view.widget(), 100, 20);
     var ctx = eventContext(arena);
 
@@ -643,6 +900,7 @@ test "merge TUI: keyboard moves panes and rows" {
     var state = try merge_ui_state.State.init(arena, &fixture.plan);
     var view = View.init(arena, &state, "A.prefab");
     defer view.deinit();
+    _ = try drawForTest(arena, view.widget(), 100, 20);
     var ctx = eventContext(arena);
 
     // Each key must map to State.handle rather than changing view-only state.
@@ -701,6 +959,7 @@ test "merge TUI: TextField submits an arbitrary YAML value" {
     var state = try merge_ui_state.State.init(arena, &fixture.plan);
     var view = View.init(arena, &state, "A.prefab");
     defer view.deinit();
+    _ = try drawForTest(arena, view.widget(), 100, 20);
     var ctx = eventContext(arena);
 
     // The real TextField must feed State.handle so the short-lived key text is copied.
@@ -723,6 +982,7 @@ test "merge TUI: draws the active TextField in the Result cell" {
     var state = try merge_ui_state.State.init(arena, &fixture.plan);
     var view = View.init(arena, &state, "A.prefab");
     defer view.deinit();
+    _ = try drawForTest(arena, view.widget(), 100, 20);
     var ctx = eventContext(arena);
 
     try view.widget().handleEvent(&ctx, .{ .key_press = .{ .codepoint = vaxis.Key.enter } });
@@ -744,6 +1004,7 @@ test "merge TUI: Escape cancels TextField input and restores root focus" {
     var state = try merge_ui_state.State.init(arena, &fixture.plan);
     var view = View.init(arena, &state, "A.prefab");
     defer view.deinit();
+    _ = try drawForTest(arena, view.widget(), 100, 20);
     var ctx = eventContext(arena);
 
     try view.widget().handleEvent(&ctx, .{ .key_press = .{ .codepoint = vaxis.Key.enter } });
@@ -760,6 +1021,147 @@ test "merge TUI: Escape cancels TextField input and restores root focus" {
     }
 }
 
+test "merge TUI: focused editor survives a small resize without accepting hidden input" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var fixture = try screenPlan(arena);
+    var state = try merge_ui_state.State.init(arena, &fixture.plan);
+    var view = View.init(arena, &state, "A.prefab");
+    defer view.deinit();
+    var ctx = eventContext(arena);
+
+    _ = try drawForTest(arena, view.widget(), 80, 10);
+    try view.widget().handleEvent(&ctx, .{ .key_press = .{ .codepoint = vaxis.Key.enter } });
+    const small = try drawForTest(arena, view.widget(), 79, 9);
+
+    // The pinned App rebuilds this real widget path after every draw.
+    try routeFocusedEventForTest(
+        arena,
+        small,
+        view.editor.widget(),
+        &ctx,
+        .{ .key_press = .{ .codepoint = '9', .text = "9" } },
+    );
+
+    const restored = try drawForTest(arena, view.widget(), 80, 10);
+    try routeFocusedEventForTest(
+        arena,
+        restored,
+        view.editor.widget(),
+        &ctx,
+        .{ .key_press = .{ .codepoint = '7', .text = "7" } },
+    );
+    try routeFocusedEventForTest(
+        arena,
+        restored,
+        view.editor.widget(),
+        &ctx,
+        .{ .key_press = .{ .codepoint = vaxis.Key.enter } },
+    );
+
+    // If the hidden key reached TextField, the submitted value would be "97".
+    switch (state.pending.?) {
+        .custom => |value| try testing.expectEqualStrings("7", value),
+        else => return error.TestUnexpectedResult,
+    }
+}
+
+test "merge TUI: pre-draw and undersized views block all merge actions" {
+    const SizeCase = struct {
+        width: u16,
+        height: u16,
+        draw_first: bool,
+    };
+    const cases = [_]SizeCase{
+        .{ .width = 0, .height = 0, .draw_first = false },
+        .{ .width = 79, .height = 9, .draw_first = true },
+        .{ .width = 79, .height = 10, .draw_first = true },
+        .{ .width = 80, .height = 9, .draw_first = true },
+    };
+    const events = [_]vxfw.Event{
+        .{ .key_press = .{ .codepoint = vaxis.Key.right } },
+        .{ .key_press = .{ .codepoint = vaxis.Key.down } },
+        .{ .key_press = .{ .codepoint = 'o', .text = "o" } },
+        .{ .key_press = .{ .codepoint = 't', .text = "t" } },
+        .{ .key_press = .{ .codepoint = vaxis.Key.enter } },
+        .{ .key_press = .{ .codepoint = 'a', .text = "a" } },
+        .{ .key_press = .{ .codepoint = 'q', .text = "q" } },
+        .{ .key_press = .{ .codepoint = vaxis.Key.right, .mods = .{ .shift = true } } },
+        .{ .mouse = .{
+            .col = 0,
+            .row = 3,
+            .button = .wheel_down,
+            .mods = .{},
+            .type = .press,
+        } },
+        .{ .mouse = .{
+            .col = 0,
+            .row = 3,
+            .button = .wheel_right,
+            .mods = .{},
+            .type = .press,
+        } },
+    };
+
+    for (cases) |case| {
+        for (events) |event| {
+            var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+            defer arena_state.deinit();
+            const arena = arena_state.allocator();
+            var fixture = try screenPlan(arena);
+            var state = try merge_ui_state.State.init(arena, &fixture.plan);
+            var view = View.init(arena, &state, "A.prefab");
+            defer view.deinit();
+            if (case.draw_first) {
+                _ = try drawForTest(arena, view.widget(), case.width, case.height);
+            }
+            var ctx = eventContext(arena);
+            ctx.redraw = false;
+
+            try view.widget().handleEvent(&ctx, event);
+
+            // Hidden actions must not alter either merge state or view navigation state.
+            try testing.expectEqual(merge_ui_state.Pane.hierarchy, state.pane);
+            try testing.expectEqual(@as(usize, 0), state.selected_conflict);
+            try testing.expectEqual(@as(?core.merge.Resolution, null), state.pending);
+            try testing.expectEqualStrings("", state.status);
+            try testing.expectEqual(merge_ui_state.Outcome.active, state.outcome);
+            try testing.expect(!view.editing);
+            try testing.expectEqual(@as(usize, 0), view.horizontal_offset);
+            try testing.expect(!ctx.quit);
+            try testing.expect(!ctx.redraw);
+        }
+    }
+}
+
+test "merge TUI: the exact 80x10 boundary accepts merge actions" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var fixture = try screenPlan(arena);
+    var state = try merge_ui_state.State.init(arena, &fixture.plan);
+    var view = View.init(arena, &state, "A.prefab");
+    defer view.deinit();
+    _ = try drawForTest(arena, view.widget(), 80, 10);
+    var ctx = eventContext(arena);
+
+    // Both semantic keys and wheel navigation become active at the full boundary.
+    try view.widget().handleEvent(&ctx, .{ .key_press = .{ .codepoint = 'o', .text = "o" } });
+    try testing.expect(state.pending.? == .take and state.pending.?.take == .ours);
+    try view.widget().handleEvent(&ctx, .{ .mouse = .{
+        .col = 0,
+        .row = 3,
+        .button = .wheel_down,
+        .mods = .{},
+        .type = .press,
+    } });
+    try testing.expectEqual(@as(usize, 1), state.selected_conflict);
+    try view.widget().handleEvent(&ctx, .{ .key_press = .{ .codepoint = 'q', .text = "q" } });
+    try testing.expectEqual(merge_ui_state.Outcome.aborted, state.outcome);
+    try testing.expect(ctx.quit);
+}
+
 test "merge TUI: keyboard and horizontal wheel scroll only the selected value" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
@@ -772,6 +1174,7 @@ test "merge TUI: keyboard and horizontal wheel scroll only the selected value" {
     defer key_view.deinit();
     var mouse_view = View.init(arena, &mouse_state, "A.prefab");
     defer mouse_view.deinit();
+    _ = try drawForTest(arena, key_view.widget(), 100, 20);
     _ = try drawForTest(arena, mouse_view.widget(), 100, 20);
     var ctx = eventContext(arena);
 
@@ -779,6 +1182,14 @@ test "merge TUI: keyboard and horizontal wheel scroll only the selected value" {
     try key_view.widget().handleEvent(&ctx, .{ .key_press = .{
         .codepoint = vaxis.Key.right,
         .mods = .{ .shift = true },
+    } });
+    const geometry = Geometry.init(100);
+    try mouse_view.widget().handleEvent(&ctx, .{ .mouse = .{
+        .col = @intCast(geometry.ours.start),
+        .row = 3,
+        .button = .left,
+        .mods = .{},
+        .type = .press,
     } });
     try mouse_view.widget().handleEvent(&ctx, .{ .mouse = .{
         .col = 0,
@@ -790,7 +1201,6 @@ test "merge TUI: keyboard and horizontal wheel scroll only the selected value" {
     try testing.expectEqual(key_view.horizontal_offset, mouse_view.horizontal_offset);
 
     const surface = try drawForTest(arena, key_view.widget(), 100, 20);
-    const geometry = Geometry.init(100);
     // Scrolling Ours must not shift the unselected Theirs value.
     try testing.expectEqualStrings("BC", try cellsText(arena, surface, 3, geometry.ours.start, 2));
     try testing.expectEqualStrings("AB", try cellsText(arena, surface, 3, geometry.theirs.start, 2));
@@ -800,6 +1210,76 @@ test "merge TUI: keyboard and horizontal wheel scroll only the selected value" {
         .mods = .{ .shift = true },
     } });
     try testing.expectEqual(@as(usize, 0), key_view.horizontal_offset);
+}
+
+test "merge TUI: Unicode value scrolling clamps and preserves separators" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var fixture = try unicodeValuePlan(arena);
+    var state = try merge_ui_state.State.init(arena, &fixture.plan);
+    var view = View.init(arena, &state, "A.prefab");
+    defer view.deinit();
+    _ = try drawForTest(arena, view.widget(), 80, 10);
+    var ctx = eventContext(arena);
+    const geometry = Geometry.init(80);
+
+    try view.widget().handleEvent(&ctx, .{ .key_press = .{ .codepoint = 'o', .text = "o" } });
+    var surface = try drawForTest(arena, view.widget(), 80, 10);
+    // Wide and combining graphemes occupy real cells without crossing the separator.
+    try testing.expectEqualStrings("漢", surface.readCell(geometry.ours.start, 3).char.grapheme);
+    try testing.expectEqual(@as(u8, 2), surface.readCell(geometry.ours.start, 3).char.width);
+    try testing.expectEqualStrings("字", surface.readCell(geometry.ours.start + 2, 3).char.grapheme);
+    try testing.expectEqualStrings("e\u{301}", surface.readCell(geometry.ours.start + 4, 3).char.grapheme);
+    try testing.expectEqual(@as(u8, 1), surface.readCell(geometry.ours.start + 4, 3).char.width);
+    try testing.expectEqualStrings("🙂", surface.readCell(geometry.ours.start + 5, 3).char.grapheme);
+    try testing.expectEqual(@as(u8, 2), surface.readCell(geometry.ours.start + 5, 3).char.width);
+    try testing.expectEqualStrings("│", surface.readCell(geometry.ours.end, 3).char.grapheme);
+    try testing.expectEqualStrings("│", surface.readCell(geometry.theirs.end, 3).char.grapheme);
+
+    for (0..100) |_| {
+        try view.widget().handleEvent(&ctx, .{ .key_press = .{
+            .codepoint = vaxis.Key.right,
+            .mods = .{ .shift = true },
+        } });
+    }
+    // Skipping three graphemes exposes an exact 8-cell suffix: 🙂終OURS.
+    try testing.expectEqual(@as(usize, 3), view.horizontal_offset);
+    surface = try drawForTest(arena, view.widget(), 80, 10);
+    try testing.expectEqualStrings("🙂", surface.readCell(geometry.ours.start, 3).char.grapheme);
+    try testing.expectEqualStrings("S", surface.readCell(geometry.ours.end - 1, 3).char.grapheme);
+    try testing.expectEqualStrings("│", surface.readCell(geometry.ours.end, 3).char.grapheme);
+
+    for (0..100) |_| {
+        try view.widget().handleEvent(&ctx, .{ .mouse = .{
+            .col = @intCast(geometry.ours.start),
+            .row = 3,
+            .button = .wheel_left,
+            .mods = .{},
+            .type = .press,
+        } });
+    }
+    try testing.expectEqual(@as(usize, 0), view.horizontal_offset);
+    for (0..100) |_| {
+        try view.widget().handleEvent(&ctx, .{ .mouse = .{
+            .col = @intCast(geometry.ours.start),
+            .row = 3,
+            .button = .wheel_right,
+            .mods = .{},
+            .type = .press,
+        } });
+    }
+    try testing.expectEqual(@as(usize, 3), view.horizontal_offset);
+    for (0..100) |_| {
+        try view.widget().handleEvent(&ctx, .{ .key_press = .{
+            .codepoint = vaxis.Key.left,
+            .mods = .{ .shift = true },
+        } });
+    }
+    try testing.expectEqual(@as(usize, 0), view.horizontal_offset);
+    surface = try drawForTest(arena, view.widget(), 80, 10);
+    try testing.expectEqualStrings("漢", surface.readCell(geometry.ours.start, 3).char.grapheme);
+    try testing.expectEqualStrings("│", surface.readCell(geometry.ours.end, 3).char.grapheme);
 }
 
 test "merge TUI: wheel moves the selection and resize requests redraw" {
@@ -849,9 +1329,46 @@ test "merge TUI: moving down keeps the selected row visible" {
     }
     const surface = try drawForTest(arena, view.widget(), 100, 10);
 
-    // Without vertical offset updates, f7 would be below the footer.
-    try testing.expectEqual(@as(usize, 2), view.vertical_offset);
-    try testing.expect(std.mem.indexOf(u8, try rowText(arena, surface, 8), "f7") != null);
+    // Row 8 is reserved for status, so f7 must remain on the last body row.
+    try testing.expectEqual(@as(usize, 3), view.vertical_offset);
+    try testing.expect(std.mem.indexOf(u8, try rowText(arena, surface, 7), "f7") != null);
+}
+
+test "merge TUI: status keeps the selected conflict visible and is not selectable" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var fixture = try tallPlan(arena);
+    var state = try merge_ui_state.State.init(arena, &fixture.plan);
+    var view = View.init(arena, &state, "A.prefab");
+    defer view.deinit();
+    _ = try drawForTest(arena, view.widget(), 80, 10);
+    var ctx = eventContext(arena);
+
+    for (0..5) |_| {
+        try view.widget().handleEvent(&ctx, .{ .key_press = .{ .codepoint = vaxis.Key.down } });
+    }
+    try view.widget().handleEvent(&ctx, .{ .key_press = .{ .codepoint = vaxis.Key.enter } });
+    try view.widget().handleEvent(&ctx, .{ .key_press = .{ .codepoint = '{', .text = "{bad" } });
+    try view.widget().handleEvent(&ctx, .{ .key_press = .{ .codepoint = vaxis.Key.enter } });
+    try view.widget().handleEvent(&ctx, .{ .key_press = .{ .codepoint = 'a', .text = "a" } });
+
+    const surface = try drawForTest(arena, view.widget(), 80, 10);
+    const geometry = Geometry.init(80);
+    // The five body rows are 3...7; status has its own non-overlapping row 8.
+    try testing.expectEqualStrings("f5", try cellsText(arena, surface, 7, geometry.property.start, 2));
+    try testing.expect(std.mem.indexOf(u8, try rowText(arena, surface, 8), "not valid Unity YAML") != null);
+
+    try view.widget().handleEvent(&ctx, .{ .key_press = .{ .codepoint = vaxis.Key.up } });
+    try testing.expectEqual(@as(usize, 4), state.selected_conflict);
+    try view.widget().handleEvent(&ctx, .{ .mouse = .{
+        .col = @intCast(geometry.property.start),
+        .row = 8,
+        .button = .left,
+        .mods = .{},
+        .type = .press,
+    } });
+    try testing.expectEqual(@as(usize, 4), state.selected_conflict);
 }
 
 test "merge TUI: apply quits only after every conflict is ready" {
@@ -862,6 +1379,7 @@ test "merge TUI: apply quits only after every conflict is ready" {
     var state = try merge_ui_state.State.init(arena, &fixture.plan);
     var view = View.init(arena, &state, "A.prefab");
     defer view.deinit();
+    _ = try drawForTest(arena, view.widget(), 100, 20);
     var ctx = eventContext(arena);
 
     // The first apply resolves one row but must keep the application open.
@@ -885,6 +1403,7 @@ test "merge TUI: non-apply actions do not quit a ready view" {
     var state = try merge_ui_state.State.init(arena, &fixture.plan);
     var view = View.init(arena, &state, "A.prefab");
     defer view.deinit();
+    _ = try drawForTest(arena, view.widget(), 100, 20);
     var ctx = eventContext(arena);
 
     // A ready model can still receive navigation; only Apply or Abort may stop the loop.
@@ -901,6 +1420,7 @@ test "merge TUI: q aborts and quits through a real key event" {
     var state = try merge_ui_state.State.init(arena, &fixture.plan);
     var view = View.init(arena, &state, "A.prefab");
     defer view.deinit();
+    _ = try drawForTest(arena, view.widget(), 100, 20);
     var ctx = eventContext(arena);
 
     // Abort must update the model before it terminates the event loop.

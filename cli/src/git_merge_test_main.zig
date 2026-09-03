@@ -250,6 +250,7 @@ pub fn prepareRepository(
     try cwd.createDirPath(io, try std.fs.path.join(arena, &.{ repo, "Assets" }));
     try cwd.createDirPath(io, try std.fs.path.join(arena, &.{ repo, "Notes" }));
     try gitOk(io, arena, repo, &.{ "init", "-q", "-b", "base" });
+    try configureHermeticRepository(io, arena, repo);
     try gitOk(io, arena, repo, &.{ "config", "user.email", "prefablens-tests@example.invalid" });
     try gitOk(io, arena, repo, &.{ "config", "user.name", "PrefabLens tests" });
     try gitOk(io, arena, repo, &.{ "config", "merge.prefablens.name", "PrefabLens semantic merge" });
@@ -275,6 +276,22 @@ pub fn prepareRepository(
     try gitOk(io, arena, repo, &.{ "add", "--all" });
     try gitOk(io, arena, repo, &.{ "commit", "-q", "-m", "remote" });
     try gitOk(io, arena, repo, &.{ "switch", "-q", "local" });
+}
+
+fn configureHermeticRepository(io: std.Io, arena: std.mem.Allocator, repo: []const u8) !void {
+    const empty_attributes = try std.fs.path.join(arena, &.{ repo, ".git/prefablens-global-attributes" });
+    const empty_excludes = try std.fs.path.join(arena, &.{ repo, ".git/prefablens-global-excludes" });
+    const disabled_hooks = try std.fs.path.join(arena, &.{ repo, ".git/prefablens-disabled-hooks" });
+    try writeFile(io, arena, repo, ".git/prefablens-global-attributes", "");
+    try writeFile(io, arena, repo, ".git/prefablens-global-excludes", "");
+
+    // Exact-byte assertions require Git to ignore user line-ending and attribute settings.
+    try gitOk(io, arena, repo, &.{ "config", "core.autocrlf", "false" });
+    try gitOk(io, arena, repo, &.{ "config", "core.eol", "lf" });
+    try gitOk(io, arena, repo, &.{ "config", "core.attributesFile", empty_attributes });
+    try gitOk(io, arena, repo, &.{ "config", "core.excludesFile", empty_excludes });
+    try gitOk(io, arena, repo, &.{ "config", "core.hooksPath", disabled_hooks });
+    try gitOk(io, arena, repo, &.{ "config", "commit.gpgSign", "false" });
 }
 
 fn installAttributes(

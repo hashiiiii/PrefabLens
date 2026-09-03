@@ -2,6 +2,8 @@
 GameObject:
   m_Component:
   - component: {fileID: 400}
+  # Keep this component group.
+
   - component: {fileID: 540}
   - component: {fileID: 650}
   m_Name: Root

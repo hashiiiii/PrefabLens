@@ -8,6 +8,10 @@ const source = @import("source.zig");
 
 const testing = std.testing;
 
+test {
+    _ = merge_order;
+}
+
 const Decision = enum { ours, theirs, common, conflict };
 
 const DocumentNodes = struct {
@@ -186,6 +190,10 @@ fn collectField(
         if (equalOptional(nodes.base, nodes.ours) and equalOptional(nodes.base, nodes.theirs)) return;
         const sequence_kind = merge_identity.sequenceKind(document_id.class_id, property_path) orelse
             return error.UnsupportedStructure;
+        switch (sequence_kind) {
+            .components, .children => {},
+            else => return error.UnsupportedStructure,
+        }
         return collectSequence(
             arena,
             operations,
@@ -581,9 +589,17 @@ fn appendOrderOperation(
     merged_bytes: []const u8,
     has_conflict: bool,
 ) std.mem.Allocator.Error!void {
+    var ours_value = sequenceSideValue(ours_file, nodes.ours);
+    const replacement = if (!has_conflict)
+        try sequenceReplacement(arena, ours_file, nodes.ours, merged_bytes)
+    else
+        merged_bytes;
+    if (!has_conflict and merged_bytes.len == 0) {
+        ours_value = sequenceEmptyPatchValue(ours_file, nodes.ours);
+    }
     var theirs_value = sequenceSideValue(theirs_file, nodes.theirs);
     if (!has_conflict) {
-        if (theirs_value) |*value| value.bytes = try sequenceReplacement(arena, ours_file, nodes.ours, merged_bytes);
+        if (theirs_value) |*value| value.bytes = replacement;
     }
     try operations.append(arena, .{
         .id = @intCast(operations.items.len),
@@ -594,10 +610,10 @@ fn appendOrderOperation(
         .property_path = property_path,
         .values = .{
             .base = sequenceSideValue(base_file, nodes.base),
-            .ours = sequenceSideValue(ours_file, nodes.ours),
+            .ours = ours_value,
             .theirs = theirs_value,
         },
-        .resolution = if (nodes.ours != null and std.mem.eql(u8, sequenceSideValue(ours_file, nodes.ours).?.bytes, merged_bytes))
+        .resolution = if (ours_value != null and std.mem.eql(u8, ours_value.?.bytes, replacement))
             .{ .take = .ours }
         else
             .{ .take = .theirs },
@@ -665,6 +681,7 @@ fn renderSequence(
                 ours_file.lineEndingAt(offset),
             ));
         }
+        try appendOursGap(arena, &output, ours_file, items.ours, order, index, id);
     }
     return output.toOwnedSlice(arena);
 }
@@ -676,8 +693,17 @@ fn sequenceReplacement(
     merged_bytes: []const u8,
 ) std.mem.Allocator.Error![]const u8 {
     const node = ours_node orelse return merged_bytes;
+    if (merged_bytes.len == 0) {
+        if (node.* != .seq or node.seq.len == 0) {
+            return if (sequenceSideValue(ours_file, node)) |value| value.bytes else "[]";
+        }
+        const span = ours_file.node_spans.get(node) orelse return " []";
+        const source_bytes = span.bytes(ours_file.bytes);
+        if (std.mem.endsWith(u8, source_bytes, "\r\n")) return " []\r\n";
+        if (std.mem.endsWith(u8, source_bytes, "\n")) return " []\n";
+        return " []";
+    }
     if (node.* != .seq or node.seq.len != 0) return merged_bytes;
-    if (merged_bytes.len == 0) return "[]";
     const span = ours_file.node_spans.get(node) orelse return merged_bytes;
     const line_ending = ours_file.lineEndingAt(span.end);
     const item_bytes = if (std.mem.endsWith(u8, merged_bytes, line_ending))
@@ -685,6 +711,46 @@ fn sequenceReplacement(
     else
         merged_bytes;
     return std.fmt.allocPrint(arena, "{s}{s}", .{ line_ending, item_bytes });
+}
+
+fn sequenceEmptyPatchValue(file: source.ParsedFile, node: ?*const model.Node) ?merge_model.SideValue {
+    var value = sequenceSideValue(file, node) orelse return null;
+    const sequence = node.?;
+    if (sequence.* != .seq or sequence.seq.len == 0) return value;
+    const entry = file.entry_spans.get(sequence) orelse return value;
+    const span = file.node_spans.get(sequence) orelse return value;
+    if (entry.value.start > span.end) return value;
+    value.span = .{ .start = entry.value.start, .end = span.end };
+    value.bytes = value.span.?.bytes(file.bytes);
+    return value;
+}
+
+fn appendOursGap(
+    arena: std.mem.Allocator,
+    output: *std.ArrayList(u8),
+    ours_file: source.ParsedFile,
+    ours_items: []const SequenceItem,
+    order: []const []const u8,
+    order_index: usize,
+    id: []const u8,
+) merge_model.Error!void {
+    const ours_index = for (ours_items, 0..) |item, index| {
+        if (std.mem.eql(u8, item.id, id)) break index;
+    } else return;
+    if (ours_index + 1 == ours_items.len) return;
+    const current_span = ours_file.sequence_item_spans.get(ours_items[ours_index].node) orelse
+        return error.UnsupportedStructure;
+    const next_item = ours_items[ours_index + 1];
+    const next_span = ours_file.sequence_item_spans.get(next_item.node) orelse
+        return error.UnsupportedStructure;
+    if (next_span.start < current_span.end) return error.UnsupportedStructure;
+    const gap = ours_file.bytes[current_span.end..next_span.start];
+    if (gap.len == 0) return;
+    const next_order_index = for (order, 0..) |ordered_id, index| {
+        if (std.mem.eql(u8, ordered_id, next_item.id)) break index;
+    } else return error.UnsupportedStructure;
+    if (next_order_index <= order_index) return error.UnsupportedStructure;
+    try output.appendSlice(arena, gap);
 }
 
 fn sequenceIndent(file: source.ParsedFile, node: ?*const model.Node) ?usize {
@@ -1172,6 +1238,60 @@ test "merge planner: adds a child to an inline empty sequence" {
     const built = try @import("merge.zig").build(arena_state.allocator(), base, base, theirs);
 
     try testing.expectEqualStrings(expected, built.partial);
+}
+
+test "merge planner: deletes the final child from a block sequence" {
+    const block =
+        "--- !u!1 &100\nGameObject:\n  m_Component:\n  - component: {fileID: 400}\n" ++
+        "--- !u!4 &400\nTransform:\n  m_GameObject: {fileID: 100}\n  m_Children:\n  - {fileID: 410}\n" ++
+        "--- !u!1 &110\nGameObject:\n  m_Component:\n  - component: {fileID: 410}\n" ++
+        "--- !u!4 &410\nTransform:\n  m_GameObject: {fileID: 110}\n  m_Children: []\n";
+    const inline_empty =
+        "--- !u!1 &100\nGameObject:\n  m_Component:\n  - component: {fileID: 400}\n" ++
+        "--- !u!4 &400\nTransform:\n  m_GameObject: {fileID: 100}\n  m_Children: []\n" ++
+        "--- !u!1 &110\nGameObject:\n  m_Component:\n  - component: {fileID: 410}\n" ++
+        "--- !u!4 &410\nTransform:\n  m_GameObject: {fileID: 110}\n  m_Children: []\n";
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+
+    const built = try @import("merge.zig").build(arena_state.allocator(), block, block, inline_empty);
+
+    try testing.expectEqualStrings(inline_empty, built.partial);
+}
+
+test "merge planner: keeps inline spacing after deleting the final child" {
+    const block =
+        "--- !u!1 &100\nGameObject:\n  m_Component:\n  - component: {fileID: 400}\n" ++
+        "--- !u!4 &400\nTransform:\n  m_GameObject: {fileID: 100}\n  m_Children:\n  - {fileID: 410}\n" ++
+        "--- !u!1 &110\nGameObject:\n  m_Component:\n  - component: {fileID: 410}\n" ++
+        "--- !u!4 &410\nTransform:\n  m_GameObject: {fileID: 110}\n  m_Children: []\n";
+    const inline_empty =
+        "--- !u!1 &100\nGameObject:\n  m_Component:\n  - component: {fileID: 400}\n" ++
+        "--- !u!4 &400\nTransform:\n  m_GameObject: {fileID: 100}\n  m_Children: []\n" ++
+        "--- !u!1 &110\nGameObject:\n  m_Component:\n  - component: {fileID: 410}\n" ++
+        "--- !u!4 &410\nTransform:\n  m_GameObject: {fileID: 110}\n  m_Children: []\n";
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+
+    const built = try @import("merge.zig").build(arena_state.allocator(), block, inline_empty, block);
+
+    try testing.expectEqualStrings(inline_empty, built.partial);
+}
+
+test "merge planner: rejects a changed Prefab override sequence until its rules exist" {
+    const base =
+        "--- !u!1001 &1001\nPrefabInstance:\n  m_Modification:\n    m_Modifications:\n" ++
+        "    - target: {fileID: 1, guid: aaa, type: 3}\n      propertyPath: m_Name\n      value: Old\n";
+    const ours =
+        "--- !u!1001 &1001\nPrefabInstance:\n  m_Modification:\n    m_Modifications:\n" ++
+        "    - target: {fileID: 1, guid: aaa, type: 3}\n      propertyPath: m_Name\n      value: New\n";
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+
+    try testing.expectError(
+        error.UnsupportedStructure,
+        @import("merge.zig").build(arena_state.allocator(), base, ours, base),
+    );
 }
 
 test "merge planner: holds conflicting child orders" {

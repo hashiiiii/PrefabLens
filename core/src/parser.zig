@@ -88,6 +88,32 @@ test "parseSpanned: reports malformed syntax without changing parse" {
     try testing.expectEqual(@as(usize, 1), docs.len);
 }
 
+test "parseSpanned: records container and nested entry spans" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const src = "--- !u!1 &1\nGameObject:\n  m_Component:\n  - component: {fileID: 4}\n    propertyPath: m_Name\n  m_Vector: {x: 1, y: 2}\n";
+    const parsed = try parseSpanned(arena_state.allocator(), src);
+    const body = parsed.documents[0].body;
+    try testing.expectEqualStrings("  - component: {fileID: 4}\n    propertyPath: m_Name\n", parsed.nodeBytes(model.findValue(body.map, "m_Component").?).?);
+    const components = model.findValue(body.map, "m_Component").?;
+    try testing.expectEqualStrings("  - component: {fileID: 4}\n    propertyPath: m_Name\n", parsed.sequenceItemBytes(components.seq[0]).?);
+    const component = model.findValue(components.seq[0].map, "component").?;
+    try testing.expect(parsed.entry_spans.get(component) != null);
+    const property = model.findValue(components.seq[0].map, "propertyPath").?;
+    try testing.expect(parsed.entry_spans.get(property) != null);
+    const vector = model.findValue(body.map, "m_Vector").?;
+    const x = model.findValue(vector.map, "x").?;
+    try testing.expect(parsed.entry_spans.get(x) != null);
+}
+
+test "parseSpanned: selects adjacent line ending at EOF" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const src = "--- !u!1 &1\r\nGameObject:\r\n  m_Name: A\n";
+    const parsed = try parseSpanned(arena_state.allocator(), src);
+    try testing.expectEqualStrings("\n", parsed.lineEndingAt(src.len));
+}
+
 test "parse: multiple documents" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
@@ -573,6 +599,7 @@ fn parseBlock(p: *Parser, indent: usize, depth: usize) Error!*Node {
 
 fn parseMap(p: *Parser, indent: usize, depth: usize) Error!*Node {
     var entries: std.ArrayList(Entry) = .empty;
+    const start = if (p.peek()) |first| first.whole.start else 0;
     while (p.peek()) |line| {
         if (line.indent != indent) break;
         if (std.mem.startsWith(u8, line.text, "---")) break;
@@ -591,7 +618,10 @@ fn parseMap(p: *Parser, indent: usize, depth: usize) Error!*Node {
         }
         try entries.append(p.arena, .{ .key = kv.key, .value = value });
     }
-    return makeNode(p.arena, .{ .map = try entries.toOwnedSlice(p.arena) });
+    const node = try makeNode(p.arena, .{ .map = try entries.toOwnedSlice(p.arena) });
+    const end = if (p.pos > 0) p.lines[p.pos - 1].whole.end else start;
+    try p.node_spans.put(p.arena, node, .{ .start = start, .end = end });
+    return node;
 }
 
 // Value of a "key:" line with nothing after the colon: a deeper-indented nested block,
@@ -610,6 +640,7 @@ fn parseNestedValue(p: *Parser, key_indent: usize, depth: usize) Error!*Node {
 
 fn parseSeq(p: *Parser, indent: usize, depth: usize) Error!*Node {
     var items: std.ArrayList(*Node) = .empty;
+    const start = if (p.peek()) |first| first.whole.start else 0;
     while (p.peek()) |line| {
         if (line.indent != indent) break;
         if (!(std.mem.startsWith(u8, line.text, "- ") or std.mem.eql(u8, line.text, "-"))) break;
@@ -619,12 +650,14 @@ fn parseSeq(p: *Parser, indent: usize, depth: usize) Error!*Node {
             // Lone "-": this item's nested block continues at a deeper indent.
             const ci = indentOfNext(p, indent + 2);
             const item = try parseBlock(p, ci, depth + 1);
-            try p.sequence_item_spans.put(p.arena, item, line.whole);
+            const end = if (p.pos > 0) p.lines[p.pos - 1].whole.end else line.whole.end;
+            try p.sequence_item_spans.put(p.arena, item, .{ .start = line.whole.start, .end = end });
             try items.append(p.arena, item);
         } else if (looksLikeMapEntry(rest)) {
             // Compact map item: the first entry is on the dash line, the rest at indent+2.
             const item = try parseSeqMapItem(p, indent, rest, depth);
-            try p.sequence_item_spans.put(p.arena, item, line.whole);
+            const end = if (p.pos > 0) p.lines[p.pos - 1].whole.end else line.whole.end;
+            try p.sequence_item_spans.put(p.arena, item, .{ .start = line.whole.start, .end = end });
             try items.append(p.arena, item);
         } else {
             const item = try parseValue(p, rest, depth);
@@ -632,7 +665,10 @@ fn parseSeq(p: *Parser, indent: usize, depth: usize) Error!*Node {
             try items.append(p.arena, item);
         }
     }
-    return makeNode(p.arena, .{ .seq = try items.toOwnedSlice(p.arena) });
+    const node = try makeNode(p.arena, .{ .seq = try items.toOwnedSlice(p.arena) });
+    const end = if (p.pos > 0) p.lines[p.pos - 1].whole.end else start;
+    try p.node_spans.put(p.arena, node, .{ .start = start, .end = end });
+    return node;
 }
 
 // A sequence item that is a mapping. Example:
@@ -645,9 +681,13 @@ fn parseSeqMapItem(p: *Parser, dash_indent: usize, first_line: []const u8, depth
     const key_indent = dash_indent + 2;
     const kv = splitKeyValue(first_line);
     if (kv.value.len == 0) {
-        try entries.append(p.arena, .{ .key = kv.key, .value = try parseNestedValue(p, key_indent, depth) });
+        const value = try parseNestedValue(p, key_indent, depth);
+        try entries.append(p.arena, .{ .key = kv.key, .value = value });
+        try putEntrySpan(p, value, kv, spanForSlice(p.source_bytes, first_line));
     } else {
-        try entries.append(p.arena, .{ .key = kv.key, .value = try parseValue(p, kv.value, depth) });
+        const value = try parseValue(p, kv.value, depth);
+        try entries.append(p.arena, .{ .key = kv.key, .value = value });
+        try putEntrySpan(p, value, kv, spanForSlice(p.source_bytes, first_line));
     }
     // Continuation entries are 2 deeper than the dash (aligned right after "- ").
     while (p.peek()) |line| {
@@ -660,9 +700,16 @@ fn parseSeqMapItem(p: *Parser, dash_indent: usize, first_line: []const u8, depth
             try parseNestedValue(p, key_indent, depth)
         else
             try parseValue(p, e.value, depth);
+        try putEntrySpan(p, value, e, line.whole);
         try entries.append(p.arena, .{ .key = e.key, .value = value });
     }
     return makeNode(p.arena, .{ .map = try entries.toOwnedSlice(p.arena) });
+}
+
+fn putEntrySpan(p: *Parser, value: *Node, kv: KV, whole: source_map.Span) !void {
+    const key_start = @intFromPtr(kv.key.ptr) - @intFromPtr(p.source_bytes.ptr);
+    const value_start = @intFromPtr(kv.value.ptr) - @intFromPtr(p.source_bytes.ptr);
+    try p.entry_spans.put(p.arena, value, .{ .whole = whole, .key = .{ .start = key_start, .end = key_start + kv.key.len }, .value = .{ .start = value_start, .end = value_start + kv.value.len } });
 }
 
 // ---------- helpers ----------
@@ -728,6 +775,7 @@ fn parseFlow(p: *Parser, s: []const u8, depth: usize) Error!*Node {
         const kv = splitKeyValue(part);
         if (kv.key.len == 0) continue;
         const value = try parseValue(p, kv.value, depth + 1);
+        try putEntrySpan(p, value, kv, spanForSlice(p.source_bytes, part));
         try entries.append(arena, .{ .key = kv.key, .value = value });
     }
     const es = try entries.toOwnedSlice(arena);

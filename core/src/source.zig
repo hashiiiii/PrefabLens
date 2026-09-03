@@ -53,6 +53,9 @@ pub const ParsedFile = struct {
     pub fn lineEndingAt(self: ParsedFile, offset: usize) []const u8 {
         const next_lf = std.mem.indexOfScalarPos(u8, self.bytes, offset, '\n');
         if (next_lf) |lf| return if (lf != 0 and self.bytes[lf - 1] == '\r') "\r\n" else "\n";
+        if (offset > 0 and offset <= self.bytes.len and self.bytes[offset - 1] == '\n') {
+            return if (offset > 1 and self.bytes[offset - 2] == '\r') "\r\n" else "\n";
+        }
         return if (self.line_ending == .crlf) "\r\n" else "\n";
     }
 };

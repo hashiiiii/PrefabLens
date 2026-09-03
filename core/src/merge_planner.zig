@@ -813,7 +813,7 @@ fn renderSequence(
                 ours_file.lineEndingAt(offset),
             ));
         }
-        try appendOursGap(arena, &output, ours_file, items.ours, order, index, id);
+        try appendOursGap(arena, &output, ours_file, items.ours, id);
     }
     return output.toOwnedSlice(arena);
 }
@@ -862,8 +862,6 @@ fn appendOursGap(
     output: *std.ArrayList(u8),
     ours_file: source.ParsedFile,
     ours_items: []const SequenceItem,
-    order: []const []const u8,
-    order_index: usize,
     id: []const u8,
 ) merge_model.Error!void {
     const ours_index = for (ours_items, 0..) |item, index| {
@@ -877,11 +875,6 @@ fn appendOursGap(
         return error.UnsupportedStructure;
     if (next_span.start < current_span.end) return error.UnsupportedStructure;
     const gap = ours_file.bytes[current_span.end..next_span.start];
-    if (gap.len == 0) return;
-    const next_order_index = for (order, 0..) |ordered_id, index| {
-        if (std.mem.eql(u8, ordered_id, next_item.id)) break index;
-    } else return error.UnsupportedStructure;
-    if (next_order_index <= order_index) return error.UnsupportedStructure;
     try output.appendSlice(arena, gap);
 }
 
@@ -1437,7 +1430,7 @@ test "merge planner: composes component choices with an independent order choice
         "--- !u!65 &65\nBoxCollider:\n  m_GameObject: {fileID: 1}\n  m_IsTrigger: 0\n" ++
         "--- !u!66 &66\nMeshCollider:\n  m_GameObject: {fileID: 1}\n  m_Convex: 0\n";
     const ours =
-        "--- !u!1 &1\nGameObject:\n  m_Component:\n  - component: {fileID: 65}\n  - component: {fileID: 4}\n  - component: {fileID: 54}\n  - component: {fileID: 66}\n" ++
+        "--- !u!1 &1\nGameObject:\n  m_Component:\n  - component: {fileID: 65}\n  # Keep with component 65.\n  - component: {fileID: 4}\n  - component: {fileID: 54}\n  - component: {fileID: 66}\n" ++
         "--- !u!4 &4\nTransform:\n  m_GameObject: {fileID: 1}\n  m_Children: []\n" ++
         "--- !u!54 &54\nRigidbody:\n  m_GameObject: {fileID: 1}\n  m_Mass: 2\n" ++
         "--- !u!65 &65\nBoxCollider:\n  m_GameObject: {fileID: 1}\n  m_IsTrigger: 0\n" ++
@@ -1463,6 +1456,11 @@ test "merge planner: composes component choices with an independent order choice
     const component_65 = std.mem.indexOf(u8, finished, "component: {fileID: 65}").?;
     try testing.expect(std.mem.indexOf(u8, finished, "component: {fileID: 54}") != null);
     try testing.expect(std.mem.indexOf(u8, finished, "--- !u!54 &54") != null);
+    try testing.expect(std.mem.indexOf(
+        u8,
+        finished,
+        "  - component: {fileID: 65}\n  # Keep with component 65.\n",
+    ) != null);
     try testing.expect(component_4 < component_66 and component_66 < component_65);
 
     var reversed = try @import("merge.zig").build(arena, base, theirs, ours);
@@ -1474,6 +1472,31 @@ test "merge planner: composes component choices with an independent order choice
 
     try testing.expect(std.mem.indexOf(u8, reversed_finished, "component: {fileID: 54}") == null);
     try testing.expect(std.mem.indexOf(u8, reversed_finished, "--- !u!54 &54") == null);
+}
+
+test "merge planner: keeps a component gap when the next component is deleted" {
+    const base =
+        "--- !u!1 &1\nGameObject:\n  m_Component:\n  - component: {fileID: 4}\n" ++
+        "  - component: {fileID: 54}\n  # Keep with component 54.\n  - component: {fileID: 65}\n" ++
+        "--- !u!4 &4\nTransform:\n  m_GameObject: {fileID: 1}\n  m_Children: []\n" ++
+        "--- !u!54 &54\nRigidbody:\n  m_GameObject: {fileID: 1}\n  m_Mass: 1\n" ++
+        "--- !u!65 &65\nBoxCollider:\n  m_GameObject: {fileID: 1}\n  m_IsTrigger: 0\n";
+    const theirs =
+        "--- !u!1 &1\nGameObject:\n  m_Component:\n  - component: {fileID: 4}\n" ++
+        "  - component: {fileID: 54}\n" ++
+        "--- !u!4 &4\nTransform:\n  m_GameObject: {fileID: 1}\n  m_Children: []\n" ++
+        "--- !u!54 &54\nRigidbody:\n  m_GameObject: {fileID: 1}\n  m_Mass: 1\n";
+    const expected =
+        "--- !u!1 &1\nGameObject:\n  m_Component:\n  - component: {fileID: 4}\n" ++
+        "  - component: {fileID: 54}\n  # Keep with component 54.\n" ++
+        "--- !u!4 &4\nTransform:\n  m_GameObject: {fileID: 1}\n  m_Children: []\n" ++
+        "--- !u!54 &54\nRigidbody:\n  m_GameObject: {fileID: 1}\n  m_Mass: 1\n";
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+
+    const built = try @import("merge.zig").build(arena_state.allocator(), base, base, theirs);
+
+    try testing.expectEqualStrings(expected, built.partial);
 }
 
 test "merge planner: rejects a component reference without its document" {

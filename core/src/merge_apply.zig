@@ -348,12 +348,12 @@ fn renderComponentSequence(
     destination_indent: usize,
 ) merge_model.Error![]const u8 {
     var output: std.ArrayList(u8) = .empty;
-    for (order, 0..) |file_id, order_index| {
+    for (order) |file_id| {
         const selected = componentItem(plan, operation, choices, file_id) orelse
             return error.UnsupportedStructure;
         if (selected.side == .ours) {
             try output.appendSlice(arena, selected.value.bytes);
-            try appendOursComponentGap(arena, &output, plan.ours, ours_sequence, order, order_index, file_id);
+            try appendOursComponentGap(arena, &output, plan.ours, ours_sequence, file_id);
         } else {
             try output.appendSlice(arena, try merge_planner.reindentSequenceItem(
                 arena,
@@ -394,8 +394,6 @@ fn appendOursComponentGap(
     output: *std.ArrayList(u8),
     file: source.ParsedFile,
     sequence: *const model.Node,
-    order: []const i64,
-    order_index: usize,
     file_id: i64,
 ) merge_model.Error!void {
     const ours_index = for (sequence.seq, 0..) |item, index| {
@@ -408,10 +406,6 @@ fn appendOursComponentGap(
     const next_span = file.sequence_item_spans.get(next_item) orelse return error.UnsupportedStructure;
     if (next_span.start < current_span.end) return error.UnsupportedStructure;
     const gap = file.bytes[current_span.end..next_span.start];
-    if (gap.len == 0) return;
-    const next_id = componentFileId(next_item) orelse return error.UnsupportedStructure;
-    const next_order_index = componentIndex(order, next_id) orelse return error.UnsupportedStructure;
-    if (next_order_index <= order_index) return error.UnsupportedStructure;
     try output.appendSlice(arena, gap);
 }
 

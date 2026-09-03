@@ -52,7 +52,6 @@ pub fn resolve(
             if (value == null) return error.InvalidResolution;
         },
         .custom => |bytes| {
-            if (bytes.len == 0) return error.InvalidResolution;
             operation.resolution = .{ .custom = try arena.dupe(u8, bytes) };
             return;
         },
@@ -69,6 +68,7 @@ pub fn finish(arena: std.mem.Allocator, plan: *const MergePlan) Error![]const u8
 fn render(arena: std.mem.Allocator, plan: *const MergePlan, allow_unresolved: bool) Error![]const u8 {
     var edits: std.ArrayList(Edit) = .empty;
     for (plan.operations, 0..) |*operation, order| {
+        if (allow_unresolved and try atomicHasUnresolved(plan, operation.atomic_id)) continue;
         const replacement = switch (operation.resolution) {
             .unresolved => if (allow_unresolved) continue else return error.InvalidMerge,
             .take => |side| (valueForSide(operation, side) orelse return error.InvalidResolution).bytes,
@@ -99,27 +99,32 @@ fn appendEdit(
     replacement: []const u8,
     order: usize,
 ) Error!void {
-    if (operation.resolution == .remove and operation.values.ours == null) return;
+    if (operation.resolution == .remove) {
+        const ours = operation.values.ours orelse return;
+        const node = ours.node orelse return error.InvalidMerge;
+        const entry = plan.ours.entry_spans.get(node) orelse return error.UnsupportedStructure;
+        return edits.append(arena, .{ .start = entry.whole.start, .end = entry.whole.end, .replacement = "", .order = order });
+    }
     if (operation.values.ours) |ours| {
-        if (replacement.len == 0) {
-            const node = ours.node orelse return error.InvalidMerge;
-            const entry = plan.ours.entry_spans.get(node) orelse return error.UnsupportedStructure;
-            return edits.append(arena, .{ .start = entry.whole.start, .end = entry.whole.end, .replacement = "", .order = order });
-        }
         const span = ours.span orelse return error.UnsupportedStructure;
         if (std.mem.eql(u8, span.bytes(plan.ours.bytes), replacement)) return;
         return edits.append(arena, .{ .start = span.start, .end = span.end, .replacement = replacement, .order = order });
     }
 
-    const selected = selectedValue(operation) orelse return error.InvalidResolution;
-    const node = selected.value.node orelse return error.InvalidMerge;
-    const selected_file = fileForSide(plan, selected.side);
-    const entry = selected_file.entry_spans.get(node) orelse return error.UnsupportedStructure;
+    const template = insertionTemplate(operation) orelse return error.InvalidResolution;
+    const node = template.value.node orelse return error.InvalidMerge;
+    const template_file = fileForSide(plan, template.side);
+    const entry = template_file.entry_spans.get(node) orelse return error.UnsupportedStructure;
+    const inserted = switch (operation.resolution) {
+        .take => entry.whole.bytes(template_file.bytes),
+        .custom => try entryWithValue(arena, template_file, entry, template.value, replacement),
+        .unresolved, .remove => return error.InvalidResolution,
+    };
     const insert_at = try insertionOffset(plan, operation);
     try edits.append(arena, .{
         .start = insert_at,
         .end = insert_at,
-        .replacement = entry.whole.bytes(selected_file.bytes),
+        .replacement = inserted,
         .order = order,
     });
 }
@@ -131,6 +136,42 @@ fn selectedValue(operation: *const Operation) ?SelectedValue {
         .take => |side| if (valueForSide(operation, side)) |value| .{ .side = side, .value = value } else null,
         else => null,
     };
+}
+
+fn insertionTemplate(operation: *const Operation) ?SelectedValue {
+    if (selectedValue(operation)) |selected| return selected;
+    if (operation.resolution != .custom) return null;
+    if (operation.values.theirs) |value| return .{ .side = .theirs, .value = value };
+    if (operation.values.base) |value| return .{ .side = .base, .value = value };
+    return null;
+}
+
+fn entryWithValue(
+    arena: std.mem.Allocator,
+    file: source.ParsedFile,
+    entry: source.EntrySpan,
+    value: SideValue,
+    replacement: []const u8,
+) Error![]const u8 {
+    const value_span = value.span orelse return error.UnsupportedStructure;
+    if (value_span.start < entry.whole.start or value_span.end > entry.whole.end) return error.UnsupportedStructure;
+    var bytes: std.ArrayList(u8) = .empty;
+    try bytes.appendSlice(arena, file.bytes[entry.whole.start..value_span.start]);
+    try bytes.appendSlice(arena, replacement);
+    try bytes.appendSlice(arena, file.bytes[value_span.end..entry.whole.end]);
+    return bytes.toOwnedSlice(arena);
+}
+
+fn atomicHasUnresolved(plan: *const MergePlan, atomic_id: merge_model.AtomicId) Error!bool {
+    for (plan.atomic_operations) |atomic| {
+        if (atomic.id != atomic_id) continue;
+        for (atomic.operation_ids) |operation_id| {
+            const operation = merge_model.operationByIdConst(plan, operation_id) orelse return error.InvalidMerge;
+            if (operation.resolution == .unresolved) return true;
+        }
+        return false;
+    }
+    return error.InvalidMerge;
 }
 
 fn valueForSide(operation: *const Operation, side: merge_model.Side) ?SideValue {
@@ -182,4 +223,57 @@ fn findValue(entries: []const @import("model.zig").Entry, key: []const u8) ?*@im
 fn lessThanEdit(_: void, a: Edit, b: Edit) bool {
     if (a.start != b.start) return a.start < b.start;
     return a.order < b.order;
+}
+
+test "partial merge holds all members of an unresolved atomic operation" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const base = "--- !u!114 &1\nMonoBehaviour:\n  first: 1\n  second: 1\n";
+    const ours = "--- !u!114 &1\nMonoBehaviour:\n  first: 1\n  second: 2\n";
+    const theirs = "--- !u!114 &1\nMonoBehaviour:\n  first: 3\n  second: 3\n";
+    var built = try build(arena, base, ours, theirs);
+    const operation_ids = try arena.dupe(OperationId, &.{ 0, 1 });
+    built.plan.operations[1].atomic_id = 0;
+    built.plan.atomic_operations[0].operation_ids = operation_ids;
+    built.plan.atomic_operations = built.plan.atomic_operations[0..1];
+
+    const partial = try render(arena, &built.plan, true);
+
+    try std.testing.expectEqualStrings(ours, partial);
+}
+
+test "custom value inserts a field that is absent from ours" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const base = "--- !u!114 &1\nMonoBehaviour:\n  m_Value: 1\n";
+    const ours = "--- !u!114 &1\nMonoBehaviour:\n";
+    const theirs = "--- !u!114 &1\nMonoBehaviour:\n  m_Value: 2\n";
+    var built = try build(arena, base, ours, theirs);
+
+    try resolve(arena, &built.plan, 0, .{ .custom = "3" });
+    const result = try finish(arena, &built.plan);
+
+    try std.testing.expectEqualStrings(
+        "--- !u!114 &1\nMonoBehaviour:\n  m_Value: 3\n",
+        result,
+    );
+}
+
+test "empty scalar stays present for take and custom resolutions" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const base = "--- !u!114 &1\nMonoBehaviour:\n  m_Value: {x: 1}\n";
+    const ours = "--- !u!114 &1\nMonoBehaviour:\n  m_Value: {x: 2}\n";
+    const theirs = "--- !u!114 &1\nMonoBehaviour:\n  m_Value: {x: }\n";
+
+    var taken = try build(arena, base, ours, theirs);
+    try resolve(arena, &taken.plan, 0, .{ .take = .theirs });
+    try std.testing.expectEqualStrings(theirs, try finish(arena, &taken.plan));
+
+    var custom = try build(arena, base, ours, theirs);
+    try resolve(arena, &custom.plan, 0, .{ .custom = "" });
+    try std.testing.expectEqualStrings(theirs, try finish(arena, &custom.plan));
 }

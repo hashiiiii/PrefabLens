@@ -55,8 +55,6 @@ pub fn resolve(
         .custom => |value| {
             if (operation.kind != .field or atomic.operation_ids.len != 1 or
                 !supportsCustomValue(operation) or !wasConflict(operation)) return error.InvalidResolution;
-            if (!customFlowMapIsSafeToParse(value))
-                return error.InvalidResolution;
             _ = try merge_apply.parseCustomValue(arena, value);
             stored_resolution = .{ .custom = try arena.dupe(u8, value) };
         },
@@ -83,53 +81,6 @@ pub fn resolve(
         error.OutOfMemory => return error.OutOfMemory,
         else => return error.InvalidResolution,
     };
-}
-
-fn customFlowMapIsSafeToParse(value: []const u8) bool {
-    const trimmed = std.mem.trim(u8, value, " ");
-    if (trimmed.len == 0) return true;
-    if (trimmed[0] == '[') return false;
-    if (trimmed[0] != '{') return true;
-    if (trimmed[trimmed.len - 1] != '}') return false;
-    const inner = std.mem.trim(u8, trimmed[1 .. trimmed.len - 1], " ");
-    if (inner.len == 0) return true;
-
-    var part_start: usize = 0;
-    var quote: ?u8 = null;
-    var escaped = false;
-    for (inner, 0..) |byte, index| {
-        if (quote) |delimiter| {
-            if (byte == ',' or byte == '{' or byte == '}' or byte == '[' or byte == ']')
-                return false;
-            if (escaped) {
-                escaped = false;
-            } else if (byte == '\\' and delimiter == '"') {
-                escaped = true;
-            } else if (byte == delimiter) {
-                quote = null;
-            }
-            continue;
-        }
-        switch (byte) {
-            '\'', '"' => quote = byte,
-            '{', '}', '[', ']' => return false,
-            ',' => {
-                if (!flowEntryHasValue(inner[part_start..index])) return false;
-                part_start = index + 1;
-            },
-            else => {},
-        }
-    }
-    return quote == null and flowEntryHasValue(inner[part_start..]);
-}
-
-fn flowEntryHasValue(input: []const u8) bool {
-    const entry = std.mem.trim(u8, input, " ");
-    for (entry, 0..) |byte, index| {
-        if (byte == ':' and index != 0 and
-            (index + 1 == entry.len or entry[index + 1] == ' ')) return true;
-    }
-    return false;
 }
 
 fn valueForSide(operation: *const Operation, side: merge_model.Side) ?SideValue {
@@ -225,4 +176,16 @@ test "empty scalar stays present for take and custom resolutions" {
     var custom = try build(arena, base, ours, theirs);
     try resolve(arena, &custom.plan, 0, .{ .custom = "" });
     try std.testing.expectEqualStrings(theirs, try finish(arena, &custom.plan));
+}
+
+test "merge build rejects a malformed flow entry" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const valid = "--- !u!114 &1\nMonoBehaviour:\n  m_Value: 1\n";
+    const malformed = "--- !u!114 &1\nMonoBehaviour:\n  m_Value: {fileID: 1, bad}\n";
+
+    try std.testing.expectError(
+        error.MalformedInput,
+        build(arena_state.allocator(), valid, malformed, valid),
+    );
 }

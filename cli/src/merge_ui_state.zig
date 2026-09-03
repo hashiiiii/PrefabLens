@@ -427,14 +427,14 @@ test "merge UI state: malformed flow input returns a status" {
     try testing.expectEqualStrings("The result is not valid Unity YAML.", state.status);
 }
 
-test "merge UI state: nested malformed custom input returns a status" {
+test "merge UI state: a nested collection custom input returns a status" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
     var fixture = try conflictPlan(arena, 1);
     var state = try State.init(arena, &fixture.plan);
 
-    try state.handle(.{ .edit_result = "{fileID: 1, extra: {bad}}" });
+    try state.handle(.{ .edit_result = "{outer: {value: 1}}" });
     try state.handle(.apply_result);
 
     try testing.expectEqual(@as(usize, 1), state.unresolvedCount());
@@ -448,21 +448,52 @@ test "merge UI state: a sequence custom input returns a status" {
     var fixture = try conflictPlan(arena, 1);
     var state = try State.init(arena, &fixture.plan);
 
-    try state.handle(.{ .edit_result = "[{bad}]" });
+    try state.handle(.{ .edit_result = "[first, second]" });
     try state.handle(.apply_result);
 
     try testing.expectEqual(@as(usize, 1), state.unresolvedCount());
     try testing.expectEqualStrings("The result is not valid Unity YAML.", state.status);
 }
 
-test "merge UI state: quoted flow punctuation returns a status" {
+test "merge UI state: quoted flow punctuation applies" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var fixture = try conflictPlan(arena, 1);
+    var state = try State.init(arena, &fixture.plan);
+    const custom = "{fileID: 0, guid: \"a,b{c}\\\"d\", type: 3}";
+
+    try state.handle(.{ .edit_result = custom });
+    try state.handle(.apply_result);
+
+    try testing.expectEqual(Outcome.ready, state.outcome);
+    try testing.expectEqualStrings("", state.status);
+    try testing.expect(std.mem.indexOf(u8, try core.merge.finish(arena, &fixture.plan), custom) != null);
+}
+
+test "merge UI state: quoted scalar punctuation applies" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var fixture = try conflictPlan(arena, 1);
+    var state = try State.init(arena, &fixture.plan);
+    const custom = "\"a,b{c}\\\"d\"";
+
+    try state.handle(.{ .edit_result = custom });
+    try state.handle(.apply_result);
+
+    try testing.expectEqual(Outcome.ready, state.outcome);
+    try testing.expect(std.mem.indexOf(u8, try core.merge.finish(arena, &fixture.plan), custom) != null);
+}
+
+test "merge UI state: unterminated quoted scalar remains unresolved" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
     var fixture = try conflictPlan(arena, 1);
     var state = try State.init(arena, &fixture.plan);
 
-    try state.handle(.{ .edit_result = "{fileID: 1, guid: \"a,b\", type: 3}" });
+    try state.handle(.{ .edit_result = "\"unterminated" });
     try state.handle(.apply_result);
 
     try testing.expectEqual(@as(usize, 1), state.unresolvedCount());

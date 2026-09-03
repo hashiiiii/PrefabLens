@@ -425,6 +425,64 @@ test "parse: single-quoted scalar is unquoted" {
     try testing.expectEqualStrings("Hello: World", model.findValue(doc.body.map, "m_Name").?.scalar);
 }
 
+test "parseSpanned: quoted punctuation stays in one flow entry" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const src =
+        \\--- !u!114 &1
+        \\MonoBehaviour:
+        \\  m_Double: {fileID: 7, guid: "a,b{c}\"d", type: 3}
+        \\  m_Single: {fileID: 8, guid: 'a,b{c}''d', type: 3}
+    ;
+
+    const parsed = try parseSpanned(arena_state.allocator(), src);
+
+    try testing.expectEqual(@as(usize, 0), parsed.diagnostics.len);
+    const double = model.findValue(parsed.documents[0].body.map, "m_Double").?;
+    try testing.expectEqualStrings("a,b{c}\"d", double.ref.guid.?);
+    const single = model.findValue(parsed.documents[0].body.map, "m_Single").?;
+    try testing.expectEqualStrings("a,b{c}'d", single.ref.guid.?);
+}
+
+test "parseSpanned: malformed flow values produce diagnostics and valid spans" {
+    const malformed_values = [_][]const u8{
+        "{fileID: 1, bad}",
+        "{fileID: 1",
+        "{fileID: 1, guid: \"bad}",
+        "[{fileID: 1}",
+    };
+    for (malformed_values) |malformed| {
+        var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+        defer arena_state.deinit();
+        const src = try std.fmt.allocPrint(
+            arena_state.allocator(),
+            "--- !u!114 &1\nMonoBehaviour:\n  value: {s}\n",
+            .{malformed},
+        );
+
+        const parsed = try parseSpanned(arena_state.allocator(), src);
+
+        try testing.expect(parsed.diagnostics.len != 0);
+        var spans = parsed.entry_spans.iterator();
+        while (spans.next()) |entry| {
+            try testing.expect(entry.value_ptr.whole.end <= src.len);
+            try testing.expect(entry.value_ptr.key.end <= src.len);
+            try testing.expect(entry.value_ptr.value.end <= src.len);
+        }
+    }
+}
+
+test "parseSpanned: unterminated quoted scalar produces a diagnostic" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const parsed = try parseSpanned(
+        arena_state.allocator(),
+        "--- !u!114 &1\nMonoBehaviour:\n  value: \"unterminated\n",
+    );
+
+    try testing.expect(parsed.diagnostics.len != 0);
+}
+
 const Line = struct {
     indent: usize,
     text: []const u8,
@@ -571,8 +629,12 @@ fn spanToken(source_bytes: []const u8, text: []const u8, text_start: usize, mark
     return .{ .start = start, .end = end };
 }
 
-fn spanForSlice(source_bytes: []const u8, slice: []const u8) source_map.Span {
-    const start = @intFromPtr(slice.ptr) - @intFromPtr(source_bytes.ptr);
+fn spanForSlice(source_bytes: []const u8, slice: []const u8) ?source_map.Span {
+    const source_start = @intFromPtr(source_bytes.ptr);
+    const slice_start = @intFromPtr(slice.ptr);
+    if (slice_start < source_start) return null;
+    const start = slice_start - source_start;
+    if (start > source_bytes.len or slice.len > source_bytes.len - start) return null;
     return .{ .start = start, .end = start + slice.len };
 }
 
@@ -681,14 +743,15 @@ fn parseSeqMapItem(p: *Parser, dash_indent: usize, first_line: []const u8, depth
     // All of the item's keys line up at the column right after "- ".
     const key_indent = dash_indent + 2;
     const kv = splitKeyValue(first_line);
+    if (!kv.has_colon) try p.diagnostics.append(p.arena, .invalid_map_entry);
     if (kv.value.len == 0) {
         const value = try parseNestedValue(p, key_indent, depth);
         try entries.append(p.arena, .{ .key = kv.key, .value = value });
-        try putEntrySpan(p, value, kv, spanForSlice(p.source_bytes, first_line));
+        try putEntrySpan(p, value, kv, spanForSlice(p.source_bytes, first_line), .invalid_map_entry);
     } else {
         const value = try parseValue(p, kv.value, depth);
         try entries.append(p.arena, .{ .key = kv.key, .value = value });
-        try putEntrySpan(p, value, kv, spanForSlice(p.source_bytes, first_line));
+        try putEntrySpan(p, value, kv, spanForSlice(p.source_bytes, first_line), .invalid_map_entry);
     }
     // Continuation entries are 2 deeper than the dash (aligned right after "- ").
     while (p.peek()) |line| {
@@ -697,11 +760,12 @@ fn parseSeqMapItem(p: *Parser, dash_indent: usize, first_line: []const u8, depth
         if (std.mem.startsWith(u8, line.text, "---")) break;
         _ = p.advance();
         const e = splitKeyValue(line.text);
+        if (!e.has_colon) try p.diagnostics.append(p.arena, .invalid_map_entry);
         const value = if (e.value.len == 0)
             try parseNestedValue(p, key_indent, depth)
         else
             try parseValue(p, e.value, depth);
-        try putEntrySpan(p, value, e, line.whole);
+        try putEntrySpan(p, value, e, line.whole, .invalid_map_entry);
         try entries.append(p.arena, .{ .key = e.key, .value = value });
     }
     const node = try makeNode(p.arena, .{ .map = try entries.toOwnedSlice(p.arena) });
@@ -710,10 +774,29 @@ fn parseSeqMapItem(p: *Parser, dash_indent: usize, first_line: []const u8, depth
     return node;
 }
 
-fn putEntrySpan(p: *Parser, value: *Node, kv: KV, whole: source_map.Span) !void {
-    const key_start = @intFromPtr(kv.key.ptr) - @intFromPtr(p.source_bytes.ptr);
-    const value_start = @intFromPtr(kv.value.ptr) - @intFromPtr(p.source_bytes.ptr);
-    try p.entry_spans.put(p.arena, value, .{ .whole = whole, .key = .{ .start = key_start, .end = key_start + kv.key.len }, .value = .{ .start = value_start, .end = value_start + kv.value.len } });
+fn putEntrySpan(
+    p: *Parser,
+    value: *Node,
+    kv: KV,
+    whole: ?source_map.Span,
+    diagnostic: source_map.Diagnostic,
+) !void {
+    const key = spanForSlice(p.source_bytes, kv.key) orelse {
+        try p.diagnostics.append(p.arena, diagnostic);
+        return;
+    };
+    const value_span = spanForSlice(p.source_bytes, kv.value) orelse {
+        try p.diagnostics.append(p.arena, diagnostic);
+        return;
+    };
+    try p.entry_spans.put(p.arena, value, .{
+        .whole = whole orelse {
+            try p.diagnostics.append(p.arena, diagnostic);
+            return;
+        },
+        .key = key,
+        .value = value_span,
+    });
 }
 
 // ---------- helpers ----------
@@ -747,7 +830,7 @@ fn splitKeyValue(line: []const u8) KV {
             return .{ .key = key, .value = value, .has_colon = true };
         }
     }
-    return .{ .key = std.mem.trim(u8, line, " "), .value = "", .has_colon = false };
+    return .{ .key = std.mem.trim(u8, line, " "), .value = line[line.len..], .has_colon = false };
 }
 
 fn looksLikeMapEntry(s: []const u8) bool {
@@ -762,8 +845,21 @@ fn parseValue(p: *Parser, raw: []const u8, depth: usize) Error!*Node {
     const s = std.mem.trim(u8, raw, " ");
     if (s.len == 0) return makeNode(arena, .{ .scalar = "" });
     const span = spanForSlice(p.source_bytes, s);
-    const n = if (s[0] == '{') try parseFlow(p, s, depth) else if (s[0] == '[') try parseFlowSeq(p, s, depth) else try makeNode(arena, .{ .scalar = try unquote(arena, s) });
-    try p.node_spans.put(arena, n, span);
+    const n = if (s[0] == '{') blk: {
+        if (s.len < 2 or s[s.len - 1] != '}') try p.diagnostics.append(arena, .invalid_flow_value);
+        break :blk try parseFlow(p, s, depth);
+    } else if (s[0] == '[') blk: {
+        if (s.len < 2 or s[s.len - 1] != ']') try p.diagnostics.append(arena, .invalid_flow_value);
+        break :blk try parseFlowSeq(p, s, depth);
+    } else blk: {
+        if (!quotedScalarIsValid(s)) try p.diagnostics.append(arena, .invalid_flow_value);
+        break :blk try makeNode(arena, .{ .scalar = try unquote(arena, s) });
+    };
+    if (span) |owned_span| {
+        try p.node_spans.put(arena, n, owned_span);
+    } else {
+        try p.diagnostics.append(arena, .invalid_flow_value);
+    }
     return n;
 }
 
@@ -773,13 +869,22 @@ fn parseFlow(p: *Parser, s: []const u8, depth: usize) Error!*Node {
     const inner = stripBrackets(s, '{', '}');
     var entries: std.ArrayList(Entry) = .empty;
     var it = splitTopLevel(inner);
+    var iterator_error_reported = false;
     while (it.next()) |part| {
+        if (it.invalid and !iterator_error_reported) {
+            try p.diagnostics.append(arena, .invalid_flow_value);
+            iterator_error_reported = true;
+        }
         const kv = splitKeyValue(part);
-        if (kv.key.len == 0) continue;
+        if (!kv.has_colon or kv.key.len == 0) {
+            try p.diagnostics.append(arena, .invalid_flow_value);
+            continue;
+        }
         const value = try parseValue(p, kv.value, depth + 1);
-        try putEntrySpan(p, value, kv, spanForSlice(p.source_bytes, part));
+        try putEntrySpan(p, value, kv, spanForSlice(p.source_bytes, part), .invalid_flow_value);
         try entries.append(arena, .{ .key = kv.key, .value = value });
     }
+    if (it.invalid and !iterator_error_reported) try p.diagnostics.append(arena, .invalid_flow_value);
     const es = try entries.toOwnedSlice(arena);
     if (model.findValue(es, "fileID")) |fid_node| {
         return makeNode(arena, .{ .ref = .{
@@ -804,10 +909,20 @@ fn parseFlowSeq(p: *Parser, s: []const u8, depth: usize) Error!*Node {
     var items: std.ArrayList(*Node) = .empty;
     if (inner.len != 0) {
         var it = splitTopLevel(inner);
+        var iterator_error_reported = false;
         while (it.next()) |part| {
+            if (it.invalid and !iterator_error_reported) {
+                try p.diagnostics.append(arena, .invalid_flow_value);
+                iterator_error_reported = true;
+            }
             const t = std.mem.trim(u8, part, " ");
-            if (t.len != 0) try items.append(arena, try parseValue(p, t, depth + 1));
+            if (t.len == 0) {
+                try p.diagnostics.append(arena, .invalid_flow_value);
+            } else {
+                try items.append(arena, try parseValue(p, t, depth + 1));
+            }
         }
+        if (it.invalid and !iterator_error_reported) try p.diagnostics.append(arena, .invalid_flow_value);
     }
     return makeNode(arena, .{ .seq = try items.toOwnedSlice(arena) });
 }
@@ -824,12 +939,43 @@ fn stripBrackets(s: []const u8, open: u8, close: u8) []const u8 {
     return t;
 }
 
+fn quotedScalarIsValid(s: []const u8) bool {
+    if (s[0] != '\'' and s[0] != '"') return true;
+    const quote = s[0];
+    var index: usize = 1;
+    while (index < s.len) {
+        if (quote == '"' and s[index] == '\\') {
+            if (index + 1 >= s.len) return false;
+            index += 2;
+            continue;
+        }
+        if (s[index] == quote) {
+            if (quote == '\'' and index + 1 < s.len and s[index + 1] == '\'') {
+                index += 2;
+                continue;
+            }
+            return index + 1 == s.len;
+        }
+        index += 1;
+    }
+    return false;
+}
+
 // Strip enclosing quotes. Double-quoted scalars also resolve YAML backslash
 // escapes `\"` and `\\` (the only escapes Unity emits), so that scalar
 // holds the literal value rather than the source form.
 fn unquote(arena: std.mem.Allocator, s: []const u8) std.mem.Allocator.Error![]const u8 {
     if (s.len >= 2 and s[0] == '\'' and s[s.len - 1] == '\'') {
-        return s[1 .. s.len - 1];
+        const inner = s[1 .. s.len - 1];
+        if (std.mem.indexOf(u8, inner, "''") == null) return inner;
+        var out: std.ArrayList(u8) = .empty;
+        var index: usize = 0;
+        while (index < inner.len) : (index += 1) {
+            try out.append(arena, inner[index]);
+            if (inner[index] == '\'' and index + 1 < inner.len and inner[index + 1] == '\'')
+                index += 1;
+        }
+        return out.toOwnedSlice(arena);
     }
     if (s.len >= 2 and s[0] == '"' and s[s.len - 1] == '"') {
         const inner = s[1 .. s.len - 1];
@@ -854,22 +1000,72 @@ fn unquote(arena: std.mem.Allocator, s: []const u8) std.mem.Allocator.Error![]co
 const TopLevelIter = struct {
     s: []const u8,
     i: usize = 0,
+    invalid: bool = false,
+
     fn next(self: *TopLevelIter) ?[]const u8 {
         if (self.i >= self.s.len) return null;
+        var bracket_stack: [max_nesting_depth + 1]u8 = undefined;
         var depth: usize = 0;
+        var quote: ?u8 = null;
         const start = self.i;
-        while (self.i < self.s.len) : (self.i += 1) {
+        while (self.i < self.s.len) {
             const c = self.s[self.i];
-            if (c == '{' or c == '[') depth += 1;
-            if (c == '}' or c == ']') {
-                if (depth > 0) depth -= 1;
-            }
-            if (c == ',' and depth == 0) {
-                const part = self.s[start..self.i];
+            if (quote) |delimiter| {
+                if (delimiter == '"' and c == '\\') {
+                    if (self.i + 1 >= self.s.len) {
+                        self.invalid = true;
+                        self.i += 1;
+                    } else {
+                        self.i += 2;
+                    }
+                    continue;
+                }
+                if (c == delimiter) {
+                    if (delimiter == '\'' and self.i + 1 < self.s.len and self.s[self.i + 1] == '\'') {
+                        self.i += 2;
+                        continue;
+                    }
+                    quote = null;
+                }
                 self.i += 1;
-                return part;
+                continue;
             }
+            switch (c) {
+                '\'', '"' => quote = c,
+                '{' => {
+                    if (depth == bracket_stack.len) {
+                        self.invalid = true;
+                    } else {
+                        bracket_stack[depth] = '}';
+                        depth += 1;
+                    }
+                },
+                '[' => {
+                    if (depth == bracket_stack.len) {
+                        self.invalid = true;
+                    } else {
+                        bracket_stack[depth] = ']';
+                        depth += 1;
+                    }
+                },
+                '}', ']' => {
+                    if (depth == 0 or bracket_stack[depth - 1] != c) {
+                        self.invalid = true;
+                    } else {
+                        depth -= 1;
+                    }
+                },
+                ',' => if (depth == 0) {
+                    const part = self.s[start..self.i];
+                    self.i += 1;
+                    if (self.i == self.s.len) self.invalid = true;
+                    return part;
+                },
+                else => {},
+            }
+            self.i += 1;
         }
+        if (quote != null or depth != 0) self.invalid = true;
         return self.s[start..self.i];
     }
 };

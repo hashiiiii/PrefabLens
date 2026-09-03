@@ -53,7 +53,8 @@ const Index = struct {
         var owners: std.AutoHashMapUnmanaged(i64, i64) = .empty;
         for (self.all_documents) |document| {
             if (document.class_id != 1) continue;
-            const components = model.findValue(document.body.map, "m_Component") orelse continue;
+            const components = model.findValue(document.body.map, "m_Component") orelse
+                return error.InvalidMerge;
             if (components.* != .seq) return error.InvalidMerge;
             var transform_count: usize = 0;
             for (components.seq) |item| {
@@ -73,10 +74,13 @@ const Index = struct {
                 if (back_reference.* != .ref or back_reference.ref.guid != null or
                     back_reference.ref.file_id != document.file_id) return error.InvalidMerge;
             }
-            if (transform_count > 1) return error.InvalidMerge;
+            if (transform_count != 1) return error.InvalidMerge;
         }
         for (self.all_documents) |document| {
-            const game_object = model.findValue(document.body.map, "m_GameObject") orelse continue;
+            const game_object = model.findValue(document.body.map, "m_GameObject") orelse {
+                if (document.class_id == 4 or document.class_id == 224) return error.InvalidMerge;
+                continue;
+            };
             if (game_object.* != .ref or game_object.ref.guid != null or
                 game_object.ref.file_id == 0) return error.InvalidMerge;
             const owner = owners.get(document.file_id) orelse return error.InvalidMerge;
@@ -88,7 +92,8 @@ const Index = struct {
         var parents: std.AutoHashMapUnmanaged(i64, i64) = .empty;
         for (self.all_documents) |document| {
             if (document.class_id != 4 and document.class_id != 224) continue;
-            const children = model.findValue(document.body.map, "m_Children") orelse continue;
+            const children = model.findValue(document.body.map, "m_Children") orelse
+                return error.InvalidMerge;
             if (children.* != .seq) return error.InvalidMerge;
             for (children.seq) |item| {
                 if (item.* != .ref or item.ref.guid != null or item.ref.file_id == 0)
@@ -102,9 +107,8 @@ const Index = struct {
         }
         for (self.all_documents) |document| {
             if (document.class_id != 4 and document.class_id != 224) continue;
-            const father = model.findValue(document.body.map, "m_Father") orelse {
-                continue;
-            };
+            const father = model.findValue(document.body.map, "m_Father") orelse
+                return error.InvalidMerge;
             if (father.* != .ref or father.ref.guid != null) return error.InvalidMerge;
             if (father.ref.file_id == 0) {
                 if (parents.contains(document.file_id)) return error.InvalidMerge;
@@ -327,6 +331,55 @@ test "merge validation: rejects two Transforms in one Component list" {
     try testing.expectError(error.InvalidMerge, validate(arena_state.allocator(), bytes));
 }
 
+test "merge validation: rejects a GameObject without one Transform" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const bytes =
+        "--- !u!1 &1\nGameObject:\n  m_Component: []\n";
+
+    try testing.expectError(error.InvalidMerge, validate(arena_state.allocator(), bytes));
+}
+
+test "merge validation: rejects a GameObject without a Component list" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const bytes =
+        "--- !u!1 &1\nGameObject:\n  m_Name: Root\n";
+
+    try testing.expectError(error.InvalidMerge, validate(arena_state.allocator(), bytes));
+}
+
+test "merge validation: rejects a Transform without a GameObject owner" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const bytes =
+        "--- !u!4 &4\nTransform:\n  m_Children: []\n  m_Father: {fileID: 0}\n";
+
+    try testing.expectError(error.InvalidMerge, validate(arena_state.allocator(), bytes));
+}
+
+test "merge validation: rejects a listed child without a father" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const bytes =
+        "--- !u!1 &1\nGameObject:\n  m_Component:\n  - component: {fileID: 4}\n" ++
+        "--- !u!4 &4\nTransform:\n  m_GameObject: {fileID: 1}\n  m_Children:\n  - {fileID: 42}\n  m_Father: {fileID: 0}\n" ++
+        "--- !u!1 &20\nGameObject:\n  m_Component:\n  - component: {fileID: 42}\n" ++
+        "--- !u!4 &42\nTransform:\n  m_GameObject: {fileID: 20}\n  m_Children: []\n";
+
+    try testing.expectError(error.InvalidMerge, validate(arena_state.allocator(), bytes));
+}
+
+test "merge validation: rejects a Transform without a Children list" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const bytes =
+        "--- !u!1 &1\nGameObject:\n  m_Component:\n  - component: {fileID: 4}\n" ++
+        "--- !u!4 &4\nTransform:\n  m_GameObject: {fileID: 1}\n  m_Father: {fileID: 0}\n";
+
+    try testing.expectError(error.InvalidMerge, validate(arena_state.allocator(), bytes));
+}
+
 test "merge validation: rejects duplicate parent membership" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
@@ -403,6 +456,39 @@ test "merge planner: holds a complete GameObject during a delete and edit confli
     );
 
     try testing.expectEqualStrings(fixture.partial.?, built.partial);
+}
+
+test "merge planner: keeps Base when subtree deletion conflicts with descendant reparent" {
+    const fixture = merge_test_support.load("game-object-delete-reparent", true);
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+
+    const built = try merge.build(
+        arena_state.allocator(),
+        fixture.base,
+        fixture.ours,
+        fixture.theirs,
+    );
+
+    try testing.expectEqual(@as(usize, 1), built.plan.unresolvedCount());
+    try testing.expectEqualStrings(fixture.partial.?, built.partial);
+}
+
+test "merge planner: resolves subtree deletion and descendant reparent coherently" {
+    const fixture = merge_test_support.load("game-object-delete-reparent", true);
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var deletion = try merge.build(arena, fixture.base, fixture.ours, fixture.theirs);
+    const delete_operation = merge_test_support.findOperationByKind(&deletion.plan, .game_object).?;
+    try merge.resolve(arena, &deletion.plan, delete_operation.id, .remove);
+    try testing.expectEqualStrings(fixture.expected, try merge.finish(arena, &deletion.plan));
+
+    var reparent = try merge.build(arena, fixture.base, fixture.ours, fixture.theirs);
+    const reparent_operation = merge_test_support.findOperationByKind(&reparent.plan, .game_object).?;
+    try merge.resolve(arena, &reparent.plan, reparent_operation.id, .{ .take = .theirs });
+    try testing.expectEqualStrings(fixture.theirs, try merge.finish(arena, &reparent.plan));
 }
 
 test "merge planner: applies a complete GameObject addition" {

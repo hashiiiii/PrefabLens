@@ -584,15 +584,26 @@ fn appendGameObjectAtomic(
     var operation_ids: std.ArrayList(merge_model.OperationId) = .empty;
     var document_ids: std.ArrayList(merge_model.DocumentId) = .empty;
     var semantic_ids: std.ArrayList(merge_model.SemanticId) = .empty;
+    var transform_file_ids: std.ArrayList(i64) = .empty;
     inline for (.{ bundles.base, bundles.ours, bundles.theirs }) |side_bundles| {
         for (side_bundles) |bundle| {
             try appendUniqueDocumentId(arena, &document_ids, bundle.game_object);
             try appendUniqueDocumentId(arena, &document_ids, bundle.transform);
+            if (!containsFileId(transform_file_ids.items, bundle.transform.file_id)) {
+                try transform_file_ids.append(arena, bundle.transform.file_id);
+            }
             for (bundle.components) |component| try appendUniqueDocumentId(arena, &document_ids, component);
             for (bundle.component_items) |item| try appendUniqueSemanticId(arena, &semantic_ids, item);
             if (bundle.parent_child_item) |item| try appendUniqueSemanticId(arena, &semantic_ids, item);
             try appendUniqueSemanticId(arena, &semantic_ids, bundle.father_field);
         }
+    }
+    for (operations.items) |operation| {
+        if (operation.kind != .sequence_membership or
+            !std.mem.eql(u8, operation.property_path, "m_Children")) continue;
+        const target = operation.identity.item_ref orelse continue;
+        if (!containsFileId(transform_file_ids.items, target.file_id)) continue;
+        try appendUniqueSemanticId(arena, &semantic_ids, operation.identity);
     }
     const resolution = resolutionForSubtree(decision, bundles.ours, bundles.theirs);
     for (document_ids.items) |document_id| {
@@ -663,6 +674,11 @@ fn appendUniqueDocumentId(
 ) std.mem.Allocator.Error!void {
     for (ids.items) |candidate| if (std.meta.eql(candidate, id)) return;
     try ids.append(arena, id);
+}
+
+fn containsFileId(ids: []const i64, file_id: i64) bool {
+    for (ids) |candidate| if (candidate == file_id) return true;
+    return false;
 }
 
 fn appendUniqueSemanticId(
@@ -2011,18 +2027,18 @@ test "merge planner: combines independent component additions" {
 test "merge planner: keeps an existing component field edit separate from sequence membership" {
     const base =
         "--- !u!1 &100\nGameObject:\n  m_Component:\n  - component: {fileID: 400}\n" ++
-        "--- !u!4 &400\nTransform:\n  m_GameObject: {fileID: 100}\n  m_Value: 0\n";
+        "--- !u!4 &400\nTransform:\n  m_GameObject: {fileID: 100}\n  m_Value: 0\n  m_Children: []\n  m_Father: {fileID: 0}\n";
     const ours =
         "--- !u!1 &100\nGameObject:\n  m_Component:\n  - component: {fileID: 400}\n  - component: {fileID: 540}\n" ++
-        "--- !u!4 &400\nTransform:\n  m_GameObject: {fileID: 100}\n  m_Value: 0\n" ++
+        "--- !u!4 &400\nTransform:\n  m_GameObject: {fileID: 100}\n  m_Value: 0\n  m_Children: []\n  m_Father: {fileID: 0}\n" ++
         "--- !u!54 &540\nRigidbody:\n  m_GameObject: {fileID: 100}\n";
     const theirs =
         "--- !u!1 &100\nGameObject:\n  m_Component:\n  - component: {fileID: 400}\n  - component: {fileID: 650}\n" ++
-        "--- !u!4 &400\nTransform:\n  m_GameObject: {fileID: 100}\n  m_Value: 1\n" ++
+        "--- !u!4 &400\nTransform:\n  m_GameObject: {fileID: 100}\n  m_Value: 1\n  m_Children: []\n  m_Father: {fileID: 0}\n" ++
         "--- !u!65 &650\nBoxCollider:\n  m_GameObject: {fileID: 100}\n";
     const expected =
         "--- !u!1 &100\nGameObject:\n  m_Component:\n  - component: {fileID: 400}\n  - component: {fileID: 540}\n  - component: {fileID: 650}\n" ++
-        "--- !u!4 &400\nTransform:\n  m_GameObject: {fileID: 100}\n  m_Value: 1\n" ++
+        "--- !u!4 &400\nTransform:\n  m_GameObject: {fileID: 100}\n  m_Value: 1\n  m_Children: []\n  m_Father: {fileID: 0}\n" ++
         "--- !u!54 &540\nRigidbody:\n  m_GameObject: {fileID: 100}\n" ++
         "--- !u!65 &650\nBoxCollider:\n  m_GameObject: {fileID: 100}\n";
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
@@ -2102,10 +2118,13 @@ test "merge planner: removes a component document with its owner reference" {
     try testing.expectEqualStrings(fixture.expected, built.partial);
 }
 
-test "merge planner: adds a component to an inline empty owner sequence" {
-    const base = "--- !u!1 &1\nGameObject:\n  m_Component: []\n  m_Name: Root\n";
+test "merge planner: adds a component to a valid owner sequence" {
+    const base =
+        "--- !u!1 &1\nGameObject:\n  m_Component:\n  - component: {fileID: 4}\n  m_Name: Root\n" ++
+        "--- !u!4 &4\nTransform:\n  m_GameObject: {fileID: 1}\n  m_Children: []\n  m_Father: {fileID: 0}\n";
     const theirs =
-        "--- !u!1 &1\nGameObject:\n  m_Component:\n  - component: {fileID: 54}\n  m_Name: Root\n" ++
+        "--- !u!1 &1\nGameObject:\n  m_Component:\n  - component: {fileID: 4}\n  - component: {fileID: 54}\n  m_Name: Root\n" ++
+        "--- !u!4 &4\nTransform:\n  m_GameObject: {fileID: 1}\n  m_Children: []\n  m_Father: {fileID: 0}\n" ++
         "--- !u!54 &54\nRigidbody:\n  m_GameObject: {fileID: 1}\n  m_Mass: 1\n";
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
@@ -2115,10 +2134,13 @@ test "merge planner: adds a component to an inline empty owner sequence" {
     try testing.expectEqualStrings(theirs, built.partial);
 }
 
-test "merge planner: adds two components to an inline empty owner sequence" {
-    const base = "--- !u!1 &1\nGameObject:\n  m_Component: []\n  m_Name: Root\n";
+test "merge planner: adds two components to a valid owner sequence" {
+    const base =
+        "--- !u!1 &1\nGameObject:\n  m_Component:\n  - component: {fileID: 4}\n  m_Name: Root\n" ++
+        "--- !u!4 &4\nTransform:\n  m_GameObject: {fileID: 1}\n  m_Children: []\n  m_Father: {fileID: 0}\n";
     const theirs =
-        "--- !u!1 &1\nGameObject:\n  m_Component:\n  - component: {fileID: 54}\n  - component: {fileID: 65}\n  m_Name: Root\n" ++
+        "--- !u!1 &1\nGameObject:\n  m_Component:\n  - component: {fileID: 4}\n  - component: {fileID: 54}\n  - component: {fileID: 65}\n  m_Name: Root\n" ++
+        "--- !u!4 &4\nTransform:\n  m_GameObject: {fileID: 1}\n  m_Children: []\n  m_Father: {fileID: 0}\n" ++
         "--- !u!54 &54\nRigidbody:\n  m_GameObject: {fileID: 1}\n  m_Mass: 1\n" ++
         "--- !u!65 &65\nBoxCollider:\n  m_GameObject: {fileID: 1}\n  m_IsTrigger: 0\n";
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
@@ -2132,19 +2154,19 @@ test "merge planner: adds two components to an inline empty owner sequence" {
 test "merge planner: composes component choices with an independent order choice" {
     const base =
         "--- !u!1 &1\nGameObject:\n  m_Component:\n  - component: {fileID: 4}\n  - component: {fileID: 54}\n  - component: {fileID: 65}\n  - component: {fileID: 66}\n" ++
-        "--- !u!4 &4\nTransform:\n  m_GameObject: {fileID: 1}\n  m_Children: []\n" ++
+        "--- !u!4 &4\nTransform:\n  m_GameObject: {fileID: 1}\n  m_Children: []\n  m_Father: {fileID: 0}\n" ++
         "--- !u!54 &54\nRigidbody:\n  m_GameObject: {fileID: 1}\n  m_Mass: 1\n" ++
         "--- !u!65 &65\nBoxCollider:\n  m_GameObject: {fileID: 1}\n  m_IsTrigger: 0\n" ++
         "--- !u!66 &66\nMeshCollider:\n  m_GameObject: {fileID: 1}\n  m_Convex: 0\n";
     const ours =
         "--- !u!1 &1\nGameObject:\n  m_Component:\n  - component: {fileID: 65}\n  # Keep with component 65.\n  - component: {fileID: 4}\n  - component: {fileID: 54}\n  - component: {fileID: 66}\n" ++
-        "--- !u!4 &4\nTransform:\n  m_GameObject: {fileID: 1}\n  m_Children: []\n" ++
+        "--- !u!4 &4\nTransform:\n  m_GameObject: {fileID: 1}\n  m_Children: []\n  m_Father: {fileID: 0}\n" ++
         "--- !u!54 &54\nRigidbody:\n  m_GameObject: {fileID: 1}\n  m_Mass: 2\n" ++
         "--- !u!65 &65\nBoxCollider:\n  m_GameObject: {fileID: 1}\n  m_IsTrigger: 0\n" ++
         "--- !u!66 &66\nMeshCollider:\n  m_GameObject: {fileID: 1}\n  m_Convex: 0\n";
     const theirs =
         "--- !u!1 &1\nGameObject:\n  m_Component:\n  - component: {fileID: 4}\n  - component: {fileID: 66}\n  - component: {fileID: 65}\n" ++
-        "--- !u!4 &4\nTransform:\n  m_GameObject: {fileID: 1}\n  m_Children: []\n" ++
+        "--- !u!4 &4\nTransform:\n  m_GameObject: {fileID: 1}\n  m_Children: []\n  m_Father: {fileID: 0}\n" ++
         "--- !u!65 &65\nBoxCollider:\n  m_GameObject: {fileID: 1}\n  m_IsTrigger: 0\n" ++
         "--- !u!66 &66\nMeshCollider:\n  m_GameObject: {fileID: 1}\n  m_Convex: 0\n";
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
@@ -2185,18 +2207,18 @@ test "merge planner: keeps a component gap when the next component is deleted" {
     const base =
         "--- !u!1 &1\nGameObject:\n  m_Component:\n  - component: {fileID: 4}\n" ++
         "  - component: {fileID: 54}\n  # Keep with component 54.\n  - component: {fileID: 65}\n" ++
-        "--- !u!4 &4\nTransform:\n  m_GameObject: {fileID: 1}\n  m_Children: []\n" ++
+        "--- !u!4 &4\nTransform:\n  m_GameObject: {fileID: 1}\n  m_Children: []\n  m_Father: {fileID: 0}\n" ++
         "--- !u!54 &54\nRigidbody:\n  m_GameObject: {fileID: 1}\n  m_Mass: 1\n" ++
         "--- !u!65 &65\nBoxCollider:\n  m_GameObject: {fileID: 1}\n  m_IsTrigger: 0\n";
     const theirs =
         "--- !u!1 &1\nGameObject:\n  m_Component:\n  - component: {fileID: 4}\n" ++
         "  - component: {fileID: 54}\n" ++
-        "--- !u!4 &4\nTransform:\n  m_GameObject: {fileID: 1}\n  m_Children: []\n" ++
+        "--- !u!4 &4\nTransform:\n  m_GameObject: {fileID: 1}\n  m_Children: []\n  m_Father: {fileID: 0}\n" ++
         "--- !u!54 &54\nRigidbody:\n  m_GameObject: {fileID: 1}\n  m_Mass: 1\n";
     const expected =
         "--- !u!1 &1\nGameObject:\n  m_Component:\n  - component: {fileID: 4}\n" ++
         "  - component: {fileID: 54}\n  # Keep with component 54.\n" ++
-        "--- !u!4 &4\nTransform:\n  m_GameObject: {fileID: 1}\n  m_Children: []\n" ++
+        "--- !u!4 &4\nTransform:\n  m_GameObject: {fileID: 1}\n  m_Children: []\n  m_Father: {fileID: 0}\n" ++
         "--- !u!54 &54\nRigidbody:\n  m_GameObject: {fileID: 1}\n  m_Mass: 1\n";
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
@@ -2209,10 +2231,10 @@ test "merge planner: keeps a component gap when the next component is deleted" {
 test "merge planner: rejects a component reference without its document" {
     const base =
         "--- !u!1 &1\nGameObject:\n  m_Component:\n  - component: {fileID: 4}\n" ++
-        "--- !u!4 &4\nTransform:\n  m_GameObject: {fileID: 1}\n  m_Children: []\n";
+        "--- !u!4 &4\nTransform:\n  m_GameObject: {fileID: 1}\n  m_Children: []\n  m_Father: {fileID: 0}\n";
     const ours =
         "--- !u!1 &1\nGameObject:\n  m_Component:\n  - component: {fileID: 4}\n  - component: {fileID: 54}\n" ++
-        "--- !u!4 &4\nTransform:\n  m_GameObject: {fileID: 1}\n  m_Children: []\n";
+        "--- !u!4 &4\nTransform:\n  m_GameObject: {fileID: 1}\n  m_Children: []\n  m_Father: {fileID: 0}\n";
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
 
@@ -2225,7 +2247,7 @@ test "merge planner: rejects a component reference without its document" {
 test "merge planner: rejects a component document without its owner reference" {
     const base =
         "--- !u!1 &1\nGameObject:\n  m_Component:\n  - component: {fileID: 4}\n" ++
-        "--- !u!4 &4\nTransform:\n  m_GameObject: {fileID: 1}\n  m_Children: []\n";
+        "--- !u!4 &4\nTransform:\n  m_GameObject: {fileID: 1}\n  m_Children: []\n  m_Father: {fileID: 0}\n";
     const ours = base ++
         "--- !u!54 &54\nRigidbody:\n  m_GameObject: {fileID: 1}\n  m_Mass: 1\n";
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
@@ -2251,19 +2273,19 @@ test "merge planner: leaves every part of a delete-edit conflict unchanged" {
 test "merge planner: applies an independent component while another component is unresolved" {
     const base =
         "--- !u!1 &1\nGameObject:\n  m_Component:\n  - component: {fileID: 4}\n  - component: {fileID: 54}\n" ++
-        "--- !u!4 &4\nTransform:\n  m_GameObject: {fileID: 1}\n  m_Children: []\n" ++
+        "--- !u!4 &4\nTransform:\n  m_GameObject: {fileID: 1}\n  m_Children: []\n  m_Father: {fileID: 0}\n" ++
         "--- !u!54 &54\nRigidbody:\n  m_GameObject: {fileID: 1}\n  m_Mass: 1\n";
     const ours =
         "--- !u!1 &1\nGameObject:\n  m_Component:\n  - component: {fileID: 4}\n" ++
-        "--- !u!4 &4\nTransform:\n  m_GameObject: {fileID: 1}\n  m_Children: []\n";
+        "--- !u!4 &4\nTransform:\n  m_GameObject: {fileID: 1}\n  m_Children: []\n  m_Father: {fileID: 0}\n";
     const theirs =
         "--- !u!1 &1\nGameObject:\n  m_Component:\n  - component: {fileID: 4}\n  - component: {fileID: 54}\n  - component: {fileID: 65}\n" ++
-        "--- !u!4 &4\nTransform:\n  m_GameObject: {fileID: 1}\n  m_Children: []\n" ++
+        "--- !u!4 &4\nTransform:\n  m_GameObject: {fileID: 1}\n  m_Children: []\n  m_Father: {fileID: 0}\n" ++
         "--- !u!54 &54\nRigidbody:\n  m_GameObject: {fileID: 1}\n  m_Mass: 2\n" ++
         "--- !u!65 &65\nBoxCollider:\n  m_GameObject: {fileID: 1}\n  m_IsTrigger: 0\n";
     const expected =
         "--- !u!1 &1\nGameObject:\n  m_Component:\n  - component: {fileID: 4}\n  - component: {fileID: 54}\n  - component: {fileID: 65}\n" ++
-        "--- !u!4 &4\nTransform:\n  m_GameObject: {fileID: 1}\n  m_Children: []\n" ++
+        "--- !u!4 &4\nTransform:\n  m_GameObject: {fileID: 1}\n  m_Children: []\n  m_Father: {fileID: 0}\n" ++
         "--- !u!54 &54\nRigidbody:\n  m_GameObject: {fileID: 1}\n  m_Mass: 1\n" ++
         "--- !u!65 &65\nBoxCollider:\n  m_GameObject: {fileID: 1}\n  m_IsTrigger: 0\n";
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
@@ -2337,17 +2359,17 @@ test "merge planner: combines a child addition with a compatible reorder" {
 test "merge planner: adds a child to an inline empty sequence" {
     const base =
         "--- !u!1 &100\nGameObject:\n  m_Component:\n  - component: {fileID: 400}\n" ++
-        "--- !u!4 &400\nTransform:\n  m_GameObject: {fileID: 100}\n  m_Children: []\n";
+        "--- !u!4 &400\nTransform:\n  m_GameObject: {fileID: 100}\n  m_Children: []\n  m_Father: {fileID: 0}\n";
     const theirs =
         "--- !u!1 &100\nGameObject:\n  m_Component:\n  - component: {fileID: 400}\n" ++
-        "--- !u!4 &400\nTransform:\n  m_GameObject: {fileID: 100}\n  m_Children:\n  - {fileID: 410}\n" ++
+        "--- !u!4 &400\nTransform:\n  m_GameObject: {fileID: 100}\n  m_Children:\n  - {fileID: 410}\n  m_Father: {fileID: 0}\n" ++
         "--- !u!1 &110\nGameObject:\n  m_Component:\n  - component: {fileID: 410}\n" ++
-        "--- !u!4 &410\nTransform:\n  m_GameObject: {fileID: 110}\n  m_Children: []\n";
+        "--- !u!4 &410\nTransform:\n  m_GameObject: {fileID: 110}\n  m_Children: []\n  m_Father: {fileID: 400}\n";
     const expected =
         "--- !u!1 &100\nGameObject:\n  m_Component:\n  - component: {fileID: 400}\n" ++
-        "--- !u!4 &400\nTransform:\n  m_GameObject: {fileID: 100}\n  m_Children:\n  - {fileID: 410}\n" ++
+        "--- !u!4 &400\nTransform:\n  m_GameObject: {fileID: 100}\n  m_Children:\n  - {fileID: 410}\n  m_Father: {fileID: 0}\n" ++
         "--- !u!1 &110\nGameObject:\n  m_Component:\n  - component: {fileID: 410}\n" ++
-        "--- !u!4 &410\nTransform:\n  m_GameObject: {fileID: 110}\n  m_Children: []\n";
+        "--- !u!4 &410\nTransform:\n  m_GameObject: {fileID: 110}\n  m_Children: []\n  m_Father: {fileID: 400}\n";
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
 
@@ -2359,14 +2381,14 @@ test "merge planner: adds a child to an inline empty sequence" {
 test "merge planner: deletes the final child from a block sequence" {
     const block =
         "--- !u!1 &100\nGameObject:\n  m_Component:\n  - component: {fileID: 400}\n" ++
-        "--- !u!4 &400\nTransform:\n  m_GameObject: {fileID: 100}\n  m_Children:\n  - {fileID: 410}\n" ++
+        "--- !u!4 &400\nTransform:\n  m_GameObject: {fileID: 100}\n  m_Children:\n  - {fileID: 410}\n  m_Father: {fileID: 0}\n" ++
         "--- !u!1 &110\nGameObject:\n  m_Component:\n  - component: {fileID: 410}\n" ++
-        "--- !u!4 &410\nTransform:\n  m_GameObject: {fileID: 110}\n  m_Children: []\n";
+        "--- !u!4 &410\nTransform:\n  m_GameObject: {fileID: 110}\n  m_Children: []\n  m_Father: {fileID: 400}\n";
     const inline_empty =
         "--- !u!1 &100\nGameObject:\n  m_Component:\n  - component: {fileID: 400}\n" ++
-        "--- !u!4 &400\nTransform:\n  m_GameObject: {fileID: 100}\n  m_Children: []\n" ++
+        "--- !u!4 &400\nTransform:\n  m_GameObject: {fileID: 100}\n  m_Children: []\n  m_Father: {fileID: 0}\n" ++
         "--- !u!1 &110\nGameObject:\n  m_Component:\n  - component: {fileID: 410}\n" ++
-        "--- !u!4 &410\nTransform:\n  m_GameObject: {fileID: 110}\n  m_Children: []\n";
+        "--- !u!4 &410\nTransform:\n  m_GameObject: {fileID: 110}\n  m_Children: []\n  m_Father: {fileID: 0}\n";
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
 
@@ -2378,14 +2400,14 @@ test "merge planner: deletes the final child from a block sequence" {
 test "merge planner: keeps inline spacing after deleting the final child" {
     const block =
         "--- !u!1 &100\nGameObject:\n  m_Component:\n  - component: {fileID: 400}\n" ++
-        "--- !u!4 &400\nTransform:\n  m_GameObject: {fileID: 100}\n  m_Children:\n  - {fileID: 410}\n" ++
+        "--- !u!4 &400\nTransform:\n  m_GameObject: {fileID: 100}\n  m_Children:\n  - {fileID: 410}\n  m_Father: {fileID: 0}\n" ++
         "--- !u!1 &110\nGameObject:\n  m_Component:\n  - component: {fileID: 410}\n" ++
-        "--- !u!4 &410\nTransform:\n  m_GameObject: {fileID: 110}\n  m_Children: []\n";
+        "--- !u!4 &410\nTransform:\n  m_GameObject: {fileID: 110}\n  m_Children: []\n  m_Father: {fileID: 400}\n";
     const inline_empty =
         "--- !u!1 &100\nGameObject:\n  m_Component:\n  - component: {fileID: 400}\n" ++
-        "--- !u!4 &400\nTransform:\n  m_GameObject: {fileID: 100}\n  m_Children: []\n" ++
+        "--- !u!4 &400\nTransform:\n  m_GameObject: {fileID: 100}\n  m_Children: []\n  m_Father: {fileID: 0}\n" ++
         "--- !u!1 &110\nGameObject:\n  m_Component:\n  - component: {fileID: 410}\n" ++
-        "--- !u!4 &410\nTransform:\n  m_GameObject: {fileID: 110}\n  m_Children: []\n";
+        "--- !u!4 &410\nTransform:\n  m_GameObject: {fileID: 110}\n  m_Children: []\n  m_Father: {fileID: 0}\n";
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
 
@@ -2482,10 +2504,10 @@ test "merge planner: adds a field to its matching document" {
     defer arena_state.deinit();
     const arena = arena_state.allocator();
     const base =
-        "--- !u!1 &1\nGameObject:\n  m_Name: First\n" ++
+        "--- !u!114 &1\nMonoBehaviour:\n  m_Name: First\n" ++
         "--- !u!114 &2\nMonoBehaviour:\n  m_Value: 5\n";
     const theirs =
-        "--- !u!1 &1\nGameObject:\n  m_Name: First\n" ++
+        "--- !u!114 &1\nMonoBehaviour:\n  m_Name: First\n" ++
         "--- !u!114 &2\nMonoBehaviour:\n  m_Value: 5\n  m_Enabled: 1\n";
 
     const built = try @import("merge.zig").build(arena, base, base, theirs);

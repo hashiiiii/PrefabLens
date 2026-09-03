@@ -7,3 +7,4 @@ GameObject:
 Transform:
   m_GameObject: {fileID: 100}
   m_Children: []
+  m_Father: {fileID: 0}

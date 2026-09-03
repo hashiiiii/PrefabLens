@@ -11,6 +11,7 @@ Transform:
   - {fileID: 410}
   - {fileID: 440}
   - {fileID: 430}
+  m_Father: {fileID: 0}
 --- !u!1 &110
 GameObject:
   m_Component:
@@ -20,6 +21,7 @@ GameObject:
 Transform:
   m_GameObject: {fileID: 110}
   m_Children: []
+  m_Father: {fileID: 400}
 --- !u!1 &120
 GameObject:
   m_Component:
@@ -29,6 +31,7 @@ GameObject:
 Transform:
   m_GameObject: {fileID: 120}
   m_Children: []
+  m_Father: {fileID: 400}
 --- !u!1 &130
 GameObject:
   m_Component:
@@ -38,6 +41,7 @@ GameObject:
 Transform:
   m_GameObject: {fileID: 130}
   m_Children: []
+  m_Father: {fileID: 400}
 --- !u!1 &140
 GameObject:
   m_Component:
@@ -47,3 +51,4 @@ GameObject:
 Transform:
   m_GameObject: {fileID: 140}
   m_Children: []
+  m_Father: {fileID: 400}

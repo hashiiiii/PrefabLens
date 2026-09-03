@@ -710,12 +710,40 @@ fn appendDocumentPatch(
         });
     }
     const inserted = selected orelse return;
+    const selected_side = switch (operation.resolution) {
+        .take => |side| side,
+        .unresolved, .remove, .custom => return error.InvalidResolution,
+    };
+    const insert_at = if (operation.kind == .game_object)
+        documentInsertionOffset(plan, operation, selected_side)
+    else
+        plan.ours.bytes.len;
     try patches.append(arena, .{
-        .span = .{ .start = plan.ours.bytes.len, .end = plan.ours.bytes.len },
+        .span = .{ .start = insert_at, .end = insert_at },
         .replacement = inserted.bytes,
         .atomic_id = operation.atomic_id,
         .order = operation.id,
     });
+}
+
+fn documentInsertionOffset(
+    plan: *const merge_model.MergePlan,
+    operation: *const merge_model.Operation,
+    selected_side: merge_model.Side,
+) usize {
+    const selected_file = fileForSide(plan, selected_side);
+    const selected_index = for (selected_file.documents, 0..) |document, index| {
+        if (document.class_id == operation.identity.document.class_id and
+            document.file_id == operation.identity.document.file_id) break index;
+    } else return plan.ours.bytes.len;
+    for (selected_file.documents[selected_index + 1 ..]) |next| {
+        for (plan.ours.documents, plan.ours.document_spans) |ours_document, ours_span| {
+            if (ours_document.class_id == next.class_id and ours_document.file_id == next.file_id) {
+                return ours_span.whole.start;
+            }
+        }
+    }
+    return plan.ours.bytes.len;
 }
 
 const SelectedValue = struct { side: merge_model.Side, value: merge_model.SideValue };

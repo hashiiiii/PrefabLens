@@ -11,6 +11,7 @@ GameObject:
 Transform:
   m_GameObject: {fileID: 100}
   m_Children: []
+  m_Father: {fileID: 0}
 --- !u!54 &540
 Rigidbody:
   m_GameObject: {fileID: 100}

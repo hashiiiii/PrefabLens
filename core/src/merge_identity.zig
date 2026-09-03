@@ -145,9 +145,45 @@ test "merge identity: document and references use stable Unity identifiers" {
     try testing.expectEqual(@as(u32, 4), id.class_id);
     try testing.expectEqual(@as(i64, 900), id.file_id);
 
-    const a = merge_model.RefId{ .file_id = 7, .guid = "aaa", .type_id = 3 };
-    const b = merge_model.RefId{ .file_id = 7, .guid = "bbb", .type_id = 3 };
-    try testing.expect(!refEql(a, b));
+    const cases = [_]struct {
+        left: merge_model.RefId,
+        right: merge_model.RefId,
+        equal: bool,
+    }{
+        .{
+            .left = .{ .file_id = 7, .guid = "aaa", .type_id = 3 },
+            .right = .{ .file_id = 8, .guid = "aaa", .type_id = 3 },
+            .equal = false,
+        },
+        .{
+            .left = .{ .file_id = 7, .guid = "aaa", .type_id = 3 },
+            .right = .{ .file_id = 7, .guid = "bbb", .type_id = 3 },
+            .equal = false,
+        },
+        .{
+            .left = .{ .file_id = 7, .guid = "aaa", .type_id = 3 },
+            .right = .{ .file_id = 7, .guid = "aaa", .type_id = 4 },
+            .equal = false,
+        },
+        .{
+            .left = .{ .file_id = 7, .guid = null, .type_id = null },
+            .right = .{ .file_id = 7, .guid = null, .type_id = null },
+            .equal = true,
+        },
+        .{
+            .left = .{ .file_id = 7, .guid = null, .type_id = null },
+            .right = .{ .file_id = 7, .guid = "aaa", .type_id = null },
+            .equal = false,
+        },
+        .{
+            .left = .{ .file_id = 7, .guid = null, .type_id = 3 },
+            .right = .{ .file_id = 7, .guid = null, .type_id = null },
+            .equal = false,
+        },
+    };
+    for (cases) |case| {
+        try testing.expectEqual(case.equal, refEql(case.left, case.right));
+    }
 }
 
 test "merge identity: index finds a document by class and file identifier" {
@@ -227,12 +263,12 @@ test "merge identity: every Prefab sequence uses its semantic fields" {
         \\      value: Player
         \\    m_AddedComponents:
         \\    - targetCorrespondingSourceObject: {fileID: 2, guid: aaa, type: 3}
-        \\      addedObject: {fileID: 3}
+        \\      addedObject: {fileID: 3, guid: bbb, type: 4}
         \\    m_RemovedComponents:
         \\    - {fileID: 4, guid: aaa, type: 3}
         \\    m_AddedGameObjects:
         \\    - targetCorrespondingSourceObject: {fileID: 5, guid: aaa, type: 3}
-        \\      addedObject: {fileID: 6}
+        \\      addedObject: {fileID: 6, guid: bbb, type: 4}
         \\    m_RemovedGameObjects:
         \\    - {fileID: 7, guid: aaa, type: 3}
     );
@@ -244,6 +280,9 @@ test "merge identity: every Prefab sequence uses its semantic fields" {
     ).?;
     try testing.expectEqualStrings("m_Name", property.property_path.?);
     try testing.expectEqual(merge_model.PrefabOverrideKind.property, property.override_kind.?);
+    try testing.expectEqual(@as(i64, 1), property.target.file_id);
+    try testing.expectEqualStrings("aaa", property.target.guid.?);
+    try testing.expectEqual(@as(?i64, 3), property.target.type_id);
 
     const cases = [_]struct {
         field: []const u8,
@@ -261,18 +300,41 @@ test "merge identity: every Prefab sequence uses its semantic fields" {
         const item = model.findValue(modification, case.field).?.seq[0];
         const identity = sequenceItemId(case.kind, item).?;
         try testing.expectEqual(case.target, identity.target.file_id);
+        try testing.expectEqualStrings("aaa", identity.target.guid.?);
+        try testing.expectEqual(@as(?i64, 3), identity.target.type_id);
         try testing.expectEqual(case.added_object, if (identity.added_object) |added_object| added_object.file_id else null);
+        if (identity.added_object) |added_object| {
+            try testing.expectEqualStrings("bbb", added_object.guid.?);
+            try testing.expectEqual(@as(?i64, 4), added_object.type_id);
+        }
         try testing.expectEqual(case.override_kind, identity.override_kind.?);
     }
 
-    var child = model.Node{ .ref = .{ .file_id = 8 } };
-    try testing.expectEqual(@as(i64, 8), sequenceItemId(.children, &child).?.target.file_id);
+    var child = model.Node{ .ref = .{ .file_id = 8, .guid = "child-guid", .type_id = 224 } };
+    const child_id = sequenceItemId(.children, &child).?.target;
+    try testing.expectEqual(@as(i64, 8), child_id.file_id);
+    try testing.expect(child_id.guid == null);
+    try testing.expect(child_id.type_id == null);
 }
 
 test "merge identity: sequence classification uses class and property path" {
-    try testing.expectEqual(SequenceKind.components, sequenceKind(1, "m_Component").?);
-    try testing.expectEqual(SequenceKind.children, sequenceKind(224, "m_Children").?);
-    try testing.expectEqual(SequenceKind.prefab_properties, sequenceKind(1001, "m_Modification.m_Modifications").?);
+    const cases = [_]struct {
+        class_id: u32,
+        property_path: []const u8,
+        kind: SequenceKind,
+    }{
+        .{ .class_id = 1, .property_path = "m_Component", .kind = .components },
+        .{ .class_id = 4, .property_path = "m_Children", .kind = .children },
+        .{ .class_id = 224, .property_path = "m_Children", .kind = .children },
+        .{ .class_id = 1001, .property_path = "m_Modification.m_Modifications", .kind = .prefab_properties },
+        .{ .class_id = 1001, .property_path = "m_Modification.m_AddedComponents", .kind = .prefab_added_components },
+        .{ .class_id = 1001, .property_path = "m_Modification.m_RemovedComponents", .kind = .prefab_removed_components },
+        .{ .class_id = 1001, .property_path = "m_Modification.m_AddedGameObjects", .kind = .prefab_added_game_objects },
+        .{ .class_id = 1001, .property_path = "m_Modification.m_RemovedGameObjects", .kind = .prefab_removed_game_objects },
+    };
+    for (cases) |case| {
+        try testing.expectEqual(case.kind, sequenceKind(case.class_id, case.property_path).?);
+    }
     try testing.expect(sequenceKind(114, "m_Component") == null);
     try testing.expect(sequenceKind(1001, "m_Unknown") == null);
 }

@@ -55,6 +55,8 @@ pub fn resolve(
         .custom => |value| {
             if (operation.kind != .field or atomic.operation_ids.len != 1 or
                 !supportsCustomValue(operation) or !wasConflict(operation)) return error.InvalidResolution;
+            if (!customFlowMapIsSafeToParse(value))
+                return error.InvalidResolution;
             _ = try merge_apply.parseCustomValue(arena, value);
             stored_resolution = .{ .custom = try arena.dupe(u8, value) };
         },
@@ -81,6 +83,53 @@ pub fn resolve(
         error.OutOfMemory => return error.OutOfMemory,
         else => return error.InvalidResolution,
     };
+}
+
+fn customFlowMapIsSafeToParse(value: []const u8) bool {
+    const trimmed = std.mem.trim(u8, value, " ");
+    if (trimmed.len == 0) return true;
+    if (trimmed[0] == '[') return false;
+    if (trimmed[0] != '{') return true;
+    if (trimmed[trimmed.len - 1] != '}') return false;
+    const inner = std.mem.trim(u8, trimmed[1 .. trimmed.len - 1], " ");
+    if (inner.len == 0) return true;
+
+    var part_start: usize = 0;
+    var quote: ?u8 = null;
+    var escaped = false;
+    for (inner, 0..) |byte, index| {
+        if (quote) |delimiter| {
+            if (byte == ',' or byte == '{' or byte == '}' or byte == '[' or byte == ']')
+                return false;
+            if (escaped) {
+                escaped = false;
+            } else if (byte == '\\' and delimiter == '"') {
+                escaped = true;
+            } else if (byte == delimiter) {
+                quote = null;
+            }
+            continue;
+        }
+        switch (byte) {
+            '\'', '"' => quote = byte,
+            '{', '}', '[', ']' => return false,
+            ',' => {
+                if (!flowEntryHasValue(inner[part_start..index])) return false;
+                part_start = index + 1;
+            },
+            else => {},
+        }
+    }
+    return quote == null and flowEntryHasValue(inner[part_start..]);
+}
+
+fn flowEntryHasValue(input: []const u8) bool {
+    const entry = std.mem.trim(u8, input, " ");
+    for (entry, 0..) |byte, index| {
+        if (byte == ':' and index != 0 and
+            (index + 1 == entry.len or entry[index + 1] == ' ')) return true;
+    }
+    return false;
 }
 
 fn valueForSide(operation: *const Operation, side: merge_model.Side) ?SideValue {

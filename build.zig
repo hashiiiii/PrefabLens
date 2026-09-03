@@ -18,6 +18,13 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("core/src/root.zig"),
         .target = target,
     });
+    const vaxis_dep = b.dependency("vaxis", .{ .target = target, .optimize = optimize });
+    const vaxis_mod = vaxis_dep.module("vaxis");
+    const cli_imports: []const std.Build.Module.Import = &.{
+        .{ .name = "core", .module = core_mod },
+        .{ .name = "build_options", .module = build_options_mod },
+        .{ .name = "vaxis", .module = vaxis_mod },
+    };
 
     const exe = b.addExecutable(.{
         .name = "prefablens",
@@ -25,10 +32,7 @@ pub fn build(b: *std.Build) void {
             .root_source_file = b.path("cli/src/main.zig"),
             .target = target,
             .optimize = optimize,
-            .imports = &.{
-                .{ .name = "core", .module = core_mod },
-                .{ .name = "build_options", .module = build_options_mod },
-            },
+            .imports = cli_imports,
         }),
     });
     b.installArtifact(exe);
@@ -46,12 +50,10 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("cli/src/main.zig"),
         .target = target,
         .optimize = optimize,
-        .imports = &.{
-            .{ .name = "core", .module = core_mod },
-            .{ .name = "build_options", .module = build_options_mod },
-            .{ .name = "test_options", .module = test_options_mod },
-        },
+        .imports = cli_imports,
     });
+    // Test fixtures stay explicit so the external-cwd gate cannot read ambient paths.
+    cli_test_mod.addImport("test_options", test_options_mod);
     const cli_tests = b.addTest(.{
         .root_module = cli_test_mod,
     });
@@ -74,6 +76,16 @@ pub fn build(b: *std.Build) void {
 
     const merge_driver_test_step = b.step("test-merge-driver", "Run merge-driver fixture tests outside the checkout");
     merge_driver_test_step.dependOn(&run_merge_driver_cwd_tests.step);
+
+    const merge_tui_tests = b.addTest(.{
+        .name = "merge-tui-test",
+        .root_module = cli_test_mod,
+        .filters = &.{"merge TUI:"},
+    });
+    const run_merge_tui_tests = b.addRunArtifact(merge_tui_tests);
+    run_merge_tui_tests.setCwd(b.path("."));
+    const merge_tui_test_step = b.step("test-merge-tui", "Run merge TUI renderer and event tests");
+    merge_tui_test_step.dependOn(&run_merge_tui_tests.step);
 
     const perf_exe = b.addExecutable(.{
         .name = "perf",

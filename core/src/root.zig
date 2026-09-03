@@ -79,6 +79,13 @@ test {
     _ = perf;
     _ = instantiate;
     _ = prefab;
+    _ = @import("source.zig");
+    _ = @import("merge_model.zig");
+    _ = @import("merge_identity.zig");
+    _ = @import("merge_order.zig");
     _ = @import("merge_planner.zig");
+    _ = @import("merge_apply.zig");
+    _ = @import("merge_validate.zig");
+    _ = @import("merge_fixture_test.zig");
     _ = @import("fixture_test.zig");
 }

@@ -2,6 +2,7 @@ const std = @import("std");
 pub const model = @import("model.zig");
 pub const source = @import("source.zig");
 pub const json = @import("json.zig");
+pub const merge = @import("merge.zig");
 
 const assets_tlv = @import("assets_tlv.zig");
 const classid = @import("classid.zig");
@@ -78,5 +79,6 @@ test {
     _ = perf;
     _ = instantiate;
     _ = prefab;
+    _ = @import("merge_planner.zig");
     _ = @import("fixture_test.zig");
 }

@@ -97,6 +97,7 @@ test "parseSpanned: records container and nested entry spans" {
     try testing.expectEqualStrings("  - component: {fileID: 4}\n    propertyPath: m_Name\n", parsed.nodeBytes(model.findValue(body.map, "m_Component").?).?);
     const components = model.findValue(body.map, "m_Component").?;
     try testing.expectEqualStrings("  - component: {fileID: 4}\n    propertyPath: m_Name\n", parsed.sequenceItemBytes(components.seq[0]).?);
+    try testing.expectEqualStrings("  - component: {fileID: 4}\n    propertyPath: m_Name\n", parsed.nodeBytes(components.seq[0]).?);
     const component = model.findValue(components.seq[0].map, "component").?;
     try testing.expect(parsed.entry_spans.get(component) != null);
     const property = model.findValue(components.seq[0].map, "propertyPath").?;
@@ -655,7 +656,7 @@ fn parseSeq(p: *Parser, indent: usize, depth: usize) Error!*Node {
             try items.append(p.arena, item);
         } else if (looksLikeMapEntry(rest)) {
             // Compact map item: the first entry is on the dash line, the rest at indent+2.
-            const item = try parseSeqMapItem(p, indent, rest, depth);
+            const item = try parseSeqMapItem(p, indent, rest, depth, line.whole.start);
             const end = if (p.pos > 0) p.lines[p.pos - 1].whole.end else line.whole.end;
             try p.sequence_item_spans.put(p.arena, item, .{ .start = line.whole.start, .end = end });
             try items.append(p.arena, item);
@@ -675,7 +676,7 @@ fn parseSeq(p: *Parser, indent: usize, depth: usize) Error!*Node {
 //   - target: {fileID: 0}
 //     propertyPath: m_Name
 //     value: Foo
-fn parseSeqMapItem(p: *Parser, dash_indent: usize, first_line: []const u8, depth: usize) Error!*Node {
+fn parseSeqMapItem(p: *Parser, dash_indent: usize, first_line: []const u8, depth: usize, item_start: usize) Error!*Node {
     var entries: std.ArrayList(Entry) = .empty;
     // All of the item's keys line up at the column right after "- ".
     const key_indent = dash_indent + 2;
@@ -703,7 +704,10 @@ fn parseSeqMapItem(p: *Parser, dash_indent: usize, first_line: []const u8, depth
         try putEntrySpan(p, value, e, line.whole);
         try entries.append(p.arena, .{ .key = e.key, .value = value });
     }
-    return makeNode(p.arena, .{ .map = try entries.toOwnedSlice(p.arena) });
+    const node = try makeNode(p.arena, .{ .map = try entries.toOwnedSlice(p.arena) });
+    const item_end = if (p.pos > 0) p.lines[p.pos - 1].whole.end else item_start;
+    try p.node_spans.put(p.arena, node, .{ .start = item_start, .end = item_end });
+    return node;
 }
 
 fn putEntrySpan(p: *Parser, value: *Node, kv: KV, whole: source_map.Span) !void {

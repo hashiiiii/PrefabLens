@@ -133,20 +133,31 @@ pub const View = struct {
         return .{ .width = screen.width, .height = screen.height };
     }
 
-    fn dispatch(self: *View, ctx: *vxfw.EventContext, action: merge_ui_state.Action) !void {
+    fn ensureSelectionVisible(self: *View, size: vxfw.Size) void {
+        if (!isUsableSize(size)) return;
+        const visible_rows = BodyGeometry.init(size.height).visibleRows();
+        const max_offset = self.state.conflict_indices.len -| visible_rows;
+        self.vertical_offset = @min(self.vertical_offset, max_offset);
+        if (self.state.selected_conflict < self.vertical_offset) {
+            self.vertical_offset = self.state.selected_conflict;
+        } else if (self.state.selected_conflict - self.vertical_offset >= visible_rows) {
+            self.vertical_offset = self.state.selected_conflict - visible_rows + 1;
+        }
+        self.vertical_offset = @min(self.vertical_offset, max_offset);
+    }
+
+    fn dispatch(
+        self: *View,
+        ctx: *vxfw.EventContext,
+        action: merge_ui_state.Action,
+        size: vxfw.Size,
+    ) !void {
         switch (action) {
             .move_up, .move_down, .select_conflict => self.horizontal_offset = 0,
             else => {},
         }
         try self.state.handle(action);
-        if (isUsableSize(self.last_size)) {
-            const visible_rows = BodyGeometry.init(self.last_size.height).visibleRows();
-            if (self.state.selected_conflict < self.vertical_offset) {
-                self.vertical_offset = self.state.selected_conflict;
-            } else if (self.state.selected_conflict >= self.vertical_offset + visible_rows) {
-                self.vertical_offset = self.state.selected_conflict - visible_rows + 1;
-            }
-        }
+        self.ensureSelectionVisible(size);
         const should_quit = switch (action) {
             .apply_result => self.state.outcome == .ready,
             .abort => self.state.outcome == .aborted,
@@ -212,8 +223,8 @@ pub const View = struct {
         ctx.consumeAndRedraw();
     }
 
-    fn scrollRight(self: *View, ctx: *vxfw.EventContext) void {
-        const geometry = Geometry.init(self.last_size.width);
+    fn scrollRight(self: *View, ctx: *vxfw.EventContext, size: vxfw.Size) void {
+        const geometry = Geometry.init(size.width);
         self.horizontal_offset = @min(
             self.horizontal_offset +| 1,
             self.maxHorizontalOffset(geometry),
@@ -221,46 +232,51 @@ pub const View = struct {
         ctx.consumeAndRedraw();
     }
 
-    fn handleMouse(self: *View, ctx: *vxfw.EventContext, mouse: vaxis.Mouse) !void {
+    fn handleMouse(
+        self: *View,
+        ctx: *vxfw.EventContext,
+        mouse: vaxis.Mouse,
+        size: vxfw.Size,
+    ) !void {
         if (mouse.type != .press) return;
-        if (mouse.button == .wheel_up) return self.dispatch(ctx, .move_up);
-        if (mouse.button == .wheel_down) return self.dispatch(ctx, .move_down);
+        if (mouse.button == .wheel_up) return self.dispatch(ctx, .move_up, size);
+        if (mouse.button == .wheel_down) return self.dispatch(ctx, .move_down, size);
         if (mouse.button == .wheel_left) return self.scrollLeft(ctx);
-        if (mouse.button == .wheel_right) return self.scrollRight(ctx);
+        if (mouse.button == .wheel_right) return self.scrollRight(ctx, size);
         if (mouse.button != .left or mouse.col < 0 or mouse.row < 0) return;
         const col: u16 = @intCast(mouse.col);
         const row: u16 = @intCast(mouse.row);
-        const geometry = Geometry.init(self.last_size.width);
-        const footer = FooterGeometry.init(self.last_size.width, self.last_size.height);
-        const body = BodyGeometry.init(self.last_size.height);
+        const geometry = Geometry.init(size.width);
+        const footer = FooterGeometry.init(size.width, size.height);
+        const body = BodyGeometry.init(size.height);
         if (row == footer.row and inRange(col, footer.apply)) {
-            return self.dispatch(ctx, .apply_result);
+            return self.dispatch(ctx, .apply_result, size);
         }
         if (row == footer.row and inRange(col, footer.abort)) {
-            return self.dispatch(ctx, .abort);
+            return self.dispatch(ctx, .abort, size);
         }
         if (row < body.rows.start or row >= body.rows.end) return;
 
         const conflict_index = self.vertical_offset + row - body.rows.start;
         if (conflict_index >= self.state.conflict_indices.len) return;
-        try self.dispatch(ctx, .{ .select_conflict = conflict_index });
+        try self.dispatch(ctx, .{ .select_conflict = conflict_index }, size);
         if (inRange(col, geometry.ours)) {
             self.selected_value = .ours;
             self.horizontal_offset = 0;
-            return self.dispatch(ctx, .choose_ours);
+            return self.dispatch(ctx, .choose_ours, size);
         }
         if (inRange(col, geometry.theirs)) {
             self.selected_value = .theirs;
             self.horizontal_offset = 0;
-            return self.dispatch(ctx, .choose_theirs);
+            return self.dispatch(ctx, .choose_theirs, size);
         }
         if (inRange(col, geometry.result)) {
             self.selected_value = .result;
             self.horizontal_offset = 0;
             return self.beginEditing(ctx);
         }
-        if (inRange(col, geometry.hierarchy)) return self.dispatch(ctx, .pane_left);
-        return self.dispatch(ctx, .pane_right);
+        if (inRange(col, geometry.hierarchy)) return self.dispatch(ctx, .pane_left, size);
+        return self.dispatch(ctx, .pane_right, size);
     }
 };
 
@@ -328,6 +344,7 @@ fn draw(
     const geometry = Geometry.init(size.width);
     const footer = FooterGeometry.init(size.width, size.height);
     const body = BodyGeometry.init(size.height);
+    self.ensureSelectionVisible(size);
     self.horizontal_offset = @min(self.horizontal_offset, self.maxHorizontalOffset(geometry));
     const unresolved = try std.fmt.allocPrint(
         ctx.arena,
@@ -553,9 +570,13 @@ fn handleEvent(
     event: vxfw.Event,
 ) !void {
     const self: *View = @ptrCast(@alignCast(userdata));
+    const size = self.eventSize();
     switch (event) {
         .winsize => return ctx.consumeAndRedraw(),
-        .key_press, .mouse => if (!isUsableSize(self.eventSize())) return ctx.consumeEvent(),
+        .key_press, .mouse => {
+            if (!isUsableSize(size)) return ctx.consumeEvent();
+            self.ensureSelectionVisible(size);
+        },
         else => {},
     }
     if (self.editing) {
@@ -575,37 +596,38 @@ fn handleEvent(
     }
 
     switch (event) {
-        .mouse => |mouse| try self.handleMouse(ctx, mouse),
+        .mouse => |mouse| try self.handleMouse(ctx, mouse, size),
         .key_press => |key| {
             if (key.matches(vaxis.Key.left, .{ .shift = true })) return self.scrollLeft(ctx);
-            if (key.matches(vaxis.Key.right, .{ .shift = true })) return self.scrollRight(ctx);
-            if (key.matches(vaxis.Key.left, .{})) return self.dispatch(ctx, .pane_left);
-            if (key.matches(vaxis.Key.right, .{})) return self.dispatch(ctx, .pane_right);
+            if (key.matches(vaxis.Key.right, .{ .shift = true })) return self.scrollRight(ctx, size);
+            if (key.matches(vaxis.Key.left, .{})) return self.dispatch(ctx, .pane_left, size);
+            if (key.matches(vaxis.Key.right, .{})) return self.dispatch(ctx, .pane_right, size);
             if (key.matches(vaxis.Key.tab, .{})) {
                 return self.dispatch(
                     ctx,
                     if (self.state.pane == .hierarchy) .pane_right else .pane_left,
+                    size,
                 );
             }
-            if (key.matches(vaxis.Key.up, .{})) return self.dispatch(ctx, .move_up);
-            if (key.matches(vaxis.Key.down, .{})) return self.dispatch(ctx, .move_down);
+            if (key.matches(vaxis.Key.up, .{})) return self.dispatch(ctx, .move_up, size);
+            if (key.matches(vaxis.Key.down, .{})) return self.dispatch(ctx, .move_down, size);
             if (key.matches('o', .{})) {
                 self.selected_value = .ours;
                 self.horizontal_offset = 0;
-                return self.dispatch(ctx, .choose_ours);
+                return self.dispatch(ctx, .choose_ours, size);
             }
             if (key.matches('t', .{})) {
                 self.selected_value = .theirs;
                 self.horizontal_offset = 0;
-                return self.dispatch(ctx, .choose_theirs);
+                return self.dispatch(ctx, .choose_theirs, size);
             }
             if (key.matches(vaxis.Key.enter, .{})) {
                 self.selected_value = .result;
                 self.horizontal_offset = 0;
                 return self.beginEditing(ctx);
             }
-            if (key.matches('a', .{})) return self.dispatch(ctx, .apply_result);
-            if (key.matches('q', .{})) return self.dispatch(ctx, .abort);
+            if (key.matches('a', .{})) return self.dispatch(ctx, .apply_result, size);
+            if (key.matches('q', .{})) return self.dispatch(ctx, .abort, size);
         },
         else => {},
     }
@@ -1230,6 +1252,131 @@ test "merge TUI: root delegates an unconsumed editor event only as target" {
     try testing.expect(!ctx.redraw);
 }
 
+test "merge TUI: queued grow keeps a navigated editor in the next surface" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var fixture = try tallPlan(arena);
+    var state = try merge_ui_state.State.init(arena, &fixture.plan);
+    var view = View.init(arena, &state, "A.prefab");
+    defer view.deinit();
+    var screen: vaxis.Screen = .{ .width = 79, .height = 9 };
+    view.live_screen = &screen;
+    _ = try drawForTest(arena, view.widget(), 79, 9);
+    var ctx = eventContext(arena);
+
+    // App accepts these events from the grown live Screen before it performs layout.
+    screen.width = 80;
+    screen.height = 10;
+    for (0..6) |_| {
+        ctx.consume_event = false;
+        try view.widget().handleEvent(&ctx, .{ .key_press = .{ .codepoint = vaxis.Key.down } });
+    }
+    ctx.consume_event = false;
+    try view.widget().handleEvent(&ctx, .{ .key_press = .{ .codepoint = vaxis.Key.enter } });
+
+    const surface = try drawForTest(arena, view.widget(), 80, 10);
+    const geometry = Geometry.init(80);
+    try testing.expectEqual(@as(usize, 6), state.selected_conflict);
+    try testing.expectEqual(@as(usize, 2), view.vertical_offset);
+    try testing.expectEqualStrings(">", surface.readCell(0, 7).char.grapheme);
+    try testing.expectEqualStrings("f6", try cellsText(arena, surface, 7, geometry.property.start, 2));
+    try testing.expectEqual(@as(usize, 1), surface.children.len);
+    try testing.expect(surface.children[0].surface.widget.eql(view.editor.widget()));
+    try testing.expectEqual(@as(i17, 7), surface.children[0].origin.row);
+}
+
+test "merge TUI: queued height shrink uses the new footer hit range" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var fixture = try tallPlan(arena);
+    var state = try merge_ui_state.State.init(arena, &fixture.plan);
+    var view = View.init(arena, &state, "A.prefab");
+    defer view.deinit();
+    var screen: vaxis.Screen = .{ .width = 80, .height = 20 };
+    view.live_screen = &screen;
+    _ = try drawForTest(arena, view.widget(), 80, 20);
+    var ctx = eventContext(arena);
+
+    screen.height = 10;
+    try view.widget().handleEvent(&ctx, .{ .mouse = .{
+        .col = 75,
+        .row = 9,
+        .button = .left,
+        .mods = .{},
+        .type = .press,
+    } });
+
+    // At 80x10, row 9 and column 75 are Abort, not conflict 6's Result cell.
+    try testing.expectEqual(merge_ui_state.Outcome.aborted, state.outcome);
+    try testing.expect(ctx.quit);
+    try testing.expectEqual(@as(usize, 0), state.selected_conflict);
+    try testing.expect(!view.editing);
+}
+
+test "merge TUI: queued height grow normalizes the body hit offset" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var fixture = try tallPlan(arena);
+    var state = try merge_ui_state.State.init(arena, &fixture.plan);
+    var view = View.init(arena, &state, "A.prefab");
+    defer view.deinit();
+    var screen: vaxis.Screen = .{ .width = 80, .height = 10 };
+    view.live_screen = &screen;
+    _ = try drawForTest(arena, view.widget(), 80, 10);
+    var ctx = eventContext(arena);
+    for (0..7) |_| {
+        try view.widget().handleEvent(&ctx, .{ .key_press = .{ .codepoint = vaxis.Key.down } });
+    }
+    try testing.expectEqual(@as(usize, 3), view.vertical_offset);
+
+    screen.height = 20;
+    ctx.consume_event = false;
+    try view.widget().handleEvent(&ctx, .{ .mouse = .{
+        .col = 0,
+        .row = 3,
+        .button = .left,
+        .mods = .{},
+        .type = .press,
+    } });
+
+    // The grown body shows every conflict, so its first row must select f0.
+    try testing.expectEqual(@as(usize, 0), state.selected_conflict);
+    try testing.expectEqual(@as(usize, 0), view.vertical_offset);
+}
+
+test "merge TUI: queued width change sets the horizontal wheel bound" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var fixture = try longValuePlan(arena);
+    var state = try merge_ui_state.State.init(arena, &fixture.plan);
+    var view = View.init(arena, &state, "A.prefab");
+    defer view.deinit();
+    var screen: vaxis.Screen = .{ .width = 100, .height = 20 };
+    view.live_screen = &screen;
+    _ = try drawForTest(arena, view.widget(), 100, 20);
+    var ctx = eventContext(arena);
+    try view.widget().handleEvent(&ctx, .{ .key_press = .{ .codepoint = 'o', .text = "o" } });
+
+    screen.width = 80;
+    for (0..100) |_| {
+        ctx.consume_event = false;
+        try view.widget().handleEvent(&ctx, .{ .mouse = .{
+            .col = 0,
+            .row = 3,
+            .button = .wheel_right,
+            .mods = .{},
+            .type = .press,
+        } });
+    }
+
+    // The 20-cell Ours value has a 12-grapheme bound in the new 8-cell column.
+    try testing.expectEqual(@as(usize, 12), view.horizontal_offset);
+}
+
 test "merge TUI: pre-draw and undersized views block all merge actions" {
     const SizeCase = struct {
         width: u16,
@@ -1495,6 +1642,32 @@ test "merge TUI: moving down keeps the selected row visible" {
     // Row 8 is reserved for status, so f7 must remain on the last body row.
     try testing.expectEqual(@as(usize, 3), view.vertical_offset);
     try testing.expect(std.mem.indexOf(u8, try rowText(arena, surface, 7), "f7") != null);
+}
+
+test "merge TUI: drawing a resized body normalizes selection visibility" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var fixture = try tallPlan(arena);
+    var state = try merge_ui_state.State.init(arena, &fixture.plan);
+    var view = View.init(arena, &state, "A.prefab");
+    defer view.deinit();
+    _ = try drawForTest(arena, view.widget(), 100, 20);
+    var ctx = eventContext(arena);
+    for (0..7) |_| {
+        try view.widget().handleEvent(&ctx, .{ .key_press = .{ .codepoint = vaxis.Key.down } });
+    }
+    try testing.expectEqual(@as(usize, 0), view.vertical_offset);
+
+    var surface = try drawForTest(arena, view.widget(), 100, 10);
+    // A resize with no later input must still place f7 on the final body row.
+    try testing.expectEqual(@as(usize, 3), view.vertical_offset);
+    try testing.expect(std.mem.indexOf(u8, try rowText(arena, surface, 7), "f7") != null);
+
+    surface = try drawForTest(arena, view.widget(), 100, 20);
+    // Growing enough to show every conflict clamps the obsolete scroll offset to zero.
+    try testing.expectEqual(@as(usize, 0), view.vertical_offset);
+    try testing.expect(std.mem.indexOf(u8, try rowText(arena, surface, 10), "f7") != null);
 }
 
 test "merge TUI: status keeps the selected conflict visible and is not selectable" {

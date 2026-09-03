@@ -36,7 +36,7 @@ test "isUnityPath rejects git refs, .meta and unknown extensions" {
 // https://github.com/gitattributes/gitattributes/blob/master/Unity.gitattributes
 // Excludes .meta (not !u! document format) and JSON like .asmdef. This is a
 // prefilter; content is the ground truth (core isUnityYaml).
-const extensions = [_][]const u8{
+pub const extensions = [_][]const u8{
     ".prefab",             ".unity",          ".asset",
     ".mat",                ".anim",           ".controller",
     ".overrideController", ".physicMaterial", ".physicsMaterial2D",

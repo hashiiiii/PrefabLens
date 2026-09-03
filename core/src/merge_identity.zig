@@ -100,11 +100,11 @@ pub fn sequenceItemId(kind: SequenceKind, item: *const model.Node) ?SequenceItem
     return switch (kind) {
         .components => itemFileIdField(item, "component"),
         .children => directFileId(item),
-        .prefab_properties => propertyOverride(item),
-        .prefab_added_components => addedOverride(item, .added_component),
-        .prefab_removed_components => directReference(item, .removed_component),
-        .prefab_added_game_objects => addedOverride(item, .added_game_object),
-        .prefab_removed_game_objects => directReference(item, .removed_game_object),
+        .prefab_properties => prefabOverride(item, .property),
+        .prefab_added_components => prefabOverride(item, .added_component),
+        .prefab_removed_components => prefabOverride(item, .removed_component),
+        .prefab_added_game_objects => prefabOverride(item, .added_game_object),
+        .prefab_removed_game_objects => prefabOverride(item, .removed_game_object),
     };
 }
 
@@ -118,35 +118,22 @@ fn directFileId(item: *const model.Node) ?SequenceItemId {
     return .{ .target = .{ .file_id = target.file_id, .guid = null, .type_id = null } };
 }
 
-fn propertyOverride(item: *const model.Node) ?SequenceItemId {
-    if (item.* != .map) return null;
-    const target = refId(prefab.reference(model.findValue(item.map, "target")) orelse return null);
-    const path = model.findValue(item.map, "propertyPath") orelse return null;
-    if (path.* != .scalar) return null;
+fn prefabOverride(
+    item: *const model.Node,
+    kind: merge_model.PrefabOverrideKind,
+) ?SequenceItemId {
+    const override = prefab.overrideItem(kind, item);
+    const target = refId(override.target orelse return null);
+    if (kind == .property and override.property_path.len == 0) return null;
     return .{
         .target = target,
-        .property_path = path.scalar,
-        .override_kind = .property,
-    };
-}
-
-fn addedOverride(item: *const model.Node, kind: merge_model.PrefabOverrideKind) ?SequenceItemId {
-    if (item.* != .map) return null;
-    const target = refId(prefab.reference(model.findValue(item.map, "targetCorrespondingSourceObject")) orelse return null);
-    const added_object = refId(prefab.reference(model.findValue(item.map, "addedObject")) orelse return null);
-    return .{
-        .target = target,
-        .added_object = added_object,
+        .property_path = if (kind == .property) override.property_path else null,
+        .added_object = switch (kind) {
+            .added_component, .added_game_object => refId(override.object orelse return null),
+            .property, .removed_component, .removed_game_object => null,
+        },
         .override_kind = kind,
     };
-}
-
-fn directReference(
-    item: *const model.Node,
-    override_kind: ?merge_model.PrefabOverrideKind,
-) ?SequenceItemId {
-    const target = prefab.reference(item) orelse return null;
-    return .{ .target = refId(target), .override_kind = override_kind };
 }
 
 fn refId(value: model.Ref) merge_model.RefId {

@@ -1,4 +1,5 @@
 const std = @import("std");
+const merge_identity = @import("merge_identity.zig");
 const merge_model = @import("merge_model.zig");
 const merge_planner = @import("merge_planner.zig");
 const model = @import("model.zig");
@@ -77,6 +78,8 @@ pub fn applyResolved(
             try appendComposedComponentSequencePatch(arena, &patches, plan, operation);
         } else if (isHierarchySequenceOrder(plan, operation)) {
             try appendComposedHierarchySequencePatch(arena, &patches, plan, operation);
+        } else if (isPrefabSequenceOrder(operation)) {
+            try appendComposedPrefabSequencePatch(arena, &patches, plan, operation);
         }
     }
     return applyPatches(arena, plan.ours.bytes, patches.items);
@@ -120,7 +123,10 @@ fn appendPatch(
 ) merge_model.Error!void {
     if (operation.kind == .sequence_membership) return;
     if (operation.kind == .sequence_content) return;
-    if (isComponentSequenceOrder(plan, operation) or isHierarchySequenceOrder(plan, operation)) return;
+    if (operation.kind == .prefab_override) return;
+    if (isComponentSequenceOrder(plan, operation) or
+        isHierarchySequenceOrder(plan, operation) or
+        isPrefabSequenceOrder(operation)) return;
     if (operation.kind == .component or operation.kind == .game_object) {
         return appendDocumentPatch(arena, patches, plan, operation);
     }
@@ -177,7 +183,8 @@ fn isComponentSequenceOrder(
     plan: *const merge_model.MergePlan,
     operation: *const merge_model.Operation,
 ) bool {
-    if (operation.kind != .sequence_order) return false;
+    if (operation.kind != .sequence_order or
+        !std.mem.eql(u8, operation.property_path, "m_Component")) return false;
     const atomic = atomicByIdConst(plan, operation.atomic_id) orelse return false;
     for (atomic.dependencies) |dependency_id| {
         const dependency = atomicByIdConst(plan, dependency_id) orelse return false;
@@ -198,6 +205,23 @@ fn isHierarchySequenceOrder(
         if (dependency.kind == .game_object or dependency.kind == .reparent) return true;
     }
     return false;
+}
+
+fn isPrefabSequenceOrder(operation: *const merge_model.Operation) bool {
+    if (operation.kind != .sequence_order or operation.identity.document.class_id != 1001) return false;
+    const kind = merge_identity.sequenceKind(
+        operation.identity.document.class_id,
+        operation.property_path,
+    ) orelse return false;
+    return switch (kind) {
+        .prefab_properties,
+        .prefab_added_components,
+        .prefab_removed_components,
+        .prefab_added_game_objects,
+        .prefab_removed_game_objects,
+        => true,
+        .components, .children => false,
+    };
 }
 
 fn appendComposedHierarchySequencePatch(
@@ -419,6 +443,312 @@ const SequenceChoice = struct {
     file_id: i64,
     selected: ?SelectedValue,
 };
+
+const PrefabChoice = struct {
+    id: []const u8,
+    selected: ?SelectedValue,
+};
+
+fn appendComposedPrefabSequencePatch(
+    arena: std.mem.Allocator,
+    patches: *std.ArrayList(Patch),
+    plan: *const merge_model.MergePlan,
+    order_operation: *const merge_model.Operation,
+) merge_model.Error!void {
+    const kind = merge_identity.sequenceKind(
+        order_operation.identity.document.class_id,
+        order_operation.property_path,
+    ) orelse return error.UnsupportedStructure;
+    const ours_sequence = findSequence(plan.ours, order_operation) orelse
+        return error.UnsupportedStructure;
+    if (ours_sequence.* != .seq) return error.UnsupportedStructure;
+    const selected_order = switch (order_operation.resolution) {
+        .unresolved => if (order_operation.values.ours) |value|
+            SelectedValue{ .side = .ours, .value = value }
+        else
+            return error.InvalidResolution,
+        .take => |side| SelectedValue{
+            .side = side,
+            .value = valueForSide(order_operation, side) orelse return error.InvalidResolution,
+        },
+        .remove, .custom => return error.InvalidResolution,
+    };
+    var order: std.ArrayList([]const u8) = .empty;
+    try order.appendSlice(arena, try prefabOrder(arena, selected_order.value.bytes, kind));
+    var choices: std.ArrayList(PrefabChoice) = .empty;
+    for (plan.operations) |*operation| {
+        if (operation.kind != .prefab_override or
+            operation.identity.document.class_id != order_operation.identity.document.class_id or
+            operation.identity.document.file_id != order_operation.identity.document.file_id or
+            !std.mem.eql(u8, operation.property_path, order_operation.property_path)) continue;
+        const id = try prefabOperationId(arena, operation, kind);
+        const selected = try effectivePrefabChoice(operation);
+        try choices.append(arena, .{ .id = id, .selected = selected });
+        if (selected == null) {
+            removePrefabId(&order, id);
+        } else if (!containsPrefabId(order.items, id)) {
+            try insertPrefabId(
+                arena,
+                &order,
+                plan,
+                order_operation,
+                selected.?.side,
+                id,
+                kind,
+            );
+        }
+    }
+
+    const destination_indent = sequenceIndent(plan.ours, ours_sequence) orelse
+        (sequenceFieldIndent(plan.ours, ours_sequence) orelse return error.UnsupportedStructure);
+    const merged_bytes = try renderPrefabSequence(
+        arena,
+        plan,
+        order_operation,
+        ours_sequence,
+        order.items,
+        choices.items,
+        destination_indent,
+        kind,
+    );
+    const replacement = try merge_planner.sequenceReplacement(
+        arena,
+        plan.ours,
+        ours_sequence,
+        merged_bytes,
+    );
+    var ours_value = order_operation.values.ours orelse return error.UnsupportedStructure;
+    if (order.items.len == 0 and ours_sequence.seq.len != 0) {
+        const entry = plan.ours.entry_spans.get(ours_sequence) orelse
+            return error.UnsupportedStructure;
+        const span = plan.ours.node_spans.get(ours_sequence) orelse
+            return error.UnsupportedStructure;
+        ours_value.span = .{ .start = entry.value.start, .end = span.end };
+        ours_value.bytes = ours_value.span.?.bytes(plan.ours.bytes);
+    }
+    const patch_span = ours_value.span orelse return error.UnsupportedStructure;
+    if (std.mem.eql(u8, patch_span.bytes(plan.ours.bytes), replacement)) return;
+    try patches.append(arena, .{
+        .span = patch_span,
+        .replacement = replacement,
+        .atomic_id = order_operation.atomic_id,
+        .order = order_operation.id,
+    });
+}
+
+fn effectivePrefabChoice(operation: *const merge_model.Operation) merge_model.Error!?SelectedValue {
+    return switch (operation.resolution) {
+        .unresolved => if (operation.values.base) |value| .{ .side = .base, .value = value } else null,
+        .remove => null,
+        .take => |side| if (valueForSide(operation, side)) |value|
+            .{ .side = side, .value = value }
+        else
+            null,
+        .custom => error.InvalidResolution,
+    };
+}
+
+fn prefabOrder(
+    arena: std.mem.Allocator,
+    bytes: []const u8,
+    kind: merge_identity.SequenceKind,
+) merge_model.Error![]const []const u8 {
+    var wrapped: std.ArrayList(u8) = .empty;
+    try wrapped.appendSlice(arena, "--- !u!1001 &1\nPrefabInstance:\n  m_Modification:\n    ");
+    try wrapped.appendSlice(arena, prefabField(kind));
+    try wrapped.append(arena, ':');
+    const trimmed = std.mem.trimStart(u8, bytes, " ");
+    if (std.mem.startsWith(u8, trimmed, "[")) {
+        try wrapped.append(arena, ' ');
+        try wrapped.appendSlice(arena, trimmed);
+        if (!std.mem.endsWith(u8, trimmed, "\n")) try wrapped.append(arena, '\n');
+    } else {
+        try wrapped.append(arena, '\n');
+        try wrapped.appendSlice(arena, bytes);
+    }
+    const parsed = try parser.parseSpanned(arena, wrapped.items);
+    if (parsed.diagnostics.len != 0 or parsed.documents.len != 1) return error.UnsupportedStructure;
+    const modification = model.findValue(parsed.documents[0].body.map, "m_Modification") orelse
+        return error.UnsupportedStructure;
+    if (modification.* != .map) return error.UnsupportedStructure;
+    const sequence = model.findValue(modification.map, prefabField(kind)) orelse
+        return error.UnsupportedStructure;
+    if (sequence.* != .seq) return error.UnsupportedStructure;
+    var result: std.ArrayList([]const u8) = .empty;
+    for (sequence.seq) |item| {
+        const id = try prefabItemId(arena, kind, item);
+        if (containsPrefabId(result.items, id)) return error.InvalidMerge;
+        try result.append(arena, id);
+    }
+    return result.toOwnedSlice(arena);
+}
+
+fn prefabField(kind: merge_identity.SequenceKind) []const u8 {
+    return switch (kind) {
+        .prefab_properties => "m_Modifications",
+        .prefab_added_components => "m_AddedComponents",
+        .prefab_removed_components => "m_RemovedComponents",
+        .prefab_added_game_objects => "m_AddedGameObjects",
+        .prefab_removed_game_objects => "m_RemovedGameObjects",
+        .components, .children => unreachable,
+    };
+}
+
+fn prefabOperationId(
+    arena: std.mem.Allocator,
+    operation: *const merge_model.Operation,
+    kind: merge_identity.SequenceKind,
+) merge_model.Error![]const u8 {
+    for ([_]?merge_model.SideValue{
+        operation.values.base,
+        operation.values.ours,
+        operation.values.theirs,
+    }) |value| {
+        const present = value orelse continue;
+        const item = present.node orelse continue;
+        return prefabItemId(arena, kind, item);
+    }
+    return error.InvalidMerge;
+}
+
+fn prefabItemId(
+    arena: std.mem.Allocator,
+    kind: merge_identity.SequenceKind,
+    item: *const model.Node,
+) merge_model.Error![]const u8 {
+    const identity = merge_identity.sequenceItemId(kind, item) orelse
+        return error.UnsupportedStructure;
+    return merge_planner.sequenceId(arena, identity);
+}
+
+fn removePrefabId(order: *std.ArrayList([]const u8), id: []const u8) void {
+    for (order.items, 0..) |candidate, index| {
+        if (!std.mem.eql(u8, candidate, id)) continue;
+        _ = order.orderedRemove(index);
+        return;
+    }
+}
+
+fn containsPrefabId(order: []const []const u8, id: []const u8) bool {
+    for (order) |candidate| if (std.mem.eql(u8, candidate, id)) return true;
+    return false;
+}
+
+fn prefabIndex(order: []const []const u8, id: []const u8) ?usize {
+    for (order, 0..) |candidate, index| {
+        if (std.mem.eql(u8, candidate, id)) return index;
+    }
+    return null;
+}
+
+fn insertPrefabId(
+    arena: std.mem.Allocator,
+    order: *std.ArrayList([]const u8),
+    plan: *const merge_model.MergePlan,
+    operation: *const merge_model.Operation,
+    selected_side: merge_model.Side,
+    id: []const u8,
+    kind: merge_identity.SequenceKind,
+) merge_model.Error!void {
+    const selected_file = fileForSide(plan, selected_side);
+    const selected_sequence = findSequence(selected_file, operation) orelse
+        return error.UnsupportedStructure;
+    if (selected_sequence.* != .seq) return error.UnsupportedStructure;
+    const selected_index = for (selected_sequence.seq, 0..) |item, index| {
+        const candidate = try prefabItemId(arena, kind, item);
+        if (std.mem.eql(u8, candidate, id)) break index;
+    } else return error.UnsupportedStructure;
+    for (selected_sequence.seq[selected_index + 1 ..]) |next| {
+        const next_id = try prefabItemId(arena, kind, next);
+        if (prefabIndex(order.items, next_id)) |index| {
+            try order.insert(arena, index, id);
+            return;
+        }
+    }
+    try order.append(arena, id);
+}
+
+fn renderPrefabSequence(
+    arena: std.mem.Allocator,
+    plan: *const merge_model.MergePlan,
+    operation: *const merge_model.Operation,
+    ours_sequence: *const model.Node,
+    order: []const []const u8,
+    choices: []const PrefabChoice,
+    destination_indent: usize,
+    kind: merge_identity.SequenceKind,
+) merge_model.Error![]const u8 {
+    var output: std.ArrayList(u8) = .empty;
+    for (order) |id| {
+        const selected = try prefabItem(arena, plan, operation, choices, id, kind) orelse
+            return error.UnsupportedStructure;
+        if (selected.side == .ours) {
+            try output.appendSlice(arena, selected.value.bytes);
+            try appendOursPrefabGap(arena, &output, plan.ours, ours_sequence, id, kind);
+        } else {
+            try output.appendSlice(arena, try merge_planner.reindentSequenceItem(
+                arena,
+                selected.value.bytes,
+                destination_indent,
+                plan.ours.lineEndingAt(
+                    (operation.values.ours orelse return error.UnsupportedStructure).span.?.start,
+                ),
+            ));
+        }
+    }
+    return output.toOwnedSlice(arena);
+}
+
+fn prefabItem(
+    arena: std.mem.Allocator,
+    plan: *const merge_model.MergePlan,
+    operation: *const merge_model.Operation,
+    choices: []const PrefabChoice,
+    id: []const u8,
+    kind: merge_identity.SequenceKind,
+) merge_model.Error!?SelectedValue {
+    for (choices) |choice| {
+        if (std.mem.eql(u8, choice.id, id)) return choice.selected;
+    }
+    for ([_]merge_model.Side{ .ours, .base, .theirs }) |side| {
+        const file = fileForSide(plan, side);
+        const sequence = findSequence(file, operation) orelse continue;
+        if (sequence.* != .seq) continue;
+        for (sequence.seq) |item| {
+            const candidate = try prefabItemId(arena, kind, item);
+            if (!std.mem.eql(u8, candidate, id)) continue;
+            const span = file.sequence_item_spans.get(item) orelse
+                return error.UnsupportedStructure;
+            return .{
+                .side = side,
+                .value = .{ .node = item, .bytes = span.bytes(file.bytes), .span = span },
+            };
+        }
+    }
+    return null;
+}
+
+fn appendOursPrefabGap(
+    arena: std.mem.Allocator,
+    output: *std.ArrayList(u8),
+    file: source.ParsedFile,
+    sequence: *const model.Node,
+    id: []const u8,
+    kind: merge_identity.SequenceKind,
+) merge_model.Error!void {
+    const ours_index = for (sequence.seq, 0..) |item, index| {
+        const candidate = try prefabItemId(arena, kind, item);
+        if (std.mem.eql(u8, candidate, id)) break index;
+    } else return;
+    if (ours_index + 1 == sequence.seq.len) return;
+    const current_span = file.sequence_item_spans.get(sequence.seq[ours_index]) orelse
+        return error.UnsupportedStructure;
+    const next_item = sequence.seq[ours_index + 1];
+    const next_span = file.sequence_item_spans.get(next_item) orelse
+        return error.UnsupportedStructure;
+    if (next_span.start < current_span.end) return error.UnsupportedStructure;
+    try output.appendSlice(arena, file.bytes[current_span.end..next_span.start]);
+}
 
 fn appendComposedComponentSequencePatch(
     arena: std.mem.Allocator,

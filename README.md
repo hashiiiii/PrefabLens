@@ -111,7 +111,7 @@ Save the attributes block below in `.git/info/attributes`.
 
 #### Team setup
 
-Run these commands on each clone:
+Run these commands once on each development machine or user account:
 
 ```bash
 git config --global merge.prefablens.driver \

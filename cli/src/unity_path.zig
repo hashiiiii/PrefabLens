@@ -32,24 +32,50 @@ test "isUnityPath rejects git refs, .meta and unknown extensions" {
     for (no) |p| try testing.expect(!isUnityPath(p));
 }
 
-test "README merge attributes match the Unity extension allowlist" {
-    const readme = @import("test_options").readme;
+fn readmeExtensions(readme: []const u8, allocator: std.mem.Allocator) !std.ArrayList([]const u8) {
     var actual: std.ArrayList([]const u8) = .empty;
-    defer actual.deinit(testing.allocator);
     var lines = std.mem.splitScalar(u8, readme, '\n');
     const suffix = " merge=prefablens";
     while (lines.next()) |line| {
-        if (!std.mem.endsWith(u8, line, suffix)) continue;
-        try testing.expect(std.mem.startsWith(u8, line, "*."));
-        try actual.append(
-            testing.allocator,
-            line[1 .. line.len - suffix.len],
-        );
+        const normalized = if (std.mem.endsWith(u8, line, "\r")) line[0 .. line.len - 1] else line;
+        if (!std.mem.endsWith(u8, normalized, suffix)) continue;
+        try testing.expect(std.mem.startsWith(u8, normalized, "*."));
+        try actual.append(allocator, normalized[1 .. normalized.len - suffix.len]);
     }
+    return actual;
+}
+
+fn expectReadmeExtensions(readme: []const u8) !void {
+    var actual = try readmeExtensions(readme, testing.allocator);
+    defer actual.deinit(testing.allocator);
     try testing.expectEqual(@as(usize, extensions.len), actual.items.len);
     for (extensions, actual.items) |expected, documented| {
         try testing.expectEqualStrings(expected, documented);
     }
+}
+
+fn readmeContents() ![]u8 {
+    return std.Io.Dir.cwd().readFileAlloc(
+        testing.io,
+        @import("test_options").readme_path,
+        testing.allocator,
+        .limited(1024 * 1024),
+    );
+}
+
+test "README merge attributes match the Unity extension allowlist" {
+    const readme = try readmeContents();
+    defer testing.allocator.free(readme);
+    try expectReadmeExtensions(readme);
+}
+
+test "README merge attributes match the Unity extension allowlist with CRLF" {
+    const readme = try readmeContents();
+    defer testing.allocator.free(readme);
+    const crlf = try testing.allocator.alloc(u8, readme.len + std.mem.count(u8, readme, "\n"));
+    defer testing.allocator.free(crlf);
+    _ = std.mem.replace(u8, readme, "\n", "\r\n", crlf);
+    try expectReadmeExtensions(crlf);
 }
 
 // Same set as unityyamlmerge targets, i.e. the community Unity.gitattributes:

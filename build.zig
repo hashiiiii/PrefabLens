@@ -12,13 +12,7 @@ pub fn build(b: *std.Build) void {
 
     const test_opts = b.addOptions();
     test_opts.addOption([]const u8, "fixture_root", b.pathFromRoot("core/src/testdata/merge"));
-    const readme = b.build_root.handle.readFileAlloc(
-        b.graph.io,
-        "README.md",
-        b.allocator,
-        .unlimited,
-    ) catch @panic("failed to read README.md");
-    test_opts.addOption([]const u8, "readme", readme);
+    test_opts.addOptionPath("readme_path", b.path("README.md"));
     const test_options_mod = test_opts.createModule();
 
     const core_mod = b.addModule("core", .{

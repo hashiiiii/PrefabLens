@@ -818,7 +818,7 @@ fn renderSequence(
     return output.toOwnedSlice(arena);
 }
 
-fn sequenceReplacement(
+pub fn sequenceReplacement(
     arena: std.mem.Allocator,
     ours_file: source.ParsedFile,
     ours_node: ?*const model.Node,
@@ -1413,6 +1413,67 @@ test "merge planner: adds a component to an inline empty owner sequence" {
     const built = try @import("merge.zig").build(arena_state.allocator(), base, base, theirs);
 
     try testing.expectEqualStrings(theirs, built.partial);
+}
+
+test "merge planner: adds two components to an inline empty owner sequence" {
+    const base = "--- !u!1 &1\nGameObject:\n  m_Component: []\n  m_Name: Root\n";
+    const theirs =
+        "--- !u!1 &1\nGameObject:\n  m_Component:\n  - component: {fileID: 54}\n  - component: {fileID: 65}\n  m_Name: Root\n" ++
+        "--- !u!54 &54\nRigidbody:\n  m_GameObject: {fileID: 1}\n  m_Mass: 1\n" ++
+        "--- !u!65 &65\nBoxCollider:\n  m_GameObject: {fileID: 1}\n  m_IsTrigger: 0\n";
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+
+    const built = try @import("merge.zig").build(arena_state.allocator(), base, base, theirs);
+
+    try testing.expectEqualStrings(theirs, built.partial);
+}
+
+test "merge planner: composes component choices with an independent order choice" {
+    const base =
+        "--- !u!1 &1\nGameObject:\n  m_Component:\n  - component: {fileID: 4}\n  - component: {fileID: 54}\n  - component: {fileID: 65}\n  - component: {fileID: 66}\n" ++
+        "--- !u!4 &4\nTransform:\n  m_GameObject: {fileID: 1}\n  m_Children: []\n" ++
+        "--- !u!54 &54\nRigidbody:\n  m_GameObject: {fileID: 1}\n  m_Mass: 1\n" ++
+        "--- !u!65 &65\nBoxCollider:\n  m_GameObject: {fileID: 1}\n  m_IsTrigger: 0\n" ++
+        "--- !u!66 &66\nMeshCollider:\n  m_GameObject: {fileID: 1}\n  m_Convex: 0\n";
+    const ours =
+        "--- !u!1 &1\nGameObject:\n  m_Component:\n  - component: {fileID: 65}\n  - component: {fileID: 4}\n  - component: {fileID: 54}\n  - component: {fileID: 66}\n" ++
+        "--- !u!4 &4\nTransform:\n  m_GameObject: {fileID: 1}\n  m_Children: []\n" ++
+        "--- !u!54 &54\nRigidbody:\n  m_GameObject: {fileID: 1}\n  m_Mass: 2\n" ++
+        "--- !u!65 &65\nBoxCollider:\n  m_GameObject: {fileID: 1}\n  m_IsTrigger: 0\n" ++
+        "--- !u!66 &66\nMeshCollider:\n  m_GameObject: {fileID: 1}\n  m_Convex: 0\n";
+    const theirs =
+        "--- !u!1 &1\nGameObject:\n  m_Component:\n  - component: {fileID: 4}\n  - component: {fileID: 66}\n  - component: {fileID: 65}\n" ++
+        "--- !u!4 &4\nTransform:\n  m_GameObject: {fileID: 1}\n  m_Children: []\n" ++
+        "--- !u!65 &65\nBoxCollider:\n  m_GameObject: {fileID: 1}\n  m_IsTrigger: 0\n" ++
+        "--- !u!66 &66\nMeshCollider:\n  m_GameObject: {fileID: 1}\n  m_Convex: 0\n";
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var built = try @import("merge.zig").build(arena, base, ours, theirs);
+    const component = @import("merge_test_support.zig").findOperationByKind(&built.plan, .component).?;
+    const order = @import("merge_test_support.zig").findOperationByKind(&built.plan, .sequence_order).?;
+
+    try @import("merge.zig").resolve(arena, &built.plan, component.id, .{ .take = .ours });
+    try @import("merge.zig").resolve(arena, &built.plan, order.id, .{ .take = .theirs });
+    const finished = try @import("merge.zig").finish(arena, &built.plan);
+
+    const component_4 = std.mem.indexOf(u8, finished, "component: {fileID: 4}").?;
+    const component_66 = std.mem.indexOf(u8, finished, "component: {fileID: 66}").?;
+    const component_65 = std.mem.indexOf(u8, finished, "component: {fileID: 65}").?;
+    try testing.expect(std.mem.indexOf(u8, finished, "component: {fileID: 54}") != null);
+    try testing.expect(std.mem.indexOf(u8, finished, "--- !u!54 &54") != null);
+    try testing.expect(component_4 < component_66 and component_66 < component_65);
+
+    var reversed = try @import("merge.zig").build(arena, base, theirs, ours);
+    const reversed_component = @import("merge_test_support.zig").findOperationByKind(&reversed.plan, .component).?;
+    const reversed_order = @import("merge_test_support.zig").findOperationByKind(&reversed.plan, .sequence_order).?;
+    try @import("merge.zig").resolve(arena, &reversed.plan, reversed_component.id, .remove);
+    try @import("merge.zig").resolve(arena, &reversed.plan, reversed_order.id, .{ .take = .theirs });
+    const reversed_finished = try @import("merge.zig").finish(arena, &reversed.plan);
+
+    try testing.expect(std.mem.indexOf(u8, reversed_finished, "component: {fileID: 54}") == null);
+    try testing.expect(std.mem.indexOf(u8, reversed_finished, "--- !u!54 &54") == null);
 }
 
 test "merge planner: rejects a component reference without its document" {

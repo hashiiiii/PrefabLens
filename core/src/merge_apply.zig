@@ -72,6 +72,11 @@ pub fn applyResolved(
             try appendPatch(arena, &patches, plan, operation);
         }
     }
+    for (plan.operations) |*operation| {
+        if (isComponentSequenceOrder(plan, operation)) {
+            try appendComposedComponentSequencePatch(arena, &patches, plan, operation);
+        }
+    }
     return applyPatches(arena, plan.ours.bytes, patches.items);
 }
 
@@ -111,13 +116,9 @@ fn appendPatch(
     plan: *const merge_model.MergePlan,
     operation: *const merge_model.Operation,
 ) merge_model.Error!void {
-    if (operation.kind == .sequence_membership) {
-        const atomic = atomicByIdConst(plan, operation.atomic_id) orelse return error.InvalidMerge;
-        if (atomic.kind != .component) return;
-        if (try changedSequenceOrderIsReady(arena, plan, operation)) return;
-        return appendComponentMembershipPatch(arena, patches, plan, operation);
-    }
+    if (operation.kind == .sequence_membership) return;
     if (operation.kind == .sequence_content) return;
+    if (isComponentSequenceOrder(plan, operation)) return;
     if (operation.kind == .component or operation.kind == .game_object) {
         return appendDocumentPatch(arena, patches, plan, operation);
     }
@@ -170,119 +171,248 @@ fn appendPatch(
     });
 }
 
-fn changedSequenceOrderIsReady(
-    arena: std.mem.Allocator,
+fn isComponentSequenceOrder(
     plan: *const merge_model.MergePlan,
-    membership: *const merge_model.Operation,
-) merge_model.Error!bool {
-    for (plan.operations) |*operation| {
-        if (operation.kind != .sequence_order or
-            operation.identity.document.class_id != membership.identity.document.class_id or
-            operation.identity.document.file_id != membership.identity.document.file_id or
-            !std.mem.eql(u8, operation.property_path, membership.property_path)) continue;
-        const atomic = atomicByIdConst(plan, operation.atomic_id) orelse return error.InvalidMerge;
-        var path: std.ArrayList(merge_model.AtomicId) = .empty;
-        if (!try atomicIsReady(arena, plan, atomic.*, &path)) return false;
-        const selected = selectedValue(operation) orelse return false;
-        const ours = operation.values.ours orelse return selected.value.bytes.len != 0;
-        return !std.mem.eql(u8, ours.bytes, selected.value.bytes);
+    operation: *const merge_model.Operation,
+) bool {
+    if (operation.kind != .sequence_order) return false;
+    const atomic = atomicByIdConst(plan, operation.atomic_id) orelse return false;
+    for (atomic.dependencies) |dependency_id| {
+        const dependency = atomicByIdConst(plan, dependency_id) orelse return false;
+        if (dependency.kind == .component) return true;
     }
     return false;
 }
 
-fn appendComponentMembershipPatch(
+const ComponentChoice = struct {
+    file_id: i64,
+    selected: ?SelectedValue,
+};
+
+fn appendComposedComponentSequencePatch(
     arena: std.mem.Allocator,
     patches: *std.ArrayList(Patch),
     plan: *const merge_model.MergePlan,
-    operation: *const merge_model.Operation,
+    order_operation: *const merge_model.Operation,
 ) merge_model.Error!void {
-    const selected = switch (operation.resolution) {
-        .unresolved => return error.InvalidResolution,
-        .remove => null,
-        .take => |side| valueForSide(operation, side),
+    const ours_sequence = findSequence(plan.ours, order_operation) orelse return error.UnsupportedStructure;
+    if (ours_sequence.* != .seq) return error.UnsupportedStructure;
+    const selected_order = switch (order_operation.resolution) {
+        .unresolved => if (order_operation.values.ours) |value|
+            SelectedValue{ .side = .ours, .value = value }
+        else
+            return error.InvalidResolution,
+        .take => |side| SelectedValue{
+            .side = side,
+            .value = valueForSide(order_operation, side) orelse return error.InvalidResolution,
+        },
+        .remove => return error.InvalidResolution,
         .custom => return error.InvalidResolution,
     };
-    if (operation.values.ours) |ours| {
-        const span = ours.span orelse return error.UnsupportedStructure;
-        const replacement = if (selected) |value| value.bytes else "";
-        if (std.mem.eql(u8, span.bytes(plan.ours.bytes), replacement)) return;
-        return patches.append(arena, .{
-            .span = span,
-            .replacement = replacement,
-            .atomic_id = operation.atomic_id,
-            .order = operation.id,
-        });
+    var order: std.ArrayList(i64) = .empty;
+    try order.appendSlice(arena, try componentOrder(arena, selected_order.value.bytes));
+    var choices: std.ArrayList(ComponentChoice) = .empty;
+    for (plan.operations) |*operation| {
+        if (operation.kind != .sequence_membership or
+            operation.identity.document.class_id != order_operation.identity.document.class_id or
+            operation.identity.document.file_id != order_operation.identity.document.file_id or
+            !std.mem.eql(u8, operation.property_path, order_operation.property_path)) continue;
+        const atomic = atomicByIdConst(plan, operation.atomic_id) orelse return error.InvalidMerge;
+        if (atomic.kind != .component) continue;
+        const file_id = (operation.identity.item_ref orelse return error.InvalidMerge).file_id;
+        const selected = try effectiveComponentChoice(operation);
+        try choices.append(arena, .{ .file_id = file_id, .selected = selected });
+        if (selected == null) {
+            removeComponentId(&order, file_id);
+        } else if (!containsComponentId(order.items, file_id)) {
+            try insertComponentId(arena, &order, plan, order_operation, selected.?.side, file_id);
+        }
     }
-    const inserted = selected orelse return;
-    const insertion = try componentInsertion(arena, plan, operation, inserted);
-    try patches.append(arena, .{
-        .span = insertion.span,
-        .replacement = insertion.replacement,
-        .atomic_id = operation.atomic_id,
-        .order = operation.id,
-    });
-}
-
-const ComponentInsertion = struct {
-    span: source.Span,
-    replacement: []const u8,
-};
-
-fn componentInsertion(
-    arena: std.mem.Allocator,
-    plan: *const merge_model.MergePlan,
-    operation: *const merge_model.Operation,
-    selected: merge_model.SideValue,
-) merge_model.Error!ComponentInsertion {
-    const ours_sequence = findSequence(plan.ours, operation) orelse return error.UnsupportedStructure;
-    if (ours_sequence.* != .seq) return error.UnsupportedStructure;
-    const selected_side = switch (operation.resolution) {
-        .take => |side| side,
-        else => return error.InvalidResolution,
-    };
-    const selected_file = fileForSide(plan, selected_side);
-    const selected_sequence = findSequence(selected_file, operation) orelse return error.UnsupportedStructure;
-    if (selected_sequence.* != .seq) return error.UnsupportedStructure;
-    const target_file_id = (operation.identity.item_ref orelse return error.InvalidMerge).file_id;
-    const selected_index = for (selected_sequence.seq, 0..) |item, index| {
-        if (componentFileId(item) == target_file_id) break index;
-    } else return error.UnsupportedStructure;
 
     const destination_indent = sequenceIndent(plan.ours, ours_sequence) orelse
         (sequenceFieldIndent(plan.ours, ours_sequence) orelse return error.UnsupportedStructure);
-    var offset: ?usize = null;
+    const merged_bytes = try renderComponentSequence(
+        arena,
+        plan,
+        order_operation,
+        ours_sequence,
+        order.items,
+        choices.items,
+        destination_indent,
+    );
+    const replacement = try merge_planner.sequenceReplacement(arena, plan.ours, ours_sequence, merged_bytes);
+    var ours_value = order_operation.values.ours orelse return error.UnsupportedStructure;
+    if (order.items.len == 0 and ours_sequence.seq.len != 0) {
+        const entry = plan.ours.entry_spans.get(ours_sequence) orelse return error.UnsupportedStructure;
+        const span = plan.ours.node_spans.get(ours_sequence) orelse return error.UnsupportedStructure;
+        ours_value.span = .{ .start = entry.value.start, .end = span.end };
+        ours_value.bytes = ours_value.span.?.bytes(plan.ours.bytes);
+    }
+    const patch_span = ours_value.span orelse return error.UnsupportedStructure;
+    if (std.mem.eql(u8, patch_span.bytes(plan.ours.bytes), replacement)) return;
+    try patches.append(arena, .{
+        .span = patch_span,
+        .replacement = replacement,
+        .atomic_id = order_operation.atomic_id,
+        .order = order_operation.id,
+    });
+}
+
+fn effectiveComponentChoice(operation: *const merge_model.Operation) merge_model.Error!?SelectedValue {
+    return switch (operation.resolution) {
+        .unresolved => if (operation.values.base) |value| .{ .side = .base, .value = value } else null,
+        .remove => null,
+        .take => |side| if (valueForSide(operation, side)) |value|
+            .{ .side = side, .value = value }
+        else
+            null,
+        .custom => error.InvalidResolution,
+    };
+}
+
+fn componentOrder(arena: std.mem.Allocator, bytes: []const u8) merge_model.Error![]const i64 {
+    var wrapped: std.ArrayList(u8) = .empty;
+    try wrapped.appendSlice(arena, "--- !u!1 &1\nGameObject:\n  m_Component:");
+    const trimmed = std.mem.trimStart(u8, bytes, " ");
+    if (std.mem.startsWith(u8, trimmed, "[")) {
+        try wrapped.appendSlice(arena, " ");
+        try wrapped.appendSlice(arena, trimmed);
+        if (!std.mem.endsWith(u8, trimmed, "\n")) try wrapped.appendSlice(arena, "\n");
+    } else {
+        try wrapped.appendSlice(arena, "\n");
+        try wrapped.appendSlice(arena, bytes);
+    }
+    const parsed = try parser.parseSpanned(arena, wrapped.items);
+    if (parsed.diagnostics.len != 0 or parsed.documents.len != 1) return error.UnsupportedStructure;
+    const sequence = model.findValue(parsed.documents[0].body.map, "m_Component") orelse
+        return error.UnsupportedStructure;
+    if (sequence.* != .seq) return error.UnsupportedStructure;
+    var result: std.ArrayList(i64) = .empty;
+    for (sequence.seq) |item| {
+        const file_id = componentFileId(item) orelse return error.UnsupportedStructure;
+        if (containsComponentId(result.items, file_id)) return error.InvalidMerge;
+        try result.append(arena, file_id);
+    }
+    return result.toOwnedSlice(arena);
+}
+
+fn removeComponentId(order: *std.ArrayList(i64), file_id: i64) void {
+    for (order.items, 0..) |candidate, index| {
+        if (candidate != file_id) continue;
+        _ = order.orderedRemove(index);
+        return;
+    }
+}
+
+fn containsComponentId(order: []const i64, file_id: i64) bool {
+    for (order) |candidate| if (candidate == file_id) return true;
+    return false;
+}
+
+fn componentIndex(order: []const i64, file_id: i64) ?usize {
+    for (order, 0..) |candidate, index| if (candidate == file_id) return index;
+    return null;
+}
+
+fn insertComponentId(
+    arena: std.mem.Allocator,
+    order: *std.ArrayList(i64),
+    plan: *const merge_model.MergePlan,
+    operation: *const merge_model.Operation,
+    selected_side: merge_model.Side,
+    file_id: i64,
+) merge_model.Error!void {
+    const selected_file = fileForSide(plan, selected_side);
+    const selected_sequence = findSequence(selected_file, operation) orelse return error.UnsupportedStructure;
+    if (selected_sequence.* != .seq) return error.UnsupportedStructure;
+    const selected_index = for (selected_sequence.seq, 0..) |item, index| {
+        if (componentFileId(item) == file_id) break index;
+    } else return error.UnsupportedStructure;
     for (selected_sequence.seq[selected_index + 1 ..]) |next| {
-        const next_file_id = componentFileId(next) orelse return error.UnsupportedStructure;
-        if (findComponentItem(ours_sequence.seq, next_file_id)) |ours_item| {
-            offset = (plan.ours.sequence_item_spans.get(ours_item) orelse return error.UnsupportedStructure).start;
-            break;
+        const next_id = componentFileId(next) orelse return error.UnsupportedStructure;
+        if (componentIndex(order.items, next_id)) |index| {
+            try order.insert(arena, index, file_id);
+            return;
         }
     }
-    if (offset == null and ours_sequence.seq.len != 0) {
-        const last = ours_sequence.seq[ours_sequence.seq.len - 1];
-        offset = (plan.ours.sequence_item_spans.get(last) orelse return error.UnsupportedStructure).end;
-    }
-    if (offset) |insertion_offset| {
-        return .{
-            .span = .{ .start = insertion_offset, .end = insertion_offset },
-            .replacement = try merge_planner.reindentSequenceItem(
+    try order.append(arena, file_id);
+}
+
+fn renderComponentSequence(
+    arena: std.mem.Allocator,
+    plan: *const merge_model.MergePlan,
+    operation: *const merge_model.Operation,
+    ours_sequence: *const model.Node,
+    order: []const i64,
+    choices: []const ComponentChoice,
+    destination_indent: usize,
+) merge_model.Error![]const u8 {
+    var output: std.ArrayList(u8) = .empty;
+    for (order, 0..) |file_id, order_index| {
+        const selected = componentItem(plan, operation, choices, file_id) orelse
+            return error.UnsupportedStructure;
+        if (selected.side == .ours) {
+            try output.appendSlice(arena, selected.value.bytes);
+            try appendOursComponentGap(arena, &output, plan.ours, ours_sequence, order, order_index, file_id);
+        } else {
+            try output.appendSlice(arena, try merge_planner.reindentSequenceItem(
                 arena,
-                selected.bytes,
+                selected.value.bytes,
                 destination_indent,
-                plan.ours.lineEndingAt(insertion_offset),
-            ),
+                plan.ours.lineEndingAt((operation.values.ours orelse return error.UnsupportedStructure).span.?.start),
+            ));
+        }
+    }
+    return output.toOwnedSlice(arena);
+}
+
+fn componentItem(
+    plan: *const merge_model.MergePlan,
+    operation: *const merge_model.Operation,
+    choices: []const ComponentChoice,
+    file_id: i64,
+) ?SelectedValue {
+    for (choices) |choice| {
+        if (choice.file_id == file_id) return choice.selected;
+    }
+    for ([_]merge_model.Side{ .ours, .base, .theirs }) |side| {
+        const file = fileForSide(plan, side);
+        const sequence = findSequence(file, operation) orelse continue;
+        if (sequence.* != .seq) continue;
+        const item = findComponentItem(sequence.seq, file_id) orelse continue;
+        const span = file.sequence_item_spans.get(item) orelse continue;
+        return .{
+            .side = side,
+            .value = .{ .node = item, .bytes = span.bytes(file.bytes), .span = span },
         };
     }
+    return null;
+}
 
-    var empty_span = plan.ours.node_spans.get(ours_sequence) orelse return error.UnsupportedStructure;
-    if (empty_span.start > 0 and plan.ours.bytes[empty_span.start - 1] == ' ') empty_span.start -= 1;
-    const line_ending = plan.ours.lineEndingAt(empty_span.end);
-    const item = try merge_planner.reindentSequenceItem(arena, selected.bytes, destination_indent, line_ending);
-    const trimmed = std.mem.trimEnd(u8, item, "\r\n");
-    return .{
-        .span = empty_span,
-        .replacement = try std.fmt.allocPrint(arena, "{s}{s}", .{ line_ending, trimmed }),
-    };
+fn appendOursComponentGap(
+    arena: std.mem.Allocator,
+    output: *std.ArrayList(u8),
+    file: source.ParsedFile,
+    sequence: *const model.Node,
+    order: []const i64,
+    order_index: usize,
+    file_id: i64,
+) merge_model.Error!void {
+    const ours_index = for (sequence.seq, 0..) |item, index| {
+        if (componentFileId(item) == file_id) break index;
+    } else return;
+    if (ours_index + 1 == sequence.seq.len) return;
+    const current_span = file.sequence_item_spans.get(sequence.seq[ours_index]) orelse
+        return error.UnsupportedStructure;
+    const next_item = sequence.seq[ours_index + 1];
+    const next_span = file.sequence_item_spans.get(next_item) orelse return error.UnsupportedStructure;
+    if (next_span.start < current_span.end) return error.UnsupportedStructure;
+    const gap = file.bytes[current_span.end..next_span.start];
+    if (gap.len == 0) return;
+    const next_id = componentFileId(next_item) orelse return error.UnsupportedStructure;
+    const next_order_index = componentIndex(order, next_id) orelse return error.UnsupportedStructure;
+    if (next_order_index <= order_index) return error.UnsupportedStructure;
+    try output.appendSlice(arena, gap);
 }
 
 fn findSequence(file: source.ParsedFile, operation: *const merge_model.Operation) ?*const model.Node {

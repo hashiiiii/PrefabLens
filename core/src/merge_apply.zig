@@ -57,6 +57,14 @@ pub fn applyResolved(
         dependency_path.clearRetainingCapacity();
         if (!try atomicIsReady(arena, plan, atomic, &dependency_path)) {
             if (require_all) return error.InvalidResolution;
+            if (atomic.kind == .component) {
+                for (atomic.operation_ids) |operation_id| {
+                    const stored = merge_model.operationByIdConst(plan, operation_id) orelse return error.InvalidMerge;
+                    var operation = stored.*;
+                    operation.resolution = if (operation.values.base == null) .remove else .{ .take = .base };
+                    try appendPatch(arena, &patches, plan, &operation);
+                }
+            }
             continue;
         }
         for (atomic.operation_ids) |operation_id| {
@@ -103,7 +111,13 @@ fn appendPatch(
     plan: *const merge_model.MergePlan,
     operation: *const merge_model.Operation,
 ) merge_model.Error!void {
-    if (operation.kind == .sequence_membership or operation.kind == .sequence_content) return;
+    if (operation.kind == .sequence_membership) {
+        const atomic = atomicByIdConst(plan, operation.atomic_id) orelse return error.InvalidMerge;
+        if (atomic.kind != .component) return;
+        if (try changedSequenceOrderIsReady(arena, plan, operation)) return;
+        return appendComponentMembershipPatch(arena, patches, plan, operation);
+    }
+    if (operation.kind == .sequence_content) return;
     if (operation.kind == .component or operation.kind == .game_object) {
         return appendDocumentPatch(arena, patches, plan, operation);
     }
@@ -154,6 +168,167 @@ fn appendPatch(
         .atomic_id = operation.atomic_id,
         .order = operation.id,
     });
+}
+
+fn changedSequenceOrderIsReady(
+    arena: std.mem.Allocator,
+    plan: *const merge_model.MergePlan,
+    membership: *const merge_model.Operation,
+) merge_model.Error!bool {
+    for (plan.operations) |*operation| {
+        if (operation.kind != .sequence_order or
+            operation.identity.document.class_id != membership.identity.document.class_id or
+            operation.identity.document.file_id != membership.identity.document.file_id or
+            !std.mem.eql(u8, operation.property_path, membership.property_path)) continue;
+        const atomic = atomicByIdConst(plan, operation.atomic_id) orelse return error.InvalidMerge;
+        var path: std.ArrayList(merge_model.AtomicId) = .empty;
+        if (!try atomicIsReady(arena, plan, atomic.*, &path)) return false;
+        const selected = selectedValue(operation) orelse return false;
+        const ours = operation.values.ours orelse return selected.value.bytes.len != 0;
+        return !std.mem.eql(u8, ours.bytes, selected.value.bytes);
+    }
+    return false;
+}
+
+fn appendComponentMembershipPatch(
+    arena: std.mem.Allocator,
+    patches: *std.ArrayList(Patch),
+    plan: *const merge_model.MergePlan,
+    operation: *const merge_model.Operation,
+) merge_model.Error!void {
+    const selected = switch (operation.resolution) {
+        .unresolved => return error.InvalidResolution,
+        .remove => null,
+        .take => |side| valueForSide(operation, side),
+        .custom => return error.InvalidResolution,
+    };
+    if (operation.values.ours) |ours| {
+        const span = ours.span orelse return error.UnsupportedStructure;
+        const replacement = if (selected) |value| value.bytes else "";
+        if (std.mem.eql(u8, span.bytes(plan.ours.bytes), replacement)) return;
+        return patches.append(arena, .{
+            .span = span,
+            .replacement = replacement,
+            .atomic_id = operation.atomic_id,
+            .order = operation.id,
+        });
+    }
+    const inserted = selected orelse return;
+    const insertion = try componentInsertion(arena, plan, operation, inserted);
+    try patches.append(arena, .{
+        .span = insertion.span,
+        .replacement = insertion.replacement,
+        .atomic_id = operation.atomic_id,
+        .order = operation.id,
+    });
+}
+
+const ComponentInsertion = struct {
+    span: source.Span,
+    replacement: []const u8,
+};
+
+fn componentInsertion(
+    arena: std.mem.Allocator,
+    plan: *const merge_model.MergePlan,
+    operation: *const merge_model.Operation,
+    selected: merge_model.SideValue,
+) merge_model.Error!ComponentInsertion {
+    const ours_sequence = findSequence(plan.ours, operation) orelse return error.UnsupportedStructure;
+    if (ours_sequence.* != .seq) return error.UnsupportedStructure;
+    const selected_side = switch (operation.resolution) {
+        .take => |side| side,
+        else => return error.InvalidResolution,
+    };
+    const selected_file = fileForSide(plan, selected_side);
+    const selected_sequence = findSequence(selected_file, operation) orelse return error.UnsupportedStructure;
+    if (selected_sequence.* != .seq) return error.UnsupportedStructure;
+    const target_file_id = (operation.identity.item_ref orelse return error.InvalidMerge).file_id;
+    const selected_index = for (selected_sequence.seq, 0..) |item, index| {
+        if (componentFileId(item) == target_file_id) break index;
+    } else return error.UnsupportedStructure;
+
+    const destination_indent = sequenceIndent(plan.ours, ours_sequence) orelse
+        (sequenceFieldIndent(plan.ours, ours_sequence) orelse return error.UnsupportedStructure);
+    var offset: ?usize = null;
+    for (selected_sequence.seq[selected_index + 1 ..]) |next| {
+        const next_file_id = componentFileId(next) orelse return error.UnsupportedStructure;
+        if (findComponentItem(ours_sequence.seq, next_file_id)) |ours_item| {
+            offset = (plan.ours.sequence_item_spans.get(ours_item) orelse return error.UnsupportedStructure).start;
+            break;
+        }
+    }
+    if (offset == null and ours_sequence.seq.len != 0) {
+        const last = ours_sequence.seq[ours_sequence.seq.len - 1];
+        offset = (plan.ours.sequence_item_spans.get(last) orelse return error.UnsupportedStructure).end;
+    }
+    if (offset) |insertion_offset| {
+        return .{
+            .span = .{ .start = insertion_offset, .end = insertion_offset },
+            .replacement = try merge_planner.reindentSequenceItem(
+                arena,
+                selected.bytes,
+                destination_indent,
+                plan.ours.lineEndingAt(insertion_offset),
+            ),
+        };
+    }
+
+    var empty_span = plan.ours.node_spans.get(ours_sequence) orelse return error.UnsupportedStructure;
+    if (empty_span.start > 0 and plan.ours.bytes[empty_span.start - 1] == ' ') empty_span.start -= 1;
+    const line_ending = plan.ours.lineEndingAt(empty_span.end);
+    const item = try merge_planner.reindentSequenceItem(arena, selected.bytes, destination_indent, line_ending);
+    const trimmed = std.mem.trimEnd(u8, item, "\r\n");
+    return .{
+        .span = empty_span,
+        .replacement = try std.fmt.allocPrint(arena, "{s}{s}", .{ line_ending, trimmed }),
+    };
+}
+
+fn findSequence(file: source.ParsedFile, operation: *const merge_model.Operation) ?*const model.Node {
+    for (file.documents) |*document| {
+        if (document.class_id != operation.identity.document.class_id or
+            document.file_id != operation.identity.document.file_id) continue;
+        var node = document.body;
+        var path = std.mem.splitScalar(u8, operation.property_path, '.');
+        while (path.next()) |field| {
+            if (node.* != .map) return null;
+            node = model.findValue(node.map, field) orelse return null;
+        }
+        return node;
+    }
+    return null;
+}
+
+fn componentFileId(item: *const model.Node) ?i64 {
+    if (item.* != .map) return null;
+    const component = model.findValue(item.map, "component") orelse return null;
+    if (component.* != .ref) return null;
+    return component.ref.file_id;
+}
+
+fn findComponentItem(items: []const *model.Node, file_id: i64) ?*const model.Node {
+    for (items) |item| if (componentFileId(item) == file_id) return item;
+    return null;
+}
+
+fn sequenceIndent(file: source.ParsedFile, sequence: *const model.Node) ?usize {
+    if (sequence.* != .seq or sequence.seq.len == 0) return null;
+    const span = file.sequence_item_spans.get(sequence.seq[0]) orelse return null;
+    const end = std.mem.indexOfScalarPos(u8, file.bytes, span.start, '\n') orelse span.end;
+    return leadingSpaces(file.bytes[span.start..end]);
+}
+
+fn sequenceFieldIndent(file: source.ParsedFile, sequence: *const model.Node) ?usize {
+    const entry = file.entry_spans.get(sequence) orelse return null;
+    const line_start = if (std.mem.lastIndexOfScalar(u8, file.bytes[0..entry.key.start], '\n')) |lf| lf + 1 else 0;
+    return entry.key.start - line_start;
+}
+
+fn leadingSpaces(line: []const u8) usize {
+    var count: usize = 0;
+    while (count < line.len and line[count] == ' ') count += 1;
+    return count;
 }
 
 fn appendDocumentPatch(

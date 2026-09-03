@@ -44,6 +44,29 @@ pub fn rejectDuplicateDocuments(
     }
 }
 
+pub const ComponentOwnerIndex = std.AutoHashMapUnmanaged(i64, i64);
+
+pub fn componentOwners(
+    arena: std.mem.Allocator,
+    documents: []const model.Document,
+) merge_model.Error!ComponentOwnerIndex {
+    var owners: ComponentOwnerIndex = .empty;
+    for (documents) |document| {
+        if (document.class_id != 1) continue;
+        const components = model.findValue(document.body.map, "m_Component") orelse continue;
+        if (components.* != .seq) return error.UnsupportedStructure;
+        for (components.seq) |item| {
+            if (item.* != .map) return error.UnsupportedStructure;
+            const component = prefab.reference(model.findValue(item.map, "component")) orelse
+                return error.UnsupportedStructure;
+            const result = try owners.getOrPut(arena, component.file_id);
+            if (result.found_existing) return error.InvalidMerge;
+            result.value_ptr.* = document.file_id;
+        }
+    }
+    return owners;
+}
+
 pub const SequenceKind = enum {
     components,
     children,
@@ -150,6 +173,34 @@ test "merge identity: index finds a document by class and file identifier" {
     const document = index.document(.{ .class_id = 1, .file_id = 7 }).?;
 
     try testing.expectEqualStrings("GameObject", document.type_name);
+}
+
+test "merge identity: component owners use component and GameObject identifiers" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const documents = try @import("parser.zig").parse(
+        arena,
+        "--- !u!1 &1\nGameObject:\n  m_Component:\n  - component: {fileID: 4}\n  - component: {fileID: 54}\n",
+    );
+
+    const owners = try componentOwners(arena, documents);
+
+    try testing.expectEqual(@as(i64, 1), owners.get(4).?);
+    try testing.expectEqual(@as(i64, 1), owners.get(54).?);
+}
+
+test "merge identity: component owners reject one component with two owners" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const documents = try @import("parser.zig").parse(
+        arena,
+        "--- !u!1 &1\nGameObject:\n  m_Component:\n  - component: {fileID: 54}\n" ++
+            "--- !u!1 &2\nGameObject:\n  m_Component:\n  - component: {fileID: 54}\n",
+    );
+
+    try testing.expectError(error.InvalidMerge, componentOwners(arena, documents));
 }
 
 test "merge identity: known sequences use Unity reference fields" {

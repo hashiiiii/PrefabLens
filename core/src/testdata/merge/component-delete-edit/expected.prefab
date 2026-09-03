@@ -1,0 +1,14 @@
+--- !u!1 &1
+GameObject:
+  m_Component:
+  - component: {fileID: 4}
+  - component: {fileID: 54}
+  m_Name: Root
+--- !u!4 &4
+Transform:
+  m_GameObject: {fileID: 1}
+  m_Children: []
+--- !u!54 &54
+Rigidbody:
+  m_GameObject: {fileID: 1}
+  m_Mass: 2

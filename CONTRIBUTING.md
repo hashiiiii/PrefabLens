@@ -19,6 +19,10 @@ Automation also converts the pull request to draft until the issue-first flow is
 For security vulnerabilities, do **not** open a public issue.
 Follow [SECURITY.md](SECURITY.md) instead.
 
+## Language
+
+Use English in this repository.
+
 ## Releases and changelog
 
 There is no curated `CHANGELOG.md`.

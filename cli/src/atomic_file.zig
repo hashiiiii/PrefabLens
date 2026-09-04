@@ -55,7 +55,8 @@ test "atomic file: preserves a target changed by another process" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
-    var tmp = testing.tmpDir(.{});
+    // Linux requires an iterable directory handle before the test can scan for leaked files.
+    var tmp = testing.tmpDir(.{ .iterate = true });
     defer tmp.cleanup();
     try tmp.dir.writeFile(testing.io, .{ .sub_path = "merged.prefab", .data = "external\n" });
     const root = try tmp.dir.realPathFileAlloc(testing.io, ".", arena);

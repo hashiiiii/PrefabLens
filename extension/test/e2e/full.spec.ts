@@ -308,8 +308,9 @@ test.afterEach(async () => {
 test("finishes prefetch after the semantic cache is ready", async () => {
   holdPrefetchBlob();
   const worker = context.serviceWorkers()[0] ?? (await context.waitForEvent("serviceworker"));
+  // The packaged manifest supplies an extension context without relying on unbuilt pages.
   const extensionPage = await context.newPage();
-  await extensionPage.goto(`chrome-extension://${new URL(worker.url()).host}/options.html`);
+  await extensionPage.goto(`chrome-extension://${new URL(worker.url()).host}/manifest.json`);
 
   const stateBeforeBlob = await extensionPage.evaluate(async () =>
     Promise.race([

@@ -63,6 +63,31 @@ fn readmeContents() ![]u8 {
     );
 }
 
+fn withCrLf(bytes: []const u8, allocator: std.mem.Allocator) ![]u8 {
+    var converted: std.ArrayList(u8) = .empty;
+    var index: usize = 0;
+    while (index < bytes.len) {
+        if (bytes[index] == '\r' and index + 1 < bytes.len and bytes[index + 1] == '\n') {
+            try converted.appendSlice(allocator, "\r\n");
+            index += 2;
+        } else if (bytes[index] == '\n') {
+            try converted.appendSlice(allocator, "\r\n");
+            index += 1;
+        } else {
+            try converted.append(allocator, bytes[index]);
+            index += 1;
+        }
+    }
+    return converted.toOwnedSlice(allocator);
+}
+
+test "withCrLf keeps existing CRLF pairs" {
+    // This matches a Windows checkout and prevents CRCRLF from a second conversion.
+    const converted = try withCrLf("first\r\nsecond\r\n", testing.allocator);
+    defer testing.allocator.free(converted);
+    try testing.expectEqualStrings("first\r\nsecond\r\n", converted);
+}
+
 test "README merge attributes match the Unity extension allowlist" {
     const readme = try readmeContents();
     defer testing.allocator.free(readme);
@@ -72,9 +97,9 @@ test "README merge attributes match the Unity extension allowlist" {
 test "README merge attributes match the Unity extension allowlist with CRLF" {
     const readme = try readmeContents();
     defer testing.allocator.free(readme);
-    const crlf = try testing.allocator.alloc(u8, readme.len + std.mem.count(u8, readme, "\n"));
+    // Windows can check out the README with CRLF, so the conversion must not add a second CR.
+    const crlf = try withCrLf(readme, testing.allocator);
     defer testing.allocator.free(crlf);
-    _ = std.mem.replace(u8, readme, "\n", "\r\n", crlf);
     try expectReadmeExtensions(crlf);
 }
 

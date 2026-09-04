@@ -8,7 +8,6 @@ export type FileEntry = {
   attachHost(host: HTMLElement): void;
   setRawHidden(hidden: boolean): void; // idempotent: re-resolves the live DOM on each call
   collapsed(): boolean; // github file collapse (react chevron)
-  globalAnchor(): Element | null;
 };
 
 export type DiffPage = { owner: string; repo: string; target: DiffTarget };
@@ -20,6 +19,37 @@ function decodeRef(s: string): string {
   } catch {
     return s;
   }
+}
+
+const BIDI_MARKS = /[‎‏]/g;
+const REACT_LIST_SELECTOR = '[data-testid="virtualized-diffs-list"], [data-testid="progressive-diffs-list"]';
+
+function classicGlobalAnchor(root: ParentNode, fallback: Element): Element {
+  const firstFile = root.querySelector<HTMLElement>(".file-header[data-path]")?.closest(".file");
+  if (!firstFile) return fallback;
+  const list = firstFile.closest(".js-diff-progressive-container");
+  if (!list) return firstFile;
+
+  let anchor: Element = firstFile;
+  while (anchor.parentElement && anchor.parentElement !== list) anchor = anchor.parentElement;
+  return anchor;
+}
+
+export function findGlobalAnchor(root: ParentNode): Element | null {
+  const classicUnity = [...root.querySelectorAll<HTMLElement>(".file-header[data-path]")].find((header) => {
+    const path = header.dataset.path;
+    return path !== undefined && isUnityPath(path);
+  });
+  const classicFile = classicUnity?.closest(".file");
+  if (classicFile) return classicGlobalAnchor(root, classicFile);
+
+  const reactList = root.querySelector(REACT_LIST_SELECTOR);
+  if (!reactList) return null;
+  const hasUnity = [...root.querySelectorAll<HTMLAnchorElement>('a[href^="#diff-"]')].some((link) => {
+    const path = (link.querySelector("code")?.textContent ?? link.textContent ?? "").replace(BIDI_MARKS, "").trim();
+    return isUnityPath(path);
+  });
+  return hasUnity ? reactList : null;
 }
 
 // Diff pages we can serve. Compare is same-repo three-dot only (fork owner:branch needs a second repo).
@@ -60,7 +90,7 @@ function scanClassic(root: ParentNode): FileEntry[] {
     if (!path || !isUnityPath(path)) continue;
     const container = header.closest(".file");
     const content = container?.querySelector<HTMLElement>(".js-file-content") ?? null;
-    if (!content) continue;
+    if (!container || !content) continue;
     out.push({
       path,
       header,
@@ -73,13 +103,10 @@ function scanClassic(root: ParentNode): FileEntry[] {
         content.style.display = hidden ? "none" : "";
       },
       collapsed: () => false, // Details--on CSS hides collapsed content without our help
-      globalAnchor: () => container,
     });
   }
   return out;
 }
-
-const BIDI_MARKS = /[‎‏]/g;
 
 // React has no path attribute: the path is header text (+ LRM marks). Renames hide "OLD renamed to NEW".
 function filePathFromReactHeader(header: HTMLElement): string | null {
@@ -144,7 +171,6 @@ function scanReact(root: ParentNode): FileEntry[] {
           block.querySelector('[class*="DiffFileHeader-module__collapsed"]') !== null
         );
       },
-      globalAnchor: () => region.closest('[data-testid="progressive-diffs-list"]') ?? region.parentElement,
     });
   }
   return out;

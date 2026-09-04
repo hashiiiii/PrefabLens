@@ -101,6 +101,65 @@ describe("raw diff", () => {
     ).toBe(false);
   });
 
+  it("uses a newer stored diff instead of the memory entry", async () => {
+    const client = githubClient((request) => {
+      if (request.pathname === "/repos/o/r/pulls/1") {
+        return json({ base: { sha: "base-tip" }, head: { sha: "head-sha" } });
+      }
+      if (request.pathname === "/repos/o/r/compare/base-tip...head-sha") {
+        return json({ merge_base_commit: { sha: "base-sha" }, files: [] });
+      }
+      if (request.pathname === "/repos/o/r/pulls/1/files") {
+        return json([{ filename: PATH, status: "modified", sha: "head-blob" }]);
+      }
+      if (request.pathname === "/repos/o/r/git/trees/base-sha") {
+        return json({ truncated: false, tree: [{ path: PATH, type: "blob", sha: "base-blob" }] });
+      }
+      if (request.pathname === "/repos/o/r/git/blobs/base-blob") return raw(BEFORE_PREFAB);
+      if (request.pathname === "/repos/o/r/git/blobs/head-blob") return raw(AFTER_PREFAB);
+      return new Response(null, { status: 500 });
+    });
+    const repository = new MemoryDiffRepository();
+    const session = createDiffSession();
+    const context = await getContext(session, client, OWNER, REPO, PULL);
+    expect(context.ok).toBe(true);
+    if (!context.ok) return;
+
+    const first = await getDiff(
+      async () => differ,
+      repository,
+      session,
+      client,
+      context.value,
+      OWNER,
+      REPO,
+      PATH,
+      false,
+    );
+    expect(first.ok).toBe(true);
+    if (!first.ok) return;
+    await repository.save("base-sha:head-sha:Assets/Foo.prefab", {
+      ...first.json,
+      resolved: { def: "Assets/Sound.cs" },
+    });
+
+    const second = await getDiff(
+      async () => differ,
+      repository,
+      session,
+      client,
+      context.value,
+      OWNER,
+      REPO,
+      PATH,
+      false,
+    );
+
+    expect(second.ok).toBe(true);
+    if (!second.ok) return;
+    expect(second.json.resolved).toEqual({ def: "Assets/Sound.cs" });
+  });
+
   it("uses an empty after side for a removed file", async () => {
     const requests: URL[] = [];
     const client = githubClient((request) => {

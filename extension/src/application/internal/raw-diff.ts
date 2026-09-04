@@ -224,7 +224,7 @@ async function computeDiff(
 }
 
 // Sha-keyed: a push produces a new key (no invalidation)
-export function getDiff(
+export async function getDiff(
   getDiffer: () => Promise<DifferGateway>,
   diffRepository: DiffRepository,
   session: DiffSession,
@@ -235,12 +235,16 @@ export function getDiff(
   path: string,
   force: boolean,
 ): Promise<DiffOutcome> {
-  const key = `${ctx.refs.baseSha}:${ctx.refs.headSha}:${path}`;
+  const key = diffCacheKey(ctx, path);
+  const stored = await diffRepository.load(key);
+  if (stored) return { ok: true, json: stored };
   return session.diffs.get(key, async (): Promise<DiffOutcome> => {
-    const stored = await diffRepository.load(key); // prior SW life
-    if (stored) return { ok: true, json: stored };
     const outcome = await computeDiff(getDiffer, session, githubGateway, ctx, owner, repo, path, force);
-    if (outcome.ok) void diffRepository.save(key, outcome.json);
+    if (outcome.ok) await diffRepository.save(key, outcome.json);
     return outcome;
   });
+}
+
+export function diffCacheKey(ctx: DiffContext, path: string): string {
+  return `${ctx.refs.baseSha}:${ctx.refs.headSha}:${path}`;
 }

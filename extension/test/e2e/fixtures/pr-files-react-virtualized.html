@@ -1,0 +1,28 @@
+<!doctype html>
+<html data-color-mode="light">
+  <head>
+    <meta charset="utf-8" /><title>PR fixture (virtualized react diff ui)</title>
+  </head>
+  <body>
+    <ul role="tree" aria-label="Changed files">
+      <li role="treeitem"><a href="#diff-readme">README.md</a></li>
+      <li role="treeitem"><a href="#diff-prefab">Assets/Foo.prefab</a></li>
+    </ul>
+    <div data-testid="diff-content">
+      <div data-hpc="true" data-testid="virtualized-diffs-list" class="d-flex flex-column gap-3">
+        <div class="PullRequestVirtualizedDiffsList-module__virtualized-diff-row">
+          <div role="region" id="diff-readme" aria-labelledby="readme-heading" class="Diff-module__diffTargetable Diff-module__diff">
+            <div class="Diff-module__diffHeaderWrapper">
+              <div class="DiffFileHeader-module__diff-file-header">
+                <h3 id="readme-heading" class="DiffFileHeader-module__file-name">
+                  <a class="Link--primary" href="#diff-readme"><code>&#x200e;README.md&#x200e;</code></a>
+                </h3>
+              </div>
+            </div>
+            <div class="border position-relative rounded-bottom-2">raw github diff table</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </body>
+</html>

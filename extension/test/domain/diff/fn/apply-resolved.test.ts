@@ -33,4 +33,17 @@ describe("applyResolved", () => {
     expect(result).not.toBe(input);
     expect(input.resolved).toBeUndefined();
   });
+
+  it("keeps a stored name when the new index has no match", () => {
+    const result = applyResolved(
+      {
+        ...emptyDiff(),
+        unresolvedGuids: ["aaa"],
+        resolved: { aaa: "Assets/Stored.cs" },
+      },
+      new Map(),
+    );
+
+    expect(result.resolved).toEqual({ aaa: "Assets/Stored.cs" });
+  });
 });

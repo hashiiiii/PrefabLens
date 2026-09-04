@@ -13,7 +13,7 @@ import type { RepoGuidIndex } from "../../../src/domain/guid/repo-guid-index";
 import type { RepoIndexRepository } from "../../../src/domain/guid/repo-index-repository";
 import { createGithubGateway } from "../../../src/infrastructure/clients/github-client";
 import { createDifferGateway } from "../../../src/infrastructure/clients/wasm-differ-client";
-import { AFTER_PREFAB, BEFORE_PREFAB } from "../../fixtures/unity";
+import { AFTER_PREFAB, BEFORE_PREFAB, SOURCE_PREFAB, VARIANT_PREFAB } from "../../fixtures/unity";
 
 class MemoryAuthRepository implements AuthRepository {
   private accessToken = "token";
@@ -125,6 +125,58 @@ describe("prefetchPr", () => {
       before: "0.5",
       after: "0.8",
     });
+  });
+
+  it("stores a semantic diff from the repo index without Code Search", async () => {
+    const requests: URL[] = [];
+    const client = createGithubGateway("https://api.github.com", "token", async (input) => {
+      const request = new URL(String(input));
+      requests.push(request);
+      if (request.pathname === "/repos/o/r/pulls/1") {
+        return Response.json({ base: { sha: "base-tip" }, head: { sha: "head-sha" } });
+      }
+      if (request.pathname === "/repos/o/r/compare/base-tip...head-sha") {
+        return Response.json({ merge_base_commit: { sha: "base-sha" }, files: [] });
+      }
+      if (request.pathname === "/repos/o/r/pulls/1/files") {
+        return Response.json([{ filename: "Assets/Foo.prefab", status: "modified", sha: "head-blob" }]);
+      }
+      if (request.pathname === "/repos/o/r/git/trees/base-sha") {
+        return Response.json({
+          truncated: false,
+          tree: [{ path: "Assets/Foo.prefab", type: "blob", sha: "base-blob" }],
+        });
+      }
+      if (request.pathname === "/repos/o/r/git/trees/head-sha") {
+        return Response.json({
+          truncated: false,
+          tree: [{ path: "Assets/Source.prefab.meta", type: "blob", sha: "source-meta" }],
+        });
+      }
+      if (request.pathname === "/repos/o/r/git/blobs/base-blob") return new Response(new Uint8Array());
+      if (request.pathname === "/repos/o/r/git/blobs/head-blob") return new Response(VARIANT_PREFAB);
+      if (request.pathname === "/repos/o/r/contents/Assets/Source.prefab") return new Response(SOURCE_PREFAB);
+      if (request.pathname === "/graphql") {
+        return Response.json({ data: { repository: { b0: { text: "guid: src0\n" } } } });
+      }
+      return new Response(null, { status: 500 });
+    });
+    const repository = new MemoryDiffRepository();
+
+    await prefetchPr(
+      new MemoryAuthRepository(),
+      () => client,
+      async () => differ,
+      repository,
+      new MemoryRepoIndexRepository(),
+      createDiffSession(),
+      { type: "prefetch", owner: "o", repo: "r", prNumber: 1 },
+    );
+
+    const stored = await repository.load("base-sha:head-sha:Assets/Foo.prefab");
+    expect(stored?.resolved).toEqual({ src0: "Assets/Source.prefab" });
+    expect(stored?.neededSources).toBeUndefined();
+    expect(requests.some((request) => request.pathname === "/search/code")).toBe(false);
   });
 
   it("uses a stored diff after a worker restart", async () => {

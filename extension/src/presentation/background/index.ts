@@ -55,7 +55,16 @@ chrome.runtime.onMessage.addListener((msg: BackgroundRequest, sender, sendRespon
       return true; // async response
     }
     case "prefetch":
-      void prefetchPr(authRepository, makeGithubGateway, getDiffer, diffRepository, repoIndexRepository, session, msg);
-      return undefined; // prefetch is fire-and-forget
+      // Keep the message open so Chrome keeps the worker active until the semantic cache is ready.
+      void prefetchPr(
+        authRepository,
+        makeGithubGateway,
+        getDiffer,
+        diffRepository,
+        repoIndexRepository,
+        session,
+        msg,
+      ).finally(() => sendResponse());
+      return true;
   }
 });

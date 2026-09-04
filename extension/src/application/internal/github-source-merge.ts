@@ -10,6 +10,38 @@ import { resolveGuids } from "./guid-resolution";
 import { getBlob } from "./raw-diff";
 import { mergeSourceRounds } from "./source-rounds";
 
+type ReResolve = (json: DiffV2) => Promise<{ json: DiffV2; rateLimited: boolean }>;
+
+async function mergeGithubSourcesWithResolver(
+  differ: DifferGateway,
+  session: DiffSession,
+  githubGateway: Pick<GithubGateway, "getBlobRaw" | "getFileAtRef">,
+  owner: string,
+  repo: string,
+  context: DiffContext,
+  before: Uint8Array,
+  after: Uint8Array,
+  first: DiffV2,
+  reResolve: ReResolve,
+): Promise<{ json: DiffV2; status: ResolutionStatus }> {
+  return mergeSourceRounds(
+    differ,
+    before,
+    after,
+    first,
+    async (source, path) => {
+      const sha = source.side === "before" ? context.refs.baseSha : context.refs.headSha;
+      // The base tree supplies a blob SHA for a source outside the changed-file list.
+      const blobSha = source.side === "before" ? context.baseShas?.get(path) : undefined;
+      const bytes = await getBlob(session, githubGateway, owner, repo, path, sha, blobSha);
+      if (!bytes.ok) return { abort: isRateLimited(bytes.error) ? "rateLimited" : "failed" };
+      if (!bytes.value) return { skip: true };
+      return { bytes: bytes.value };
+    },
+    reResolve,
+  );
+}
+
 export async function mergeGithubSources(
   differ: DifferGateway,
   guidRepository: GuidRepository,
@@ -23,20 +55,16 @@ export async function mergeGithubSources(
   after: Uint8Array,
   first: DiffV2,
 ): Promise<{ json: DiffV2; status: ResolutionStatus }> {
-  return mergeSourceRounds(
+  return mergeGithubSourcesWithResolver(
     differ,
+    session,
+    githubGateway,
+    owner,
+    repo,
+    context,
     before,
     after,
     first,
-    async (source, path) => {
-      const sha = source.side === "before" ? context.refs.baseSha : context.refs.headSha;
-      // Only the base tree can supply a blob sha for a source outside the changed-file list.
-      const blobSha = source.side === "before" ? context.baseShas?.get(path) : undefined;
-      const bytes = await getBlob(session, githubGateway, owner, repo, path, sha, blobSha);
-      if (!bytes.ok) return { abort: isRateLimited(bytes.error) ? "rateLimited" : "failed" };
-      if (!bytes.value) return { skip: true };
-      return { bytes: bytes.value };
-    },
     async (json) => {
       const withIndex = applyResolved(json, context.guidIndex);
       const found = await resolveGuids(
@@ -53,5 +81,31 @@ export async function mergeGithubSources(
         rateLimited: found.rateLimited,
       };
     },
+  );
+}
+
+export function mergeGithubSourcesFromIndex(
+  differ: DifferGateway,
+  session: DiffSession,
+  githubGateway: Pick<GithubGateway, "getBlobRaw" | "getFileAtRef">,
+  owner: string,
+  repo: string,
+  context: DiffContext,
+  before: Uint8Array,
+  after: Uint8Array,
+  first: DiffV2,
+  index: Map<string, string>,
+): Promise<{ json: DiffV2; status: ResolutionStatus }> {
+  return mergeGithubSourcesWithResolver(
+    differ,
+    session,
+    githubGateway,
+    owner,
+    repo,
+    context,
+    before,
+    after,
+    first,
+    async (json) => ({ json: applyResolved(json, index), rateLimited: false }),
   );
 }

@@ -5,7 +5,7 @@ import type { StorageAreaWithRemove } from "../internal/storage-area";
 const PREFIX = "diff:";
 const MAX_BYTES = 512 * 1024; // storage.session is 10MB: large diffs stay in the memory cache only.
 
-// Raw diffs in storage.session under a sha key across SW restarts.
+// SHA-keyed diffs stay in storage.session across service worker restarts.
 // On quota overflow, wipe the diffs and rewrite once. Without this, every SW restart recomputes forever.
 export function createChromeDiffRepository(area: StorageAreaWithRemove): DiffRepository {
   return {

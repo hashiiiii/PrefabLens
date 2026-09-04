@@ -23,6 +23,10 @@ Follow [SECURITY.md](SECURITY.md) instead.
 
 Use English in this repository.
 
+Contributors often read related issues and pull requests to understand the reasons for earlier changes.
+Many software engineers are familiar with English.
+English makes this project history available to more people and lowers the barrier to using and contributing to PrefabLens.
+
 ## Releases and changelog
 
 There is no curated `CHANGELOG.md`.

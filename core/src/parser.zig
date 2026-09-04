@@ -584,6 +584,8 @@ const Parser = struct {
     arena: std.mem.Allocator,
     lines: []const Line,
     source_bytes: []const u8,
+    // Two-way diffs do not need source indexes, which require a hash-table write for each node.
+    track_source: bool,
     pos: usize = 0,
     node_spans: std.AutoHashMapUnmanaged(*const Node, source_map.Span) = .empty,
     entry_spans: std.AutoHashMapUnmanaged(*const Node, source_map.EntrySpan) = .empty,
@@ -633,11 +635,36 @@ fn tokenize(arena: std.mem.Allocator, source_bytes: []const u8) std.mem.Allocato
 }
 
 pub fn parse(arena: std.mem.Allocator, source_bytes: []const u8) Error![]Document {
-    return (try parseSpanned(arena, source_bytes)).documents;
+    var p = Parser{
+        .arena = arena,
+        .source_bytes = source_bytes,
+        .lines = try tokenize(arena, source_bytes),
+        .track_source = false,
+    };
+    return parseDocuments(&p);
 }
 
 pub fn parseSpanned(arena: std.mem.Allocator, source_bytes: []const u8) Error!source_map.ParsedFile {
-    var p = Parser{ .arena = arena, .source_bytes = source_bytes, .lines = try tokenize(arena, source_bytes) };
+    var p = Parser{
+        .arena = arena,
+        .source_bytes = source_bytes,
+        .lines = try tokenize(arena, source_bytes),
+        .track_source = true,
+    };
+    const documents = try parseDocuments(&p);
+    return .{
+        .bytes = source_bytes,
+        .documents = documents,
+        .document_spans = try p.document_spans.toOwnedSlice(arena),
+        .node_spans = p.node_spans,
+        .entry_spans = p.entry_spans,
+        .sequence_item_spans = p.sequence_item_spans,
+        .diagnostics = try p.diagnostics.toOwnedSlice(arena),
+        .line_ending = if (std.mem.indexOf(u8, source_bytes, "\r\n") != null) .crlf else .lf,
+    };
+}
+
+fn parseDocuments(p: *Parser) Error![]Document {
     var docs: std.ArrayList(Document) = .empty;
     while (p.peek()) |line| {
         if (!std.mem.startsWith(u8, line.text, "---")) {
@@ -646,25 +673,18 @@ pub fn parseSpanned(arena: std.mem.Allocator, source_bytes: []const u8) Error!so
         }
         const doc_start = line.whole.start;
         const header = line;
-        try docs.append(arena, try parseDocument(&p));
-        const doc_end = if (p.peek()) |next| next.whole.start else source_bytes.len;
-        try p.document_spans.append(arena, .{
-            .whole = .{ .start = doc_start, .end = doc_end },
-            .header = header.content,
-            .class_id = spanToken(source_bytes, header.text, header.content.start, "!u!"),
-            .file_id = spanToken(source_bytes, header.text, header.content.start, "&"),
-        });
+        try docs.append(p.arena, try parseDocument(p));
+        if (p.track_source) {
+            const doc_end = if (p.peek()) |next| next.whole.start else p.source_bytes.len;
+            try p.document_spans.append(p.arena, .{
+                .whole = .{ .start = doc_start, .end = doc_end },
+                .header = header.content,
+                .class_id = spanToken(p.source_bytes, header.text, header.content.start, "!u!"),
+                .file_id = spanToken(p.source_bytes, header.text, header.content.start, "&"),
+            });
+        }
     }
-    return .{
-        .bytes = source_bytes,
-        .documents = try docs.toOwnedSlice(arena),
-        .document_spans = try p.document_spans.toOwnedSlice(arena),
-        .node_spans = p.node_spans,
-        .entry_spans = p.entry_spans,
-        .sequence_item_spans = p.sequence_item_spans,
-        .diagnostics = try p.diagnostics.toOwnedSlice(arena),
-        .line_ending = if (std.mem.indexOf(u8, source_bytes, "\r\n") != null) .crlf else .lf,
-    };
+    return docs.toOwnedSlice(p.arena);
 }
 
 fn parseDocument(p: *Parser) Error!Document {
@@ -768,7 +788,7 @@ fn parseMap(p: *Parser, indent: usize, depth: usize) Error!*Node {
             try parseNestedValue(p, indent, depth)
         else
             try parseValue(p, kv.value, depth);
-        if (kv.has_colon) {
+        if (p.track_source and kv.has_colon) {
             const key_start = line.content.start + (@intFromPtr(kv.key.ptr) - @intFromPtr(line.text.ptr));
             const value_start = line.content.start + (@intFromPtr(kv.value.ptr) - @intFromPtr(line.text.ptr));
             try p.entry_spans.put(p.arena, value, .{ .whole = line.whole, .key = .{ .start = key_start, .end = key_start + kv.key.len }, .value = .{ .start = value_start, .end = value_start + kv.value.len } });
@@ -777,7 +797,7 @@ fn parseMap(p: *Parser, indent: usize, depth: usize) Error!*Node {
     }
     const node = try makeNode(p.arena, .{ .map = try entries.toOwnedSlice(p.arena) });
     const end = if (p.pos > 0) p.lines[p.pos - 1].whole.end else start;
-    try p.node_spans.put(p.arena, node, .{ .start = start, .end = end });
+    if (p.track_source) try p.node_spans.put(p.arena, node, .{ .start = start, .end = end });
     return node;
 }
 
@@ -808,23 +828,23 @@ fn parseSeq(p: *Parser, indent: usize, depth: usize) Error!*Node {
             const ci = indentOfNext(p, indent + 2);
             const item = try parseBlock(p, ci, depth + 1);
             const end = if (p.pos > 0) p.lines[p.pos - 1].whole.end else line.whole.end;
-            try p.sequence_item_spans.put(p.arena, item, .{ .start = line.whole.start, .end = end });
+            if (p.track_source) try p.sequence_item_spans.put(p.arena, item, .{ .start = line.whole.start, .end = end });
             try items.append(p.arena, item);
         } else if (looksLikeMapEntry(rest)) {
             // Compact map item: the first entry is on the dash line, the rest at indent+2.
             const item = try parseSeqMapItem(p, indent, rest, depth, line.whole.start);
             const end = if (p.pos > 0) p.lines[p.pos - 1].whole.end else line.whole.end;
-            try p.sequence_item_spans.put(p.arena, item, .{ .start = line.whole.start, .end = end });
+            if (p.track_source) try p.sequence_item_spans.put(p.arena, item, .{ .start = line.whole.start, .end = end });
             try items.append(p.arena, item);
         } else {
             const item = try parseValue(p, rest, depth);
-            try p.sequence_item_spans.put(p.arena, item, line.whole);
+            if (p.track_source) try p.sequence_item_spans.put(p.arena, item, line.whole);
             try items.append(p.arena, item);
         }
     }
     const node = try makeNode(p.arena, .{ .seq = try items.toOwnedSlice(p.arena) });
     const end = if (p.pos > 0) p.lines[p.pos - 1].whole.end else start;
-    try p.node_spans.put(p.arena, node, .{ .start = start, .end = end });
+    if (p.track_source) try p.node_spans.put(p.arena, node, .{ .start = start, .end = end });
     return node;
 }
 
@@ -864,7 +884,7 @@ fn parseSeqMapItem(p: *Parser, dash_indent: usize, first_line: []const u8, depth
     }
     const node = try makeNode(p.arena, .{ .map = try entries.toOwnedSlice(p.arena) });
     const item_end = if (p.pos > 0) p.lines[p.pos - 1].whole.end else item_start;
-    try p.node_spans.put(p.arena, node, .{ .start = item_start, .end = item_end });
+    if (p.track_source) try p.node_spans.put(p.arena, node, .{ .start = item_start, .end = item_end });
     return node;
 }
 
@@ -875,6 +895,7 @@ fn putEntrySpan(
     whole: ?source_map.Span,
     diagnostic: source_map.Diagnostic,
 ) !void {
+    if (!p.track_source) return;
     const key = spanForSlice(p.source_bytes, kv.key) orelse {
         try p.diagnostics.append(p.arena, diagnostic);
         return;
@@ -938,7 +959,6 @@ fn parseValue(p: *Parser, raw: []const u8, depth: usize) Error!*Node {
     if (depth > max_nesting_depth) return error.NestingTooDeep;
     const s = std.mem.trim(u8, raw, " ");
     if (s.len == 0) return makeNode(arena, .{ .scalar = "" });
-    const span = spanForSlice(p.source_bytes, s);
     const n = if (s[0] == '{') blk: {
         if (s.len < 2 or s[s.len - 1] != '}') try p.diagnostics.append(arena, .invalid_flow_value);
         break :blk try parseFlow(p, s, depth);
@@ -949,10 +969,12 @@ fn parseValue(p: *Parser, raw: []const u8, depth: usize) Error!*Node {
         if (!quotedScalarIsValid(s)) try p.diagnostics.append(arena, .invalid_flow_value);
         break :blk try makeNode(arena, .{ .scalar = try unquote(arena, s) });
     };
-    if (span) |owned_span| {
-        try p.node_spans.put(arena, n, owned_span);
-    } else {
-        try p.diagnostics.append(arena, .invalid_flow_value);
+    if (p.track_source) {
+        if (spanForSlice(p.source_bytes, s)) |span| {
+            try p.node_spans.put(arena, n, span);
+        } else {
+            try p.diagnostics.append(arena, .invalid_flow_value);
+        }
     }
     return n;
 }

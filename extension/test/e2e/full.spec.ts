@@ -12,6 +12,10 @@ import { type BrowserContext, chromium, expect, type Page, test } from "@playwri
 const DIST = fileURLToPath(new URL("../../dist", import.meta.url));
 const fixture = readFileSync(new URL("./fixtures/pr-files.html", import.meta.url), "utf8");
 const reactFixture = readFileSync(new URL("./fixtures/pr-files-react.html", import.meta.url), "utf8");
+const virtualizedReactFixture = readFileSync(
+  new URL("./fixtures/pr-files-react-virtualized.html", import.meta.url),
+  "utf8",
+);
 
 // build.mjs --e2e puts this port in __API_BASE__.
 const PORT = 8471;
@@ -34,6 +38,8 @@ const state: ServerState = {
 
 let guidSearchGate: Promise<void> | undefined;
 let releaseGuidSearch: (() => void) | undefined;
+let prefetchBlobGate: Promise<void> | undefined;
+let releasePrefetchBlob: (() => void) | undefined;
 
 function holdGuidSearch(): void {
   guidSearchGate = new Promise((resolve) => {
@@ -45,6 +51,18 @@ function releaseHeldGuidSearch(): void {
   releaseGuidSearch?.();
   guidSearchGate = undefined;
   releaseGuidSearch = undefined;
+}
+
+function holdPrefetchBlob(): void {
+  prefetchBlobGate = new Promise((resolve) => {
+    releasePrefetchBlob = resolve;
+  });
+}
+
+function releaseHeldPrefetchBlob(): void {
+  releasePrefetchBlob?.();
+  prefetchBlobGate = undefined;
+  releasePrefetchBlob = undefined;
 }
 
 // This prefab matches the golden WASM input and keeps the expected diff stable.
@@ -79,6 +97,8 @@ function startServer(): Promise<Server> {
         return send(fixture, "text/html");
       case "/o/r/pull/2/files":
         return send(reactFixture, "text/html");
+      case "/o/r/pull/3/files":
+        return send(virtualizedReactFixture, "text/html");
       case "/repos/o/r/pulls/1/files":
         return json([
           { filename: "Assets/Foo.prefab", status: "modified" },
@@ -91,8 +111,18 @@ function startServer(): Promise<Server> {
         return json([{ filename: "Assets/Foo.prefab", status: "modified" }]);
       case "/repos/o/r/pulls/2":
         return json({ base: { sha: "B" }, head: { sha: "H" } });
+      case "/repos/o/r/pulls/3/files":
+        return json([{ filename: "Assets/Foo.prefab", status: "modified" }]);
+      case "/repos/o/r/pulls/3":
+        return json({ base: { sha: "B" }, head: { sha: "H" } });
+      case "/repos/o/r/pulls/4/files":
+        return json([{ filename: "Assets/Foo.prefab", status: "modified" }]);
+      case "/repos/o/r/pulls/4":
+        return json({ base: { sha: "B4" }, head: { sha: "H4" } });
       case "/repos/o/r/compare/B...H":
         return json({ merge_base_commit: { sha: "MB" } });
+      case "/repos/o/r/compare/B4...H4":
+        return json({ merge_base_commit: { sha: "MB4" } });
       // Commit discovery uses the first parent as the base.
       case "/o/r/commit/abcdef0":
         return send(fixture, "text/html");
@@ -153,13 +183,14 @@ function startServer(): Promise<Server> {
         }
         // These refs are the base side of the pull, commit, compare, and backoff flows.
         const ref = url.searchParams.get("ref") ?? "";
+        if (ref === "H4" && prefetchBlobGate) await prefetchBlobGate;
         if (ref === "H429" && !servedRateLimit) {
           servedRateLimit = true;
           res.writeHead(429, { "retry-after": "1" });
           return res.end("rate limit");
         }
         return send(
-          ["MB", "PC", "MC", "P429", "P500", "P600"].includes(ref) ? BEFORE : AFTER,
+          ["MB", "MB4", "PC", "MC", "P429", "P500", "P600"].includes(ref) ? BEFORE : AFTER,
           "application/vnd.github.raw+json",
         );
       }
@@ -264,12 +295,42 @@ test.beforeEach(async () => {
   });
   if (!context.serviceWorkers()[0]) await context.waitForEvent("serviceworker");
   releaseHeldGuidSearch();
+  releaseHeldPrefetchBlob();
   await setLocalStorage({ accessToken: "e2e-token" });
 });
 
 test.afterEach(async () => {
   releaseHeldGuidSearch();
+  releaseHeldPrefetchBlob();
   await context?.close();
+});
+
+test("finishes prefetch after the semantic cache is ready", async () => {
+  holdPrefetchBlob();
+  const worker = context.serviceWorkers()[0] ?? (await context.waitForEvent("serviceworker"));
+  // The packaged manifest supplies an extension context without relying on unbuilt pages.
+  const extensionPage = await context.newPage();
+  await extensionPage.goto(`chrome-extension://${new URL(worker.url()).host}/manifest.json`);
+
+  const stateBeforeBlob = await extensionPage.evaluate(async () =>
+    Promise.race([
+      chrome.runtime.sendMessage({ type: "prefetch", owner: "o", repo: "r", prNumber: 4 }).then(() => "complete"),
+      new Promise<string>((resolve) => setTimeout(() => resolve("pending"), 100)),
+    ]),
+  );
+
+  // A pending message keeps the MV3 worker active while it builds the semantic cache.
+  expect(stateBeforeBlob).toBe("pending");
+  releaseHeldPrefetchBlob();
+  await expect
+    .poll(() =>
+      extensionPage.evaluate(async () => {
+        const stored = await chrome.storage.session.get("diff:MB4:H4:Assets/Foo.prefab");
+        return stored["diff:MB4:H4:Assets/Foo.prefab"] !== undefined;
+      }),
+    )
+    .toBe(true);
+  await extensionPage.close();
 });
 
 test("starts PR prefetch before a manual semantic request", async () => {
@@ -495,15 +556,23 @@ test("applies the persisted semantic default to current and later files", async 
   await page.close();
 });
 
+test("mounts the global toggle before the first classic file", async () => {
+  const page = await context.newPage();
+  await page.goto(`http://127.0.0.1:${PORT}/o/r/pull/1/files`);
+
+  await expect(page.locator("[data-prefablens-global]")).toHaveCount(1);
+  await expect(
+    page.locator('[data-prefablens-global] + copilot-diff-entry .file-header[data-path="README.md"]'),
+  ).toHaveCount(1);
+  await page.close();
+});
+
 test("clears per-file overrides after a global selection", async () => {
   const page = await context.newPage();
   await page.goto(`http://127.0.0.1:${PORT}/o/r/pull/1/files`);
 
   const global = page.locator("[data-prefablens-global]");
   await expect(global).toHaveCount(1);
-  await expect(
-    page.locator('[data-prefablens-global] + .file .file-header[data-path="Assets/Foo.prefab"]'),
-  ).toHaveCount(1);
 
   await global.getByRole("button", { name: "Semantic" }).click();
   const header = page.locator('.file-header[data-path="Assets/Foo.prefab"]');
@@ -557,12 +626,57 @@ test("hides a remounted raw body before paint", async () => {
   await page.close();
 });
 
-test("mounts the global toggle outside the recycled item", async () => {
+test("mounts the global toggle before the React file list", async () => {
   const page = await context.newPage();
   await page.goto(`http://127.0.0.1:${PORT}/o/r/pull/2/files`);
 
   await expect(page.locator("[data-prefablens-global]")).toHaveCount(1);
-  await expect(page.locator('[data-prefablens-global] + [data-testid="progressive-diffs-list"]')).toHaveCount(1);
+  await expect(page.locator('[data-prefablens-global] + [data-testid="virtualized-diffs-list"]')).toHaveCount(1);
+  await expect(page.locator('[data-testid="virtualized-diffs-list"] > :first-child #diff-ccc333')).toHaveCount(1);
+  await page.close();
+});
+
+test("mounts the global toggle before a Unity region enters the virtual list", async () => {
+  const page = await context.newPage();
+  await page.goto(`http://127.0.0.1:${PORT}/o/r/pull/3/files`);
+
+  await expect(page.locator('div[role="region"] [data-prefablens]')).toHaveCount(0);
+  await expect(page.locator('[data-prefablens-global] + [data-testid="virtualized-diffs-list"]')).toHaveCount(1);
+  await page.close();
+});
+
+test("restores a fully remounted React file before the next paint", async () => {
+  await setLocalStorage({ accessToken: "e2e-token", viewMode: "semantic" });
+  const page = await context.newPage();
+  await page.goto(`http://127.0.0.1:${PORT}/o/r/pull/2/files`);
+
+  await expect(page.locator("#diff-aaa111 [data-prefablens-view]")).toBeVisible();
+  const firstPaint = await page.evaluate(
+    () =>
+      new Promise<{ rawDisplay: string; semanticView: boolean }>((resolve) => {
+        const entry = document.querySelector("#diff-aaa111")?.parentElement;
+        if (!entry) throw new Error("diff region missing");
+        const clone = entry.cloneNode(true) as HTMLElement;
+        // GitHub rebuilds this node from React state. The new node has no PrefabLens attributes or styles.
+        clone.querySelector("[data-prefablens-view]")?.remove();
+        clone.querySelector("[data-prefablens-toggle]")?.remove();
+        clone.querySelector("[data-prefablens]")?.removeAttribute("data-prefablens");
+        clone.querySelector("[data-prefablens-raw-hidden]")?.removeAttribute("data-prefablens-raw-hidden");
+        for (const element of clone.querySelectorAll<HTMLElement>("[style]")) element.style.display = "";
+        entry.replaceWith(clone);
+
+        requestAnimationFrame(() => {
+          const region = document.querySelector("#diff-aaa111");
+          const raw = region?.querySelector<HTMLElement>(".border.rounded-bottom-2");
+          resolve({
+            rawDisplay: raw ? getComputedStyle(raw).display : "missing",
+            semanticView: region?.querySelector("[data-prefablens-view]") !== null,
+          });
+        });
+      }),
+  );
+
+  expect(firstPaint).toEqual({ rawDisplay: "none", semanticView: true });
   await page.close();
 });
 

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
 import { must } from "../../../src/internal/must";
-import { parseDiffUrl, parsePrPage, scanUnityFiles } from "../../../src/presentation/content/detect";
+import { findGlobalAnchor, parseDiffUrl, parsePrPage, scanUnityFiles } from "../../../src/presentation/content/detect";
 
 const FIXTURE = `
   <div class="file">
@@ -183,7 +183,7 @@ describe("scanUnityFiles", () => {
 
     // Primer CSS controls the collapsed state for classic file containers.
     expect(entry.collapsed()).toBe(false);
-    expect(entry.globalAnchor()).toBe(document.querySelector(".file"));
+    expect(findGlobalAnchor(document)).toBe(document.querySelector(".file"));
   });
 
   it("attaches the semantic host after the raw content", () => {

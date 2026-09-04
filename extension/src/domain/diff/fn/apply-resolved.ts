@@ -4,8 +4,9 @@ import type { DiffV2 } from "../types";
 // domain so the site demo can import it without a GitHub gateway or __API_BASE__.
 export function applyResolved(diff: DiffV2, index: Map<string, string>): DiffV2 {
   const resolved: Record<string, string> = {};
+  const stored = diff.resolved ?? {};
   for (const g of diff.unresolvedGuids) {
-    const path = index.get(g);
+    const path = index.get(g) ?? (Object.hasOwn(stored, g) ? stored[g] : undefined);
     if (path !== undefined) resolved[g] = path;
   }
   return { ...diff, resolved };

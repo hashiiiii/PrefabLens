@@ -6,7 +6,7 @@ import { renderSignIn, renderSignInPending } from "../internal/render";
 import { mountGlobalBar, type Toggle } from "../internal/toggle";
 import type { ViewMode } from "../internal/view-mode";
 import { createViewState, type ViewState } from "../internal/view-state";
-import { type DiffPage, type FileEntry, parseDiffUrl, parsePrPage, scanUnityFiles } from "./detect";
+import { type DiffPage, findGlobalAnchor, parseDiffUrl, parsePrPage, scanUnityFiles } from "./detect";
 import { fillDeviceCode } from "./device-page";
 import { createFileView, type FileRegistry, fileKey } from "./overlay/file-view";
 
@@ -90,9 +90,9 @@ function attach(viewState: ViewState): void {
 
   updateFiles();
 
+  const globalAnchor = findGlobalAnchor(document);
+  if (globalAnchor) ensureGlobalToggle(viewState, globalAnchor);
   const entries = scanUnityFiles(document);
-  const first = entries[0];
-  if (first) ensureGlobalToggle(viewState, first);
   for (const entry of entries) {
     const file = createFileView(entry, page, messengerGateway, viewState);
     file.subscribeAuth((root, error) => {
@@ -103,11 +103,10 @@ function attach(viewState: ViewState): void {
   }
 }
 
-// Global bar must sit outside recycled react list items (classic: before .file, react: list root)
-function ensureGlobalToggle(viewState: ViewState, first: FileEntry): void {
+// The global bar stays outside the recycled rows from GitHub.
+function ensureGlobalToggle(viewState: ViewState, anchor: Element): void {
   if (globalToggle?.element.closest("[data-prefablens-global]")?.isConnected) return;
-  const anchor = first.globalAnchor();
-  if (!anchor?.parentElement) return;
+  if (!anchor.parentElement) return;
   const bar = mountGlobalBar(viewState.page);
   bar.toggle.subscribe((view) => viewState.savePage(view));
   anchor.before(bar.element);
@@ -166,10 +165,11 @@ async function init(): Promise<void> {
   new MutationObserver(() => {
     if (scheduled) return;
     scheduled = true;
-    setTimeout(() => {
+    // If React replaces a complete file during a scroll, reattach before the browser paints the raw body.
+    queueMicrotask(() => {
       scheduled = false;
       attach(viewState);
-    }, 50);
+    });
   }).observe(document.body, { childList: true, subtree: true });
 }
 

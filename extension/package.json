@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.9.1",
   "type": "module",
-  "packageManager": "pnpm@11.24.0",
+  "packageManager": "pnpm@11.25.0",
   "scripts": {
     "build": "node build.mjs",
     "demo": "node build.mjs --demo",

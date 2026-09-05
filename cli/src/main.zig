@@ -3,6 +3,14 @@ const builtin = @import("builtin");
 const core = @import("core");
 const testing = std.testing;
 
+const atomic_file = @import("atomic_file.zig");
+const command = @import("command.zig");
+const merge_driver = @import("merge_driver.zig");
+const merge_io = @import("merge_io.zig");
+const merge_tree = @import("merge_tree.zig");
+const merge_tui = @import("merge_tui.zig");
+const merge_ui_state = @import("merge_ui_state.zig");
+const mergetool = @import("mergetool.zig");
 pub const resolve = @import("resolve.zig");
 pub const input = @import("input.zig");
 pub const display = @import("display.zig");
@@ -13,6 +21,14 @@ const builtin_refs = @import("builtin_refs.zig");
 
 test {
     std.testing.refAllDecls(@This());
+    _ = command;
+    _ = merge_io;
+    _ = atomic_file;
+    _ = merge_driver;
+    _ = merge_tree;
+    _ = merge_tui;
+    _ = merge_ui_state;
+    _ = mergetool;
     _ = resolve;
     _ = input;
     _ = display;
@@ -1302,7 +1318,41 @@ pub fn main(init: std.process.Init) !u8 {
 
     const color = std.Io.File.stdout().isTty(init.io) catch false;
 
-    const code = try run(init.io, arena, user_args, stdout, stderr, color, init.environ_map);
+    const parsed = command.parse(user_args) catch {
+        try stderr.writeAll("prefablens: Invalid command arguments.\n");
+        try stderr.flush();
+        return 2;
+    };
+    const code = switch (parsed) {
+        .diff => |diff_args| try run(
+            init.io,
+            arena,
+            diff_args,
+            stdout,
+            stderr,
+            color,
+            init.environ_map,
+        ),
+        .merge_driver => |driver_args| try merge_driver.run(
+            init.io,
+            arena,
+            driver_args,
+            stderr,
+        ),
+        .mergetool => |tool_args| blk: {
+            const stdin_tty = std.Io.File.stdin().isTty(init.io) catch false;
+            const stdout_tty = std.Io.File.stdout().isTty(init.io) catch false;
+            break :blk try mergetool.run(
+                init.io,
+                arena,
+                tool_args,
+                init.environ_map,
+                stdin_tty,
+                stdout_tty,
+                stderr,
+            );
+        },
+    };
     try stdout.flush();
     try stderr.flush();
     return code;

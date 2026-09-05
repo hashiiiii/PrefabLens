@@ -4,6 +4,7 @@
 .playwright-mcp/
 .worktrees/
 .zig-cache/
+/zig-pkg/
 zig-out/
 docs/superpowers/
 extension/node_modules/

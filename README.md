@@ -90,6 +90,87 @@ You do not need to set a token.
 > [!NOTE]
 > The extension works on github.com only.
 
+### Git merge
+
+PrefabLens can resolve semantic conflicts in Unity YAML files during `git merge`.
+Choose one setup mode for each clone.
+
+#### Personal repository setup
+
+Run these commands for one clone:
+
+```bash
+git config --local merge.prefablens.driver \
+  'prefablens merge-driver %O %A %B %P'
+git config --local mergetool.prefablens.cmd \
+  'prefablens mergetool "$BASE" "$LOCAL" "$REMOTE" "$MERGED"'
+git config --local mergetool.prefablens.trustExitCode true
+```
+
+Save the attributes block below in `.git/info/attributes`.
+
+#### Team setup
+
+Run these commands once on each development machine or user account:
+
+```bash
+git config --global merge.prefablens.driver \
+  'prefablens merge-driver %O %A %B %P'
+git config --global mergetool.prefablens.cmd \
+  'prefablens mergetool "$BASE" "$LOCAL" "$REMOTE" "$MERGED"'
+git config --global mergetool.prefablens.trustExitCode true
+```
+
+Commit the same attributes block below as `.gitattributes`.
+
+```gitattributes
+*.prefab merge=prefablens
+*.unity merge=prefablens
+*.asset merge=prefablens
+*.mat merge=prefablens
+*.anim merge=prefablens
+*.controller merge=prefablens
+*.overrideController merge=prefablens
+*.physicMaterial merge=prefablens
+*.physicsMaterial2D merge=prefablens
+*.playable merge=prefablens
+*.mask merge=prefablens
+*.brush merge=prefablens
+*.flare merge=prefablens
+*.fontsettings merge=prefablens
+*.guiskin merge=prefablens
+*.giparams merge=prefablens
+*.renderTexture merge=prefablens
+*.spriteatlas merge=prefablens
+*.spriteatlasv2 merge=prefablens
+*.terrainlayer merge=prefablens
+*.mixer merge=prefablens
+*.shadervariants merge=prefablens
+*.preset merge=prefablens
+*.signal merge=prefablens
+*.lighting merge=prefablens
+*.scenetemplate merge=prefablens
+```
+
+#### Daily merge
+
+Run the normal Git commands:
+
+```bash
+git switch feature
+git merge main
+```
+
+If no semantic conflict exists, these commands complete the merge.
+If a Unity YAML conflict remains, run the mergetool for that path:
+
+```bash
+git mergetool --tool=prefablens -- Assets/Prefabs/Robot.prefab
+git merge --continue
+```
+
+If other file formats also conflict, specify the Unity YAML path and use the suitable tool for each other file.
+
 ### CLI
 
 ```bash

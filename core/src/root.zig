@@ -1,6 +1,8 @@
 const std = @import("std");
 pub const model = @import("model.zig");
+pub const source = @import("source.zig");
 pub const json = @import("json.zig");
+pub const merge = @import("merge.zig");
 
 const assets_tlv = @import("assets_tlv.zig");
 const classid = @import("classid.zig");
@@ -16,6 +18,7 @@ const instantiate = @import("instantiate.zig");
 const prefab = @import("prefab.zig");
 
 pub const Assets = prefab.Assets;
+pub const displayPropertyPath = inspector.displayPath;
 pub const isUnityYaml = parser.isUnityYaml;
 pub const DiffError = parser.Error;
 pub const JsonError = DiffError || std.Io.Writer.Error;
@@ -77,5 +80,13 @@ test {
     _ = perf;
     _ = instantiate;
     _ = prefab;
+    _ = @import("source.zig");
+    _ = @import("merge_model.zig");
+    _ = @import("merge_identity.zig");
+    _ = @import("merge_order.zig");
+    _ = @import("merge_planner.zig");
+    _ = @import("merge_apply.zig");
+    _ = @import("merge_validate.zig");
+    _ = @import("merge_fixture_test.zig");
     _ = @import("fixture_test.zig");
 }

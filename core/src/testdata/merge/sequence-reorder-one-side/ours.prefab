@@ -1,0 +1,43 @@
+--- !u!1 &100
+GameObject:
+  m_Component:
+  - component: {fileID: 400}
+  m_Name: Root
+--- !u!4 &400
+Transform:
+  m_GameObject: {fileID: 100}
+  m_Children:
+  - {fileID: 420}
+  - {fileID: 410}
+  - {fileID: 430}
+  m_Father: {fileID: 0}
+--- !u!1 &110
+GameObject:
+  m_Component:
+  - component: {fileID: 410}
+  m_Name: A
+--- !u!4 &410
+Transform:
+  m_GameObject: {fileID: 110}
+  m_Children: []
+  m_Father: {fileID: 400}
+--- !u!1 &120
+GameObject:
+  m_Component:
+  - component: {fileID: 420}
+  m_Name: B
+--- !u!4 &420
+Transform:
+  m_GameObject: {fileID: 120}
+  m_Children: []
+  m_Father: {fileID: 400}
+--- !u!1 &130
+GameObject:
+  m_Component:
+  - component: {fileID: 430}
+  m_Name: C
+--- !u!4 &430
+Transform:
+  m_GameObject: {fileID: 130}
+  m_Children: []
+  m_Father: {fileID: 400}

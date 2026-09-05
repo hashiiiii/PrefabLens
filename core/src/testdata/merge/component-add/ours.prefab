@@ -1,0 +1,10 @@
+--- !u!1 &1
+GameObject:
+  m_Component:
+  - component: {fileID: 4}
+  m_Name: Root
+--- !u!4 &4
+Transform:
+  m_GameObject: {fileID: 1}
+  m_Children: []
+  m_Father: {fileID: 0}

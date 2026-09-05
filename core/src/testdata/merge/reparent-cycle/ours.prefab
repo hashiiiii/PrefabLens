@@ -1,0 +1,48 @@
+--- !u!1 &1
+GameObject:
+  m_Component:
+  - component: {fileID: 4}
+  m_Name: Root
+--- !u!4 &4
+Transform:
+  m_GameObject: {fileID: 1}
+  m_Children:
+  - {fileID: 41}
+  m_Father: {fileID: 0}
+--- !u!1 &10
+GameObject:
+  m_Component:
+  - component: {fileID: 40}
+  m_Name: Parent A
+--- !u!4 &40
+Transform:
+  m_GameObject: {fileID: 10}
+  m_Children:
+  - {fileID: 42}
+  m_Father: {fileID: 41}
+--- !u!1 &11
+GameObject:
+  m_Component:
+  - component: {fileID: 41}
+  m_Name: Parent B
+--- !u!4 &41
+Transform:
+  m_GameObject: {fileID: 11}
+  m_Children:
+  - {fileID: 40}
+  m_Father: {fileID: 4}
+--- !u!1 &20
+GameObject:
+  m_Component:
+  - component: {fileID: 42}
+  - component: {fileID: 54}
+  m_Name: Child
+--- !u!4 &42
+Transform:
+  m_GameObject: {fileID: 20}
+  m_Children: []
+  m_Father: {fileID: 40}
+--- !u!54 &54
+Rigidbody:
+  m_GameObject: {fileID: 20}
+  m_Mass: 1

@@ -59,6 +59,71 @@ Dependencies point from `cli/` into `core/`.
 - `.meta`, `.asmdef`, and other non-UnityYAML names are never path operands.
   The CLI treats them as git refs on purpose.
 
+### Semantic merge adapters
+
+The CLI provides two Git merge adapters. Both adapters use the semantic merge engine for Unity YAML files.
+
+#### `merge-driver`
+
+```text
+prefablens merge-driver <base> <ours-and-output> <theirs> <path>
+```
+
+Git maps the placeholders to these arguments:
+
+| Argument | Git placeholder | Meaning |
+|---|---|---|
+| `<base>` | `%O` | Common ancestor |
+| `<ours-and-output>` | `%A` | Ours input and result output |
+| `<theirs>` | `%B` | Theirs input |
+| `<path>` | `%P` | Repository-relative path |
+
+#### `mergetool`
+
+```text
+prefablens mergetool <base> <local> <remote> <merged>
+```
+
+Git provides these values through environment variables:
+
+| Argument | Git variable | Meaning |
+|---|---|---|
+| `<base>` | `$BASE` | Common ancestor |
+| `<local>` | `$LOCAL` | Ours input |
+| `<remote>` | `$REMOTE` | Theirs input |
+| `<merged>` | `$MERGED` | Partial result and final output |
+
+The adapters return these results:
+
+| Command | Arguments | Exit 0 | Exit 1 | Exit 2 |
+| --- | --- | --- | --- | --- |
+| `merge-driver` | `<base> <ours-and-output> <theirs> <path>` | Complete result | Safe partial result | No write |
+| `mergetool` | `<base> <local> <remote> <merged>` | Validated result | User abort, no write | Validation failure, no write |
+
+At startup, `mergetool` recomputes the deterministic partial result. It compares that result with the bytes in `$MERGED`.
+If the bytes differ, it returns exit 2 and keeps `$MERGED` unchanged.
+
+After the last conflict is resolved, `mergetool` checks these eight conditions:
+
+1. Every atomic operation has a result.
+2. Every `fileID` is unique.
+3. Every Component document has a matching `m_Component` reference.
+4. Every Transform `m_Father` matches the parent `m_Children` reference.
+5. The hierarchy has no cycle.
+6. Every internal reference points to an existing document.
+7. The complete output parses as Unity YAML.
+8. `$MERGED` has not changed since startup.
+
+Each input file has a 64 MiB limit. `mergetool` opens its TUI only when standard input and standard output are TTYs.
+Without both TTYs, it returns exit 2 and does not write `$MERGED`.
+
+The adapters write a temporary file in the same directory as the output. They flush and close the file before atomic replace.
+Malformed input, unsupported input, an abort, or a validation error leaves the output unchanged.
+
+`diff-driver` and `difftool` are reserved names for Issue #227. This task does not implement those adapters.
+
+libvaxis is a dependency of the CLI TUI only. The core and WASM targets do not import libvaxis.
+
 ### CLI contract
 
 Consumers (humans, the Editor package, scripts) rely on this surface.

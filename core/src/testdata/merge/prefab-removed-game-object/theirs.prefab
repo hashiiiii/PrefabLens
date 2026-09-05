@@ -1,0 +1,30 @@
+--- !u!1001 &100100000
+PrefabInstance:
+  m_ObjectHideFlags: 0
+  serializedVersion: 2
+  m_Modification:
+    serializedVersion: 3
+    m_TransformParent: {fileID: 0}
+    m_Modifications: []
+    m_RemovedComponents: []
+    m_RemovedGameObjects:
+    - {fileID: 200000, guid: 11111111111111111111111111111111, type: 3}
+    m_AddedGameObjects: []
+    m_AddedComponents: []
+  m_SourcePrefab: {fileID: 100100000, guid: 11111111111111111111111111111111, type: 3}
+--- !u!1 &100000 stripped
+GameObject:
+  m_CorrespondingSourceObject: {fileID: 100000, guid: 11111111111111111111111111111111, type: 3}
+  m_PrefabInstance: {fileID: 100100000}
+  m_PrefabAsset: {fileID: 0}
+  m_Component:
+  - component: {fileID: 300000}
+  m_Name: Root
+--- !u!4 &300000 stripped
+Transform:
+  m_CorrespondingSourceObject: {fileID: 300000, guid: 11111111111111111111111111111111, type: 3}
+  m_PrefabInstance: {fileID: 100100000}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 100000}
+  m_Children: []
+  m_Father: {fileID: 0}

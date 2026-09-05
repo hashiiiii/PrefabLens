@@ -1,0 +1,22 @@
+--- !u!1 &100
+GameObject:
+  m_Component:
+  - component: {fileID: 400}
+  # Keep this component group.
+
+  - component: {fileID: 540}
+  - component: {fileID: 650}
+  m_Name: Root
+--- !u!4 &400
+Transform:
+  m_GameObject: {fileID: 100}
+  m_Children: []
+  m_Father: {fileID: 0}
+--- !u!54 &540
+Rigidbody:
+  m_GameObject: {fileID: 100}
+  m_Mass: 1
+--- !u!65 &650
+BoxCollider:
+  m_GameObject: {fileID: 100}
+  m_IsTrigger: 0

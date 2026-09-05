@@ -24,6 +24,8 @@ pub const Diagnostic = enum {
     invalid_map_entry,
     invalid_flow_value,
     non_map_document_body,
+    duplicate_key,
+    unconsumed_line,
 };
 
 pub const ParsedFile = struct {

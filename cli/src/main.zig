@@ -7,6 +7,7 @@ const atomic_file = @import("atomic_file.zig");
 const command = @import("command.zig");
 const merge_driver = @import("merge_driver.zig");
 const merge_io = @import("merge_io.zig");
+const merge_tree = @import("merge_tree.zig");
 const merge_tui = @import("merge_tui.zig");
 const merge_ui_state = @import("merge_ui_state.zig");
 const mergetool = @import("mergetool.zig");
@@ -24,6 +25,7 @@ test {
     _ = merge_io;
     _ = atomic_file;
     _ = merge_driver;
+    _ = merge_tree;
     _ = merge_tui;
     _ = merge_ui_state;
     _ = mergetool;

@@ -16,6 +16,7 @@ pub const Action = union(enum) {
     choose_theirs,
     edit_result: []const u8,
     apply_result,
+    reopen_result,
     abort,
 };
 
@@ -197,11 +198,11 @@ pub const State = struct {
                 self.selectConflict(self.selected_conflict + 1);
             },
             .select_conflict => |index| self.selectConflict(index),
-            .choose_ours => if (self.operation() != null) {
-                self.pending = .{ .take = .ours };
+            .choose_ours => if (self.operation()) |operation_item| {
+                self.pending = resolutionForSide(operation_item, .ours);
             },
-            .choose_theirs => if (self.operation() != null) {
-                self.pending = .{ .take = .theirs };
+            .choose_theirs => if (self.operation()) |operation_item| {
+                self.pending = resolutionForSide(operation_item, .theirs);
             },
             .edit_result => |value| if (self.operation() != null) {
                 self.pending = .{ .custom = try self.allocator.dupe(u8, value) };
@@ -238,10 +239,32 @@ pub const State = struct {
                 self.status = "";
                 self.advance();
             },
+            .reopen_result => if (self.operation()) |operation_item| {
+                const atomic_index = self.atomicIndexById(operation_item.atomic_id) orelse return;
+                for (self.plan.atomic_operations[atomic_index].operation_ids) |operation_id| {
+                    const member = self.operationById(operation_id) orelse continue;
+                    member.resolution = .unresolved;
+                }
+                self.pending = null;
+                self.status = "";
+                self.outcome = .active;
+            },
             .abort => unreachable,
         }
     }
 };
+
+fn resolutionForSide(
+    operation: *const core.merge.Operation,
+    side: core.merge.Side,
+) core.merge.Resolution {
+    const value = switch (side) {
+        .base => operation.values.base,
+        .ours => operation.values.ours,
+        .theirs => operation.values.theirs,
+    };
+    return if (value == null) .remove else .{ .take = side };
+}
 
 fn conflictPlan(arena: std.mem.Allocator, count: u8) !core.merge.BuildResult {
     const base = "--- !u!54 &54\nRigidbody:\n  m_Mass: 5\n  m_Drag: 0\n";
@@ -281,6 +304,33 @@ test "merge UI state: choose and apply advances to the next conflict" {
     try testing.expectEqual(@as(usize, 1), state.selected_conflict);
 }
 
+test "merge UI state: a missing side removes the container in both directions" {
+    const base =
+        "--- !u!114 &1\nMonoBehaviour:\n  m_Config:\n    value: 1\n  m_After: keep\n";
+    const deleted =
+        "--- !u!114 &1\nMonoBehaviour:\n  m_After: keep\n";
+    const edited =
+        "--- !u!114 &1\nMonoBehaviour:\n  m_Config:\n    value: 2\n  m_After: keep\n";
+
+    inline for (.{
+        .{ .ours = deleted, .theirs = edited, .action = Action.choose_ours },
+        .{ .ours = edited, .theirs = deleted, .action = Action.choose_theirs },
+    }) |case| {
+        var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+        defer arena_state.deinit();
+        const arena = arena_state.allocator();
+        var fixture = try core.merge.build(arena, base, case.ours, case.theirs);
+        var state = try State.init(arena, &fixture.plan);
+
+        try state.handle(case.action);
+        try testing.expect(state.pending.? == .remove);
+        try state.handle(.apply_result);
+
+        try testing.expectEqual(Outcome.ready, state.outcome);
+        try testing.expectEqualStrings(deleted, try core.merge.finish(arena, &fixture.plan));
+    }
+}
+
 test "merge UI state: invalid custom input remains unresolved" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
@@ -293,6 +343,93 @@ test "merge UI state: invalid custom input remains unresolved" {
 
     try testing.expectEqual(@as(usize, 1), state.unresolvedCount());
     try testing.expectEqualStrings("The result is not valid Unity YAML.", state.status);
+}
+
+test "merge UI state: ambiguous plain Result never reaches finish" {
+    const invalid_values = [_][]const u8{
+        "value # comment",
+        "key: value",
+        "# comment",
+        " leading",
+    };
+    for (invalid_values) |invalid| {
+        var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+        defer arena_state.deinit();
+        const arena = arena_state.allocator();
+        var fixture = try conflictPlan(arena, 1);
+        var state = try State.init(arena, &fixture.plan);
+
+        try state.handle(.{ .edit_result = invalid });
+        try state.handle(.apply_result);
+
+        try testing.expectEqual(@as(usize, 1), state.unresolvedCount());
+        try testing.expectEqualStrings("The result is not valid Unity YAML.", state.status);
+        try testing.expectError(error.InvalidResolution, core.merge.finish(arena, &fixture.plan));
+    }
+}
+
+test "merge UI state: invalid references remain unresolved" {
+    const invalid_values = [_][]const u8{
+        "{fileID: 0, bogus: value}",
+        "{fileID: 0, guid: bad, type: 3}",
+        "{fileID: 0, guid: 0123456789abcdef0123456789abcdef}",
+        "{fileID: 0, type: nope}",
+        "{guid: 0123456789abcdef0123456789abcdef, type: 3}",
+        "{fileID: 0, guid: 0123456789abcdef0123456789abcdef, type: nope}",
+        "{fileID: nope}",
+        "{fileID: 0, fileID: 1}",
+    };
+    for (invalid_values) |invalid| {
+        var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+        defer arena_state.deinit();
+        const arena = arena_state.allocator();
+        var fixture = try conflictPlan(arena, 1);
+        var state = try State.init(arena, &fixture.plan);
+
+        try testing.expectError(
+            error.InvalidResolution,
+            core.merge.resolve(
+                arena,
+                &fixture.plan,
+                fixture.plan.operations[0].id,
+                .{ .custom = invalid },
+            ),
+        );
+        try testing.expect(fixture.plan.operations[0].resolution == .unresolved);
+        try state.handle(.{ .edit_result = invalid });
+        try state.handle(.apply_result);
+
+        try testing.expect(fixture.plan.operations[0].resolution == .unresolved);
+        try testing.expectEqual(@as(usize, 1), state.unresolvedCount());
+        try testing.expectEqualStrings("The result is not valid Unity YAML.", state.status);
+        try testing.expectError(error.InvalidResolution, core.merge.finish(arena, &fixture.plan));
+    }
+}
+
+test "merge UI state: valid references reach finish" {
+    const cases = [_]struct { value: []const u8, expected: []const u8 }{
+        .{
+            .value = "{fileID: 0}",
+            .expected = "--- !u!54 &54\nRigidbody:\n  m_Mass: {fileID: 0}\n  m_Drag: 0\n",
+        },
+        .{
+            .value = "{fileID: 2100000, guid: 0123456789abcdef0123456789abcdef, type: 3}",
+            .expected = "--- !u!54 &54\nRigidbody:\n  m_Mass: {fileID: 2100000, guid: 0123456789abcdef0123456789abcdef, type: 3}\n  m_Drag: 0\n",
+        },
+    };
+    for (cases) |case| {
+        var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+        defer arena_state.deinit();
+        const arena = arena_state.allocator();
+        var fixture = try conflictPlan(arena, 1);
+        var state = try State.init(arena, &fixture.plan);
+
+        try state.handle(.{ .edit_result = case.value });
+        try state.handle(.apply_result);
+
+        try testing.expectEqual(Outcome.ready, state.outcome);
+        try testing.expectEqualStrings(case.expected, try core.merge.finish(arena, &fixture.plan));
+    }
 }
 
 test "merge UI state: abort discards all in-memory choices" {
@@ -354,6 +491,26 @@ test "merge UI state: one conflict represents an atomic operation" {
         try testing.expect(operation_item.resolution == .take);
         try testing.expect(operation_item.resolution.take == .ours);
     }
+}
+
+test "merge UI state: reopening a conflict resets every atomic member" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var fixture = try conflictPlan(arena, 2);
+    try groupConflicts(arena, &fixture.plan);
+    var state = try State.init(arena, &fixture.plan);
+
+    try state.handle(.choose_ours);
+    try state.handle(.apply_result);
+    try state.handle(.reopen_result);
+
+    // An atomic conflict cannot contain both resolved and unresolved members.
+    for (fixture.plan.operations) |operation_item| {
+        try testing.expect(operation_item.resolution == .unresolved);
+    }
+    try testing.expectEqual(Outcome.active, state.outcome);
+    try testing.expectEqual(@as(?core.merge.Resolution, null), state.pending);
 }
 
 test "merge UI state: a ready conflict can be revised" {
@@ -475,7 +632,7 @@ test "merge UI state: a sequence custom input returns a status" {
     try testing.expectEqualStrings("The result is not valid Unity YAML.", state.status);
 }
 
-test "merge UI state: quoted flow punctuation applies" {
+test "merge UI state: quoted non-GUID reference remains unresolved" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
@@ -486,9 +643,10 @@ test "merge UI state: quoted flow punctuation applies" {
     try state.handle(.{ .edit_result = custom });
     try state.handle(.apply_result);
 
-    try testing.expectEqual(Outcome.ready, state.outcome);
-    try testing.expectEqualStrings("", state.status);
-    try testing.expect(std.mem.indexOf(u8, try core.merge.finish(arena, &fixture.plan), custom) != null);
+    try testing.expectEqual(Outcome.active, state.outcome);
+    try testing.expectEqual(@as(usize, 1), state.unresolvedCount());
+    try testing.expectEqualStrings("The result is not valid Unity YAML.", state.status);
+    try testing.expectError(error.InvalidResolution, core.merge.finish(arena, &fixture.plan));
 }
 
 test "merge UI state: quoted scalar punctuation applies" {

@@ -121,6 +121,212 @@ test "merge driver: preserves a leading BOM when theirs changes a direct-header 
     try runDriverCase(base, ours, theirs, expected, 0);
 }
 
+test "merge driver: keeps document headers in order" {
+    const base = "--- !u!114 &1\nMonoBehaviour:\n  m_Value: 1\n";
+    const theirs =
+        "--- !u!21 &2\nMaterial:\n  m_Name: Added\n" ++
+        "--- !u!114 &1\nMonoBehaviour:\n  m_Value: 2\n";
+    const partial =
+        "--- !u!21 &2\nMaterial:\n  m_Name: Added\n" ++
+        base;
+
+    try runDriverCase(base, "", theirs, partial, 1);
+}
+
+test "merge driver: covers standalone documents and source-only changes" {
+    const base =
+        "--- !u!114 &1\n" ++
+        "MonoBehaviour:\n" ++
+        "  m_Value: 1\n";
+    const ours =
+        "--- !u!114 &1\n" ++
+        "MonoBehaviour:\n" ++
+        "  m_Value: 2\n";
+    const theirs = base ++
+        "--- !u!21 &2\n" ++
+        "Material:\n" ++
+        "  m_Name: Added\n";
+    const expected = ours ++
+        "--- !u!21 &2\n" ++
+        "Material:\n" ++
+        "  m_Name: Added\n";
+
+    // A document outside a GameObject bundle must not disappear from a clean merge.
+    try runDriverCase(base, ours, theirs, expected, 0);
+    try runDriverCase(base, theirs, ours, expected, 0);
+
+    const stripped =
+        "--- !u!114 &1 stripped\n" ++
+        "MonoBehaviour:\n" ++
+        "  m_Value: 1\n";
+    const stripped_expected =
+        "--- !u!114 &1 stripped\n" ++
+        "MonoBehaviour:\n" ++
+        "  m_Value: 2\n";
+    // A header-only Theirs change must merge with an independent Ours field change.
+    try runDriverCase(base, ours, stripped, stripped_expected, 0);
+
+    const comment_base =
+        "--- !u!114 &1\n" ++
+        "MonoBehaviour:\n" ++
+        "  # Base comment.\n" ++
+        "  m_Value: 1\n";
+    const comment_ours =
+        "--- !u!114 &1\n" ++
+        "MonoBehaviour:\n" ++
+        "  # Base comment.\n" ++
+        "  m_Value: 2\n";
+    const comment_theirs =
+        "--- !u!114 &1\n" ++
+        "MonoBehaviour:\n" ++
+        "  # Theirs comment.\n" ++
+        "  m_Value: 1\n";
+    // An unmodeled source-only change must stop before the driver writes output.
+    try runDriverCase(comment_base, comment_ours, comment_theirs, comment_ours, 2);
+}
+
+test "merge driver: rejects a document deletion that drops ours source bytes" {
+    const base =
+        "--- !u!114 &1\n" ++
+        "MonoBehaviour:\n" ++
+        "  # Base comment.\n" ++
+        "  m_Value: 1\n";
+    const ours =
+        "--- !u!114 &1\n" ++
+        "MonoBehaviour:\n" ++
+        "  # Ours comment.\n" ++
+        "  m_Value: 1\n";
+
+    // Semantic equality does not make different Ours document bytes safe to delete.
+    try runDriverCase(base, ours, "", ours, 2);
+}
+
+test "merge driver: keeps ours source bytes for equal document additions" {
+    const ours =
+        "--- !u!114 &1\n" ++
+        "MonoBehaviour:\n" ++
+        "  # Ours comment.\n" ++
+        "  m_Value: 1\n";
+    const theirs =
+        "--- !u!114 &1\n" ++
+        "MonoBehaviour:\n" ++
+        "  # Theirs comment.\n" ++
+        "  m_Value: 1\n";
+
+    // The common decision selects Ours, so it does not discard Ours document bytes.
+    try runDriverCase("", ours, theirs, ours, 0);
+}
+
+test "merge driver: rejects sequence comments" {
+    const sequence_base =
+        "--- !u!1 &1\n" ++
+        "GameObject:\n" ++
+        "  m_Component:\n" ++
+        "  - component: {fileID: 4}\n" ++
+        "  # Base comment.\n" ++
+        "  - component: {fileID: 54}\n" ++
+        "  m_Name: Base\n" ++
+        "--- !u!4 &4\n" ++
+        "Transform:\n" ++
+        "  m_GameObject: {fileID: 1}\n" ++
+        "  m_Children: []\n" ++
+        "  m_Father: {fileID: 0}\n" ++
+        "--- !u!54 &54\n" ++
+        "Rigidbody:\n" ++
+        "  m_GameObject: {fileID: 1}\n" ++
+        "  m_Mass: 1\n";
+    const sequence_ours =
+        "--- !u!1 &1\n" ++
+        "GameObject:\n" ++
+        "  m_Component:\n" ++
+        "  - component: {fileID: 4}\n" ++
+        "  # Base comment.\n" ++
+        "  - component: {fileID: 54}\n" ++
+        "  m_Name: Ours\n" ++
+        "--- !u!4 &4\n" ++
+        "Transform:\n" ++
+        "  m_GameObject: {fileID: 1}\n" ++
+        "  m_Children: []\n" ++
+        "  m_Father: {fileID: 0}\n" ++
+        "--- !u!54 &54\n" ++
+        "Rigidbody:\n" ++
+        "  m_GameObject: {fileID: 1}\n" ++
+        "  m_Mass: 1\n";
+    const sequence_theirs =
+        "--- !u!1 &1\n" ++
+        "GameObject:\n" ++
+        "  m_Component:\n" ++
+        "  - component: {fileID: 4}\n" ++
+        "  # Theirs comment.\n" ++
+        "  - component: {fileID: 54}\n" ++
+        "  m_Name: Base\n" ++
+        "--- !u!4 &4\n" ++
+        "Transform:\n" ++
+        "  m_GameObject: {fileID: 1}\n" ++
+        "  m_Children: []\n" ++
+        "  m_Father: {fileID: 0}\n" ++
+        "--- !u!54 &54\n" ++
+        "Rigidbody:\n" ++
+        "  m_GameObject: {fileID: 1}\n" ++
+        "  m_Mass: 1\n";
+    // Known item identities do not make an unplanned comment safe.
+    try runDriverCase(sequence_base, sequence_ours, sequence_theirs, sequence_ours, 2);
+}
+
+test "merge driver: rejects map source order" {
+    const map_base =
+        "--- !u!114 &1\n" ++
+        "MonoBehaviour:\n" ++
+        "  m_Value: 1\n" ++
+        "  m_Left: left\n" ++
+        "  m_Right: right\n";
+    const map_ours =
+        "--- !u!114 &1\n" ++
+        "MonoBehaviour:\n" ++
+        "  m_Value: 2\n" ++
+        "  m_Left: left\n" ++
+        "  m_Right: right\n";
+    const map_theirs =
+        "--- !u!114 &1\n" ++
+        "MonoBehaviour:\n" ++
+        "  m_Right: right\n" ++
+        "  m_Left: left\n" ++
+        "  m_Value: 1\n";
+    // Semantic map equality does not preserve source order.
+    try runDriverCase(map_base, map_ours, map_theirs, map_ours, 2);
+}
+
+test "merge driver: rejects line ending changes" {
+    const base_lf = "--- !u!114 &1\nMonoBehaviour:\n  m_Left: 1\n  m_Right: 1\n";
+    const ours_lf = "--- !u!114 &1\nMonoBehaviour:\n  m_Left: 2\n  m_Right: 1\n";
+    const theirs_crlf = "--- !u!114 &1\r\nMonoBehaviour:\r\n  m_Left: 1\r\n  m_Right: 1\r\n";
+    // Parsed equality does not preserve line endings.
+    try runDriverCase(base_lf, ours_lf, theirs_crlf, ours_lf, 2);
+}
+
+test "merge driver: preserves a commented document" {
+    const base =
+        "--- !u!114 &1\n" ++
+        "MonoBehaviour:\n" ++
+        "  m_Value: 1\n";
+    const ours =
+        "--- !u!114 &1\n" ++
+        "MonoBehaviour:\n" ++
+        "  m_Value: 2\n";
+    const theirs_commented_document = base ++
+        "--- !u!21 &2\n" ++
+        "Material:\n" ++
+        "  # Keep this comment.\n" ++
+        "  m_Name: Added\n";
+    const expected_commented_document = ours ++
+        "--- !u!21 &2\n" ++
+        "Material:\n" ++
+        "  # Keep this comment.\n" ++
+        "  m_Name: Added\n";
+    // A whole-document operation carries its comment bytes.
+    try runDriverCase(base, ours, theirs_commented_document, expected_commented_document, 0);
+}
+
 test "merge driver: keeps ours unchanged for malformed or unsupported input" {
     const valid = "--- !u!114 &1\nMonoBehaviour:\n  m_Value: 1\n";
     // A misleading extension must not let non-Unity content reach the merge engine.
@@ -130,6 +336,20 @@ test "merge driver: keeps ours unchanged for malformed or unsupported input" {
     const base = "--- !u!114 &1\nMonoBehaviour:\n  m_Unknown:\n  - 1\n  - 2\n";
     const ours = "--- !u!114 &1\nMonoBehaviour:\n  m_Unknown:\n  - 1\n  - 3\n";
     try runDriverCase(base, ours, base, ours, 2);
+}
+
+test "merge driver: rejects malformed Unity document structure without writing" {
+    const base = "--- !u!114 &1\nMonoBehaviour:\n  m_Value: 1\n";
+    const theirs = "--- !u!114 &1\nMonoBehaviour:\n  m_Value: 3\n";
+    const malformed = [_][]const u8{
+        "--- !u!114 &1\nMonoBehaviour:\n  - rogue\n",
+        "--- !u!114 &1\n",
+        "rogue: value\n--- !u!114 &1\nMonoBehaviour:\n  m_Value: 2\n",
+        "--- !u!114 &1\nMonoBehaviour:\n  m_Value: 2\n  m_Value: duplicate\n",
+    };
+    for (malformed) |ours| {
+        try runDriverCase(base, ours, theirs, ours, 2);
+    }
 }
 
 test "merge driver: keeps ours unchanged when an input cannot be read" {

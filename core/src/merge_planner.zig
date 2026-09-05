@@ -78,6 +78,15 @@ pub fn build(
     try validateMergeSide(arena, ours);
     try validateMergeSide(arena, theirs);
 
+    return buildSemantic(arena, base, ours, theirs);
+}
+
+pub fn buildSemantic(
+    arena: std.mem.Allocator,
+    base: source.ParsedFile,
+    ours: source.ParsedFile,
+    theirs: source.ParsedFile,
+) merge_model.Error!merge_model.MergePlan {
     var operations: std.ArrayList(merge_model.Operation) = .empty;
     var atomic_operations: std.ArrayList(merge_model.AtomicOperation) = .empty;
     const component_owners = ComponentOwnerIndexes{
@@ -97,6 +106,16 @@ pub fn build(
     for (base.documents) |base_document| {
         const ours_document = findDocument(ours.documents, base_document.class_id, base_document.file_id) orelse continue;
         const theirs_document = findDocument(theirs.documents, base_document.class_id, base_document.file_id) orelse continue;
+        try collectDocumentHeader(
+            arena,
+            &operations,
+            &atomic_operations,
+            .{ .class_id = base_document.class_id, .file_id = base_document.file_id },
+            ours_document.type_name,
+            base,
+            ours,
+            theirs,
+        );
         try collectMapFields(
             arena,
             &operations,
@@ -132,6 +151,14 @@ pub fn build(
         indexes,
     );
     try attachPrefabOverrides(arena, &operations, &atomic_operations);
+    try collectRemainingDocuments(
+        arena,
+        &operations,
+        &atomic_operations,
+        base,
+        ours,
+        theirs,
+    );
 
     return .{
         .base = base,
@@ -140,6 +167,114 @@ pub fn build(
         .operations = try operations.toOwnedSlice(arena),
         .atomic_operations = try atomic_operations.toOwnedSlice(arena),
     };
+}
+
+fn collectDocumentHeader(
+    arena: std.mem.Allocator,
+    operations: *std.ArrayList(merge_model.Operation),
+    atomic_operations: *std.ArrayList(merge_model.AtomicOperation),
+    document_id: merge_model.DocumentId,
+    hierarchy_path: []const u8,
+    base: source.ParsedFile,
+    ours: source.ParsedFile,
+    theirs: source.ParsedFile,
+) merge_model.Error!void {
+    const values = merge_model.Values{
+        .base = headerValue(base, document_id),
+        .ours = headerValue(ours, document_id),
+        .theirs = headerValue(theirs, document_id),
+    };
+    if (equalOptionalBytes(values.base, values.ours) and
+        equalOptionalBytes(values.base, values.theirs)) return;
+    const decision = decideBytes(values.base, values.ours, values.theirs);
+    const operation_id: merge_model.OperationId = @intCast(operations.items.len);
+    const atomic_id: merge_model.AtomicId = @intCast(atomic_operations.items.len);
+    try operations.append(arena, .{
+        .id = operation_id,
+        .atomic_id = atomic_id,
+        .kind = .field,
+        .identity = .{ .document = document_id, .property_path = "<header>" },
+        .hierarchy_path = hierarchy_path,
+        .property_path = "<header>",
+        .values = values,
+        .resolution = switch (decision) {
+            .ours, .common => .{ .take = .ours },
+            .theirs => .{ .take = .theirs },
+            .conflict => .unresolved,
+        },
+    });
+    const ids = try arena.alloc(merge_model.OperationId, 1);
+    ids[0] = operation_id;
+    try atomic_operations.append(arena, .{
+        .id = atomic_id,
+        .kind = .field,
+        .operation_ids = ids,
+    });
+}
+
+fn collectRemainingDocuments(
+    arena: std.mem.Allocator,
+    operations: *std.ArrayList(merge_model.Operation),
+    atomic_operations: *std.ArrayList(merge_model.AtomicOperation),
+    base: source.ParsedFile,
+    ours: source.ParsedFile,
+    theirs: source.ParsedFile,
+) merge_model.Error!void {
+    var document_ids: std.ArrayList(merge_model.DocumentId) = .empty;
+    inline for (.{ base.documents, ours.documents, theirs.documents }) |documents| {
+        for (documents) |document| {
+            try appendUniqueDocumentId(arena, &document_ids, merge_identity.documentId(document));
+        }
+    }
+    for (document_ids.items) |document_id| {
+        const base_document = findDocumentPointer(base.documents, document_id);
+        const ours_document = findDocumentPointer(ours.documents, document_id);
+        const theirs_document = findDocumentPointer(theirs.documents, document_id);
+        if ((base_document != null) == (ours_document != null) and
+            (base_document != null) == (theirs_document != null)) continue;
+        if (hasWholeDocumentOperation(operations.items, document_id)) continue;
+
+        const decision = decideDocument(base_document, ours_document, theirs_document);
+        const operation_id: merge_model.OperationId = @intCast(operations.items.len);
+        const atomic_id: merge_model.AtomicId = @intCast(atomic_operations.items.len);
+        try operations.append(arena, .{
+            .id = operation_id,
+            .atomic_id = atomic_id,
+            .kind = .document,
+            .identity = .{ .document = document_id, .property_path = "" },
+            .hierarchy_path = documentTypeName(base, ours, theirs, document_id),
+            .property_path = "",
+            .values = .{
+                .base = documentValue(base, base_document),
+                .ours = documentValue(ours, ours_document),
+                .theirs = documentValue(theirs, theirs_document),
+            },
+            .resolution = switch (decision) {
+                .ours, .common => if (ours_document == null) .remove else .{ .take = .ours },
+                .theirs => if (theirs_document == null) .remove else .{ .take = .theirs },
+                .conflict => .unresolved,
+            },
+        });
+        const ids = try arena.alloc(merge_model.OperationId, 1);
+        ids[0] = operation_id;
+        try atomic_operations.append(arena, .{
+            .id = atomic_id,
+            .kind = .document,
+            .operation_ids = ids,
+        });
+    }
+}
+
+fn hasWholeDocumentOperation(
+    operations: []const merge_model.Operation,
+    document_id: merge_model.DocumentId,
+) bool {
+    for (operations) |operation| {
+        if ((operation.kind == .component or operation.kind == .game_object) and
+            operation.property_path.len == 0 and
+            std.meta.eql(operation.identity.document, document_id)) return true;
+    }
+    return false;
 }
 
 fn structuralOperationKind(
@@ -166,6 +301,7 @@ fn attachPrefabOverrides(
     var property_atomics: std.ArrayList(PrefabAtomic) = .empty;
     for (operations.items, 0..) |operation, operation_index| {
         if (operation.kind != .prefab_override) continue;
+        if (operation.item_path != null) continue;
         const override_kind = operation.identity.override_kind orelse return error.InvalidMerge;
         const atomic_id = if (structuralOperationKind(override_kind)) |structural_kind| blk: {
             const object = overrideObject(operation, override_kind) orelse
@@ -1107,6 +1243,20 @@ fn collectField(
 
     if (hasMap(nodes)) {
         if (hasNonMap(nodes)) return error.UnsupportedStructure;
+        if (nodes.base == null or nodes.ours == null or nodes.theirs == null) {
+            return collectValueField(
+                arena,
+                operations,
+                atomic_operations,
+                document_id,
+                hierarchy_path,
+                property_path,
+                nodes,
+                base_file,
+                ours_file,
+                theirs_file,
+            );
+        }
         return collectMapFields(
             arena,
             operations,
@@ -1122,6 +1272,21 @@ fn collectField(
         );
     }
     if (hasSequence(nodes)) {
+        if (hasNonSequence(nodes)) return error.UnsupportedStructure;
+        if (nodes.base == null or nodes.ours == null or nodes.theirs == null) {
+            return collectValueField(
+                arena,
+                operations,
+                atomic_operations,
+                document_id,
+                hierarchy_path,
+                property_path,
+                nodes,
+                base_file,
+                ours_file,
+                theirs_file,
+            );
+        }
         if (equalOptional(nodes.base, nodes.ours) and equalOptional(nodes.base, nodes.theirs)) return;
         const sequence_kind = merge_identity.sequenceKind(document_id.class_id, property_path) orelse
             return error.UnsupportedStructure;
@@ -1140,7 +1305,34 @@ fn collectField(
             component_owners,
         );
     }
-    if (equalOptional(nodes.base, nodes.ours) and equalOptional(nodes.base, nodes.theirs)) return;
+    return collectValueField(
+        arena,
+        operations,
+        atomic_operations,
+        document_id,
+        hierarchy_path,
+        property_path,
+        nodes,
+        base_file,
+        ours_file,
+        theirs_file,
+    );
+}
+
+fn collectValueField(
+    arena: std.mem.Allocator,
+    operations: *std.ArrayList(merge_model.Operation),
+    atomic_operations: *std.ArrayList(merge_model.AtomicOperation),
+    document_id: merge_model.DocumentId,
+    hierarchy_path: []const u8,
+    property_path: []const u8,
+    nodes: DocumentNodes,
+    base_file: source.ParsedFile,
+    ours_file: source.ParsedFile,
+    theirs_file: source.ParsedFile,
+) merge_model.Error!void {
+    if (equalSourceValue(base_file, nodes.base, ours_file, nodes.ours) and
+        equalSourceValue(base_file, nodes.base, theirs_file, nodes.theirs)) return;
 
     const decision = decide(nodes.base, nodes.ours, nodes.theirs);
     const resolution: merge_model.Resolution = switch (decision) {
@@ -1291,28 +1483,50 @@ fn collectSequence(
         }
 
         if (base_item != null and ours_item != null and theirs_item != null and
-            (!model.Node.eql(base_item.?.node, ours_item.?.node) or
-                !model.Node.eql(base_item.?.node, theirs_item.?.node)))
+            (!equalSequenceItemSource(base_file, base_item.?, ours_file, ours_item.?) or
+                !equalSequenceItemSource(base_file, base_item.?, theirs_file, theirs_item.?)))
         {
             const content_decision = decide(base_item.?.node, ours_item.?.node, theirs_item.?.node);
-            if (content_decision == .conflict) sequence_has_conflict = true;
-            try appendSequenceOperation(
-                arena,
-                operations,
-                sequence_atomic_id,
-                .sequence_content,
-                document_id,
-                hierarchy_path,
-                property_path,
-                base_file,
-                ours_file,
-                theirs_file,
-                base_item,
-                ours_item,
-                theirs_item,
-                resolutionForDecision(content_decision, ours_item, theirs_item),
-            );
-            try sequence_operation_ids.append(arena, @intCast(operations.items.len - 1));
+            if (kind == .prefab_properties) {
+                try collectPrefabItemMapFields(
+                    arena,
+                    operations,
+                    atomic_operations,
+                    document_id,
+                    hierarchy_path,
+                    property_path,
+                    id,
+                    firstSequenceItem(base_item, ours_item, theirs_item).identity,
+                    "",
+                    .{
+                        .base = base_item.?.node,
+                        .ours = ours_item.?.node,
+                        .theirs = theirs_item.?.node,
+                    },
+                    base_file,
+                    ours_file,
+                    theirs_file,
+                );
+            } else {
+                if (content_decision == .conflict) sequence_has_conflict = true;
+                try appendSequenceOperation(
+                    arena,
+                    operations,
+                    sequence_atomic_id,
+                    .sequence_content,
+                    document_id,
+                    hierarchy_path,
+                    property_path,
+                    base_file,
+                    ours_file,
+                    theirs_file,
+                    base_item,
+                    ours_item,
+                    theirs_item,
+                    resolutionForDecision(content_decision, ours_item, theirs_item),
+                );
+                try sequence_operation_ids.append(arena, @intCast(operations.items.len - 1));
+            }
             has_sequence_item_change = true;
             selected = selectedItem(base_item, ours_item, theirs_item, content_decision);
         } else if (base_item == null and ours_item != null and theirs_item != null and
@@ -1420,6 +1634,194 @@ fn collectSequence(
         .operation_ids = operation_ids,
         .dependencies = try component_atomic_ids.toOwnedSlice(arena),
     };
+}
+
+fn equalSequenceItemSource(
+    a_file: source.ParsedFile,
+    a: SequenceItem,
+    b_file: source.ParsedFile,
+    b: SequenceItem,
+) bool {
+    const a_bytes = a_file.sequenceItemBytes(a.node) orelse return false;
+    const b_bytes = b_file.sequenceItemBytes(b.node) orelse return false;
+    return std.mem.eql(u8, a_bytes, b_bytes);
+}
+
+fn collectPrefabItemMapFields(
+    arena: std.mem.Allocator,
+    operations: *std.ArrayList(merge_model.Operation),
+    atomic_operations: *std.ArrayList(merge_model.AtomicOperation),
+    document_id: merge_model.DocumentId,
+    hierarchy_path: []const u8,
+    sequence_path: []const u8,
+    item_id: []const u8,
+    item_identity: merge_identity.SequenceItemId,
+    parent_path: []const u8,
+    nodes: DocumentNodes,
+    base_file: source.ParsedFile,
+    ours_file: source.ParsedFile,
+    theirs_file: source.ParsedFile,
+) merge_model.Error!void {
+    const base_entries = mapEntries(nodes.base);
+    const ours_entries = mapEntries(nodes.ours);
+    const theirs_entries = mapEntries(nodes.theirs);
+    for (base_entries) |entry| {
+        try collectPrefabItemField(
+            arena,
+            operations,
+            atomic_operations,
+            document_id,
+            hierarchy_path,
+            sequence_path,
+            item_id,
+            item_identity,
+            parent_path,
+            entry.key,
+            .{
+                .base = entry.value,
+                .ours = findValueConst(ours_entries, entry.key),
+                .theirs = findValueConst(theirs_entries, entry.key),
+            },
+            base_file,
+            ours_file,
+            theirs_file,
+        );
+    }
+    for (ours_entries) |entry| {
+        if (findValueConst(base_entries, entry.key) != null) continue;
+        try collectPrefabItemField(
+            arena,
+            operations,
+            atomic_operations,
+            document_id,
+            hierarchy_path,
+            sequence_path,
+            item_id,
+            item_identity,
+            parent_path,
+            entry.key,
+            .{
+                .base = null,
+                .ours = entry.value,
+                .theirs = findValueConst(theirs_entries, entry.key),
+            },
+            base_file,
+            ours_file,
+            theirs_file,
+        );
+    }
+    for (theirs_entries) |entry| {
+        if (findValueConst(base_entries, entry.key) != null or
+            findValueConst(ours_entries, entry.key) != null) continue;
+        try collectPrefabItemField(
+            arena,
+            operations,
+            atomic_operations,
+            document_id,
+            hierarchy_path,
+            sequence_path,
+            item_id,
+            item_identity,
+            parent_path,
+            entry.key,
+            .{ .base = null, .ours = null, .theirs = entry.value },
+            base_file,
+            ours_file,
+            theirs_file,
+        );
+    }
+}
+
+fn collectPrefabItemField(
+    arena: std.mem.Allocator,
+    operations: *std.ArrayList(merge_model.Operation),
+    atomic_operations: *std.ArrayList(merge_model.AtomicOperation),
+    document_id: merge_model.DocumentId,
+    hierarchy_path: []const u8,
+    sequence_path: []const u8,
+    item_id: []const u8,
+    item_identity: merge_identity.SequenceItemId,
+    parent_path: []const u8,
+    key: []const u8,
+    nodes: DocumentNodes,
+    base_file: source.ParsedFile,
+    ours_file: source.ParsedFile,
+    theirs_file: source.ParsedFile,
+) merge_model.Error!void {
+    const item_path = if (parent_path.len == 0)
+        try arena.dupe(u8, key)
+    else
+        try std.fmt.allocPrint(arena, "{s}.{s}", .{ parent_path, key });
+    if (hasMap(nodes)) {
+        if (hasNonMap(nodes)) return error.UnsupportedStructure;
+        if (nodes.base != null and nodes.ours != null and nodes.theirs != null) {
+            return collectPrefabItemMapFields(
+                arena,
+                operations,
+                atomic_operations,
+                document_id,
+                hierarchy_path,
+                sequence_path,
+                item_id,
+                item_identity,
+                item_path,
+                nodes,
+                base_file,
+                ours_file,
+                theirs_file,
+            );
+        }
+    }
+    if (hasSequence(nodes)) {
+        if (hasNonSequence(nodes)) return error.UnsupportedStructure;
+        if (equalSourceValue(base_file, nodes.base, ours_file, nodes.ours) and
+            equalSourceValue(base_file, nodes.base, theirs_file, nodes.theirs)) return;
+        return error.UnsupportedStructure;
+    }
+    if (equalSourceValue(base_file, nodes.base, ours_file, nodes.ours) and
+        equalSourceValue(base_file, nodes.base, theirs_file, nodes.theirs)) return;
+
+    const values = merge_model.Values{
+        .base = sideValue(base_file, nodes.base),
+        .ours = sideValue(ours_file, nodes.ours),
+        .theirs = sideValue(theirs_file, nodes.theirs),
+    };
+    const semantic_decision = decide(nodes.base, nodes.ours, nodes.theirs);
+    const decision = if (equalOptional(nodes.base, nodes.ours) and
+        equalOptional(nodes.base, nodes.theirs))
+        decideBytes(values.base, values.ours, values.theirs)
+    else
+        semantic_decision;
+    const operation_id: merge_model.OperationId = @intCast(operations.items.len);
+    const atomic_id: merge_model.AtomicId = @intCast(atomic_operations.items.len);
+    try operations.append(arena, .{
+        .id = operation_id,
+        .atomic_id = atomic_id,
+        .kind = .prefab_override,
+        .identity = .{
+            .document = document_id,
+            .property_path = item_identity.property_path orelse "",
+            .item_ref = item_identity.target,
+            .override_kind = item_identity.override_kind,
+        },
+        .hierarchy_path = hierarchy_path,
+        .property_path = sequence_path,
+        .item_id = item_id,
+        .item_path = item_path,
+        .values = values,
+        .resolution = switch (decision) {
+            .ours, .common => if (nodes.ours == null) .remove else .{ .take = .ours },
+            .theirs => if (nodes.theirs == null) .remove else .{ .take = .theirs },
+            .conflict => .unresolved,
+        },
+    });
+    const ids = try arena.alloc(merge_model.OperationId, 1);
+    ids[0] = operation_id;
+    try atomic_operations.append(arena, .{
+        .id = atomic_id,
+        .kind = .prefab_override,
+        .operation_ids = ids,
+    });
 }
 
 fn isPrefabSequenceKind(kind: merge_identity.SequenceKind) bool {
@@ -1978,6 +2380,7 @@ fn decideDocument(
 fn equalOptionalDocuments(a: ?*const model.Document, b: ?*const model.Document) bool {
     if (a == null or b == null) return a == null and b == null;
     return a.?.class_id == b.?.class_id and a.?.file_id == b.?.file_id and
+        std.mem.eql(u8, a.?.type_name, b.?.type_name) and a.?.stripped == b.?.stripped and
         model.Node.eql(a.?.body, b.?.body);
 }
 
@@ -1990,6 +2393,15 @@ fn documentValue(file: source.ParsedFile, document: ?*const model.Document) ?mer
     const present = document orelse return null;
     for (file.documents, file.document_spans) |*candidate, span| {
         if (candidate == present) return .{ .node = present.body, .bytes = span.whole.bytes(file.bytes), .span = span.whole };
+    }
+    return null;
+}
+
+fn headerValue(file: source.ParsedFile, id: merge_model.DocumentId) ?merge_model.SideValue {
+    for (file.documents, file.document_spans) |document, span| {
+        if (document.class_id == id.class_id and document.file_id == id.file_id) {
+            return .{ .node = null, .bytes = span.header.bytes(file.bytes), .span = span.header };
+        }
     }
     return null;
 }
@@ -2113,6 +2525,13 @@ fn hasSequence(nodes: DocumentNodes) bool {
     return false;
 }
 
+fn hasNonSequence(nodes: DocumentNodes) bool {
+    inline for (.{ nodes.base, nodes.ours, nodes.theirs }) |node| {
+        if (node) |present| if (present.* != .seq) return true;
+    }
+    return false;
+}
+
 fn sideValue(file: source.ParsedFile, node: ?*const model.Node) ?merge_model.SideValue {
     const present = node orelse return null;
     return .{
@@ -2125,6 +2544,35 @@ fn sideValue(file: source.ParsedFile, node: ?*const model.Node) ?merge_model.Sid
 fn equalOptional(a: ?*const model.Node, b: ?*const model.Node) bool {
     if (a == null or b == null) return a == null and b == null;
     return model.Node.eql(a.?, b.?);
+}
+
+fn equalSourceValue(
+    a_file: source.ParsedFile,
+    a: ?*const model.Node,
+    b_file: source.ParsedFile,
+    b: ?*const model.Node,
+) bool {
+    if (!equalOptional(a, b)) return false;
+    if (a == null) return true;
+    const a_bytes = a_file.nodeBytes(a.?) orelse return false;
+    const b_bytes = b_file.nodeBytes(b.?) orelse return false;
+    return std.mem.eql(u8, a_bytes, b_bytes);
+}
+
+fn equalOptionalBytes(a: ?merge_model.SideValue, b: ?merge_model.SideValue) bool {
+    if (a == null or b == null) return a == null and b == null;
+    return std.mem.eql(u8, a.?.bytes, b.?.bytes);
+}
+
+fn decideBytes(
+    base: ?merge_model.SideValue,
+    ours: ?merge_model.SideValue,
+    theirs: ?merge_model.SideValue,
+) Decision {
+    if (equalOptionalBytes(ours, base)) return .theirs;
+    if (equalOptionalBytes(theirs, base)) return .ours;
+    if (equalOptionalBytes(ours, theirs)) return .common;
+    return .conflict;
 }
 
 fn decide(base: ?*const model.Node, ours: ?*const model.Node, theirs: ?*const model.Node) Decision {
@@ -2195,9 +2643,9 @@ test "merge planner: compares the complete object reference" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
-    const base = try yamlWithValue(arena, "{fileID: 7, guid: aaa, type: 3}");
-    const ours = try yamlWithValue(arena, "{fileID: 7, guid: bbb, type: 3}");
-    const theirs = try yamlWithValue(arena, "{fileID: 7, guid: ccc, type: 3}");
+    const base = try yamlWithValue(arena, "{fileID: 7, guid: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, type: 3}");
+    const ours = try yamlWithValue(arena, "{fileID: 7, guid: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb, type: 3}");
+    const theirs = try yamlWithValue(arena, "{fileID: 7, guid: cccccccccccccccccccccccccccccccc, type: 3}");
     const built = try @import("merge.zig").build(arena, base, ours, theirs);
     try testing.expectEqual(@as(usize, 1), built.plan.unresolvedCount());
 }
@@ -2411,7 +2859,7 @@ test "merge planner: composes component choices with an independent order choice
     try testing.expect(std.mem.indexOf(u8, reversed_finished, "--- !u!54 &54") == null);
 }
 
-test "merge planner: keeps a component gap when the next component is deleted" {
+test "merge facade: rejects an uncovered component gap" {
     const base =
         "--- !u!1 &1\nGameObject:\n  m_Component:\n  - component: {fileID: 4}\n" ++
         "  - component: {fileID: 54}\n  # Keep with component 54.\n  - component: {fileID: 65}\n" ++
@@ -2423,17 +2871,14 @@ test "merge planner: keeps a component gap when the next component is deleted" {
         "  - component: {fileID: 54}\n" ++
         "--- !u!4 &4\nTransform:\n  m_GameObject: {fileID: 1}\n  m_Children: []\n  m_Father: {fileID: 0}\n" ++
         "--- !u!54 &54\nRigidbody:\n  m_GameObject: {fileID: 1}\n  m_Mass: 1\n";
-    const expected =
-        "--- !u!1 &1\nGameObject:\n  m_Component:\n  - component: {fileID: 4}\n" ++
-        "  - component: {fileID: 54}\n  # Keep with component 54.\n" ++
-        "--- !u!4 &4\nTransform:\n  m_GameObject: {fileID: 1}\n  m_Children: []\n  m_Father: {fileID: 0}\n" ++
-        "--- !u!54 &54\nRigidbody:\n  m_GameObject: {fileID: 1}\n  m_Mass: 1\n";
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
 
-    const built = try @import("merge.zig").build(arena_state.allocator(), base, base, theirs);
-
-    try testing.expectEqualStrings(expected, built.partial);
+    // The semantic deletion does not explain the adjacent comment deletion.
+    try testing.expectError(
+        error.UnsupportedStructure,
+        @import("merge.zig").build(arena_state.allocator(), base, base, theirs),
+    );
 }
 
 test "merge planner: rejects a component reference without its document" {
@@ -2838,6 +3283,54 @@ test "merge planner: keeps an unrelated item resolved during a Prefab item confl
     try testing.expect(findPrefabPropertyOperation(&built.plan, "m_StaticEditorFlags").?.resolution != .unresolved);
     try testing.expectEqual(@as(usize, 1), built.plan.unresolvedCount());
     try testing.expectEqualStrings(expected, built.partial);
+}
+
+test "merge planner: merges fields inside an identified Prefab item" {
+    const base =
+        "--- !u!1001 &100100000\n" ++
+        "PrefabInstance:\n" ++
+        "  m_Modification:\n" ++
+        "    m_Modifications:\n" ++
+        "    - target: {fileID: 100000, guid: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, type: 3}\n" ++
+        "      propertyPath: m_Name\n" ++
+        "      value: Base\n" ++
+        "      objectReference: {fileID: 0}\n" ++
+        "  m_SourcePrefab: {fileID: 100100000, guid: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, type: 3}\n";
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const ours = try std.mem.replaceOwned(u8, arena, base, "value: Base", "value: Ours");
+    const theirs = try std.mem.replaceOwned(
+        u8,
+        arena,
+        base,
+        "objectReference: {fileID: 0}",
+        "objectReference: {fileID: 7, guid: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb, type: 3}",
+    );
+    const expected = try std.mem.replaceOwned(
+        u8,
+        arena,
+        ours,
+        "objectReference: {fileID: 0}",
+        "objectReference: {fileID: 7, guid: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb, type: 3}",
+    );
+
+    const independent = try @import("merge.zig").build(arena, base, ours, theirs);
+    try testing.expectEqual(@as(usize, 0), independent.plan.unresolvedCount());
+    try testing.expectEqualStrings(expected, independent.partial);
+
+    const conflicting_theirs = try std.mem.replaceOwned(u8, arena, base, "value: Base", "value: Theirs");
+    var conflict = try @import("merge.zig").build(arena, base, ours, conflicting_theirs);
+    try testing.expectEqual(@as(usize, 1), conflict.plan.unresolvedCount());
+    const operation = for (conflict.plan.operations) |*candidate| {
+        if (candidate.kind == .prefab_override and
+            std.mem.eql(u8, candidate.identity.property_path, "m_Name") and
+            candidate.values.ours != null and candidate.values.ours.?.node != null and
+            candidate.values.ours.?.node.?.* == .scalar) break candidate;
+    } else return error.TestUnexpectedResult;
+    try @import("merge.zig").resolve(arena, &conflict.plan, operation.id, .{ .custom = "Custom" });
+    const custom_expected = try std.mem.replaceOwned(u8, arena, base, "value: Base", "value: Custom");
+    try testing.expectEqualStrings(custom_expected, try @import("merge.zig").finish(arena, &conflict.plan));
 }
 
 test "merge planner: keeps an Ours gap when Prefab content comes from Theirs" {

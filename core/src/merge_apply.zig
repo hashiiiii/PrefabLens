@@ -30,6 +30,9 @@ pub fn applyPatches(
     std.mem.sort(Patch, patches, {}, struct {
         fn lessThan(_: void, a: Patch, b: Patch) bool {
             if (a.span.start != b.span.start) return a.span.start > b.span.start;
+            const same_offset_inserts = a.span.start == a.span.end and
+                b.span.start == b.span.end;
+            if (same_offset_inserts and a.order != b.order) return a.order > b.order;
             if (a.atomic_id != b.atomic_id) return a.atomic_id > b.atomic_id;
             return a.order > b.order;
         }
@@ -58,7 +61,7 @@ pub fn applyResolved(
         dependency_path.clearRetainingCapacity();
         if (!try atomicIsReady(arena, plan, atomic, &dependency_path)) {
             if (require_all) return error.InvalidResolution;
-            if (atomic.kind == .component or atomic.kind == .game_object) {
+            if (atomic.kind == .document or atomic.kind == .component or atomic.kind == .game_object) {
                 for (atomic.operation_ids) |operation_id| {
                     const stored = merge_model.operationByIdConst(plan, operation_id) orelse return error.InvalidMerge;
                     var operation = stored.*;
@@ -127,15 +130,14 @@ fn appendPatch(
     if (isComponentSequenceOrder(plan, operation) or
         isHierarchySequenceOrder(plan, operation) or
         isPrefabSequenceOrder(operation)) return;
-    if (operation.kind == .component or operation.kind == .game_object) {
+    if (operation.kind == .document or operation.kind == .component or operation.kind == .game_object) {
         return appendDocumentPatch(arena, patches, plan, operation);
     }
     if (operation.resolution == .remove) {
         const ours = operation.values.ours orelse return;
         const node = ours.node orelse return error.InvalidMerge;
-        const entry = plan.ours.entry_spans.get(node) orelse return error.UnsupportedStructure;
         return patches.append(arena, .{
-            .span = entry.whole,
+            .span = completeEntrySpan(plan.ours, node) orelse return error.UnsupportedStructure,
             .replacement = "",
             .atomic_id = operation.atomic_id,
             .order = operation.id,
@@ -151,6 +153,25 @@ fn appendPatch(
         },
     };
     if (operation.values.ours) |ours| {
+        if (ours.node) |ours_node| {
+            if (ours_node.* == .map or ours_node.* == .seq) {
+                const selected = selectedValue(operation) orelse return error.InvalidResolution;
+                const selected_node = selected.value.node orelse return error.InvalidMerge;
+                const selected_file = fileForSide(plan, selected.side);
+                const ours_span = completeEntrySpan(plan.ours, ours_node) orelse
+                    return error.UnsupportedStructure;
+                const selected_span = completeEntrySpan(selected_file, selected_node) orelse
+                    return error.UnsupportedStructure;
+                const selected_bytes = selected_span.bytes(selected_file.bytes);
+                if (std.mem.eql(u8, ours_span.bytes(plan.ours.bytes), selected_bytes)) return;
+                return patches.append(arena, .{
+                    .span = ours_span,
+                    .replacement = selected_bytes,
+                    .atomic_id = operation.atomic_id,
+                    .order = operation.id,
+                });
+            }
+        }
         const span = ours.span orelse return error.UnsupportedStructure;
         if (std.mem.eql(u8, span.bytes(plan.ours.bytes), replacement)) return;
         return patches.append(arena, .{
@@ -166,7 +187,10 @@ fn appendPatch(
     const template_file = fileForSide(plan, template.side);
     const entry = template_file.entry_spans.get(node) orelse return error.UnsupportedStructure;
     const inserted = switch (operation.resolution) {
-        .take => entry.whole.bytes(template_file.bytes),
+        .take => if (node.* == .map or node.* == .seq)
+            (completeEntrySpan(template_file, node) orelse return error.UnsupportedStructure).bytes(template_file.bytes)
+        else
+            entry.whole.bytes(template_file.bytes),
         .custom => try entryWithValue(arena, template_file, entry, template.value, replacement),
         .unresolved, .remove => return error.InvalidResolution,
     };
@@ -177,6 +201,15 @@ fn appendPatch(
         .atomic_id = operation.atomic_id,
         .order = operation.id,
     });
+}
+
+fn completeEntrySpan(file: source.ParsedFile, node: *const model.Node) ?source.Span {
+    const entry = file.entry_spans.get(node) orelse return null;
+    const node_span = file.node_spans.get(node) orelse return entry.whole;
+    return .{
+        .start = @min(entry.whole.start, node_span.start),
+        .end = @max(entry.whole.end, node_span.end),
+    };
 }
 
 fn isComponentSequenceOrder(
@@ -478,6 +511,7 @@ fn appendComposedPrefabSequencePatch(
     var choices: std.ArrayList(PrefabChoice) = .empty;
     for (plan.operations) |*operation| {
         if (operation.kind != .prefab_override or
+            operation.item_path != null or
             operation.identity.document.class_id != order_operation.identity.document.class_id or
             operation.identity.document.file_id != order_operation.identity.document.file_id or
             !std.mem.eql(u8, operation.property_path, order_operation.property_path)) continue;
@@ -599,6 +633,7 @@ fn prefabOperationId(
     operation: *const merge_model.Operation,
     kind: merge_identity.SequenceKind,
 ) merge_model.Error![]const u8 {
+    if (operation.item_id) |item_id| return item_id;
     for ([_]?merge_model.SideValue{
         operation.values.base,
         operation.values.ours,
@@ -683,8 +718,12 @@ fn renderPrefabSequence(
         const selected = try prefabItem(arena, plan, operation, choices, id, kind) orelse
             return error.UnsupportedStructure;
         if (selected.side == .ours) {
-            try output.appendSlice(arena, selected.value.bytes);
+            try output.appendSlice(
+                arena,
+                try applyPrefabItemFields(arena, plan, operation, id, selected),
+            );
         } else {
+            if (hasPrefabItemFields(plan, operation, id)) return error.UnsupportedStructure;
             try output.appendSlice(arena, try merge_planner.reindentSequenceItem(
                 arena,
                 selected.value.bytes,
@@ -697,6 +736,200 @@ fn renderPrefabSequence(
         try appendOursPrefabGap(arena, &output, plan.ours, ours_sequence, id, kind);
     }
     return output.toOwnedSlice(arena);
+}
+
+fn hasPrefabItemFields(
+    plan: *const merge_model.MergePlan,
+    order_operation: *const merge_model.Operation,
+    item_id: []const u8,
+) bool {
+    for (plan.operations) |field| {
+        if (field.kind == .prefab_override and
+            field.item_path != null and
+            field.item_id != null and
+            std.meta.eql(field.identity.document, order_operation.identity.document) and
+            std.mem.eql(u8, field.property_path, order_operation.property_path) and
+            std.mem.eql(u8, field.item_id.?, item_id)) return true;
+    }
+    return false;
+}
+
+fn applyPrefabItemFields(
+    arena: std.mem.Allocator,
+    plan: *const merge_model.MergePlan,
+    order_operation: *const merge_model.Operation,
+    item_id: []const u8,
+    selected_item: SelectedValue,
+) merge_model.Error![]const u8 {
+    const item_span = selected_item.value.span orelse return error.UnsupportedStructure;
+    var patches: std.ArrayList(Patch) = .empty;
+    for (plan.operations) |*field| {
+        if (field.kind != .prefab_override or
+            field.item_path == null or
+            field.item_id == null or
+            !std.meta.eql(field.identity.document, order_operation.identity.document) or
+            !std.mem.eql(u8, field.property_path, order_operation.property_path) or
+            !std.mem.eql(u8, field.item_id.?, item_id)) continue;
+        try appendPrefabItemFieldPatch(arena, &patches, plan, field, item_span);
+    }
+    return applyPatches(arena, selected_item.value.bytes, patches.items);
+}
+
+fn appendPrefabItemFieldPatch(
+    arena: std.mem.Allocator,
+    patches: *std.ArrayList(Patch),
+    plan: *const merge_model.MergePlan,
+    operation: *const merge_model.Operation,
+    item_span: source.Span,
+) merge_model.Error!void {
+    const selected = switch (operation.resolution) {
+        .unresolved => if (operation.values.base) |value|
+            SelectedValue{ .side = .base, .value = value }
+        else
+            null,
+        .remove => null,
+        .take => |side| if (valueForSide(operation, side)) |value|
+            SelectedValue{ .side = side, .value = value }
+        else
+            null,
+        .custom => null,
+    };
+    if (operation.values.ours) |ours| {
+        const ours_node = ours.node orelse return error.InvalidMerge;
+        const absolute_span = if (operation.resolution == .remove or
+            ours_node.* == .map or ours_node.* == .seq)
+            completeEntrySpan(plan.ours, ours_node) orelse return error.UnsupportedStructure
+        else
+            ours.span orelse return error.UnsupportedStructure;
+        const replacement = switch (operation.resolution) {
+            .unresolved, .take => if (selected) |value| blk: {
+                if (ours_node.* == .map or ours_node.* == .seq) {
+                    const selected_node = value.value.node orelse return error.InvalidMerge;
+                    const selected_file = fileForSide(plan, value.side);
+                    const span = completeEntrySpan(selected_file, selected_node) orelse
+                        return error.UnsupportedStructure;
+                    break :blk span.bytes(selected_file.bytes);
+                }
+                break :blk value.value.bytes;
+            } else "",
+            .remove => "",
+            .custom => |input| input,
+        };
+        return appendRelativePatch(arena, patches, operation, item_span, absolute_span, replacement);
+    }
+
+    const selected_value = selected orelse switch (operation.resolution) {
+        .custom => insertionTemplate(operation) orelse return error.InvalidResolution,
+        else => return,
+    };
+    const template_node = selected_value.value.node orelse return error.InvalidMerge;
+    const template_file = fileForSide(plan, selected_value.side);
+    const template_entry = template_file.entry_spans.get(template_node) orelse
+        return error.UnsupportedStructure;
+    const template_span = if (template_node.* == .map or template_node.* == .seq)
+        completeEntrySpan(template_file, template_node) orelse return error.UnsupportedStructure
+    else
+        template_entry.whole;
+    const inserted = switch (operation.resolution) {
+        .custom => |input| try entryWithValue(
+            arena,
+            template_file,
+            template_entry,
+            selected_value.value,
+            input,
+        ),
+        else => template_span.bytes(template_file.bytes),
+    };
+    const insert_at = try prefabItemFieldInsertionOffset(
+        arena,
+        plan,
+        operation,
+        selected_value.side,
+    );
+    try appendRelativePatch(
+        arena,
+        patches,
+        operation,
+        item_span,
+        .{ .start = insert_at, .end = insert_at },
+        inserted,
+    );
+}
+
+fn appendRelativePatch(
+    arena: std.mem.Allocator,
+    patches: *std.ArrayList(Patch),
+    operation: *const merge_model.Operation,
+    item_span: source.Span,
+    absolute_span: source.Span,
+    replacement: []const u8,
+) merge_model.Error!void {
+    if (absolute_span.start < item_span.start or absolute_span.end > item_span.end)
+        return error.UnsupportedStructure;
+    try patches.append(arena, .{
+        .span = .{
+            .start = absolute_span.start - item_span.start,
+            .end = absolute_span.end - item_span.start,
+        },
+        .replacement = replacement,
+        .atomic_id = operation.atomic_id,
+        .order = operation.id,
+    });
+}
+
+fn prefabItemFieldInsertionOffset(
+    arena: std.mem.Allocator,
+    plan: *const merge_model.MergePlan,
+    operation: *const merge_model.Operation,
+    template_side: merge_model.Side,
+) merge_model.Error!usize {
+    const item_id = operation.item_id orelse return error.InvalidMerge;
+    const item_path = operation.item_path orelse return error.InvalidMerge;
+    const kind = merge_identity.sequenceKind(
+        operation.identity.document.class_id,
+        operation.property_path,
+    ) orelse return error.UnsupportedStructure;
+    const ours_item = try findPrefabItemNode(arena, plan.ours, operation, item_id, kind);
+    const template_file = fileForSide(plan, template_side);
+    const template_item = try findPrefabItemNode(arena, template_file, operation, item_id, kind);
+    const ours_parent = try fieldParent(ours_item, item_path);
+    const template_parent = try fieldParent(template_item, item_path);
+    if (ours_parent.* != .map or template_parent.* != .map) return error.UnsupportedStructure;
+    const key = fieldName(item_path);
+    const template_index = for (template_parent.map, 0..) |entry, index| {
+        if (std.mem.eql(u8, entry.key, key)) break index;
+    } else return error.UnsupportedStructure;
+    var next_index = template_index + 1;
+    while (next_index < template_parent.map.len) : (next_index += 1) {
+        const ours_next = model.findValue(ours_parent.map, template_parent.map[next_index].key) orelse continue;
+        const entry = plan.ours.entry_spans.get(ours_next) orelse return error.UnsupportedStructure;
+        return entry.whole.start;
+    }
+    var previous_index = template_index;
+    while (previous_index > 0) {
+        previous_index -= 1;
+        const ours_previous = model.findValue(ours_parent.map, template_parent.map[previous_index].key) orelse continue;
+        const span = completeEntrySpan(plan.ours, ours_previous) orelse return error.UnsupportedStructure;
+        return span.end;
+    }
+    if (plan.ours.node_spans.get(ours_parent)) |span| return span.end;
+    return error.UnsupportedStructure;
+}
+
+fn findPrefabItemNode(
+    arena: std.mem.Allocator,
+    file: source.ParsedFile,
+    operation: *const merge_model.Operation,
+    item_id: []const u8,
+    kind: merge_identity.SequenceKind,
+) merge_model.Error!*const model.Node {
+    const sequence = findSequence(file, operation) orelse return error.UnsupportedStructure;
+    if (sequence.* != .seq) return error.UnsupportedStructure;
+    for (sequence.seq) |item| {
+        const candidate = try prefabItemId(arena, kind, item);
+        if (std.mem.eql(u8, candidate, item_id)) return item;
+    }
+    return error.UnsupportedStructure;
 }
 
 fn prefabItem(
@@ -1044,16 +1277,34 @@ fn appendDocumentPatch(
         .take => |side| side,
         .unresolved, .remove, .custom => return error.InvalidResolution,
     };
-    const insert_at = if (operation.kind == .game_object)
-        documentInsertionOffset(plan, operation, selected_side)
+    // A partial merge can insert Base bytes beside Theirs additions, so use one document order.
+    const insertion_side: merge_model.Side = if (selected_side == .base and
+        operation.values.ours == null and operation.values.theirs != null)
+        .theirs
+    else
+        selected_side;
+    const insert_at = if (operation.kind == .document or operation.kind == .game_object)
+        documentInsertionOffset(plan, operation, insertion_side)
     else
         plan.ours.bytes.len;
     try patches.append(arena, .{
         .span = .{ .start = insert_at, .end = insert_at },
         .replacement = inserted.bytes,
         .atomic_id = operation.atomic_id,
-        .order = operation.id,
+        .order = documentInsertionOrder(plan, operation, insertion_side),
     });
+}
+
+fn documentInsertionOrder(
+    plan: *const merge_model.MergePlan,
+    operation: *const merge_model.Operation,
+    selected_side: merge_model.Side,
+) usize {
+    const selected_file = fileForSide(plan, selected_side);
+    return for (selected_file.documents, 0..) |document, index| {
+        if (document.class_id == operation.identity.document.class_id and
+            document.file_id == operation.identity.document.file_id) break index;
+    } else selected_file.documents.len;
 }
 
 fn documentInsertionOffset(
@@ -1133,14 +1384,29 @@ fn insertionOffset(
         if (document.class_id != operation.identity.document.class_id or
             document.file_id != operation.identity.document.file_id) continue;
 
-        var parent = document.body;
-        if (std.mem.lastIndexOfScalar(u8, operation.property_path, '.')) |last_dot| {
-            var components = std.mem.splitScalar(u8, operation.property_path[0..last_dot], '.');
-            while (components.next()) |component| {
-                parent = switch (parent.*) {
-                    .map => |entries| model.findValue(entries, component) orelse return error.UnsupportedStructure,
-                    else => return error.UnsupportedStructure,
-                };
+        const parent = try fieldParent(document.body, operation.property_path);
+        if (insertionTemplate(operation)) |template| {
+            const template_file = fileForSide(plan, template.side);
+            const template_document = findDocument(template_file, operation.identity.document) orelse
+                return error.UnsupportedStructure;
+            const template_parent = try fieldParent(template_document.body, operation.property_path);
+            if (parent.* != .map or template_parent.* != .map) return error.UnsupportedStructure;
+            const key = fieldName(operation.property_path);
+            const template_index = for (template_parent.map, 0..) |entry, index| {
+                if (std.mem.eql(u8, entry.key, key)) break index;
+            } else return error.UnsupportedStructure;
+            var next_index = template_index + 1;
+            while (next_index < template_parent.map.len) : (next_index += 1) {
+                const ours_next = model.findValue(parent.map, template_parent.map[next_index].key) orelse continue;
+                const entry = plan.ours.entry_spans.get(ours_next) orelse return error.UnsupportedStructure;
+                return entry.whole.start;
+            }
+            var previous_index = template_index;
+            while (previous_index > 0) {
+                previous_index -= 1;
+                const ours_previous = model.findValue(parent.map, template_parent.map[previous_index].key) orelse continue;
+                const span = completeEntrySpan(plan.ours, ours_previous) orelse return error.UnsupportedStructure;
+                return span.end;
             }
         }
         if (plan.ours.node_spans.get(parent)) |span| return span.end;
@@ -1149,6 +1415,32 @@ fn insertionOffset(
         return error.UnsupportedStructure;
     }
     return error.UnsupportedStructure;
+}
+
+fn findDocument(file: source.ParsedFile, id: merge_model.DocumentId) ?*const model.Document {
+    for (file.documents) |*document| {
+        if (document.class_id == id.class_id and document.file_id == id.file_id) return document;
+    }
+    return null;
+}
+
+fn fieldParent(root: *const model.Node, property_path: []const u8) merge_model.Error!*const model.Node {
+    var parent = root;
+    if (std.mem.lastIndexOfScalar(u8, property_path, '.')) |last_dot| {
+        var components = std.mem.splitScalar(u8, property_path[0..last_dot], '.');
+        while (components.next()) |component| {
+            parent = switch (parent.*) {
+                .map => |entries| model.findValue(entries, component) orelse return error.UnsupportedStructure,
+                else => return error.UnsupportedStructure,
+            };
+        }
+    }
+    return parent;
+}
+
+fn fieldName(property_path: []const u8) []const u8 {
+    const start = if (std.mem.lastIndexOfScalar(u8, property_path, '.')) |last_dot| last_dot + 1 else 0;
+    return property_path[start..];
 }
 
 fn atomicByIdConst(
@@ -1164,6 +1456,7 @@ fn atomicByIdConst(
 pub fn parseCustomValue(arena: std.mem.Allocator, input: []const u8) merge_model.Error!ResolutionValue {
     if (input.len == 0) return .yaml_empty;
     if (std.mem.indexOfAny(u8, input, "\r\n") != null) return error.InvalidResolution;
+    try validateCustomToken(input);
     const wrapper = try std.fmt.allocPrint(
         arena,
         "--- !u!114 &1\nMonoBehaviour:\n  value: {s}\n",
@@ -1178,6 +1471,52 @@ pub fn parseCustomValue(arena: std.mem.Allocator, input: []const u8) merge_model
         .ref => |ref_value| .{ .object_reference = ref_value },
         else => error.InvalidResolution,
     };
+}
+
+fn validateCustomToken(input: []const u8) merge_model.Error!void {
+    if (!std.mem.eql(u8, input, std.mem.trim(u8, input, " \t"))) return error.InvalidResolution;
+    for (input) |byte| {
+        if (byte == '\t' or byte < 0x20 or byte == 0x7f) return error.InvalidResolution;
+    }
+    if (hasYamlComment(input)) return error.InvalidResolution;
+    if (input[0] == '\'' or input[0] == '"' or input[0] == '{') return;
+
+    if (std.mem.indexOfScalar(u8, "[]},&*!|>'%@`", input[0]) != null)
+        return error.InvalidResolution;
+    if ((input[0] == '-' or input[0] == '?' or input[0] == ':') and
+        (input.len == 1 or input[1] == ' ')) return error.InvalidResolution;
+    for (input, 0..) |byte, index| {
+        if (byte == ':' and (index + 1 == input.len or input[index + 1] == ' '))
+            return error.InvalidResolution;
+    }
+}
+
+fn hasYamlComment(input: []const u8) bool {
+    var quote: ?u8 = null;
+    var index: usize = 0;
+    while (index < input.len) : (index += 1) {
+        const byte = input[index];
+        if (quote) |active| {
+            if (active == '"' and byte == '\\') {
+                index += 1;
+                continue;
+            }
+            if (byte == active) {
+                if (active == '\'' and index + 1 < input.len and input[index + 1] == '\'') {
+                    index += 1;
+                } else {
+                    quote = null;
+                }
+            }
+            continue;
+        }
+        if (byte == '\'' or byte == '"') {
+            quote = byte;
+        } else if (byte == '#' and (index == 0 or input[index - 1] == ' ')) {
+            return true;
+        }
+    }
+    return false;
 }
 
 test "merge apply: reuses selected token bytes and keeps untouched bytes" {
@@ -1214,11 +1553,33 @@ test "merge apply: parses an object reference custom value" {
     defer arena_state.deinit();
     const value = try parseCustomValue(
         arena_state.allocator(),
-        "{fileID: 7, guid: aaa, type: 3}",
+        "{fileID: 7, guid: 0123456789abcdef0123456789abcdef, type: 3}",
     );
     try testing.expectEqual(@as(i64, 7), value.object_reference.file_id);
-    try testing.expectEqualStrings("aaa", value.object_reference.guid.?);
+    try testing.expectEqualStrings("0123456789abcdef0123456789abcdef", value.object_reference.guid.?);
     try testing.expectEqual(@as(i64, 3), value.object_reference.type_id.?);
+}
+
+test "merge apply: rejects invalid object references" {
+    const invalid_values = [_][]const u8{
+        "{fileID: 0, bogus: value}",
+        "{fileID: 0, guid: bad, type: 3}",
+        "{fileID: 0, guid: 0123456789abcdef0123456789abcdef}",
+        "{fileID: 0, type: nope}",
+        "{guid: 0123456789abcdef0123456789abcdef, type: 3}",
+        "{fileID: 0, guid: 0123456789abcdef0123456789abcdef, type: nope}",
+        "{fileID: nope}",
+        "{fileID: 0, fileID: 1}",
+    };
+    for (invalid_values) |invalid| {
+        var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+        defer arena_state.deinit();
+
+        try testing.expectError(
+            error.InvalidResolution,
+            parseCustomValue(arena_state.allocator(), invalid),
+        );
+    }
 }
 
 test "merge apply: rejects nested object reference members" {

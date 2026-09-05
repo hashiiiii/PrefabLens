@@ -411,7 +411,7 @@ test "merge validation: accepts external and built-in references" {
     defer arena_state.deinit();
     const bytes =
         "--- !u!114 &7\nMonoBehaviour:\n" ++
-        "  m_External: {fileID: 99, guid: abcdef, type: 3}\n" ++
+        "  m_External: {fileID: 99, guid: abcdef0123456789abcdef0123456789, type: 3}\n" ++
         "  m_BuiltIn: {fileID: 10001, guid: 0000000000000000f000000000000000, type: 0}\n";
 
     try validate(arena_state.allocator(), bytes);
@@ -551,7 +551,7 @@ test "merge planner: groups a nested GameObject subtree" {
     try testing.expectEqualStrings(theirs, built.partial);
 }
 
-test "merge planner: holds a GameObject addition with a duplicate file identifier" {
+test "merge validator: holds a GameObject addition with a duplicate file identifier" {
     const base =
         "--- !u!1 &1\nGameObject:\n  m_Component:\n  - component: {fileID: 4}\n" ++
         "--- !u!4 &4\nTransform:\n  m_GameObject: {fileID: 1}\n  m_Children: []\n  m_Father: {fileID: 0}\n" ++
@@ -564,8 +564,17 @@ test "merge planner: holds a GameObject addition with a duplicate file identifie
         "--- !u!4 &42\nTransform:\n  m_GameObject: {fileID: 20}\n  m_Children: []\n  m_Father: {fileID: 4}\n";
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
-    const built = try merge.build(arena_state.allocator(), base, base, theirs);
+    const arena = arena_state.allocator();
+    const planner = @import("merge_planner.zig");
+    const parsed_base = try planner.parseMergeSide(arena, base);
+    const parsed_theirs = try planner.parseMergeSide(arena, theirs);
+    var plan = try planner.buildSemantic(arena, parsed_base, parsed_base, parsed_theirs);
 
-    try testing.expectEqual(@as(usize, 1), built.plan.unresolvedCount());
-    try testing.expectEqualStrings(base, built.partial);
+    try testing.expectEqual(@as(usize, 1), plan.unresolvedCount());
+    const partial = try @import("merge_apply.zig").applyResolved(arena, &plan, false);
+    try testing.expectEqualStrings(base, partial);
+    try validate(arena, partial);
+
+    // Coverage cannot accept an unresolved Base-to-Theirs replay.
+    try testing.expectError(error.UnsupportedStructure, merge.build(arena, base, base, theirs));
 }

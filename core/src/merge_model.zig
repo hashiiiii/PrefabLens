@@ -11,6 +11,7 @@ pub const Error = @import("parser.zig").Error || error{
 };
 pub const Side = enum { base, ours, theirs };
 pub const OperationKind = enum {
+    document,
     field,
     sequence_membership,
     sequence_content,
@@ -65,6 +66,8 @@ pub const Operation = struct {
     identity: SemanticId,
     hierarchy_path: []const u8,
     property_path: []const u8,
+    item_id: ?[]const u8 = null,
+    item_path: ?[]const u8 = null,
     values: Values,
     resolution: Resolution,
     dependencies: []const AtomicId = &.{},

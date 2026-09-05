@@ -447,17 +447,17 @@ test "parseSpanned: quoted punctuation stays in one flow entry" {
     const src =
         \\--- !u!114 &1
         \\MonoBehaviour:
-        \\  m_Double: {fileID: 7, guid: "a,b{c}\"d", type: 3}
-        \\  m_Single: {fileID: 8, guid: 'a,b{c}''d', type: 3}
+        \\  m_Double: {value: "a,b{c}\"d", type: 3}
+        \\  m_Single: {value: 'a,b{c}''d', type: 3}
     ;
 
     const parsed = try parseSpanned(arena_state.allocator(), src);
 
     try testing.expectEqual(@as(usize, 0), parsed.diagnostics.len);
     const double = model.findValue(parsed.documents[0].body.map, "m_Double").?;
-    try testing.expectEqualStrings("a,b{c}\"d", double.ref.guid.?);
+    try testing.expectEqualStrings("a,b{c}\"d", model.findValue(double.map, "value").?.scalar);
     const single = model.findValue(parsed.documents[0].body.map, "m_Single").?;
-    try testing.expectEqualStrings("a,b{c}'d", single.ref.guid.?);
+    try testing.expectEqualStrings("a,b{c}'d", model.findValue(single.map, "value").?.scalar);
 }
 
 test "parseSpanned: nested object reference members produce diagnostics" {
@@ -489,6 +489,52 @@ test "parseSpanned: object reference fileID must be an integer scalar" {
     );
 
     try testing.expect(parsed.diagnostics.len != 0);
+}
+
+test "parseSpanned: rejects invalid object references" {
+    const invalid_values = [_][]const u8{
+        "{fileID: 0, bogus: value}",
+        "{fileID: 0, guid: bad, type: 3}",
+        "{fileID: 0, guid: 0123456789abcdef0123456789abcdef}",
+        "{fileID: 0, type: nope}",
+        "{fileID: 0, guid: 0123456789abcdef0123456789abcdef, type: nope}",
+        "{fileID: nope}",
+        "{fileID: 0, fileID: 1}",
+    };
+    for (invalid_values) |invalid| {
+        var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+        defer arena_state.deinit();
+        const src = try std.fmt.allocPrint(
+            arena_state.allocator(),
+            "--- !u!114 &1\nMonoBehaviour:\n  value: {s}\n",
+            .{invalid},
+        );
+
+        const parsed = try parseSpanned(arena_state.allocator(), src);
+
+        try testing.expect(parsed.diagnostics.len != 0);
+    }
+}
+
+test "parseSpanned: accepts valid object references" {
+    const valid_values = [_][]const u8{
+        "{fileID: 0}",
+        "{fileID: 2100000, guid: 0123456789abcdef0123456789abcdef, type: 3}",
+    };
+    for (valid_values) |valid| {
+        var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+        defer arena_state.deinit();
+        const src = try std.fmt.allocPrint(
+            arena_state.allocator(),
+            "--- !u!114 &1\nMonoBehaviour:\n  value: {s}\n",
+            .{valid},
+        );
+
+        const parsed = try parseSpanned(arena_state.allocator(), src);
+
+        try testing.expectEqual(@as(usize, 0), parsed.diagnostics.len);
+        try testing.expect(model.findValue(parsed.documents[0].body.map, "value").?.* == .ref);
+    }
 }
 
 test "parseSpanned: invalid double-quoted escapes produce diagnostics" {
@@ -571,6 +617,23 @@ test "parseSpanned: unterminated quoted scalar produces a diagnostic" {
     );
 
     try testing.expect(parsed.diagnostics.len != 0);
+}
+
+test "parseSpanned: malformed document structure produces diagnostics" {
+    const malformed = [_][]const u8{
+        "--- !u!114 &1\nMonoBehaviour:\n  - rogue\n",
+        "--- !u!114 &1\n",
+        "rogue: value\n--- !u!114 &1\nMonoBehaviour:\n  m_Value: 2\n",
+        "--- !u!114 &1\nMonoBehaviour:\n  m_Value: 2\n  m_Value: duplicate\n",
+        "--- !u!114 &1\nMonoBehaviour:\n  m_Items:\n  - target: {fileID: 1}\n    value: first\n    value: duplicate\n",
+    };
+    for (malformed) |input| {
+        var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+        defer arena_state.deinit();
+
+        const parsed = try parseSpanned(arena_state.allocator(), input);
+        try testing.expect(parsed.diagnostics.len != 0);
+    }
 }
 
 const Line = struct {
@@ -668,6 +731,7 @@ fn parseDocuments(p: *Parser) Error![]Document {
     var docs: std.ArrayList(Document) = .empty;
     while (p.peek()) |line| {
         if (!std.mem.startsWith(u8, line.text, "---")) {
+            try p.diagnostics.append(p.arena, .unconsumed_line);
             _ = p.advance();
             continue;
         }
@@ -713,16 +777,22 @@ fn parseDocument(p: *Parser) Error!Document {
     if (p.peek()) |first| {
         if (!std.mem.startsWith(u8, first.text, "---")) {
             _ = p.advance(); // the "TypeName:" line at indent 0
-            if (!std.mem.endsWith(u8, first.text, ":")) try p.diagnostics.append(p.arena, .missing_type_name);
+            if (first.indent != 0 or !std.mem.endsWith(u8, first.text, ":"))
+                try p.diagnostics.append(p.arena, .missing_type_name);
             type_name = stripTrailingColon(first.text);
             body = try parseBlock(p, indentOfNext(p, 2), 0);
             // Downstream reads body.map unconditionally. A malformed body parsed as a
             // sequence must not escape as a non-map node.
-            if (body.* != .map) body = try emptyMap(p.arena);
+            if (body.* != .map) {
+                try p.diagnostics.append(p.arena, .non_map_document_body);
+                body = try emptyMap(p.arena);
+            }
         } else {
+            try p.diagnostics.append(p.arena, .missing_type_name);
             body = try emptyMap(p.arena);
         }
     } else {
+        try p.diagnostics.append(p.arena, .missing_type_name);
         body = try emptyMap(p.arena);
     }
 
@@ -784,6 +854,7 @@ fn parseMap(p: *Parser, indent: usize, depth: usize) Error!*Node {
         _ = p.advance();
         const kv = splitKeyValue(line.text);
         if (!kv.has_colon) try p.diagnostics.append(p.arena, .invalid_map_entry);
+        if (mapContainsKey(entries.items, kv.key)) try p.diagnostics.append(p.arena, .duplicate_key);
         const value = if (kv.value.len == 0)
             try parseNestedValue(p, indent, depth)
         else
@@ -875,6 +946,7 @@ fn parseSeqMapItem(p: *Parser, dash_indent: usize, first_line: []const u8, depth
         _ = p.advance();
         const e = splitKeyValue(line.text);
         if (!e.has_colon) try p.diagnostics.append(p.arena, .invalid_map_entry);
+        if (mapContainsKey(entries.items, e.key)) try p.diagnostics.append(p.arena, .duplicate_key);
         const value = if (e.value.len == 0)
             try parseNestedValue(p, key_indent, depth)
         else
@@ -924,6 +996,13 @@ fn makeNode(arena: std.mem.Allocator, value: Node) std.mem.Allocator.Error!*Node
 
 fn emptyMap(arena: std.mem.Allocator) std.mem.Allocator.Error!*Node {
     return makeNode(arena, .{ .map = &[_]Entry{} });
+}
+
+fn mapContainsKey(entries: []const Entry, key: []const u8) bool {
+    for (entries) |entry| {
+        if (std.mem.eql(u8, entry.key, key)) return true;
+    }
+    return false;
 }
 
 fn stripTrailingColon(s: []const u8) []const u8 {
@@ -996,6 +1075,7 @@ fn parseFlow(p: *Parser, s: []const u8, depth: usize) Error!*Node {
             try p.diagnostics.append(arena, .invalid_flow_value);
             continue;
         }
+        if (mapContainsKey(entries.items, kv.key)) try p.diagnostics.append(arena, .duplicate_key);
         const value = try parseValue(p, kv.value, depth + 1);
         try putEntrySpan(p, value, kv, spanForSlice(p.source_bytes, part), .invalid_flow_value);
         try entries.append(arena, .{ .key = kv.key, .value = value });
@@ -1003,10 +1083,7 @@ fn parseFlow(p: *Parser, s: []const u8, depth: usize) Error!*Node {
     if (it.invalid and !iterator_error_reported) try p.diagnostics.append(arena, .invalid_flow_value);
     const es = try entries.toOwnedSlice(arena);
     if (model.findValue(es, "fileID")) |fid_node| {
-        var valid_reference = scalarToI64(fid_node) != null;
-        for (es) |entry| {
-            if (entry.value.* != .scalar) valid_reference = false;
-        }
+        const valid_reference = objectReferenceIsValid(es);
         if (!valid_reference) try p.diagnostics.append(arena, .invalid_flow_value);
         return makeNode(arena, .{ .ref = .{
             .file_id = scalarToI64(fid_node) orelse 0,
@@ -1015,6 +1092,39 @@ fn parseFlow(p: *Parser, s: []const u8, depth: usize) Error!*Node {
         } });
     }
     return makeNode(arena, .{ .map = es });
+}
+
+fn objectReferenceIsValid(entries: []const Entry) bool {
+    var file_id_count: usize = 0;
+    var guid_count: usize = 0;
+    var type_count: usize = 0;
+    for (entries) |entry| {
+        if (entry.value.* != .scalar) return false;
+        if (std.mem.eql(u8, entry.key, "fileID")) {
+            file_id_count += 1;
+        } else if (std.mem.eql(u8, entry.key, "guid")) {
+            guid_count += 1;
+        } else if (std.mem.eql(u8, entry.key, "type")) {
+            type_count += 1;
+        } else {
+            return false;
+        }
+    }
+    if (file_id_count != 1) return false;
+    if (scalarToI64(model.findValue(entries, "fileID").?) == null) return false;
+    if (guid_count == 0 and type_count == 0) return true;
+    if (guid_count != 1 or type_count != 1) return false;
+    const guid = scalarString(model.findValue(entries, "guid").?) orelse return false;
+    if (!isUnityGuid(guid)) return false;
+    return scalarToI64(model.findValue(entries, "type").?) != null;
+}
+
+fn isUnityGuid(guid: []const u8) bool {
+    if (guid.len != 32) return false;
+    for (guid) |byte| {
+        if (!std.ascii.isHex(byte)) return false;
+    }
+    return true;
 }
 
 fn scalarString(n: *const Node) ?[]const u8 {

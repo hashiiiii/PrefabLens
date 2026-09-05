@@ -1,0 +1,14 @@
+%YAML 1.1
+--- !u!114 &1
+MonoBehaviour:
+  # Keep this comment.
+  m_Quoted: "say \"hi\""
+  m_Escaped: "C:\\Temp"
+  m_Number: 01 # Keep this form.
+  m_Left: 2
+  m_Right: 3
+
+
+--- !u!21 &2
+Material:
+  m_Name: 'Keep: Name'

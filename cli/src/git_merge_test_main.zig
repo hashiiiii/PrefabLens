@@ -105,6 +105,151 @@ const sequence_theirs =
     \\  - 4
 ++ "\n";
 
+const standalone_base =
+    \\--- !u!114 &1
+    \\MonoBehaviour:
+    \\  m_Value: 1
+++ "\n";
+const standalone_ours =
+    \\--- !u!114 &1
+    \\MonoBehaviour:
+    \\  m_Value: 2
+++ "\n";
+const standalone_theirs = standalone_base ++
+    \\--- !u!21 &2
+    \\Material:
+    \\  m_Name: Added
+++ "\n";
+const standalone_expected = standalone_ours ++
+    \\--- !u!21 &2
+    \\Material:
+    \\  m_Name: Added
+++ "\n";
+
+const header_theirs =
+    \\--- !u!114 &1 stripped
+    \\MonoBehaviour:
+    \\  m_Value: 1
+++ "\n";
+const header_expected =
+    \\--- !u!114 &1 stripped
+    \\MonoBehaviour:
+    \\  m_Value: 2
+++ "\n";
+
+const comment_base =
+    \\--- !u!114 &1
+    \\MonoBehaviour:
+    \\  # Base comment.
+    \\  m_Value: 1
+++ "\n";
+const comment_ours =
+    \\--- !u!114 &1
+    \\MonoBehaviour:
+    \\  # Base comment.
+    \\  m_Value: 2
+++ "\n";
+const comment_theirs =
+    \\--- !u!114 &1
+    \\MonoBehaviour:
+    \\  # Theirs comment.
+    \\  m_Value: 1
+++ "\n";
+
+const document_delete_base =
+    \\--- !u!114 &1
+    \\MonoBehaviour:
+    \\  # Base comment.
+    \\  m_Value: 1
+++ "\n";
+const document_delete_ours =
+    \\--- !u!114 &1
+    \\MonoBehaviour:
+    \\  # Ours comment.
+    \\  m_Value: 1
+++ "\n";
+
+const sequence_comment_base =
+    \\--- !u!1 &1
+    \\GameObject:
+    \\  m_Component:
+    \\  - component: {fileID: 4}
+    \\  # Base comment.
+    \\  - component: {fileID: 54}
+    \\  m_Name: Base
+    \\--- !u!4 &4
+    \\Transform:
+    \\  m_GameObject: {fileID: 1}
+    \\  m_Children: []
+    \\  m_Father: {fileID: 0}
+    \\--- !u!54 &54
+    \\Rigidbody:
+    \\  m_GameObject: {fileID: 1}
+    \\  m_Mass: 1
+++ "\n";
+const sequence_comment_ours =
+    \\--- !u!1 &1
+    \\GameObject:
+    \\  m_Component:
+    \\  - component: {fileID: 4}
+    \\  # Base comment.
+    \\  - component: {fileID: 54}
+    \\  m_Name: Ours
+    \\--- !u!4 &4
+    \\Transform:
+    \\  m_GameObject: {fileID: 1}
+    \\  m_Children: []
+    \\  m_Father: {fileID: 0}
+    \\--- !u!54 &54
+    \\Rigidbody:
+    \\  m_GameObject: {fileID: 1}
+    \\  m_Mass: 1
+++ "\n";
+const sequence_comment_theirs =
+    \\--- !u!1 &1
+    \\GameObject:
+    \\  m_Component:
+    \\  - component: {fileID: 4}
+    \\  # Theirs comment.
+    \\  - component: {fileID: 54}
+    \\  m_Name: Base
+    \\--- !u!4 &4
+    \\Transform:
+    \\  m_GameObject: {fileID: 1}
+    \\  m_Children: []
+    \\  m_Father: {fileID: 0}
+    \\--- !u!54 &54
+    \\Rigidbody:
+    \\  m_GameObject: {fileID: 1}
+    \\  m_Mass: 1
+++ "\n";
+
+const duplicate_key_ours =
+    \\--- !u!114 &1
+    \\MonoBehaviour:
+    \\  m_Value: 2
+    \\  m_Value: duplicate
+++ "\n";
+
+const order_base =
+    \\--- !u!114 &1
+    \\MonoBehaviour:
+    \\  m_Value: 1
+++ "\n";
+const order_theirs =
+    \\--- !u!21 &2
+    \\Material:
+    \\  m_Name: Added
+    \\--- !u!114 &1
+    \\MonoBehaviour:
+    \\  m_Value: 2
+++ "\n";
+const order_partial =
+    \\--- !u!21 &2
+    \\Material:
+    \\  m_Name: Added
+++ "\n" ++ order_base;
+
 pub fn main(init: std.process.Init) !u8 {
     var arena_state = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena_state.deinit();
@@ -127,10 +272,38 @@ pub fn main(init: std.process.Init) !u8 {
         try testAutomaticMerge(io, arena, scratch, prefablens, mode);
         try testSemanticConflict(io, arena, scratch, prefablens, mode);
     }
+    try testStandaloneDocumentMerge(io, arena, scratch, prefablens, false);
+    try testStandaloneDocumentMerge(io, arena, scratch, prefablens, true);
+    try testDocumentOrderConflict(io, arena, scratch, prefablens);
+    try testHeaderMerge(io, arena, scratch, prefablens);
+    try testFailurePreservesOurs(io, arena, scratch, prefablens, "source-comment", .{
+        .path = "Assets/A.prefab",
+        .base = comment_base,
+        .ours = comment_ours,
+        .theirs = comment_theirs,
+    });
+    try testFailurePreservesOurs(io, arena, scratch, prefablens, "sequence-comment", .{
+        .path = "Assets/Conflict.prefab",
+        .base = sequence_comment_base,
+        .ours = sequence_comment_ours,
+        .theirs = sequence_comment_theirs,
+    });
+    try testFailurePreservesOurs(io, arena, scratch, prefablens, "document-delete-source", .{
+        .path = "Assets/A.prefab",
+        .base = document_delete_base,
+        .ours = document_delete_ours,
+        .theirs = "",
+    });
     try testFailurePreservesOurs(io, arena, scratch, prefablens, "malformed", .{
         .path = "Assets/A.prefab",
         .base = automatic_base,
         .ours = "not Unity YAML\n",
+        .theirs = automatic_theirs,
+    });
+    try testFailurePreservesOurs(io, arena, scratch, prefablens, "duplicate-key", .{
+        .path = "Assets/A.prefab",
+        .base = automatic_base,
+        .ours = duplicate_key_ours,
         .theirs = automatic_theirs,
     });
     try testFailurePreservesOurs(io, arena, scratch, prefablens, "unknown-sequence", .{
@@ -229,6 +402,76 @@ fn testSemanticConflict(
     try require(std.mem.indexOf(u8, partial, "m_Mass: 2") == null, "partial leaked the conflicting edit");
 }
 
+fn testStandaloneDocumentMerge(
+    io: std.Io,
+    arena: std.mem.Allocator,
+    scratch: []const u8,
+    prefablens: []const u8,
+    swap_sides: bool,
+) !void {
+    const repo = try std.fs.path.join(arena, &.{
+        scratch,
+        if (swap_sides) "standalone-ours" else "standalone-theirs",
+    });
+    const files = [_]FileSides{.{
+        .path = "Assets/A.prefab",
+        .base = standalone_base,
+        .ours = if (swap_sides) standalone_theirs else standalone_ours,
+        .theirs = if (swap_sides) standalone_ours else standalone_theirs,
+    }};
+    try prepareRepository(io, arena, repo, prefablens, .local, &files);
+
+    const result = try gitRun(io, arena, repo, &.{ "merge", "--no-edit", "remote" });
+    try expectCode(result, 0, "standalone document merge");
+    try expectFile(io, arena, repo, "Assets/A.prefab", standalone_expected);
+}
+
+fn testDocumentOrderConflict(
+    io: std.Io,
+    arena: std.mem.Allocator,
+    scratch: []const u8,
+    prefablens: []const u8,
+) !void {
+    const repo = try std.fs.path.join(arena, &.{ scratch, "document-order" });
+    const files = [_]FileSides{.{
+        .path = "Assets/A.prefab",
+        .base = order_base,
+        .ours = "",
+        .theirs = order_theirs,
+    }};
+    try prepareRepository(io, arena, repo, prefablens, .local, &files);
+
+    const result = try gitRun(io, arena, repo, &.{ "merge", "--no-edit", "remote" });
+    try expectCode(result, 1, "document order conflict");
+    try expectFile(io, arena, repo, "Assets/A.prefab", order_partial);
+    const merged = try readFile(io, arena, repo, "Assets/A.prefab");
+    const material = std.mem.indexOf(u8, merged, "--- !u!21 &2") orelse
+        return error.TestUnexpectedResult;
+    const behaviour = std.mem.indexOf(u8, merged, "--- !u!114 &1") orelse
+        return error.TestUnexpectedResult;
+    try require(material < behaviour, "document headers have the wrong order");
+}
+
+fn testHeaderMerge(
+    io: std.Io,
+    arena: std.mem.Allocator,
+    scratch: []const u8,
+    prefablens: []const u8,
+) !void {
+    const repo = try std.fs.path.join(arena, &.{ scratch, "header" });
+    const files = [_]FileSides{.{
+        .path = "Assets/A.prefab",
+        .base = standalone_base,
+        .ours = standalone_ours,
+        .theirs = header_theirs,
+    }};
+    try prepareRepository(io, arena, repo, prefablens, .local, &files);
+
+    const result = try gitRun(io, arena, repo, &.{ "merge", "--no-edit", "remote" });
+    try expectCode(result, 0, "header merge");
+    try expectFile(io, arena, repo, "Assets/A.prefab", header_expected);
+}
+
 fn testFailurePreservesOurs(
     io: std.Io,
     arena: std.mem.Allocator,
@@ -242,6 +485,10 @@ fn testFailurePreservesOurs(
     try prepareRepository(io, arena, repo, prefablens, .local, &files);
     const result = try gitRun(io, arena, repo, &.{ "merge", "--no-edit", "remote" });
     try expectNonzero(result, name);
+    try require(
+        std.mem.indexOf(u8, result.stderr, "PrefabLens did not write the output") != null,
+        "unsupported merge did not report the no-write contract",
+    );
     try expectFile(io, arena, repo, file.path, file.ours);
 }
 

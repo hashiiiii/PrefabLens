@@ -4,12 +4,16 @@ const merge_model = @import("merge_model.zig");
 const merge_planner = @import("merge_planner.zig");
 const merge_validate = @import("merge_validate.zig");
 const model = @import("model.zig");
+const source = @import("source.zig");
+
+const testing = std.testing;
 
 pub const Error = merge_model.Error;
 pub const MergePlan = merge_model.MergePlan;
 pub const Operation = merge_model.Operation;
 pub const OperationId = merge_model.OperationId;
 pub const Resolution = merge_model.Resolution;
+pub const Side = merge_model.Side;
 pub const SideValue = merge_model.SideValue;
 
 pub const BuildResult = struct {
@@ -23,18 +27,53 @@ pub fn build(
     ours: []const u8,
     theirs: []const u8,
 ) Error!BuildResult {
-    var plan = try merge_planner.build(
-        arena,
-        try merge_planner.parseMergeSide(arena, base),
-        try merge_planner.parseMergeSide(arena, ours),
-        try merge_planner.parseMergeSide(arena, theirs),
-    );
+    const parsed_base = try merge_planner.parseMergeSide(arena, base);
+    const parsed_ours = try merge_planner.parseMergeSide(arena, ours);
+    const parsed_theirs = try merge_planner.parseMergeSide(arena, theirs);
+    var plan = try merge_planner.build(arena, parsed_base, parsed_ours, parsed_theirs);
+    try verifyTheirsCoverage(arena, parsed_base, parsed_ours, parsed_theirs);
+    try verifyOursDocumentCoverage(&plan);
     const partial = try merge_apply.applyResolved(arena, &plan, false);
     try merge_validate.validate(arena, partial);
     return .{
         .plan = plan,
         .partial = partial,
     };
+}
+
+fn verifyTheirsCoverage(
+    arena: std.mem.Allocator,
+    base: source.ParsedFile,
+    ours: source.ParsedFile,
+    theirs: source.ParsedFile,
+) Error!void {
+    if (std.mem.eql(u8, ours.bytes, theirs.bytes)) return;
+
+    var replay = try merge_planner.build(arena, base, base, theirs);
+    if (replay.unresolvedCount() != 0) return error.UnsupportedStructure;
+    const replayed = try merge_apply.applyResolved(arena, &replay, false);
+    if (!std.mem.eql(u8, replayed, theirs.bytes)) return error.UnsupportedStructure;
+}
+
+fn verifyOursDocumentCoverage(plan: *const MergePlan) Error!void {
+    for (plan.operations) |*operation| {
+        switch (operation.kind) {
+            .document, .component, .game_object => {},
+            else => continue,
+        }
+        const ours = operation.values.ours orelse continue;
+        const selected = switch (operation.resolution) {
+            .unresolved => continue,
+            .remove => null,
+            .take => |side| valueForSide(operation, side),
+            .custom => return error.InvalidMerge,
+        };
+        if (selected) |value| {
+            if (std.mem.eql(u8, ours.bytes, value.bytes)) continue;
+        }
+        const base = operation.values.base orelse return error.UnsupportedStructure;
+        if (!std.mem.eql(u8, ours.bytes, base.bytes)) return error.UnsupportedStructure;
+    }
 }
 
 pub fn resolve(
@@ -53,7 +92,9 @@ pub fn resolve(
         .take => |side| if (side == .base or valueForSide(operation, side) == null)
             return error.InvalidResolution,
         .custom => |value| {
-            if (operation.kind != .field or atomic.operation_ids.len != 1 or
+            const supports_custom_kind = operation.kind == .field or
+                (operation.kind == .prefab_override and operation.item_path != null);
+            if (!supports_custom_kind or atomic.operation_ids.len != 1 or
                 !supportsCustomValue(operation) or !wasConflict(operation)) return error.InvalidResolution;
             _ = try merge_apply.parseCustomValue(arena, value);
             stored_resolution = .{ .custom = try arena.dupe(u8, value) };
@@ -176,6 +217,111 @@ test "empty scalar stays present for take and custom resolutions" {
     var custom = try build(arena, base, ours, theirs);
     try resolve(arena, &custom.plan, 0, .{ .custom = "" });
     try std.testing.expectEqualStrings(theirs, try finish(arena, &custom.plan));
+}
+
+test "merge facade: keeps selected document order at one offset" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const base = "--- !u!114 &1\nMonoBehaviour:\n  m_Value: 1\n";
+    const ours = "";
+    const theirs =
+        "--- !u!21 &2\nMaterial:\n  m_Name: Added\n" ++
+        "--- !u!114 &1\nMonoBehaviour:\n  m_Value: 2\n";
+
+    var built = try build(arena, base, ours, theirs);
+    const operation_id = for (built.plan.operations) |operation| {
+        if (operation.kind == .document and operation.identity.document.file_id == 1)
+            break operation.id;
+    } else return error.TestUnexpectedResult;
+    try resolve(arena, &built.plan, operation_id, .{ .take = .theirs });
+    try testing.expectEqualStrings(theirs, try finish(arena, &built.plan));
+}
+
+test "merge facade: rejects deletion of changed Ours document bytes" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const base =
+        "--- !u!114 &1\n" ++
+        "MonoBehaviour:\n" ++
+        "  # Base comment.\n" ++
+        "  m_Value: 1\n";
+    const ours =
+        "--- !u!114 &1\n" ++
+        "MonoBehaviour:\n" ++
+        "  # Ours comment.\n" ++
+        "  m_Value: 1\n";
+
+    // The deletion operation covers this document, so it must account for its Ours bytes.
+    try testing.expectError(error.UnsupportedStructure, build(arena, base, ours, ""));
+}
+
+test "merge facade: keeps Ours bytes for equal document additions" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const ours =
+        "--- !u!114 &1\n" ++
+        "MonoBehaviour:\n" ++
+        "  # Ours comment.\n" ++
+        "  m_Value: 1\n";
+    const theirs =
+        "--- !u!114 &1\n" ++
+        "MonoBehaviour:\n" ++
+        "  # Theirs comment.\n" ++
+        "  m_Value: 1\n";
+
+    var built = try build(arena, "", ours, theirs);
+    try testing.expectEqual(@as(usize, 0), built.plan.unresolvedCount());
+    try testing.expectEqualStrings(ours, built.partial);
+    try testing.expectEqualStrings(ours, try finish(arena, &built.plan));
+}
+
+test "map container delete and edit resolves symmetrically" {
+    const base =
+        "--- !u!114 &1\n" ++
+        "MonoBehaviour:\n" ++
+        "  m_Config:\n" ++
+        "    left: 1\n" ++
+        "    right: 1\n" ++
+        "  m_After: keep\n";
+    const deleted =
+        "--- !u!114 &1\n" ++
+        "MonoBehaviour:\n" ++
+        "  m_After: keep\n";
+    const edited =
+        "--- !u!114 &1\n" ++
+        "MonoBehaviour:\n" ++
+        "  m_Config:\n" ++
+        "    left: 2\n" ++
+        "    right: 1\n" ++
+        "  m_After: keep\n";
+
+    inline for (.{
+        .{ .ours = deleted, .theirs = edited },
+        .{ .ours = edited, .theirs = deleted },
+    }) |case| {
+        var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena_state.deinit();
+        const arena = arena_state.allocator();
+
+        var take_deleted = try build(arena, base, case.ours, case.theirs);
+        try std.testing.expectEqual(@as(usize, 1), take_deleted.plan.unresolvedCount());
+        const operation = &take_deleted.plan.operations[0];
+        try std.testing.expectEqualStrings("m_Config", operation.property_path);
+        try resolve(arena, &take_deleted.plan, operation.id, .remove);
+        try std.testing.expectEqualStrings(deleted, try finish(arena, &take_deleted.plan));
+
+        var take_edited = try build(arena, base, case.ours, case.theirs);
+        const edited_operation = &take_edited.plan.operations[0];
+        const edited_resolution: Resolution = if (edited_operation.values.ours != null)
+            .{ .take = .ours }
+        else
+            .{ .take = .theirs };
+        try resolve(arena, &take_edited.plan, edited_operation.id, edited_resolution);
+        try std.testing.expectEqualStrings(edited, try finish(arena, &take_edited.plan));
+    }
 }
 
 test "merge build rejects a malformed flow entry" {

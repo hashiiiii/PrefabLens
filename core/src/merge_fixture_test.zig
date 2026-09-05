@@ -20,6 +20,7 @@ const cases = [_][]const u8{
     "prefab-removed-component",
     "prefab-added-game-object",
     "prefab-removed-game-object",
+    "lossless-source",
 };
 
 const conflict_cases = [_][]const u8{

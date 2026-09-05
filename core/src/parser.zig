@@ -348,6 +348,49 @@ test "parse: single-quoted scalar is unquoted" {
     try testing.expectEqualStrings("Hello: World", model.findValue(doc.body.map, "m_Name").?.scalar);
 }
 
+test "parse: a quoted scalar can span lines, and a blank line in it is a newline" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    // A blank line, plus a `#` and a `---` that land inside the value.
+    const src =
+        \\--- !u!1 &1
+        \\GameObject:
+        \\  m_Name: 'first
+        \\
+        \\    --- # second'
+        \\  m_IsActive: 1
+    ;
+    const doc = try parseOne(arena, src);
+    try testing.expectEqualStrings("first\n--- # second", model.findValue(doc.body.map, "m_Name").?.scalar);
+    try testing.expectEqualStrings("1", model.findValue(doc.body.map, "m_IsActive").?.scalar);
+}
+
+test "parse: a folded sequence map item keeps its later keys and the next item apart" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const src =
+        \\--- !u!1001 &1
+        \\PrefabInstance:
+        \\  m_Modification:
+        \\    m_Modifications:
+        \\    - target: {fileID: 7, guid: aaa,
+        \\        type: 3}
+        \\      propertyPath: m_Name
+        \\    - target: {fileID: 8}
+        \\      propertyPath: m_Layer
+    ;
+    const doc = try parseOne(arena, src);
+    const mods = model.findValue(model.findValue(doc.body.map, "m_Modification").?.map, "m_Modifications").?;
+    try testing.expectEqual(@as(usize, 2), mods.seq.len);
+    const target = model.findValue(mods.seq[0].map, "target").?;
+    try testing.expectEqualStrings("aaa", target.ref.guid.?);
+    try testing.expectEqual(@as(i64, 3), target.ref.type_id.?);
+    try testing.expectEqualStrings("m_Name", model.findValue(mods.seq[0].map, "propertyPath").?.scalar);
+    try testing.expectEqualStrings("m_Layer", model.findValue(mods.seq[1].map, "propertyPath").?.scalar);
+}
+
 const Line = struct { indent: usize, text: []const u8 };
 
 const Parser = struct {
@@ -369,6 +412,8 @@ const Parser = struct {
 // and `#` comments.
 fn tokenize(arena: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error![]Line {
     var lines: std.ArrayList(Line) = .empty;
+    var folded_text: std.ArrayList(u8) = .empty;
+    var blank_lines: usize = 0;
     var it = std.mem.splitScalar(u8, source, '\n');
     while (it.next()) |raw0| {
         var raw = raw0;
@@ -376,12 +421,38 @@ fn tokenize(arena: std.mem.Allocator, source: []const u8) std.mem.Allocator.Erro
         var indent: usize = 0;
         while (indent < raw.len and raw[indent] == ' ') indent += 1;
         const content = raw[indent..];
-        if (content.len == 0) continue;
+        if (content.len == 0) {
+            blank_lines += 1;
+            continue;
+        }
+        defer blank_lines = 0;
+        if (lines.items.len > 0 and shouldContinueLine(lines.getLast(), indent)) {
+            const prev = &lines.items[lines.items.len - 1];
+            if (folded_text.items.len == 0) try folded_text.appendSlice(arena, prev.text);
+            if (blank_lines == 0) try folded_text.append(arena, ' ') else try folded_text.appendNTimes(arena, '\n', blank_lines);
+            try folded_text.appendSlice(arena, content);
+            prev.text = folded_text.items;
+            continue;
+        }
         if (content[0] == '%') continue;
         if (content[0] == '#') continue;
+        folded_text = .empty;
         try lines.append(arena, .{ .indent = indent, .text = content });
     }
     return lines.toOwnedSlice(arena);
+}
+
+fn shouldContinueLine(prev: Line, indent: usize) bool {
+    if (std.mem.startsWith(u8, prev.text, "- ")) {
+        const text = std.mem.trimStart(u8, prev.text[1..], " ");
+        const kv = splitKeyValue(text);
+        const value = if (kv.has_colon) kv.value else text;
+        if (value.len == 0) return false;
+        if (looksLikeMapEntry(text)) return indent > prev.indent + 2;
+        return indent > prev.indent;
+    }
+    const kv = splitKeyValue(prev.text);
+    return kv.has_colon and kv.value.len > 0 and indent > prev.indent;
 }
 
 pub fn parse(arena: std.mem.Allocator, source: []const u8) Error![]Document {

@@ -10,17 +10,6 @@ It shows changes to GameObjects, components, and fields.
 Use the [Chrome extension](#chrome-extension), [Unity Editor package](#unity-editor), or [CLI](#cli).
 Try the [live demo](https://prefablens.hashiiiii.workers.dev/).
 
-## Supported files
-
-PrefabLens supports text-serialized Unity assets.
-Supported extensions include `.prefab`, `.unity`, `.asset`, `.mat`, `.anim`, and `.controller`.
-See the [CLI reference](docs/cli.md#operands-and-argument-resolution) for the full list.
-PrefabLens does not support `.meta`, `.asmdef`, or other formats that are not UnityYAML.
-
-The project must use text asset serialization.
-Select `Edit > Project Settings > Editor > Asset Serialization > Force Text`.
-Binary-serialized assets do not produce useful diffs.
-
 ## Chrome extension
 
 The extension shows semantic diffs on GitHub pull requests.
@@ -42,7 +31,6 @@ You do not need to set a token.
 </p>
 
 The package requires Unity 2022.3 or newer.
-The project must be inside a git repository.
 
 ### Installation
 
@@ -53,7 +41,7 @@ openupm add com.hashiiiii.prefablens
 ```
 
 If you do not use [openupm-cli](https://github.com/openupm/openupm-cli), follow the scoped registry instructions on the [package page](https://openupm.com/packages/com.hashiiiii.prefablens/).
-Alternatively, install from this git URL in the Package Manager:
+Alternatively, install the package from this git URL in the Package Manager:
 
 `https://github.com/hashiiiii/PrefabLens.git?path=editor`
 
@@ -61,8 +49,8 @@ Alternatively, install from this git URL in the Package Manager:
 
 Open `Window > PrefabLens`.
 
-The left pane lists every changed UnityYAML asset against the **Base** ref.
-An empty **Base** ref means HEAD.
+The left pane lists every UnityYAML asset that differs from the Git reference in **Base**.
+The window uses HEAD if **Base** is empty.
 The right pane shows the semantic diff for the selected asset.
 
 The window refreshes when it gains focus.
@@ -81,7 +69,7 @@ To use a local CLI:
 Alternatively, set the `PrefabLens.CliPath` EditorPrefs key to an absolute path.
 
 The CLI must run and report its version.
-A manual CLI can use a version other than the pinned version.
+A local CLI can use a version other than the pinned version.
 If the override is invalid, PrefabLens uses a valid downloaded CLI or offers a download.
 
 ### Troubleshooting
@@ -128,10 +116,10 @@ Download the zip for your platform from [GitHub Releases](https://github.com/has
 Each zip contains one native `prefablens` executable and the `git-merge-prefablens` script.
 
 Git needs the script name to select the PrefabLens merge strategy.
-Git for Windows reads the script shebang and runs the script with `sh`.
+Git for Windows reads the script's first line (the shebang) and runs the script with `sh`.
 
 If you replace an older manual installation on Windows, remove `git-merge-prefablens.exe`.
-The old executable can hide the new script.
+Git can run the old executable instead of the new script.
 Scoop removes its old `git-merge-prefablens` shim during `scoop update prefablens`.
 
 ### Usage
@@ -149,7 +137,7 @@ prefablens --open main                  # write the report to a temp file and op
 ```
 
 Operands with a UnityYAML extension (`.prefab`, `.unity`, `.asset`, and more) are paths.
-All other operands are git refs.
+All other operands are Git references (refs).
 
 ### Git merge
 
@@ -164,7 +152,8 @@ For one clone, run:
 prefablens setup-merge
 ```
 
-This command adds repository-local Git configuration and UnityYAML attributes in `.git/info/attributes`.
+This command adds local Git configuration for the repository.
+It also adds UnityYAML attributes to `.git/info/attributes`.
 
 For a team, use shared attributes instead:
 
@@ -188,20 +177,20 @@ If a UnityYAML conflict remains and a terminal is available, the merge UI opens.
 
 Resolve the values. Then select **Complete**.
 
-File deletion and rename conflicts offer a file choice before content resolution.
+For file deletion and rename conflicts, PrefabLens offers a file choice before you resolve the content.
 PrefabLens applies the asset choice to matching `.meta` files.
 Ambiguous metadata conflicts stay unresolved.
 
 Other file formats use normal Git merge behavior.
-If other formats also conflict, those conflicts remain unresolved after PrefabLens resolves the UnityYAML conflicts.
-Before Git can complete the merge, every conflict must have a resolution.
+If files in other formats also conflict, those conflicts remain unresolved after PrefabLens resolves the UnityYAML conflicts.
+Git can complete the merge only after every conflict is resolved.
 `--no-commit`, `--squash`, and `git merge --abort` remain available.
 Strategy options (`-X`) require Git 2.43 or later.
 
-If you quit or no terminal is available, unresolved text keeps Git conflict markers.
+If you quit or no terminal is available, Git conflict markers remain in unresolved text.
 The `merge.conflictStyle` configuration and `conflict-marker-size` attribute control the markers.
 Even when a line-based merge is clean, a semantic conflict can require markers.
-Binary and file deletion or rename conflicts keep the normal Git file representation.
+Files with binary, deletion, or rename conflicts keep their normal Git representation.
 
 To complete the merge with another editor:
 
@@ -209,7 +198,7 @@ To complete the merge with another editor:
 2. Stage the resolved files with `git add`.
 3. Run `git merge --continue`.
 
-To reopen the UnityYAML content UI for one unresolved path:
+To reopen the UI for UnityYAML content at one unresolved path:
 
 ```bash
 git mergetool --tool=prefablens -- Assets/Prefabs/Robot.prefab
@@ -238,7 +227,7 @@ mise install
 
 ### Build and test
 
-Run each code block from the repository root.
+Run the commands in each code block from the repository root.
 
 #### Core and CLI
 
@@ -265,7 +254,8 @@ The build and test commands run `zig build wasm` when needed.
 
 #### Unity Editor
 
-These tests run on .NET with real native CLI commands and do not require Unity.
+These tests run on .NET and call the native CLI.
+They do not require Unity.
 
 ```bash
 zig build test-installation-binaries -Doptimize=ReleaseSafe

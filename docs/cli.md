@@ -44,66 +44,98 @@ The schema stays stable unless a release notes a break on purpose.
 | `cli/src/unity_path.zig` | Unity YAML extension detection |
 | `cli/src/builtin_refs.zig` | Built-in Unity resource names |
 | `cli/src/render_tree.zig`, `render_html.zig`, `display.zig` | Tree, HTML, and ANSI output |
-| `cli/pkg/` | Scripts that write the Homebrew formula for release |
+| `cli/pkg/` | Templates and scripts for Homebrew and Scoop |
 
 Dependencies point from `cli/` into `core/`.
 `core/` does not import `cli/`.
 
 ### Constraints
 
-- All git work uses subprocesses in `cli/src/input.zig`.
+- Diff Git work uses subprocesses in `cli/src/input.zig`.
 - Each input file has a size cap of 64 MiB.
-- Git subprocesses time out after 60 s.
+- Diff Git subprocesses time out after 60 s.
 - Binary-serialized assets produce an empty diff for an explicit path.
   Bulk git mode skips binary candidates after a content sniff.
 - `.meta`, `.asmdef`, and other non-UnityYAML names are never path operands.
   The CLI treats them as git refs on purpose.
 
-### Semantic merge adapters
+### Git merge integration
 
-The CLI provides two Git merge adapters. Both adapters use the semantic merge engine for Unity YAML files.
+`prefablens setup-merge` configures one clone.
+With `--team`, this command writes shared `.gitattributes` instead of `.git/info/attributes`.
+Both native executables must be on `PATH`: `prefablens` and `git-merge-prefablens`.
+Before setup writes attributes or Git configuration, it makes sure that both commands match its release.
+Setup runs the version command through the terminal `PATH` and through Git.
 
-#### `merge-driver`
+The `git --exec-path` command prints the directory that Git searches before the other `PATH` directories.
+The helper must be a custom Git command on `PATH`, outside this directory.
+
+Copies and symlinks from the same release are compatible.
+Setup keeps existing attribute lines and unrelated configuration.
+The configuration uses command names without absolute paths.
+A complete upgrade of both commands does not require another setup.
+
+Before the strategy writes merge objects, the index, or working files, it makes sure that the commands match its release.
+
+If a command is missing or has a different version, restore both commands from one release.
+
+The `pull.twohead=prefablens` configuration entry selects the strategy for ordinary two-head `git merge` commands.
+The strategy uses `git merge-tree --write-tree -z --messages` and requires Git 2.39 or later.
+It uses the output tree, index stages, and structured conflict types from the Git ort engine.
+It also tracks conflicts that have no unmerged index entries.
+Strategy options (`-X`) require Git 2.43 or later.
+On older Git versions, the strategy refuses these options before it writes working files.
+
+The strategy prepares the index.
+Then it uses the Git two-tree checkout to protect local edits and untracked paths.
+It writes the conflict index before any UI starts.
+Only Unity YAML conflicts open a UI. Other formats keep their normal Git conflict state.
+
+The UI includes file deletion, rename, and matching GUID metadata choices.
+PrefabLens writes a file resolution only after you complete these choices.
+Ambiguous paths, GUIDs, or metadata content remain unresolved.
+
+The outer Git command owns merge commits, `MERGE_HEAD`, `--no-commit`, `--squash`, and abort.
+Before the strategy can return 0, every conflict must have a resolution.
+If a conflict remains after the strategy installs the merge state, it returns 1.
+A failure before installation returns 2.
+
+#### Content adapters
 
 ```text
-prefablens merge-driver <base> <ours-and-output> <theirs> <path>
+prefablens merge-driver <base> <ours-and-output> <theirs> <path> [<marker-size>]
+prefablens mergetool <base> <local> <remote> <merged>
 ```
 
-Git maps the placeholders to these arguments:
-
-| Argument | Git placeholder | Meaning |
-|---|---|---|
+| Driver argument | Git placeholder | Meaning |
+| --- | --- | --- |
 | `<base>` | `%O` | Common ancestor |
 | `<ours-and-output>` | `%A` | Ours input and result output |
 | `<theirs>` | `%B` | Theirs input |
 | `<path>` | `%P` | Repository-relative path |
+| `<marker-size>` | `%L` | Conflict marker width, default 7 |
 
-#### `mergetool`
+The mergetool arguments map to `$BASE`, `$LOCAL`, `$REMOTE`, and `$MERGED`.
+`$MERGED` contains the current working file and receives only a completed resolution.
 
-```text
-prefablens mergetool <base> <local> <remote> <merged>
-```
+| Command | Exit 0 | Exit 1 | Exit 2 |
+| --- | --- | --- | --- |
+| `merge-driver` | Complete result | Unresolved result with text markers or native binary representation | I/O failure, no write |
+| `mergetool` | Result that passes all checks | User quit, no write | Startup error or failed check, no write |
 
-Git provides these values through environment variables:
+The driver uses the original three inputs for Git text fallback.
+The `merge.conflictStyle` configuration and `conflict-marker-size` attribute control the markers.
+If the text merge is clean but semantic resolution is incomplete, the driver emits a whole-file conflict block.
+Non-Unity content uses Git text or binary fallback.
 
-| Argument | Git variable | Meaning |
-|---|---|---|
-| `<base>` | `$BASE` | Common ancestor |
-| `<local>` | `$LOCAL` | Ours input |
-| `<remote>` | `$REMOTE` | Theirs input |
-| `<merged>` | `$MERGED` | Partial result and final output |
+The semantic plan and valid partial result stay in memory.
+At startup, the mergetool reads the three original inputs.
+It records a snapshot of `$MERGED`.
+It does not parse the markers.
+Quit, startup failure, and an interrupted UI leave the working conflict representation in place.
+The user can edit it with another tool and complete the normal Git workflow.
 
-The adapters return these results:
-
-| Command | Arguments | Exit 0 | Exit 1 | Exit 2 |
-| --- | --- | --- | --- | --- |
-| `merge-driver` | `<base> <ours-and-output> <theirs> <path>` | Complete result | Safe partial result | No write |
-| `mergetool` | `<base> <local> <remote> <merged>` | Validated result | User abort, no write | Validation failure, no write |
-
-At startup, `mergetool` recomputes the deterministic partial result. It compares that result with the bytes in `$MERGED`.
-If the bytes differ, it returns exit 2 and keeps `$MERGED` unchanged.
-
-After the last conflict is resolved, `mergetool` checks these eight conditions:
+Before PrefabLens writes a completed semantic resolution, it makes sure that these conditions are true:
 
 1. Every atomic operation has a result.
 2. Every `fileID` is unique.
@@ -112,17 +144,15 @@ After the last conflict is resolved, `mergetool` checks these eight conditions:
 5. The hierarchy has no cycle.
 6. Every internal reference points to an existing document.
 7. The complete output parses as Unity YAML.
-8. `$MERGED` has not changed since startup.
+8. The current output file matches its snapshot from UI startup.
 
-Each input file has a 64 MiB limit. `mergetool` opens its TUI only when standard input and standard output are TTYs.
-Without both TTYs, it returns exit 2 and does not write `$MERGED`.
+Original input files have a 64 MiB limit. Working conflict output has a separate 256 MiB limit.
+The mergetool requires both standard input and standard output to be TTYs.
+Without them, it returns 2 and keeps `$MERGED` unchanged. The automatic strategy instead leaves the merge unresolved.
+PrefabLens writes completed output with atomic file replacement and retains existing permissions.
 
-The adapters write a temporary file in the same directory as the output. They flush and close the file before atomic replace.
-Malformed input, unsupported input, an abort, or a validation error leaves the output unchanged.
-
-`diff-driver` and `difftool` are reserved names for Issue #227. This task does not implement those adapters.
-
-libvaxis is a dependency of the CLI TUI only. The core and WASM targets do not import libvaxis.
+`diff-driver` and `difftool` remain reserved for Issue #227.
+libvaxis is a CLI dependency. The core and WASM targets do not import it.
 
 ### CLI contract
 
@@ -265,7 +295,16 @@ zig build perf
 zig build run -- before.prefab after.prefab
 ```
 
-`cli/pkg/render_test.sh` covers the Homebrew formula scripts.
+Build the two native executables before you run the package test:
+
+```bash
+zig build -Doptimize=ReleaseSafe
+cli/pkg/render_test.sh zig-out/bin
+```
+
+The package test creates real ZIP files for all six release target names.
+It makes sure that the ZIP roots and the generated package files meet the distribution requirements.
+It also runs both executables from the ZIP for the host platform.
 CI also runs `.github/scripts/check-version-sync.sh` on Ubuntu.
 
 CI runs these checks in the `core` job of
@@ -275,12 +314,17 @@ CI runs these checks in the `core` job of
 
 Maintainers publish CLI binaries through the Release workflow on `main`.
 
-1. Run [`.github/workflows/release.yml`](../.github/workflows/release.yml)
-   with `workflow_dispatch` and a version `X.Y.Z` (no `v` prefix).
-2. Make sure that you run the workflow from `main`.
+Before a release:
 
-After you start the workflow, it bumps versions (including `build.zig.zon`).
-It builds platform zips under `dist/`:
+1. Make sure that the GitHub App has `Contents: Read and write` permission.
+2. Make sure that its installation has access to `PrefabLens`, `homebrew-tap`, and `scoop-bucket`.
+3. Select `main` for [`.github/workflows/release.yml`](../.github/workflows/release.yml).
+4. Run `workflow_dispatch` with a version `X.Y.Z` (no `v` prefix).
+
+These permissions require a manual check before the release.
+
+After you start the workflow, it updates versions (including `build.zig.zon`).
+It builds platform ZIP files under `dist/`:
 
 - `prefablens-macos-arm64.zip`
 - `prefablens-macos-x64.zip`
@@ -289,9 +333,15 @@ It builds platform zips under `dist/`:
 - `prefablens-windows-x64.zip`
 - `prefablens-windows-arm64.zip`
 
-It commits, tags `v$VERSION`, and creates the GitHub Release with `SHA256SUMS`.
-Then the `publish-formula` job writes the Homebrew formula with
-`cli/pkg/render.sh` and pushes it to `hashiiiii/homebrew-tap`.
+Each CLI ZIP contains `prefablens` and `git-merge-prefablens` at its root.
+Windows ZIP files contain the two `.exe` names.
 
-The Scoop bucket is not pushed from this repository.
-It updates itself from the release and `SHA256SUMS`.
+The workflow commits, tags `v$VERSION`, and creates the GitHub Release with `SHA256SUMS`.
+After the release exists, `publish-packages` downloads all six CLI ZIP files.
+It makes sure that each ZIP file contains the required pair of executables.
+It generates the Homebrew formula and Scoop manifest with `cli/pkg/render.sh`.
+Then it pushes each file to its package repository.
+
+The Homebrew formula installs both commands and runs their version commands in its test.
+The Scoop manifest creates a shim for each command.
+It keeps `checkver` and `autoupdate` for later package upgrades.

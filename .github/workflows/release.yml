@@ -48,7 +48,7 @@ jobs:
           mkdir -p dist
           build() {
             zig build -Dtarget="$1" -Doptimize=ReleaseSafe
-            (cd zig-out/bin && zip -j "../../dist/prefablens-$2.zip" "$3")
+            (cd zig-out/bin && zip -j "../../dist/prefablens-$2.zip" "$3" "git-merge-$3")
           }
           build aarch64-macos      macos-arm64   prefablens
           build x86_64-macos       macos-x64     prefablens
@@ -83,15 +83,13 @@ jobs:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           set -euo pipefail
-          # SHA256SUMS lets manifest tooling (e.g. scoop autoupdate) verify
-          # assets without downloading them.
+          # Package tools use SHA256SUMS to validate assets without downloading them.
           (cd dist && shasum -a 256 *.zip > SHA256SUMS)
           gh release create "v$VERSION" dist/* --generate-notes
 
-  # Regenerates the Homebrew formula from the published release and pushes
-  # it to the tap. Idempotent: safe to re-run without re-tagging. The Scoop
-  # bucket is not pushed from here: it self-updates via checkver/autoupdate.
-  publish-formula:
+  # Render package files from the published release. This job is safe to run
+  # again because it skips each repository when its package file is unchanged.
+  publish-packages:
     needs: release
     runs-on: ubuntu-latest
     env:
@@ -103,16 +101,16 @@ jobs:
           client-id: ${{ secrets.APP_CLIENT_ID }}
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
           owner: hashiiiii
-          repositories: PrefabLens,homebrew-tap
+          repositories: PrefabLens,homebrew-tap,scoop-bucket
       - uses: actions/checkout@v7
-      - name: Render formula from the published release
+      - name: Render package files from the published release
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           set -euo pipefail
           gh release download "v$VERSION" --dir dist
           cli/pkg/render.sh "$VERSION" dist out
-      - name: Push formula
+      - name: Push package files
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
@@ -134,6 +132,7 @@ jobs:
             }
           }
           publish homebrew-tap out/prefablens.rb Formula/prefablens.rb
+          publish scoop-bucket out/prefablens.json bucket/prefablens.json
 
   # Uploads the extension zip from the published release to the Chrome Web
   # Store and submits it for review; the store publishes it automatically on

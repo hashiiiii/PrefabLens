@@ -3,6 +3,12 @@ const input = @import("input.zig");
 const testing = std.testing;
 
 pub const max_input_bytes = input.max_input_bytes;
+// A conflict output can contain all three inputs plus marker lines.
+pub const max_output_bytes = max_input_bytes * 4;
+
+pub fn readOutputLimited(io: std.Io, arena: std.mem.Allocator, path: []const u8) ![]u8 {
+    return std.Io.Dir.cwd().readFileAlloc(io, path, arena, .limited(max_output_bytes));
+}
 
 pub fn readLimited(
     io: std.Io,
@@ -19,7 +25,7 @@ pub fn reportFailure(stderr: *std.Io.Writer, path: []const u8) !u8 {
     return 2;
 }
 
-fn writeSafePath(stderr: *std.Io.Writer, path: []const u8) !void {
+pub fn writeSafePath(stderr: *std.Io.Writer, path: []const u8) !void {
     var index: usize = 0;
     while (index < path.len) {
         const byte = path[index];

@@ -19,12 +19,12 @@ pub fn prepare(
     arena: std.mem.Allocator,
     args: command.MergetoolArgs,
 ) !Prepared {
+    // The worktree can contain Git markers or manual edits, independent of the internal plan.
+    const merged = try merge_io.readOutputLimited(io, arena, args.merged);
     const base = try merge_io.readLimited(io, arena, args.base);
     const local = try merge_io.readLimited(io, arena, args.local);
     const remote = try merge_io.readLimited(io, arena, args.remote);
     const built = try core.merge.build(arena, base, local, remote);
-    const merged = try merge_io.readLimited(io, arena, args.merged);
-    if (!std.mem.eql(u8, built.partial, merged)) return error.PartialMismatch;
     return .{ .args = args, .original_merged = merged, .built = built };
 }
 
@@ -97,7 +97,10 @@ fn fixtureArgs(
     });
     try tmp.dir.writeFile(testing.io, .{
         .sub_path = "merged.prefab",
-        .data = try readFixture(arena, "component-delete-edit/partial.prefab"),
+        .data = try std.fmt.allocPrint(arena, "<<<<<<< ours\n{s}=======\n{s}>>>>>>> theirs\n", .{
+            try readFixture(arena, "component-delete-edit/ours.prefab"),
+            try readFixture(arena, "component-delete-edit/theirs.prefab"),
+        }),
     });
     const root = try tmp.dir.realPathFileAlloc(testing.io, ".", arena);
     return .{
@@ -141,7 +144,7 @@ test "mergetool: rejects non-TTY input before reading or writing merged" {
     try testing.expectEqualStrings(original, try readMerged(arena, args));
 }
 
-test "mergetool: rejects a merged file that differs from the driver partial" {
+test "mergetool: snapshots worktree bytes independently from the semantic partial" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
@@ -149,12 +152,9 @@ test "mergetool: rejects a merged file that differs from the driver partial" {
     defer tmp.cleanup();
     const args = try fixtureArgs(&tmp, arena);
     try writeMerged(args, "manual edit\n");
-    var env = std.process.Environ.Map.init(arena);
-    var stderr_bytes: std.ArrayList(u8) = .empty;
-    var stderr = std.Io.Writer.Allocating.fromArrayList(arena, &stderr_bytes);
-
-    const code = try run(testing.io, arena, args, &env, true, true, &stderr.writer);
-    try testing.expectEqual(@as(u8, 2), code);
+    const prepared = try prepare(testing.io, arena, args);
+    try testing.expectEqualStrings("manual edit\n", prepared.original_merged);
+    try testing.expect(prepared.built.plan.unresolvedCount() != 0);
     try testing.expectEqualStrings("manual edit\n", try readMerged(arena, args));
 }
 
@@ -223,7 +223,7 @@ test "mergetool: finish writes a validated resolution" {
         try state.handle(.choose_theirs);
         try state.handle(.apply_result);
     }
-    const expected = try core.merge.finish(arena, &prepared.built.plan);
+    const expected = try readFixture(arena, "component-delete-edit/expected.prefab");
     var stderr_bytes: std.ArrayList(u8) = .empty;
     var stderr = std.Io.Writer.Allocating.fromArrayList(arena, &stderr_bytes);
 

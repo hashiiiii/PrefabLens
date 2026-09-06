@@ -15,6 +15,43 @@ namespace PrefabLens.Tests
 {
     public class CliTests
     {
+        static string NativeBundleDirectory(string variable = "PREFABLENS_TEST_BIN_DIR")
+        {
+            var dir = Environment.GetEnvironmentVariable(variable);
+            Assert.IsFalse(
+                string.IsNullOrEmpty(dir),
+                $"Set {variable} to a directory that contains the real native CLI commands."
+            );
+            return dir;
+        }
+
+        static void CopyNativeBinary(string sourceDirectory, string name, string destinationDirectory)
+        {
+            Directory.CreateDirectory(destinationDirectory);
+            File.Copy(Path.Combine(sourceDirectory, name), Path.Combine(destinationDirectory, name));
+        }
+
+        static void CopyNativeBundle(string sourceDirectory, string destinationDirectory)
+        {
+            CopyNativeBinary(sourceDirectory, Cli.BinaryName, destinationDirectory);
+            CopyNativeBinary(sourceDirectory, Cli.MergeBinaryName, destinationDirectory);
+        }
+
+        static byte[] CreateNativeBundleArchive(string sourceDirectory, params string[] names)
+        {
+            using var buffer = new MemoryStream();
+            using (var zip = new ZipArchive(buffer, ZipArchiveMode.Create, leaveOpen: true))
+            {
+                foreach (var name in names)
+                {
+                    using var source = File.OpenRead(Path.Combine(sourceDirectory, name));
+                    using var destination = zip.CreateEntry(name).Open();
+                    source.CopyTo(destination);
+                }
+            }
+            return buffer.ToArray();
+        }
+
         [Test]
         public void ReleaseAssetNameCoversAllTargets()
         {
@@ -201,24 +238,82 @@ namespace PrefabLens.Tests
         }
 
         [Test]
-        public void ExtractToWritesEveryZipEntry()
+        public void ExtractToWritesBothNativeCommands()
         {
-            // Build a real zip in memory (no fixture files) and extract it into a temp dir.
-            var buffer = new MemoryStream();
-            using (var zip = new ZipArchive(buffer, ZipArchiveMode.Create, leaveOpen: true))
-            {
-                using (var w = new StreamWriter(zip.CreateEntry("prefablens").Open()))
-                    w.Write("binary");
-                using (var w = new StreamWriter(zip.CreateEntry("LICENSE").Open()))
-                    w.Write("apache");
-            }
+            var archive = CreateNativeBundleArchive(NativeBundleDirectory(), Cli.BinaryName, Cli.MergeBinaryName);
             var dir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
             Directory.CreateDirectory(dir);
             try
             {
-                Cli.ExtractTo(buffer.ToArray(), dir);
-                Assert.AreEqual("binary", File.ReadAllText(Path.Combine(dir, "prefablens")));
-                Assert.AreEqual("apache", File.ReadAllText(Path.Combine(dir, "LICENSE")));
+                Cli.ExtractTo(archive, dir);
+                Assert.AreEqual(
+                    new FileInfo(Path.Combine(NativeBundleDirectory(), Cli.BinaryName)).Length,
+                    new FileInfo(Path.Combine(dir, Cli.BinaryName)).Length
+                );
+                Assert.AreEqual(
+                    new FileInfo(Path.Combine(NativeBundleDirectory(), Cli.MergeBinaryName)).Length,
+                    new FileInfo(Path.Combine(dir, Cli.MergeBinaryName)).Length
+                );
+            }
+            finally
+            {
+                Directory.Delete(dir, recursive: true);
+            }
+        }
+
+        [Test]
+        public void ExtractToRejectsAnArchiveWithoutTheMergeCommand()
+        {
+            // An incomplete release archive must fail before it changes the install directory.
+            var archive = CreateNativeBundleArchive(NativeBundleDirectory(), Cli.BinaryName);
+            var dir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+            Directory.CreateDirectory(dir);
+            try
+            {
+                var error = Assert.Throws<InvalidOperationException>(() => Cli.ExtractTo(archive, dir));
+                StringAssert.Contains(Cli.MergeBinaryName, error.Message);
+                Assert.IsEmpty(Directory.GetFiles(dir));
+            }
+            finally
+            {
+                Directory.Delete(dir, recursive: true);
+            }
+        }
+
+        [Test]
+        public void ExtractToRejectsAnArchiveWithoutTheMainCommand()
+        {
+            var archive = CreateNativeBundleArchive(NativeBundleDirectory(), Cli.MergeBinaryName);
+            var dir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+            Directory.CreateDirectory(dir);
+            try
+            {
+                var error = Assert.Throws<InvalidOperationException>(() => Cli.ExtractTo(archive, dir));
+                StringAssert.Contains(Cli.BinaryName, error.Message);
+                Assert.IsEmpty(Directory.GetFiles(dir));
+            }
+            finally
+            {
+                Directory.Delete(dir, recursive: true);
+            }
+        }
+
+        [Test]
+        public void MarkExecutableMakesBothRealBundleCommandsRunnable()
+        {
+            if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+                Assert.Ignore("chmod is a Unix concern");
+            var dir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+            Directory.CreateDirectory(dir);
+            try
+            {
+                var archive = CreateNativeBundleArchive(NativeBundleDirectory(), Cli.BinaryName, Cli.MergeBinaryName);
+                Cli.ExtractTo(archive, dir);
+                var cliPath = Path.Combine(dir, Cli.BinaryName);
+                Cli.MarkExecutable(cliPath);
+
+                Assert.AreEqual(0, Cli.RunProcess(cliPath, "--version", dir, 10_000).ExitCode);
+                Assert.AreEqual(0, Cli.RunProcess(Cli.MergePath(cliPath), "--version", dir, 10_000).ExitCode);
             }
             finally
             {
@@ -456,14 +551,13 @@ namespace PrefabLens.Tests
         public void LocateUsesAnExistingOverrideAndReportsNothingMissing()
         {
             var dir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
-            Directory.CreateDirectory(dir);
-            var manual = Path.Combine(dir, "custom-prefablens");
-            File.WriteAllText(manual, "bin");
+            CopyNativeBundle(NativeBundleDirectory(), dir);
+            var manual = Path.Combine(dir, Cli.BinaryName);
             try
             {
                 var loc = Cli.Locate(manual, Path.Combine(dir, "default-prefablens"));
                 Assert.AreEqual(manual, loc.Path);
-                Assert.IsNull(loc.MissingOverride);
+                Assert.IsNull(loc.OverrideError);
             }
             finally
             {
@@ -472,20 +566,200 @@ namespace PrefabLens.Tests
         }
 
         [Test]
-        public void LocateReportsAMissingOverrideWhileFallingBackToTheDefault()
+        public void LocateRejectsAnIncompleteDefaultBundle()
+        {
+            // A cache with only the main command cannot support the Git merge integration.
+            var dir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+            CopyNativeBinary(NativeBundleDirectory(), Cli.BinaryName, dir);
+            try
+            {
+                var loc = Cli.Locate("", Path.Combine(dir, Cli.BinaryName));
+                Assert.IsNull(loc.Path);
+            }
+            finally
+            {
+                Directory.Delete(dir, recursive: true);
+            }
+        }
+
+        [Test]
+        public void LocateRejectsABundleWithTheWrongMergeCommand()
+        {
+            // File existence alone cannot detect an archive that contains the wrong command.
+            var dir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+            CopyNativeBinary(NativeBundleDirectory(), Cli.BinaryName, dir);
+            File.Copy(Path.Combine(dir, Cli.BinaryName), Path.Combine(dir, Cli.MergeBinaryName));
+            try
+            {
+                var loc = Cli.Locate("", Path.Combine(dir, Cli.BinaryName));
+                Assert.IsNull(loc.Path);
+            }
+            finally
+            {
+                Directory.Delete(dir, recursive: true);
+            }
+        }
+
+        [Test]
+        public void LocateRejectsADefaultBundleFromAnotherRelease()
+        {
+            // The automatic cache belongs to Cli.Version and cannot silently use another release.
+            var dir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+            CopyNativeBundle(NativeBundleDirectory("PREFABLENS_TEST_ALT_BIN_DIR"), dir);
+            try
+            {
+                var loc = Cli.Locate("", Path.Combine(dir, Cli.BinaryName));
+                Assert.IsNull(loc.Path);
+            }
+            finally
+            {
+                Directory.Delete(dir, recursive: true);
+            }
+        }
+
+        [Test]
+        public void LocateExplainsAnIncompleteOverrideAndUsesTheDefaultBundle()
+        {
+            // The warning must identify the missing companion instead of calling the main path missing.
+            var root = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+            var manualDirectory = Path.Combine(root, "manual");
+            var defaultDirectory = Path.Combine(root, "default");
+            CopyNativeBinary(NativeBundleDirectory(), Cli.BinaryName, manualDirectory);
+            CopyNativeBinary(NativeBundleDirectory(), Cli.BinaryName, defaultDirectory);
+            CopyNativeBinary(NativeBundleDirectory(), Cli.MergeBinaryName, defaultDirectory);
+            var manual = Path.Combine(manualDirectory, Cli.BinaryName);
+            var fallback = Path.Combine(defaultDirectory, Cli.BinaryName);
+            try
+            {
+                var loc = Cli.Locate(manual, fallback);
+                Assert.AreEqual(fallback, loc.Path);
+                Assert.AreEqual(
+                    $"{Cli.MergeBinaryName} was not found at '{Cli.MergePath(manual)}'.",
+                    loc.OverrideError
+                );
+            }
+            finally
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+
+        [Test]
+        public void LocateRejectsAMixedOverrideAndUsesTheDefaultBundle()
+        {
+            // Commands from two releases do not form one installation.
+            var root = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+            var manualDirectory = Path.Combine(root, "manual");
+            var defaultDirectory = Path.Combine(root, "default");
+            CopyNativeBinary(NativeBundleDirectory(), Cli.BinaryName, manualDirectory);
+            CopyNativeBinary(
+                NativeBundleDirectory("PREFABLENS_TEST_ALT_BIN_DIR"),
+                Cli.MergeBinaryName,
+                manualDirectory
+            );
+            CopyNativeBundle(NativeBundleDirectory(), defaultDirectory);
+            var manual = Path.Combine(manualDirectory, Cli.BinaryName);
+            var fallback = Path.Combine(defaultDirectory, Cli.BinaryName);
+            try
+            {
+                var loc = Cli.Locate(manual, fallback);
+                Assert.AreEqual(fallback, loc.Path);
+                StringAssert.Contains($"prefablens {Cli.Version}", loc.OverrideError);
+                StringAssert.Contains($"git-merge-prefablens {Cli.Version}-installation-test", loc.OverrideError);
+            }
+            finally
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+
+        [Test]
+        public void LocateAcceptsAMatchingOverrideFromAnotherRelease()
+        {
+            // A manual override can select another release when both commands match.
+            var dir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+            CopyNativeBundle(NativeBundleDirectory("PREFABLENS_TEST_ALT_BIN_DIR"), dir);
+            var manual = Path.Combine(dir, Cli.BinaryName);
+            try
+            {
+                var loc = Cli.Locate(manual, Path.Combine(dir, "absent", Cli.BinaryName));
+                Assert.AreEqual(manual, loc.Path);
+                Assert.IsNull(loc.OverrideError);
+            }
+            finally
+            {
+                Directory.Delete(dir, recursive: true);
+            }
+        }
+
+        [Test]
+        public void InstallBundleInstallsAndRunsBothCommands()
+        {
+            // ZIP extraction removes Unix execute bits, so success requires both version commands to run.
+            var root = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+            var finalDirectory = Path.Combine(root, Cli.Version);
+            var archive = CreateNativeBundleArchive(NativeBundleDirectory(), Cli.BinaryName, Cli.MergeBinaryName);
+            try
+            {
+                var installed = Cli.InstallBundle(archive, finalDirectory, Cli.Version);
+                Assert.AreEqual(Path.Combine(finalDirectory, Cli.BinaryName), installed);
+                Assert.AreEqual(0, Cli.RunProcess(installed, "--version", finalDirectory, 10_000).ExitCode);
+                Assert.AreEqual(
+                    0,
+                    Cli.RunProcess(Cli.MergePath(installed), "--version", finalDirectory, 10_000).ExitCode
+                );
+            }
+            finally
+            {
+                if (Directory.Exists(root))
+                    Directory.Delete(root, recursive: true);
+            }
+        }
+
+        [Test]
+        public void InstallBundleKeepsAUsableCacheWhenTheArchiveHasAnotherVersion()
+        {
+            // Validation must finish in staging before the installer replaces a usable cache.
+            var root = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+            var finalDirectory = Path.Combine(root, Cli.Version);
+            CopyNativeBundle(NativeBundleDirectory(), finalDirectory);
+            var cliPath = Path.Combine(finalDirectory, Cli.BinaryName);
+            var mergePath = Cli.MergePath(cliPath);
+            var originalCli = File.ReadAllBytes(cliPath);
+            var originalMerge = File.ReadAllBytes(mergePath);
+            var archive = CreateNativeBundleArchive(
+                NativeBundleDirectory("PREFABLENS_TEST_ALT_BIN_DIR"),
+                Cli.BinaryName,
+                Cli.MergeBinaryName
+            );
+            try
+            {
+                Assert.Throws<InvalidOperationException>(() => Cli.InstallBundle(archive, finalDirectory, Cli.Version));
+                CollectionAssert.AreEqual(originalCli, File.ReadAllBytes(cliPath));
+                CollectionAssert.AreEqual(originalMerge, File.ReadAllBytes(mergePath));
+                Assert.AreEqual(cliPath, Cli.Locate("", cliPath).Path);
+            }
+            finally
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+
+        [Test]
+        public void LocateReportsAnInvalidOverrideWhileUsingTheDefault()
         {
             // The silent-fallback bug: an override pointing at a deleted binary used to be
             // indistinguishable from "no override set". The state must be reportable.
             var dir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
-            Directory.CreateDirectory(dir);
-            var def = Path.Combine(dir, "default-prefablens");
-            File.WriteAllText(def, "bin");
+            var defaultDirectory = Path.Combine(dir, "default");
+            CopyNativeBundle(NativeBundleDirectory(), defaultDirectory);
+            var def = Path.Combine(defaultDirectory, Cli.BinaryName);
             var gone = Path.Combine(dir, "gone-prefablens");
             try
             {
                 var loc = Cli.Locate(gone, def);
                 Assert.AreEqual(def, loc.Path);
-                Assert.AreEqual(gone, loc.MissingOverride);
+                StringAssert.Contains(gone, loc.OverrideError);
             }
             finally
             {
@@ -494,53 +768,33 @@ namespace PrefabLens.Tests
         }
 
         [Test]
-        public void LocateReportsAMissingOverrideEvenWhenNothingElseExists()
+        public void LocateReportsAnInvalidOverrideWhenNothingElseExists()
         {
             var dir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
             var gone = Path.Combine(dir, "gone-prefablens");
             var loc = Cli.Locate(gone, Path.Combine(dir, "default-prefablens"));
             Assert.IsNull(loc.Path);
-            Assert.AreEqual(gone, loc.MissingOverride);
+            StringAssert.Contains(gone, loc.OverrideError);
         }
 
         [Test]
         public void LocateWithoutAnOverrideUsesTheDefaultOrNothing()
         {
             var dir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
-            Directory.CreateDirectory(dir);
-            var def = Path.Combine(dir, "default-prefablens");
-            File.WriteAllText(def, "bin");
+            var defaultDirectory = Path.Combine(dir, "default");
+            CopyNativeBundle(NativeBundleDirectory(), defaultDirectory);
+            var def = Path.Combine(defaultDirectory, Cli.BinaryName);
             try
             {
                 Assert.AreEqual(def, Cli.Locate("", def).Path);
-                Assert.IsNull(Cli.Locate("", def).MissingOverride);
+                Assert.IsNull(Cli.Locate("", def).OverrideError);
                 var none = Cli.Locate("", Path.Combine(dir, "absent"));
                 Assert.IsNull(none.Path);
-                Assert.IsNull(none.MissingOverride);
+                Assert.IsNull(none.OverrideError);
             }
             finally
             {
                 Directory.Delete(dir, recursive: true);
-            }
-        }
-
-        [Test]
-        public void MarkExecutableMakesARealFileRunnable()
-        {
-            if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
-                Assert.Ignore("chmod is a unix concern");
-            var file = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
-            File.WriteAllText(file, "#!/bin/sh\nexit 0\n");
-            try
-            {
-                Cli.MarkExecutable(file);
-                // The proof is execution: a fresh file is not executable until chmod succeeds.
-                var res = Cli.RunProcess(file, "", ".", timeoutMs: 10_000);
-                Assert.AreEqual(0, res.ExitCode);
-            }
-            finally
-            {
-                File.Delete(file);
             }
         }
 
@@ -585,9 +839,8 @@ namespace PrefabLens.Tests
         {
             var original = Cli.PathOverride;
             var dir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
-            Directory.CreateDirectory(dir);
-            var manual = Path.Combine(dir, "prefablens");
-            File.WriteAllText(manual, "bin");
+            CopyNativeBundle(NativeBundleDirectory(), dir);
+            var manual = Path.Combine(dir, Cli.BinaryName);
             try
             {
                 Cli.PathOverride = manual;

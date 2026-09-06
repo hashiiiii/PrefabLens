@@ -77,7 +77,6 @@ namespace PrefabLens
                 RuntimeInformation.ProcessArchitecture == Architecture.Arm64
             );
             var dir = Path.GetDirectoryName(DefaultPath);
-            Directory.CreateDirectory(dir);
 
             using var http = new HttpClient();
             // One deadline for the whole operation. HttpClient.Timeout is disabled because it
@@ -98,10 +97,9 @@ namespace PrefabLens
                 throw new TimeoutException($"download timed out after {DownloadTimeoutMs / 1000}s");
             }
             VerifySha256(bytes, sums, asset);
-            ExtractTo(bytes, dir);
-            MarkExecutable(DefaultPath);
+            var installed = InstallBundle(bytes, dir, Version);
             DeleteStaleVersions(Path.GetDirectoryName(dir), Version);
-            return DefaultPath;
+            return installed;
         }
 
         /// Run Download() off the main thread. Progress and the outcome are posted back through
@@ -180,6 +178,17 @@ namespace PrefabLens
         public static void ExtractTo(byte[] zipBytes, string dir)
         {
             using var zip = new ZipArchive(new MemoryStream(zipBytes));
+            var hasCli = false;
+            var hasMerge = false;
+            foreach (var entry in zip.Entries)
+            {
+                hasCli |= entry.FullName == BinaryName;
+                hasMerge |= entry.FullName == MergeBinaryName;
+            }
+            if (!hasCli)
+                throw new InvalidOperationException($"The release archive does not contain {BinaryName}.");
+            if (!hasMerge)
+                throw new InvalidOperationException($"The release archive does not contain {MergeBinaryName}.");
             foreach (var entry in zip.Entries)
             {
                 // ZipFileExtensions (ExtractToFile) isn't referenceable under netstandard, so copy manually
@@ -190,13 +199,76 @@ namespace PrefabLens
             }
         }
 
-        /// Make the extracted binary executable (no-op on Windows). A silently failed chmod
-        /// used to surface later as an unrelated Process.Start error on first run, so a
-        /// non-zero exit fails the download step here, naming the binary path.
-        public static void MarkExecutable(string path)
+        public static string InstallBundle(byte[] zipBytes, string finalDirectory, string requiredVersion)
+        {
+            var fullFinalDirectory = Path.GetFullPath(finalDirectory);
+            var root = Path.GetDirectoryName(fullFinalDirectory);
+            Directory.CreateDirectory(root);
+            var name = Path.GetFileName(fullFinalDirectory);
+            var token = Guid.NewGuid().ToString("N");
+            var stagingDirectory = Path.Combine(root, $".{name}.staging-{token}");
+            var backupDirectory = Path.Combine(root, $".{name}.backup-{token}");
+            try
+            {
+                Directory.CreateDirectory(stagingDirectory);
+                ExtractTo(zipBytes, stagingDirectory);
+                var stagedCliPath = Path.Combine(stagingDirectory, BinaryName);
+                MarkExecutable(stagedCliPath);
+                var validation = ValidateBundle(stagedCliPath, requiredVersion);
+                if (!validation.IsValid)
+                    throw new InvalidOperationException(validation.Error);
+
+                ReplaceDirectory(stagingDirectory, fullFinalDirectory, backupDirectory);
+                return Path.Combine(finalDirectory, BinaryName);
+            }
+            finally
+            {
+                DeleteDirectoryBestEffort(stagingDirectory);
+            }
+        }
+
+        static void ReplaceDirectory(string stagingDirectory, string finalDirectory, string backupDirectory)
+        {
+            var hadPrevious = Directory.Exists(finalDirectory);
+            if (hadPrevious)
+                Directory.Move(finalDirectory, backupDirectory);
+            try
+            {
+                Directory.Move(stagingDirectory, finalDirectory);
+            }
+            catch
+            {
+                if (hadPrevious && !Directory.Exists(finalDirectory))
+                    Directory.Move(backupDirectory, finalDirectory);
+                throw;
+            }
+            DeleteDirectoryBestEffort(backupDirectory);
+        }
+
+        static void DeleteDirectoryBestEffort(string path)
+        {
+            if (!Directory.Exists(path))
+                return;
+            try
+            {
+                Directory.Delete(path, recursive: true);
+            }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+        }
+
+        /// Make both extracted commands executable (no-op on Windows).
+        public static void MarkExecutable(string cliPath)
         {
             if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
                 return;
+            MarkExecutableFile(cliPath);
+            MarkExecutableFile(MergePath(cliPath));
+        }
+
+        /// A failed chmod must stop installation before the first CLI run.
+        static void MarkExecutableFile(string path)
+        {
             var res = RunProcess("chmod", "+x \"" + path + "\"", ".", RunTimeoutMs);
             if (res.ExitCode != 0)
                 throw new InvalidOperationException(

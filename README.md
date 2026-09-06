@@ -92,84 +92,66 @@ You do not need to set a token.
 
 ### Git merge
 
-PrefabLens can resolve semantic conflicts in Unity YAML files during `git merge`.
-Choose one setup mode for each clone.
+PrefabLens uses Git 2.39 or later to resolve Unity YAML conflicts during `git merge`.
 
-#### Personal repository setup
+Install both `prefablens` and `git-merge-prefablens` on `PATH`.
 
-Run these commands for one clone:
-
-```bash
-git config --local merge.prefablens.driver \
-  'prefablens merge-driver %O %A %B %P'
-git config --local mergetool.prefablens.cmd \
-  'prefablens mergetool "$BASE" "$LOCAL" "$REMOTE" "$MERGED"'
-git config --local mergetool.prefablens.trustExitCode true
-```
-
-Save the attributes block below in `.git/info/attributes`.
-
-#### Team setup
-
-Run these commands once on each development machine or user account:
+For one clone, run:
 
 ```bash
-git config --global merge.prefablens.driver \
-  'prefablens merge-driver %O %A %B %P'
-git config --global mergetool.prefablens.cmd \
-  'prefablens mergetool "$BASE" "$LOCAL" "$REMOTE" "$MERGED"'
-git config --global mergetool.prefablens.trustExitCode true
+prefablens setup-merge
 ```
 
-Commit the same attributes block below as `.gitattributes`.
+This command adds repository-local Git configuration and Unity YAML attributes in `.git/info/attributes`.
 
-```gitattributes
-*.prefab merge=prefablens
-*.unity merge=prefablens
-*.asset merge=prefablens
-*.mat merge=prefablens
-*.anim merge=prefablens
-*.controller merge=prefablens
-*.overrideController merge=prefablens
-*.physicMaterial merge=prefablens
-*.physicsMaterial2D merge=prefablens
-*.playable merge=prefablens
-*.mask merge=prefablens
-*.brush merge=prefablens
-*.flare merge=prefablens
-*.fontsettings merge=prefablens
-*.guiskin merge=prefablens
-*.giparams merge=prefablens
-*.renderTexture merge=prefablens
-*.spriteatlas merge=prefablens
-*.spriteatlasv2 merge=prefablens
-*.terrainlayer merge=prefablens
-*.mixer merge=prefablens
-*.shadervariants merge=prefablens
-*.preset merge=prefablens
-*.signal merge=prefablens
-*.lighting merge=prefablens
-*.scenetemplate merge=prefablens
-```
-
-#### Daily merge
-
-Run the normal Git commands:
+For a team, use shared attributes instead:
 
 ```bash
-git switch feature
+prefablens setup-merge --team
+```
+
+Commit the generated `.gitattributes`.
+
+Each clone requires this setup command once.
+Setup keeps existing attributes and unrelated Git configuration.
+
+Use the normal merge command:
+
+```bash
 git merge main
 ```
 
-If no semantic conflict exists, these commands complete the merge.
-If a Unity YAML conflict remains, run the mergetool for that path:
+PrefabLens merges independent Unity YAML changes automatically.
+If a Unity YAML conflict remains and a terminal is available, the merge UI opens.
+
+Resolve the values. Then select **Complete**.
+
+File deletion and rename conflicts offer a file choice before content resolution.
+PrefabLens applies the asset choice to matching `.meta` files.
+Ambiguous metadata conflicts stay unresolved.
+
+Other file formats use normal Git merge behavior.
+If other formats also conflict, those conflicts remain unresolved after PrefabLens resolves the Unity YAML conflicts.
+Before Git can complete the merge, every conflict must have a resolution.
+`--no-commit`, `--squash`, and `git merge --abort` remain available.
+Strategy options (`-X`) require Git 2.43 or later.
+
+If you quit or no terminal is available, unresolved text keeps Git conflict markers.
+The `merge.conflictStyle` configuration and `conflict-marker-size` attribute control the markers.
+Even when a line-based merge is clean, a semantic conflict can require markers.
+Binary and file deletion or rename conflicts keep the normal Git file representation.
+
+To complete the merge with another editor:
+
+1. Resolve the conflicts with your editor.
+2. Stage the resolved files with `git add`.
+3. Run `git merge --continue`.
+
+To reopen the Unity YAML content UI for one unresolved path:
 
 ```bash
 git mergetool --tool=prefablens -- Assets/Prefabs/Robot.prefab
-git merge --continue
 ```
-
-If other file formats also conflict, specify the Unity YAML path and use the suitable tool for each other file.
 
 ### CLI
 
@@ -208,22 +190,29 @@ The right pane shows the semantic diff for the selected asset.
 The window refreshes on focus.
 The **Refresh** control also refreshes the window.
 
-On first use, the package downloads the pinned `prefablens` CLI from GitHub
-Releases into `Library/PrefabLens/`.
+On first use, the package downloads a pinned CLI bundle from GitHub Releases.
+The bundle contains `prefablens` and `git-merge-prefablens` from the same release.
+The package installs both commands in `Library/PrefabLens/`.
 Git does not track this directory.
 
-To use a local binary:
+To use a local CLI bundle:
 
 1. Open Preferences > PrefabLens.
-2. Set **CLI path override** to an absolute path.
+2. Set **CLI path override** to the absolute path of `prefablens`.
 
 Alternatively, set the `PrefabLens.CliPath` EditorPrefs key to an absolute path.
+Keep `git-merge-prefablens` in the same directory.
+
+Both commands must report the same version.
+A manual bundle can use a version other than the pinned version.
+If the override is invalid, PrefabLens uses a valid downloaded bundle or offers a download.
 
 | Symptom                                               | What to do                                                                                         |
 | ----------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
 | `Download failed: …`                                  | Retry. If the retry fails, download the release zip. Then set the CLI path override.               |
+| `CLI path override … is invalid. …`                   | Put both commands from one release in the same directory. Or clear the CLI path override.          |
 | `prefablens exited with N` / one-line CLI error       | Make sure that the project is in a git repository. Make sure that git finishes within the timeout. |
-| `Could not parse CLI output (CLI version mismatch?):` | Clear the CLI path override. Or update the binary.                                                 |
+| `Could not parse CLI output (CLI version mismatch?):` | Clear the CLI path override. Or update both commands.                                              |
 | `prefablens timed out after 90s and was killed`       | Make sure that `git status` is fast in the repository.                                             |
 | Changed assets never appear                           | Switch Asset Serialization to Force Text.                                                          |
 
@@ -250,13 +239,16 @@ zig build run -- before.prefab after.prefab
 zig build wasm
 
 # Extension (build / test run zig build wasm when needed)
-cd extension && pnpm install && pnpm run build && pnpm test
+(cd extension && pnpm install && pnpm run build && pnpm test)
 
-# Editor (EditMode tests run on .NET, no Unity required)
-cd editor && dotnet test DotNetTests~/Tests
+# Editor (headless tests use real native CLI commands)
+zig build test-installation-binaries -Doptimize=ReleaseSafe
+PREFABLENS_TEST_BIN_DIR="$PWD/zig-out/bin" \
+PREFABLENS_TEST_ALT_BIN_DIR="$PWD/zig-out/test-alternate-bin" \
+  dotnet test editor/DotNetTests~/Tests
 
 # Site (build the CLI, WASM, and extension demo bundle first: `pnpm run demo`)
-cd site && node build.mjs
+(cd site && node build.mjs)
 ```
 
 Related documents:

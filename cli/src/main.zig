@@ -11,6 +11,8 @@ const merge_tree = @import("merge_tree.zig");
 const merge_tui = @import("merge_tui.zig");
 const merge_ui_state = @import("merge_ui_state.zig");
 const mergetool = @import("mergetool.zig");
+const merge_setup = @import("merge_setup.zig");
+const installation = @import("installation.zig");
 pub const resolve = @import("resolve.zig");
 pub const input = @import("input.zig");
 pub const display = @import("display.zig");
@@ -29,6 +31,7 @@ test {
     _ = merge_tui;
     _ = merge_ui_state;
     _ = mergetool;
+    _ = @import("git_merge_strategy.zig");
     _ = resolve;
     _ = input;
     _ = display;
@@ -787,6 +790,8 @@ const usage_line = "usage: prefablens [--json|--html] [--open] [--project DIR|--
 
 const help_text = usage_line ++
     \\
+    \\Git merge setup: prefablens setup-merge [--team]
+    \\
     \\Operands ending in a Unity YAML extension (.prefab, .unity, .asset, ...)
     \\are paths; anything else is a git ref.
     \\
@@ -1324,6 +1329,17 @@ pub fn main(init: std.process.Init) !u8 {
         return 2;
     };
     const code = switch (parsed) {
+        .setup_merge => |setup_args| blk: {
+            merge_setup.run(init.io, arena, setup_args, init.environ_map, stdout) catch |err| {
+                if (!try installation.writeError(stderr, err)) switch (err) {
+                    error.Git239Required => try stderr.writeAll("prefablens: Automatic merge needs Git 2.39 or later.\n"),
+                    error.InvalidSetupArguments => try stderr.writeAll("usage: prefablens setup-merge [--team]\n"),
+                    else => try stderr.print("prefablens: Merge setup failed: {s}.\n", .{@errorName(err)}),
+                };
+                break :blk @as(u8, 2);
+            };
+            break :blk @as(u8, 0);
+        },
         .diff => |diff_args| try run(
             init.io,
             arena,

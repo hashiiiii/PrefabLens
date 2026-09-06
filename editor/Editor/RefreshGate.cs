@@ -8,11 +8,10 @@ namespace PrefabLens
         bool refreshing;
         bool pendingRefresh;
         bool downloadAttempted;
-        string warnedOverride; // last missing-override path already logged (anti-spam memo)
+        string warnedOverride; // last override error already logged
 
-        /// Current missing-override path, null when the override is unset or valid.
-        /// Display state for the missing-CLI screen — distinct from the logged memo.
-        public string MissingOverride { get; private set; }
+        /// Current override error, or null when the override is unset or valid.
+        public string OverrideError { get; private set; }
 
         public enum Step
         {
@@ -25,7 +24,7 @@ namespace PrefabLens
         public struct Decision
         {
             public Step Step;
-            public string Warn; // non-null: log this missing-override path once
+            public string Warn; // non-null: log this override error once
         }
 
         /// Every refresh trigger (focus, button, base-ref edit, post-download) lands here.
@@ -38,16 +37,16 @@ namespace PrefabLens
                 pendingRefresh = true;
                 return new Decision { Step = Step.Wait };
             }
-            MissingOverride = loc.MissingOverride;
+            OverrideError = loc.OverrideError;
             string warn = null;
-            if (loc.MissingOverride != null && loc.MissingOverride != warnedOverride)
+            if (loc.OverrideError != null && loc.OverrideError != warnedOverride)
             {
-                warnedOverride = loc.MissingOverride;
-                warn = loc.MissingOverride;
+                warnedOverride = loc.OverrideError;
+                warn = loc.OverrideError;
             }
-            else if (loc.MissingOverride == null)
+            else if (loc.OverrideError == null)
             {
-                // The override is gone or valid again: stop reporting it and re-arm the warning.
+                // The override is unset or valid again. A later error can produce a new warning.
                 warnedOverride = null;
             }
             if (loc.Path == null)

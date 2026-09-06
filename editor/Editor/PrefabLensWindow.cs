@@ -87,10 +87,13 @@ namespace PrefabLens
             var loc = Cli.Locate();
             var d = gate.OnRefresh(loc);
             if (d.Warn != null)
-                Debug.LogWarning(
-                    $"PrefabLens: EditorPrefs '{Cli.CliPathPref}' points at a missing file: "
-                        + $"{d.Warn}. Falling back to the default location."
-                );
+            {
+                var next =
+                    loc.Path != null
+                        ? $"PrefabLens will use '{loc.Path}'."
+                        : $"PrefabLens will download v{Cli.Version}.";
+                Debug.LogWarning($"PrefabLens: CLI path override '{Cli.CliPathPref}' is invalid. {d.Warn} {next}");
+            }
             switch (d.Step)
             {
                 case RefreshGate.Step.Run:
@@ -231,9 +234,9 @@ namespace PrefabLens
             content.Clear();
             if (downloadError != null)
                 Note($"Download failed: {downloadError}");
-            if (gate.MissingOverride != null)
-                Note($"Override '{Cli.CliPathPref}' points at a missing file: {gate.MissingOverride}");
-            Note($"prefablens CLI not found (v{Cli.Version}).");
+            if (gate.OverrideError != null)
+                Note($"CLI path override '{Cli.CliPathPref}' is invalid. {gate.OverrideError}");
+            Note($"PrefabLens CLI bundle v{Cli.Version} was not found.");
             content.Add(
                 new Button(StartDownload)
                 {
@@ -241,7 +244,7 @@ namespace PrefabLens
                     style = { alignSelf = Align.FlexStart, marginLeft = 6 },
                 }
             );
-            Note($"Or set a manual path via EditorPrefs key '{Cli.CliPathPref}'.");
+            Note("Or select a complete CLI bundle in Preferences > PrefabLens.");
         }
 
         /// Shared by the automatic trigger in Refresh and the manual retry button.

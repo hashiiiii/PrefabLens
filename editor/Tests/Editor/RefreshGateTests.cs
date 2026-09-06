@@ -8,7 +8,7 @@ namespace PrefabLens.Tests
 
         static Cli.Location NotFound() => new Cli.Location(null, null);
 
-        static Cli.Location MissingOverride(string over, string fallback) => new Cli.Location(fallback, over);
+        static Cli.Location InvalidOverride(string error, string fallback) => new Cli.Location(fallback, error);
 
         [Test]
         public void RefreshWithACliRunsAndGatesReentry()
@@ -55,22 +55,27 @@ namespace PrefabLens.Tests
         }
 
         [Test]
-        public void MissingOverrideWarnsOncePerPathAndRearmsWhenCleared()
+        public void InvalidOverrideWarnsOncePerErrorAndRearmsWhenCleared()
         {
             var gate = new RefreshGate();
-            Assert.AreEqual("/gone", gate.OnRefresh(MissingOverride("/gone", "bin/prefablens")).Warn);
+            Assert.AreEqual(
+                "missing companion",
+                gate.OnRefresh(InvalidOverride("missing companion", "bin/prefablens")).Warn
+            );
             Assert.IsFalse(gate.OnRunDone(canceled: false));
-            // Same broken path on the next refresh: state visible, no repeat warning.
-            var repeat = gate.OnRefresh(MissingOverride("/gone", "bin/prefablens"));
+            // The next refresh keeps the state visible without a duplicate warning.
+            var repeat = gate.OnRefresh(InvalidOverride("missing companion", "bin/prefablens"));
             Assert.IsNull(repeat.Warn);
-            Assert.AreEqual("/gone", gate.MissingOverride);
+            Assert.AreEqual("missing companion", gate.OverrideError);
             gate.OnRunDone(canceled: false);
-            // Override fixed: the state clears and the warning re-arms.
+            // A valid override clears the state. The same later error produces a warning.
             gate.OnRefresh(Found("bin/prefablens"));
-            Assert.IsNull(gate.MissingOverride);
+            Assert.IsNull(gate.OverrideError);
             gate.OnRunDone(canceled: false);
-            // The same path breaking again warns again.
-            Assert.AreEqual("/gone", gate.OnRefresh(MissingOverride("/gone", "bin/prefablens")).Warn);
+            Assert.AreEqual(
+                "missing companion",
+                gate.OnRefresh(InvalidOverride("missing companion", "bin/prefablens")).Warn
+            );
         }
 
         [Test]

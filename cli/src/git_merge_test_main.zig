@@ -244,12 +244,6 @@ const order_theirs =
     \\MonoBehaviour:
     \\  m_Value: 2
 ++ "\n";
-const order_partial =
-    \\--- !u!21 &2
-    \\Material:
-    \\  m_Name: Added
-++ "\n" ++ order_base;
-
 pub fn main(init: std.process.Init) !u8 {
     var arena_state = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena_state.deinit();
@@ -276,43 +270,44 @@ pub fn main(init: std.process.Init) !u8 {
     try testStandaloneDocumentMerge(io, arena, scratch, prefablens, true);
     try testDocumentOrderConflict(io, arena, scratch, prefablens);
     try testHeaderMerge(io, arena, scratch, prefablens);
-    try testFailurePreservesOurs(io, arena, scratch, prefablens, "source-comment", .{
+    try testUnsupportedConflictPreservesSources(io, arena, scratch, prefablens, "source-comment", .{
         .path = "Assets/A.prefab",
         .base = comment_base,
         .ours = comment_ours,
         .theirs = comment_theirs,
     });
-    try testFailurePreservesOurs(io, arena, scratch, prefablens, "sequence-comment", .{
+    try testUnsupportedConflictPreservesSources(io, arena, scratch, prefablens, "sequence-comment", .{
         .path = "Assets/Conflict.prefab",
         .base = sequence_comment_base,
         .ours = sequence_comment_ours,
         .theirs = sequence_comment_theirs,
     });
-    try testFailurePreservesOurs(io, arena, scratch, prefablens, "document-delete-source", .{
+    try testUnsupportedConflictPreservesSources(io, arena, scratch, prefablens, "document-delete-source", .{
         .path = "Assets/A.prefab",
         .base = document_delete_base,
         .ours = document_delete_ours,
         .theirs = "",
     });
-    try testFailurePreservesOurs(io, arena, scratch, prefablens, "malformed", .{
+    try testUnsupportedConflictPreservesSources(io, arena, scratch, prefablens, "malformed", .{
         .path = "Assets/A.prefab",
         .base = automatic_base,
         .ours = "not Unity YAML\n",
         .theirs = automatic_theirs,
     });
-    try testFailurePreservesOurs(io, arena, scratch, prefablens, "duplicate-key", .{
+    try testUnsupportedConflictPreservesSources(io, arena, scratch, prefablens, "duplicate-key", .{
         .path = "Assets/A.prefab",
         .base = automatic_base,
         .ours = duplicate_key_ours,
         .theirs = automatic_theirs,
     });
-    try testFailurePreservesOurs(io, arena, scratch, prefablens, "unknown-sequence", .{
+    try testUnsupportedConflictPreservesSources(io, arena, scratch, prefablens, "unknown-sequence", .{
         .path = "Assets/A.prefab",
         .base = sequence_base,
         .ours = sequence_ours,
         .theirs = sequence_theirs,
     });
     try testTextConflictUsesDefaultDriver(io, arena, scratch, prefablens);
+    try testConflictStyles(io, arena, scratch, prefablens);
 
     try std.Io.File.stdout().writeStreamingAll(io, "git merge integration: passed\n");
     return 0;
@@ -390,16 +385,12 @@ fn testSemanticConflict(
     try require(std.mem.indexOf(u8, unmerged.stdout, " 1\tAssets/A.prefab\n") != null, "missing stage 1");
     try require(std.mem.indexOf(u8, unmerged.stdout, " 2\tAssets/A.prefab\n") != null, "missing stage 2");
     try require(std.mem.indexOf(u8, unmerged.stdout, " 3\tAssets/A.prefab\n") != null, "missing stage 3");
-    if (!std.mem.eql(u8, conflict_base, try readFile(io, arena, repo, "Assets/A.prefab"))) {
-        std.debug.print("semantic merge stdout:\n{s}\nstderr:\n{s}\n", .{ result.stdout, result.stderr });
-    }
-    try expectFile(io, arena, repo, "Assets/A.prefab", conflict_base);
-
-    const partial = try readFile(io, arena, repo, "Assets/A.prefab");
-    // The delete/edit component is atomic: neither the reference nor its document may disappear alone.
-    try require(std.mem.indexOf(u8, partial, "component: {fileID: 54}") != null, "partial leaked the component-list deletion");
-    try require(std.mem.indexOf(u8, partial, "--- !u!54 &54") != null, "partial leaked the component document deletion");
-    try require(std.mem.indexOf(u8, partial, "m_Mass: 2") == null, "partial leaked the conflicting edit");
+    const markers = try expectMarkers(io, arena, repo, "Assets/A.prefab");
+    try require(std.mem.indexOf(u8, markers, "m_Mass: 2") != null, "markers lost the conflicting edit");
+    // The full original component list and document remain available in the index.
+    try expectStage(io, arena, repo, "Assets/A.prefab", 1, conflict_base);
+    try expectStage(io, arena, repo, "Assets/A.prefab", 2, conflict_ours);
+    try expectStage(io, arena, repo, "Assets/A.prefab", 3, conflict_theirs);
 }
 
 fn testStandaloneDocumentMerge(
@@ -443,8 +434,7 @@ fn testDocumentOrderConflict(
 
     const result = try gitRun(io, arena, repo, &.{ "merge", "--no-edit", "remote" });
     try expectCode(result, 1, "document order conflict");
-    try expectFile(io, arena, repo, "Assets/A.prefab", order_partial);
-    const merged = try readFile(io, arena, repo, "Assets/A.prefab");
+    const merged = try expectMarkers(io, arena, repo, "Assets/A.prefab");
     const material = std.mem.indexOf(u8, merged, "--- !u!21 &2") orelse
         return error.TestUnexpectedResult;
     const behaviour = std.mem.indexOf(u8, merged, "--- !u!114 &1") orelse
@@ -472,7 +462,7 @@ fn testHeaderMerge(
     try expectFile(io, arena, repo, "Assets/A.prefab", header_expected);
 }
 
-fn testFailurePreservesOurs(
+fn testUnsupportedConflictPreservesSources(
     io: std.Io,
     arena: std.mem.Allocator,
     scratch: []const u8,
@@ -485,11 +475,10 @@ fn testFailurePreservesOurs(
     try prepareRepository(io, arena, repo, prefablens, .local, &files);
     const result = try gitRun(io, arena, repo, &.{ "merge", "--no-edit", "remote" });
     try expectNonzero(result, name);
-    try require(
-        std.mem.indexOf(u8, result.stderr, "PrefabLens did not write the output") != null,
-        "unsupported merge did not report the no-write contract",
-    );
-    try expectFile(io, arena, repo, file.path, file.ours);
+    _ = try expectMarkers(io, arena, repo, file.path);
+    try expectStage(io, arena, repo, file.path, 1, file.base);
+    try expectStage(io, arena, repo, file.path, 2, file.ours);
+    try expectStage(io, arena, repo, file.path, 3, file.theirs);
 }
 
 fn testTextConflictUsesDefaultDriver(
@@ -513,6 +502,50 @@ fn testTextConflictUsesDefaultDriver(
     try require(std.mem.indexOf(u8, merged, "<<<<<<<") != null, "text conflict did not use Git's default driver");
 }
 
+fn testConflictStyles(
+    io: std.Io,
+    arena: std.mem.Allocator,
+    scratch: []const u8,
+    prefablens: []const u8,
+) !void {
+    for ([_][]const u8{ "merge", "diff3", "zdiff3" }) |style| {
+        const repo = try std.fs.path.join(arena, &.{ scratch, style });
+        const file: FileSides = .{
+            .path = "Assets/Style.prefab",
+            .base = standalone_base,
+            .ours = standalone_ours,
+            .theirs = "--- !u!114 &1\nMonoBehaviour:\n  m_Value: 3\n",
+        };
+        try prepareRepository(io, arena, repo, prefablens, .local, &.{file});
+        try gitOk(io, arena, repo, &.{ "config", "merge.conflictStyle", style });
+        try writeFile(io, arena, repo, ".git/info/attributes", "*.prefab merge=prefablens conflict-marker-size=11\n");
+        const merged = try gitRun(io, arena, repo, &.{ "merge", "--no-edit", "remote" });
+        try expectCode(merged, 1, "merge with conflict style");
+        const expected = try std.fmt.allocPrint(arena, "--- !u!114 &1\nMonoBehaviour:\n<<<<<<<<<<< ours\n  m_Value: 2\n{s}===========\n  m_Value: 3\n>>>>>>>>>>> theirs\n", .{if (std.mem.eql(u8, style, "merge")) "" else "||||||||||| base\n  m_Value: 1\n"});
+        try expectFile(io, arena, repo, file.path, expected);
+
+        // Unsupported semantic input still needs markers when native text merging is clean.
+        try writeFile(io, arena, repo, ".git/fallback-base", sequence_base);
+        try writeFile(io, arena, repo, ".git/fallback-ours", sequence_ours);
+        try writeFile(io, arena, repo, ".git/fallback-theirs", sequence_base);
+        const text_merge = try gitRun(io, arena, repo, &.{
+            "merge-file", "-p", ".git/fallback-ours", ".git/fallback-base", ".git/fallback-theirs",
+        });
+        try expectCode(text_merge, 0, "native text merge for unsupported sequence");
+        const fallback = try std.process.run(arena, io, .{
+            .argv = &.{ prefablens, "merge-driver", ".git/fallback-base", ".git/fallback-ours", ".git/fallback-theirs", file.path, "11" },
+            .cwd = .{ .path = repo },
+            .stdout_limit = .limited(1024 * 1024),
+            .stderr_limit = .limited(1024 * 1024),
+            .timeout = .{ .duration = .{ .clock = .awake, .raw = .fromSeconds(30) } },
+        });
+        try expectCode(fallback, 1, "whole-file semantic fallback");
+        const base_block = if (std.mem.eql(u8, style, "merge")) "" else "||||||||||| base\n" ++ sequence_base;
+        const whole_expected = try std.fmt.allocPrint(arena, "<<<<<<<<<<< ours\n" ++ sequence_ours ++ "{s}===========\n" ++ sequence_base ++ ">>>>>>>>>>> theirs\n", .{base_block});
+        try expectFile(io, arena, repo, ".git/fallback-ours", whole_expected);
+    }
+}
+
 pub fn prepareRepository(
     io: std.Io,
     arena: std.mem.Allocator,
@@ -531,8 +564,8 @@ pub fn prepareRepository(
     try gitOk(io, arena, repo, &.{ "config", "merge.prefablens.name", "PrefabLens semantic merge" });
     const driver = try std.fmt.allocPrint(
         arena,
-        "{s} merge-driver %O %A %B %P",
-        .{try shellQuote(arena, prefablens)},
+        "{s} merge-driver %O %A %B %P %L",
+        .{try shellQuote(arena, try normalizeExecutablePathForGitShell(arena, prefablens, builtin.os.tag == .windows))},
     );
     try gitOk(io, arena, repo, &.{ "config", "merge.prefablens.driver", driver });
     try installAttributes(io, arena, repo, mode);
@@ -568,6 +601,7 @@ fn configureHermeticRepository(io: std.Io, arena: std.mem.Allocator, repo: []con
     try gitOk(io, arena, repo, &.{ "config", "core.hooksPath", disabled_hooks });
     try gitOk(io, arena, repo, &.{ "config", "commit.gpgSign", "false" });
     try gitOk(io, arena, repo, &.{ "config", "merge.default", "text" });
+    try gitOk(io, arena, repo, &.{ "config", "merge.conflictStyle", "merge" });
     try gitOk(io, arena, repo, &.{ "config", "rerere.enabled", "false" });
     try gitOk(io, arena, repo, &.{ "config", "rerere.autoupdate", "false" });
 }
@@ -689,6 +723,21 @@ pub fn expectFile(
         std.debug.print("integration file mismatch for {s}\nexpected:\n{s}\nactual:\n{s}\n", .{ relative, expected, actual });
         return error.IntegrationFileMismatch;
     }
+}
+
+pub fn expectMarkers(io: std.Io, arena: std.mem.Allocator, repo: []const u8, relative: []const u8) ![]const u8 {
+    const bytes = try readFile(io, arena, repo, relative);
+    try require(std.mem.indexOf(u8, bytes, "<<<<<<<") != null, "missing opening conflict marker");
+    try require(std.mem.indexOf(u8, bytes, "=======") != null, "missing conflict separator");
+    try require(std.mem.indexOf(u8, bytes, ">>>>>>>") != null, "missing closing conflict marker");
+    return bytes;
+}
+
+fn expectStage(io: std.Io, arena: std.mem.Allocator, repo: []const u8, path: []const u8, stage: u8, expected: []const u8) !void {
+    const spec = try std.fmt.allocPrint(arena, ":{d}:{s}", .{ stage, path });
+    const result = try gitRun(io, arena, repo, &.{ "show", spec });
+    try expectCode(result, 0, "read original index stage");
+    try require(std.mem.eql(u8, result.stdout, expected), "index stage lost original source bytes");
 }
 
 pub fn gitRun(

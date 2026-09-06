@@ -111,7 +111,7 @@ fn testDeletionChoices(
         );
         const merge = try integration.gitRun(io, arena, repo, &.{ "merge", "--no-edit", "remote" });
         try integration.expectNonzero(merge, "prepare deletion conflict");
-        try integration.expectFile(io, arena, repo, "Assets/Conflict.prefab", case.ours);
+        _ = try integration.expectMarkers(io, arena, repo, "Assets/Conflict.prefab");
 
         const result = try runMergetoolInPty(io, arena, repo, case.keys, 30);
         try integration.expectCode(result, 0, "choose deletion in PTY");
@@ -144,7 +144,7 @@ fn testVisibleLabelAssertion() !void {
     );
 }
 
-fn terminalCaptureContains(capture: []const u8, needle: []const u8) bool {
+pub fn terminalCaptureContains(capture: []const u8, needle: []const u8) bool {
     var cells: [capture_height][capture_width]u8 = undefined;
     for (&cells) |*screen_row| @memset(screen_row, ' ');
     var row: usize = 0;
@@ -282,14 +282,14 @@ fn testCompletion(
     const repo = try prepareMergetoolRepository(io, arena, scratch, prefablens, "complete");
     const merge = try integration.gitRun(io, arena, repo, &.{ "merge", "--no-edit", "remote" });
     try integration.expectNonzero(merge, "prepare mergetool completion conflict");
-    try integration.expectFile(io, arena, repo, "Assets/Conflict.prefab", conflict_ours);
+    const markers = try integration.expectMarkers(io, arena, repo, "Assets/Conflict.prefab");
 
     // The mouse click focuses Result. The first key starts editing and replaces the value.
     // The first Enter applies Result. The second Enter confirms Complete.
     const result = runMergetoolInPty(io, arena, repo, "\x1b[<0;83;5M4\r\r", 30) catch |err| {
         if (err == error.Timeout) {
-            // A timed-out TUI must not silently change the driver's safe partial result.
-            try integration.expectFile(io, arena, repo, "Assets/Conflict.prefab", conflict_ours);
+            // A timed-out TUI must leave the original conflict markers available.
+            try integration.expectFile(io, arena, repo, "Assets/Conflict.prefab", markers);
             return error.PtyMergetoolTimeout;
         }
         return err;
@@ -338,7 +338,7 @@ fn testBackspaceBeforeEditing(
     const repo = try prepareMergetoolRepository(io, arena, scratch, prefablens, "backspace");
     const merge = try integration.gitRun(io, arena, repo, &.{ "merge", "--no-edit", "remote" });
     try integration.expectNonzero(merge, "prepare mergetool Backspace conflict");
-    try integration.expectFile(io, arena, repo, "Assets/Conflict.prefab", conflict_ours);
+    _ = try integration.expectMarkers(io, arena, repo, "Assets/Conflict.prefab");
 
     // A raw DEL byte is the macOS Delete key and must work before a Result click.
     // Enter opens the dialog. Right and Enter apply the empty value. The final Enter confirms Complete.
@@ -361,19 +361,19 @@ fn testQuit(
     const repo = try prepareMergetoolRepository(io, arena, scratch, prefablens, "quit");
     const merge = try integration.gitRun(io, arena, repo, &.{ "merge", "--no-edit", "remote" });
     try integration.expectNonzero(merge, "prepare mergetool quit conflict");
-    try integration.expectFile(io, arena, repo, "Assets/Conflict.prefab", conflict_ours);
+    const markers = try integration.expectMarkers(io, arena, repo, "Assets/Conflict.prefab");
 
     // Quit must leave both the merge output and Git's conflict state untouched.
     const result = runMergetoolInPty(io, arena, repo, "\x1b[27uy", 30) catch |err| {
         if (err == error.Timeout) {
-            // Timeout cleanup is verified against the exact driver partial before failing.
-            try integration.expectFile(io, arena, repo, "Assets/Conflict.prefab", conflict_ours);
+            // Timeout cleanup is verified against the exact markers before failing.
+            try integration.expectFile(io, arena, repo, "Assets/Conflict.prefab", markers);
             return error.PtyMergetoolTimeout;
         }
         return err;
     };
     try integration.expectCode(result, 1, "quit mergetool in PTY");
-    try integration.expectFile(io, arena, repo, "Assets/Conflict.prefab", conflict_ours);
+    try integration.expectFile(io, arena, repo, "Assets/Conflict.prefab", markers);
     try integration.require(
         std.mem.indexOf(u8, result.stdout, "Abort") == null and
             std.mem.indexOf(u8, result.stderr, "Abort") == null,
@@ -402,12 +402,12 @@ fn testTimeout(
     const repo = try prepareMergetoolRepository(io, arena, scratch, prefablens, "timeout");
     const merge = try integration.gitRun(io, arena, repo, &.{ "merge", "--no-edit", "remote" });
     try integration.expectNonzero(merge, "prepare mergetool timeout conflict");
-    try integration.expectFile(io, arena, repo, "Assets/Conflict.prefab", conflict_ours);
+    const markers = try integration.expectMarkers(io, arena, repo, "Assets/Conflict.prefab");
 
     _ = runMergetoolInPty(io, arena, repo, "", 3) catch |err| switch (err) {
         error.Timeout => {
             // A successful abort proves that the timed-out mergetool released Git's merge state.
-            try integration.expectFile(io, arena, repo, "Assets/Conflict.prefab", conflict_ours);
+            try integration.expectFile(io, arena, repo, "Assets/Conflict.prefab", markers);
             try integration.gitOk(io, arena, repo, &.{ "merge", "--abort" });
             try integration.expectFile(io, arena, repo, "Assets/Conflict.prefab", conflict_ours);
             return;
@@ -460,9 +460,33 @@ fn runMergetoolInPty(
     input_keys: []const u8,
     timeout_seconds: i64,
 ) !std.process.RunResult {
+    return runCommandInPty(io, arena, repository, "git mergetool --no-prompt --tool=prefablens -- Assets/Conflict.prefab", input_keys, timeout_seconds);
+}
+
+pub fn runCommandInPty(
+    io: std.Io,
+    arena: std.mem.Allocator,
+    repository: []const u8,
+    git_command: []const u8,
+    input_keys: []const u8,
+    timeout_seconds: i64,
+) !std.process.RunResult {
+    return runCommandInPtyBatches(io, arena, repository, git_command, input_keys, "", timeout_seconds);
+}
+
+pub fn runCommandInPtyBatches(
+    io: std.Io,
+    arena: std.mem.Allocator,
+    repository: []const u8,
+    git_command: []const u8,
+    input_keys: []const u8,
+    second_keys: []const u8,
+    timeout_seconds: i64,
+) !std.process.RunResult {
+    const terminal_command = try integration.shellQuote(arena, try std.fmt.allocPrint(arena, "stty cols 100 rows 24; exec {s}", .{git_command}));
     const shell_command = switch (builtin.os.tag) {
-        .linux => "script -qfec 'stty cols 100 rows 24; exec git mergetool --no-prompt --tool=prefablens -- Assets/Conflict.prefab' /dev/null",
-        .macos => "script -q /dev/null sh -c 'stty cols 100 rows 24; exec git mergetool --no-prompt --tool=prefablens -- Assets/Conflict.prefab'",
+        .linux => try std.fmt.allocPrint(arena, "script -qfec {s} /dev/null", .{terminal_command}),
+        .macos => try std.fmt.allocPrint(arena, "script -q /dev/null sh -c {s}", .{terminal_command}),
         else => unreachable,
     };
     const command = try std.fmt.allocPrint(
@@ -478,6 +502,16 @@ fn runMergetoolInPty(
         \\done
         \\sleep 1
         \\printf '%s' "$1"
+        \\if [ -n "$2" ]; then
+        \\  i=0
+        \\  while [ "$i" -lt 10 ]; do
+        \\    printf '\033[?1;2c'
+        \\    sleep 0.1
+        \\    i=$((i + 1))
+        \\  done
+        \\  sleep 1
+        \\  printf '%s' "$2"
+        \\fi
         \\i=0
         \\while [ "$i" -lt 100 ]; do
         \\  sleep 0.1
@@ -495,7 +529,7 @@ fn runMergetoolInPty(
         .{shell_command},
     );
     return std.process.run(arena, io, .{
-        .argv = &.{ "sh", "-c", command, "prefablens-keys", input_keys },
+        .argv = &.{ "sh", "-c", command, "prefablens-keys", input_keys, second_keys },
         .cwd = .{ .path = repository },
         .stdout_limit = .limited(1024 * 1024),
         .stderr_limit = .limited(1024 * 1024),

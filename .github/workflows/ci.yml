@@ -24,16 +24,17 @@ jobs:
       - name: Version sync guard
         if: matrix.os == 'ubuntu-latest'
         run: .github/scripts/check-version-sync.sh
-      - name: Packaging render test
-        # Plain bash + coreutils; folded here so it does not need its own runner
-        if: matrix.os == 'ubuntu-latest'
-        run: cli/pkg/render_test.sh
       - name: Install tools
         uses: jdx/mise-action@v4
       - name: Restore Zig global cache
         # Windows Zig caching was measured as not worth it (see PR #36 context)
         if: matrix.os == 'ubuntu-latest'
         uses: ./.github/actions/setup-zig-cache
+      - name: Packaging render test
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          zig build -Dtarget=x86_64-linux-gnu -Doptimize=ReleaseSafe --prefix .zig-cache/release-check/x86_64-linux-gnu
+          cli/pkg/render_test.sh .zig-cache/release-check/x86_64-linux-gnu/bin
       - name: Lint
         run: zig build lint
       - name: Test
@@ -122,6 +123,8 @@ jobs:
           key: ${{ runner.os }}-nuget-${{ hashFiles('editor/**/*.csproj', 'editor/.config/dotnet-tools.json') }}
           restore-keys: |
             ${{ runner.os }}-nuget-
+      - name: Build real CLI test bundles
+        run: zig build test-installation-binaries -Doptimize=ReleaseSafe
       - name: Lint
         working-directory: editor
         run: |
@@ -130,6 +133,9 @@ jobs:
       - name: Test
         working-directory: editor
         run: dotnet test DotNetTests~/Tests
+        env:
+          PREFABLENS_TEST_BIN_DIR: ${{ github.workspace }}/zig-out/bin
+          PREFABLENS_TEST_ALT_BIN_DIR: ${{ github.workspace }}/zig-out/test-alternate-bin
 
   site:
     runs-on: ubuntu-latest

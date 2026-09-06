@@ -75,20 +75,30 @@ The pinned CLI version is `Cli.Version` in `Editor/Cli.cs`.
 Release automation keeps it in sync with `editor/package.json` and
 `build.zig.zon`.
 
-Download target (relative to the project root):
+The package treats two commands from one release as one CLI bundle:
 
-`Library/PrefabLens/<version>/prefablens` (`.exe` on Windows)
+- `Library/PrefabLens/<version>/prefablens`
+- `Library/PrefabLens/<version>/git-merge-prefablens`
+
+Both names have an `.exe` suffix on Windows.
 
 `Library/` is not for version control.
-The binary must not enter the repository.
+The CLI bundle must not enter the repository.
 
-On first need, the package downloads the pinned zip from GitHub Releases.
-It fetches `SHA256SUMS` first and compares the zip digest before extract.
-A mismatch aborts the install.
-On macOS/Linux it marks the binary executable.
-A failed `chmod` fails the download.
+On first use, the package downloads the pinned ZIP from GitHub Releases.
+It compares the ZIP digest with `SHA256SUMS` before extraction.
+The archive must contain both command names at its root.
+
+The package extracts the archive into a staging directory.
+On macOS and Linux, it marks both commands as executable.
+It runs `--version` for both commands from the staging directory.
+Both commands must report `Cli.Version`.
+
+After these checks pass, the package replaces the version directory.
+A failed check leaves an existing cache unchanged.
 After a successful install, it deletes older cached versions under
 `Library/PrefabLens/`.
+
 The download has a 120 s cap.
 The window can cancel it.
 
@@ -96,18 +106,24 @@ The window can cancel it.
 
 Preferences store an optional absolute path in EditorPrefs key
 `PrefabLens.CliPath` (per machine, not per project).
+This path selects `prefablens`.
+The package requires `git-merge-prefablens` in the same directory.
 
 Resolution order:
 
-1. If the override is set and the file exists, the package uses the override.
-2. If the override is set and the file is missing, the package uses the
-   downloaded binary when that file exists. Otherwise the CLI is missing, and
-   the package reports the broken override.
-3. If no override is set, the package uses the downloaded binary when that file
-   exists. Otherwise the CLI is missing, and the window can start a download.
+1. If both commands run and report the same version, the package uses the override.
+   A manual bundle can use a version other than `Cli.Version`.
+2. If the override is invalid, the package reports the cause.
+   If a valid downloaded bundle exists, the package uses that bundle.
+   Otherwise, the window offers the pinned download.
+3. If the override is empty, the package uses a downloaded bundle that matches `Cli.Version`.
+   If either command fails the version check, the window offers the pinned download.
 
-The package reports a missing override in the console (once per distinct missing
-path), on the missing-CLI screen, and on the Preferences page.
+During a window refresh or a Preferences update, the package makes sure that the command versions are compatible.
+It does not run version commands during a UI repaint.
+
+The package reports an invalid override in the console once per distinct error.
+It also reports the error on the missing-CLI screen and the Preferences page.
 
 ### Guid resolution in the UI
 
@@ -127,26 +143,34 @@ mise install
 Then run the headless Editor checks:
 
 ```bash
+mise exec -- zig build test-installation-binaries -Doptimize=ReleaseSafe
 cd editor
 dotnet tool restore
 dotnet csharpier check . --no-msbuild-check
-dotnet test DotNetTests~/Tests
+PREFABLENS_TEST_BIN_DIR="$PWD/../zig-out/bin" \
+PREFABLENS_TEST_ALT_BIN_DIR="$PWD/../zig-out/test-alternate-bin" \
+  dotnet test DotNetTests~/Tests
 ```
 
-These commands do not need the Unity Editor app.
+The installation tests run real native commands from both directories.
+The headless C# harness does not need the Unity Editor app.
 
 For `Tests/Editor/` EditMode tests:
 
-1. Open the package in Unity 2022.3 or newer.
-2. Run the EditMode test runner there.
+1. Build the two native test bundles with the build command in this section.
+2. Set `PREFABLENS_TEST_BIN_DIR` and `PREFABLENS_TEST_ALT_BIN_DIR` for the Unity process.
+3. Open the package in Unity 2022.3 or newer.
+4. Run the EditMode test runner there.
 
 For a local CLI build from the Editor:
 
+Windows executable names have an `.exe` suffix.
+
 1. Build the CLI with `zig build` at the repository root.
-2. Set `PrefabLens.CliPath` to the absolute path of `zig-out/bin/prefablens`
-   (add `.exe` on Windows).
-3. Open **Window > PrefabLens**.
-4. Refresh the window.
+2. Set `PrefabLens.CliPath` to the absolute path of `zig-out/bin/prefablens`.
+3. Keep `git-merge-prefablens` in the same directory.
+4. Open **Window > PrefabLens**.
+5. Refresh the window.
 
 CI runs csharpier and `DotNetTests~/` in the `editor` job of
 [`.github/workflows/ci.yml`](../.github/workflows/ci.yml).

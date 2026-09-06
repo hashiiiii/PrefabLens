@@ -8,8 +8,7 @@ namespace PrefabLens
     /// page can never drift from the window's resolution behavior.
     public static class PrefabLensSettings
     {
-        /// One line naming the binary Locate would run right now, tagged with its source
-        /// (the broken-override case gets its own MissingOverrideNote line instead).
+        /// One line that names the binary that Locate will run.
         public static string ResolvedLabel(Cli.Location loc, string version)
         {
             if (loc.Path == null)
@@ -18,9 +17,9 @@ namespace PrefabLens
             return $"Resolved CLI ({source}): {loc.Path}";
         }
 
-        /// Warning line for an override pointing at a missing file; null when healthy.
-        public static string MissingOverrideNote(Cli.Location loc) =>
-            loc.MissingOverride != null ? $"Override points at a missing file: {loc.MissingOverride}" : null;
+        /// Warning line for an invalid override, or null when the override is valid or unset.
+        public static string OverrideErrorNote(Cli.Location loc) =>
+            loc.OverrideError != null ? $"CLI path override is invalid. {loc.OverrideError}" : null;
 
         [SettingsProvider]
         public static SettingsProvider Create() =>
@@ -43,7 +42,7 @@ namespace PrefabLens
                 // Commit on Enter or focus loss so each edit re-resolves exactly once.
                 isDelayed = true,
                 tooltip =
-                    $"Manual prefablens binary. Empty = auto-download v{Cli.Version} under Library. "
+                    $"Select prefablens next to {Cli.MergeBinaryName}. Empty = auto-download v{Cli.Version} under Library. "
                     + $"Stored in EditorPrefs '{Cli.CliPathPref}'.",
             };
             path.RegisterValueChangedCallback(e =>
@@ -85,7 +84,7 @@ namespace PrefabLens
         {
             var loc = Cli.Locate();
             resolved.text = ResolvedLabel(loc, Cli.Version);
-            warning.text = MissingOverrideNote(loc) ?? "";
+            warning.text = OverrideErrorNote(loc) ?? "";
         }
     }
 }

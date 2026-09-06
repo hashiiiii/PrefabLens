@@ -64,12 +64,14 @@ pub fn main(init: std.process.Init) !u8 {
     defer arena_state.deinit();
     const arena = arena_state.allocator();
     const args = try init.minimal.args.toSlice(arena);
-    try integration.require(args.len == 2, "expected the prefablens executable path");
+    try integration.require(args.len == 2 or (args.len == 3 and std.mem.eql(u8, args[2], "--readiness")), "expected the prefablens executable path and optional --readiness");
     const prefablens = try std.Io.Dir.cwd().realPathFileAlloc(io, args[1], arena);
     const scratch = try integration.scratchDirectory(io, arena, "pty");
     defer std.Io.Dir.cwd().deleteTree(io, scratch) catch {};
 
     try testVisibleLabelAssertion();
+    try testDelayedTerminals(io, arena, scratch, prefablens);
+    if (args.len == 3) return 0;
     try testCompletion(io, arena, scratch, prefablens);
     try testBackspaceBeforeEditing(io, arena, scratch, prefablens);
     try testDeletionChoices(io, arena, scratch, prefablens);
@@ -325,6 +327,42 @@ fn applyCsi(
     }
 }
 
+fn testDelayedTerminals(io: std.Io, arena: std.mem.Allocator, scratch: []const u8, prefablens: []const u8) !void {
+    const first = try prepareMergetoolRepository(io, arena, scratch, prefablens, "delayed-first");
+    const second = try prepareMergetoolRepository(io, arena, scratch, prefablens, "delayed-second");
+    for ([_][]const u8{ first, second }) |repo| {
+        try integration.expectNonzero(try integration.gitRun(io, arena, repo, &.{ "merge", "--no-edit", "remote" }), "prepare delayed terminal conflict");
+    }
+    // Each real mergetool starts after the old fixed two-second key schedule.
+    // The second batch must wait for the second UI, not a redraw of the first.
+    const command = try std.fmt.allocPrint(
+        arena,
+        "sleep 3; git mergetool --no-prompt --tool=prefablens -- Assets/Conflict.prefab && sleep 3 && git -C {s} mergetool --no-prompt --tool=prefablens -- Assets/Conflict.prefab",
+        .{try integration.shellQuote(arena, second)},
+    );
+    const result = try runCommandInPtyBatches(io, arena, first, try std.fmt.allocPrint(arena, "sh -c {s}", .{try integration.shellQuote(arena, command)}), "\x1b[<0;83;5M4\r\r", "\x1b[<0;83;5M5\r\r", 15);
+    try integration.expectCode(result, 0, "delayed terminal batches");
+    const alternate_start = "\x1b[?1049h";
+    var session_start = std.mem.indexOf(u8, result.stdout, alternate_start);
+    var session_count: usize = 0;
+    while (session_start) |start| {
+        const next = std.mem.indexOfPos(u8, result.stdout, start + alternate_start.len, alternate_start);
+        try integration.require(terminalCaptureContains(result.stdout[start .. next orelse result.stdout.len], "Assets/Conflict.prefab"), "delayed terminal omitted its file header");
+        session_count += 1;
+        session_start = next;
+    }
+    try integration.require(session_count == 2, "delayed test did not open two terminal sessions");
+    try integration.expectFile(io, arena, first, "Assets/Conflict.prefab", conflict_resolved);
+    try integration.expectFile(io, arena, second, "Assets/Conflict.prefab", try std.mem.replaceOwned(u8, arena, conflict_resolved, "m_Value: 4", "m_Value: 5"));
+    for ([_][]const u8{ first, second }) |repo| {
+        const unmerged = try integration.gitRun(io, arena, repo, &.{ "ls-files", "--unmerged" });
+        try integration.expectCode(unmerged, 0, "delayed terminal index");
+        try integration.require(unmerged.stdout.len == 0, "delayed terminal left conflict stages");
+        try integration.gitOk(io, arena, repo, &.{ "merge", "--abort" });
+        try integration.expectFile(io, arena, repo, "Assets/Conflict.prefab", conflict_ours);
+    }
+}
+
 fn testCompletion(
     io: std.Io,
     arena: std.mem.Allocator,
@@ -526,6 +564,8 @@ pub fn runCommandInPty(
     return runCommandInPtyBatches(io, arena, repository, git_command, input_keys, "", timeout_seconds);
 }
 
+// A nonempty first batch advances to another terminal session before the second.
+// An empty first batch holds the initial UI for concurrent-mutation fixtures.
 pub fn runCommandInPtyBatches(
     io: std.Io,
     arena: std.mem.Allocator,
@@ -538,6 +578,7 @@ pub fn runCommandInPtyBatches(
     return runCommandInPtyThreeBatches(io, arena, repository, git_command, input_keys, second_keys, "", timeout_seconds);
 }
 
+// The third batch continues the second UI after it renders the second batch's result.
 pub fn runCommandInPtyThreeBatches(
     io: std.Io,
     arena: std.mem.Allocator,
@@ -556,14 +597,31 @@ pub fn runCommandInPtyThreeBatches(
     const terminal_command = try integration.shellQuote(arena, try std.fmt.allocPrint(arena, "stty cols 100 rows 24; exec {s}", .{git_command}));
     const shell_command = switch (builtin.os.tag) {
         .linux => try std.fmt.allocPrint(arena, "script -qfec {s} {s}", .{ terminal_command, capture_argument }),
-        .macos => try std.fmt.allocPrint(arena, "script -q {s} sh -c {s}", .{ capture_argument, terminal_command }),
+        .macos => try std.fmt.allocPrint(arena, "script -qF {s} sh -c {s}", .{ capture_argument, terminal_command }),
         else => unreachable,
     };
     const command = try std.fmt.allocPrint(
         arena,
-        // Keep the pipe open across raw-mode setup. The DA1 replies let libvaxis finish its
-        // capability query without consuming the actual merge keys before the first draw.
+        // DA1 replies complete capability discovery. A completed synchronized frame in
+        // the active alternate screen, rather than elapsed time, makes action keys safe.
+        // Keep the minimum delays used by fixtures that mutate state while a UI is open.
         \\(
+        \\capture_file=$4
+        \\wait_frame() {{
+        \\  min_session=$1
+        \\  min_frame=$2
+        \\  while :; do
+        \\    state=$(LC_ALL=C awk {s} "$capture_file" 2>/dev/null)
+        \\    set -- $state
+        \\    if [ "$#" -eq 4 ] && [ "$4" -eq 1 ] && [ "$3" -eq "$1" ] && [ "$1" -ge "$min_session" ] && [ "$2" -gt "$min_frame" ]; then
+        \\      observed_session=$1
+        \\      observed_frame=$2
+        \\      return
+        \\    fi
+        \\    printf '\033[?1;2c' || exit 0
+        \\    sleep 0.1
+        \\  done
+        \\}}
         \\i=0
         \\while [ "$i" -lt 10 ]; do
         \\  printf '\033[?1;2c'
@@ -571,6 +629,8 @@ pub fn runCommandInPtyThreeBatches(
         \\  i=$((i + 1))
         \\done
         \\sleep 1
+        \\wait_frame 1 0
+        \\first_session=$observed_session
         \\printf '%s' "$1"
         \\if [ -n "$2" ]; then
         \\  i=0
@@ -580,10 +640,18 @@ pub fn runCommandInPtyThreeBatches(
         \\    i=$((i + 1))
         \\  done
         \\  sleep 1
+        \\  if [ -n "$1" ]; then
+        \\    wait_frame "$((first_session + 1))" 0
+        \\  else
+        \\    wait_frame "$first_session" 0
+        \\  fi
+        \\  second_frame=$observed_frame
+        \\  second_session=$observed_session
         \\  printf '%s' "$2"
         \\fi
         \\if [ -n "$3" ]; then
         \\  sleep 2
+        \\  wait_frame "$second_session" "$second_frame"
         \\  printf '%s' "$3"
         \\fi
         \\i=0
@@ -600,10 +668,10 @@ pub fn runCommandInPtyThreeBatches(
         \\trap - HUP INT TERM
         \\exit "$status"
     ,
-        .{shell_command},
+        .{ try integration.shellQuote(arena, frame_probe), shell_command },
     );
     return std.process.run(arena, io, .{
-        .argv = &.{ "sh", "-c", command, "prefablens-keys", input_keys, second_keys, third_keys },
+        .argv = &.{ "sh", "-c", command, "prefablens-keys", input_keys, second_keys, third_keys, capture },
         .cwd = .{ .path = repository },
         .stdout_limit = .limited(1024 * 1024),
         .stderr_limit = .limited(1024 * 1024),
@@ -616,3 +684,14 @@ pub fn runCommandInPtyThreeBatches(
         return err;
     };
 }
+
+// libvaxis surrounds terminal sessions and synchronized renders with these CSI
+// sequences. A partial frame or a completed frame from an exited UI is not ready.
+const frame_probe =
+    \\BEGIN { RS="\033" }
+    \\/^\[\?1049h/ { session++; active=1; pending=0 }
+    \\/^\[\?1049l/ { active=0; pending=0 }
+    \\/^\[\?2026h/ { if (active) pending=1 }
+    \\/^\[\?2026l/ { if (active && pending) { frames++; complete=session }; pending=0 }
+    \\END { print session+0, frames+0, complete+0, active+0 }
+;

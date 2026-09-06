@@ -196,6 +196,15 @@
         "B:99",
         "C:1"
       ]
+    },
+    {
+      "name": "variant-dictionary-empty-key",
+      "conflict": false,
+      "counts": [
+        ":10",
+        "B:1",
+        "C:30"
+      ]
     }
   ]
 }

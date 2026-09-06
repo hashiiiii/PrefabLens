@@ -190,7 +190,11 @@ pub fn collect(arena: A, state: *binding.State, operations: *std.ArrayList(mm.Op
             var projections: [4]projection.Projection = undefined;
             var valid = true;
             for (snapshots, 0..) |snapshot, side| {
-                projections[side] = projection.project(arena, snapshot, if (side < 3) findDoc(files[side], document) else null, group.target, group.root) catch |err| switch (err) {
+                const outer: ?projection.Document = if (side < 3)
+                    if (findDoc(files[side], document)) |doc| .{ .file = files[side], .document = doc } else null
+                else
+                    null;
+                projections[side] = projection.project(arena, snapshot, outer, group.target, group.root) catch |err| switch (err) {
                     error.OutOfMemory => return error.OutOfMemory,
                     else => {
                         valid = false;
@@ -864,9 +868,9 @@ pub fn replacement(arena: A, plan: *const mm.MergePlan, link: Link, require_all:
     for (boundary.groups, expected, expected_sizes) |group, logical, size_explicit| {
         if (!group.collection or group.raw or logical == null) continue;
         const materialized = if (groupUsesCustom(plan, group))
-            projection.projectAcceptedExplicitGrowth(arena, boundary.output, doc, group.target, group.root) catch return error.InvalidResolution
+            projection.projectAcceptedExplicitGrowth(arena, boundary.output, .{ .file = parsed, .document = doc }, group.target, group.root) catch return error.InvalidResolution
         else
-            projection.project(arena, boundary.output, doc, group.target, group.root) catch return error.InvalidResolution;
+            projection.project(arena, boundary.output, .{ .file = parsed, .document = doc }, group.target, group.root) catch return error.InvalidResolution;
         if (!model.Node.eql(materialized.node, logical.?)) return error.InvalidResolution;
         if (!group.inherit_output) try validateMasks(group, logical.?, materialized.node, group.projections.?[3].node, materialized);
         const size_path = try std.fmt.allocPrint(arena, "{s}.Array.size", .{group.root});

@@ -1069,3 +1069,173 @@ test "variant public unchanged inherited nested arrays do not need new override 
     try testing.expectEqualStrings("99", try rowValue(arena, output, "items.Array.data[0].speed"));
     try testing.expect(std.mem.indexOf(u8, output, "childValues") == null);
 }
+
+fn dictionaryContext(arena: std.mem.Allocator, kind: ctx.Kind, source_bytes: []const u8) !ctx.Context {
+    const fields = try arena.alloc(ctx.Field, 1);
+    fields[0] = .{ .path = "items", .kind = kind, .dictionary_value = if (kind == .string_dictionary) .int32 else .string, .dictionary_equality = .default };
+    const scripts = try arena.alloc(ctx.Script, 1);
+    scripts[0] = .{ .guid = small_script, .class_name = "DictionaryBehaviour", .source_hash = "same-script", .fields = fields };
+    const assets = try arena.alloc(ctx.Asset, 1);
+    assets[0] = .{ .guid = small_guid, .path = "Source.prefab", .bytes = source_bytes };
+    const snapshot: ctx.Snapshot = .{ .assets = assets, .scripts = scripts };
+    return .{ .base = snapshot, .ours = snapshot, .theirs = snapshot, .output = snapshot };
+}
+fn dictionaryVariant(arena: std.mem.Allocator, keys: []const []const u8, values: []const []const u8) ![]const u8 {
+    var rows: std.ArrayList(u8) = .empty;
+    try rows.appendSlice(arena, try smallRow(arena, "items.Array.size", try std.fmt.allocPrint(arena, "{d}", .{keys.len})));
+    for (keys, values, 0..) |key, val, i| {
+        try rows.appendSlice(arena, try smallRow(arena, try std.fmt.allocPrint(arena, "items.Array.data[{d}].key", .{i}), key));
+        try rows.appendSlice(arena, try smallRow(arena, try std.fmt.allocPrint(arena, "items.Array.data[{d}].value", .{i}), val));
+    }
+    return smallVariant(arena, rows.items);
+}
+fn expectBlankRow(arena: std.mem.Allocator, bytes: []const u8, property_path: []const u8) !void {
+    const parsed = try parser.parseSpanned(arena, bytes);
+    const modification = model.findValue(parsed.documents[0].body.map, "m_Modification").?;
+    const rows = model.findValue(modification.map, "m_Modifications").?;
+    for (rows.seq) |row| {
+        const p = model.findValue(row.map, "propertyPath").?;
+        if (!std.mem.eql(u8, p.scalar, property_path)) continue;
+        const raw = model.findValue(row.map, "value").?;
+        if (raw.* == .scalar) return testing.expectEqualStrings("", raw.scalar);
+        try testing.expect(raw.* == .map and raw.map.len == 0);
+        const span = parsed.entry_spans.get(raw).?;
+        return testing.expectEqualStrings("", std.mem.trim(u8, span.value.bytes(bytes), " \t\r\n"));
+    }
+    return error.MissingRow;
+}
+const dictionary_empty_source = "--- !u!114 &40\nMonoBehaviour:\n  m_Script: {fileID: 11500000, guid: " ++ small_script ++ ", type: 3}\n  items: []\n";
+
+test "variant public typed blank dictionary key preserves independent edits" {
+    var memory = std.heap.ArenaAllocator.init(testing.allocator);
+    defer memory.deinit();
+    const a = memory.allocator();
+    const base = try dictionaryVariant(a, &.{ "", "B" }, &.{ "1", "2" });
+    const ours = try dictionaryVariant(a, &.{ "", "B" }, &.{ "10", "2" });
+    const theirs = try dictionaryVariant(a, &.{ "", "B" }, &.{ "1", "20" });
+    const built = try merge.buildWithContext(a, base, ours, theirs, try dictionaryContext(a, .string_dictionary, dictionary_empty_source));
+    try testing.expectEqual(@as(usize, 0), built.plan.unresolvedCount());
+    const output = try merge.finish(a, &built.plan);
+    try expectBlankRow(a, output, "items.Array.data[0].key");
+    try testing.expectEqualStrings("10", try rowValue(a, output, "items.Array.data[0].value"));
+    try testing.expectEqualStrings("20", try rowValue(a, output, "items.Array.data[1].value"));
+}
+
+test "variant public typed blank dictionary value preserves independent edits" {
+    var memory = std.heap.ArenaAllocator.init(testing.allocator);
+    defer memory.deinit();
+    const a = memory.allocator();
+    const base = try dictionaryVariant(a, &.{ "1", "2" }, &.{ "", "B" });
+    const ours = try dictionaryVariant(a, &.{ "1", "2" }, &.{ "A", "B" });
+    const theirs = try dictionaryVariant(a, &.{ "1", "2" }, &.{ "", "" });
+    const built = try merge.buildWithContext(a, base, ours, theirs, try dictionaryContext(a, .int32_dictionary, dictionary_empty_source));
+    try testing.expectEqual(@as(usize, 0), built.plan.unresolvedCount());
+    const output = try merge.finish(a, &built.plan);
+    try testing.expectEqualStrings("A", try rowValue(a, output, "items.Array.data[0].value"));
+    try expectBlankRow(a, output, "items.Array.data[1].value");
+}
+
+test "variant public typed blank dictionary key collision is a local choice" {
+    var memory = std.heap.ArenaAllocator.init(testing.allocator);
+    defer memory.deinit();
+    const a = memory.allocator();
+    const base = try dictionaryVariant(a, &.{"B"}, &.{"1"});
+    const ours = try dictionaryVariant(a, &.{ "B", "" }, &.{ "2", "10" });
+    const theirs = try dictionaryVariant(a, &.{ "B", "" }, &.{ "1", "20" });
+    var built = try merge.buildWithContext(a, base, ours, theirs, try dictionaryContext(a, .string_dictionary, dictionary_empty_source));
+    try testing.expectEqual(@as(usize, 1), built.plan.unresolvedCount());
+    const id = try localId(&built.plan);
+    try testing.expectEqual(@import("merge_value.zig").Reason.edit_edit, merge.collectionConflict(&built.plan, id).?.reason);
+    try merge.resolve(a, &built.plan, id, .{ .take = .theirs });
+    const output = try merge.finish(a, &built.plan);
+    try testing.expectEqualStrings("2", try rowValue(a, output, "items.Array.size"));
+    try testing.expectEqualStrings("2", try rowValue(a, output, "items.Array.data[0].value"));
+    try expectBlankRow(a, output, "items.Array.data[1].key");
+    try testing.expectEqualStrings("20", try rowValue(a, output, "items.Array.data[1].value"));
+}
+
+test "variant public typed blank dictionary rejects integer and unknown channels" {
+    var memory = std.heap.ArenaAllocator.init(testing.allocator);
+    defer memory.deinit();
+    const a = memory.allocator();
+    const blank_integer = try dictionaryVariant(a, &.{"A"}, &.{""});
+    const invalid = try merge.buildWithContext(a, blank_integer, blank_integer, blank_integer, try dictionaryContext(a, .string_dictionary, dictionary_empty_source));
+    try testing.expect(invalid.plan.unresolvedCount() > 0);
+    try testing.expectError(error.InvalidResolution, merge.finish(a, &invalid.plan));
+    const blank_key = try dictionaryVariant(a, &.{""}, &.{"value"});
+    const integer_key = try merge.buildWithContext(a, blank_key, blank_key, blank_key, try dictionaryContext(a, .int32_dictionary, dictionary_empty_source));
+    try testing.expect(integer_key.plan.unresolvedCount() > 0);
+    try testing.expectError(error.InvalidResolution, merge.finish(a, &integer_key.plan));
+    const blank_unknown = try dictionaryVariant(a, &.{""}, &.{"1"});
+    const unknown = try merge.buildWithContext(a, blank_unknown, blank_unknown, blank_unknown, try smallContext(a, .{ dictionary_empty_source, dictionary_empty_source, dictionary_empty_source, dictionary_empty_source }));
+    try testing.expect(unknown.plan.unresolvedCount() > 0);
+    try testing.expectError(error.InvalidResolution, merge.finish(a, &unknown.plan));
+}
+
+test "variant public typed blank dictionary does not interpret a literal map as string" {
+    var memory = std.heap.ArenaAllocator.init(testing.allocator);
+    defer memory.deinit();
+    const a = memory.allocator();
+    const source_bytes = try std.mem.replaceOwned(u8, a, dictionary_empty_source, "items: []", "items:\n  - key: A\n    value: 1");
+    const variant = try dictionaryVariant(a, &.{"{}"}, &.{"1"});
+    const built = try merge.buildWithContext(a, variant, variant, variant, try dictionaryContext(a, .string_dictionary, source_bytes));
+    try testing.expect(built.plan.unresolvedCount() > 0);
+    try testing.expectError(error.InvalidResolution, merge.finish(a, &built.plan));
+}
+
+test "variant public typed blank dictionary rejects duplicate empty keys in one input" {
+    var memory = std.heap.ArenaAllocator.init(testing.allocator);
+    defer memory.deinit();
+    const a = memory.allocator();
+    const base = try dictionaryVariant(a, &.{""}, &.{"1"});
+    const ours = try dictionaryVariant(a, &.{ "", "" }, &.{ "1", "2" });
+    const built = try merge.buildWithContext(a, base, ours, base, try dictionaryContext(a, .string_dictionary, dictionary_empty_source));
+    try testing.expectEqual(@as(usize, 1), built.plan.unresolvedCount());
+    try testing.expectEqual(@import("merge_value.zig").Reason.invalid_dictionary, merge.collectionConflict(&built.plan, try localId(&built.plan)).?.reason);
+    try testing.expectError(error.InvalidResolution, merge.finish(a, &built.plan));
+}
+
+test "variant public typed blank dictionary works in an inherited Variant layer" {
+    var memory = std.heap.ArenaAllocator.init(testing.allocator);
+    defer memory.deinit();
+    const a = memory.allocator();
+    const middle_guid = "00000000000000000000000000000003";
+    const middle = try dictionaryVariant(a, &.{ "", "B" }, &.{ "1", "1" });
+    var c = try dictionaryContext(a, .string_dictionary, dictionary_empty_source);
+    const assets = try a.alloc(ctx.Asset, 2);
+    assets[0] = c.base.assets[0];
+    assets[1] = .{ .guid = middle_guid, .path = "Middle.prefab", .bytes = middle };
+    c.base.assets = assets;
+    c.ours.assets = assets;
+    c.theirs.assets = assets;
+    c.output.assets = assets;
+    const base_old = try smallVariant(a, try smallRow(a, "items.Array.data[0].value", "2"));
+    const base_guid = try std.mem.replaceOwned(u8, a, base_old, small_guid, middle_guid);
+    const base = try std.mem.replaceOwned(u8, a, base_guid, "fileID: 40,", "fileID: 76,");
+    const ours = try std.mem.replaceOwned(u8, a, base, "value: 2", "value: 10");
+    const theirs_old = try smallVariant(a, try std.mem.concat(a, u8, &.{ try smallRow(a, "items.Array.data[0].value", "2"), try smallRow(a, "items.Array.data[1].value", "20") }));
+    const theirs_guid = try std.mem.replaceOwned(u8, a, theirs_old, small_guid, middle_guid);
+    const theirs = try std.mem.replaceOwned(u8, a, theirs_guid, "fileID: 40,", "fileID: 76,");
+    const built = try merge.buildWithContext(a, base, ours, theirs, c);
+    try testing.expectEqual(@as(usize, 0), built.plan.unresolvedCount());
+    const output = try merge.finish(a, &built.plan);
+    try testing.expectEqualStrings("10", try rowValue(a, output, "items.Array.data[0].value"));
+    try testing.expectEqualStrings("20", try rowValue(a, output, "items.Array.data[1].value"));
+    try testing.expectError(error.MissingRow, rowValue(a, output, "items.Array.data[0].key"));
+}
+
+test "variant public typed blank dictionary preserves blank comments and CRLF" {
+    var memory = std.heap.ArenaAllocator.init(testing.allocator);
+    defer memory.deinit();
+    const a = memory.allocator();
+    const base_lf = try dictionaryVariant(a, &.{ " # empty key", "B" }, &.{ "1", "2" });
+    const base = try std.mem.replaceOwned(u8, a, base_lf, "\n", "\r\n");
+    const ours = try std.mem.replaceOwned(u8, a, base, "value: 1\r\n", "value: 10\r\n");
+    const theirs = try std.mem.replaceOwned(u8, a, base, "propertyPath: items.Array.data[1].value\r\n      value: 2", "propertyPath: items.Array.data[1].value\r\n      value: 20");
+    const built = try merge.buildWithContext(a, base, ours, theirs, try dictionaryContext(a, .string_dictionary, dictionary_empty_source));
+    try testing.expectEqual(@as(usize, 0), built.plan.unresolvedCount());
+    const output = try merge.finish(a, &built.plan);
+    try testing.expect(std.mem.indexOf(u8, output, "value:  # empty key\r\n") != null);
+    try testing.expectEqualStrings("10", try rowValue(a, output, "items.Array.data[0].value"));
+    try testing.expectEqualStrings("20", try rowValue(a, output, "items.Array.data[1].value"));
+}

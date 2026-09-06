@@ -7,6 +7,7 @@ const path = @import("merge_property_path.zig");
 const value = @import("merge_value.zig");
 const A = std.mem.Allocator;
 pub const Error = A.Error || error{ContextRequired};
+pub const Document = struct { file: source.ParsedFile, document: *const model.Document };
 pub const Leaf = struct { node: *const model.Node, explicit: bool, row: ?*const model.Node = null };
 pub const Projection = struct {
     node: *const model.Node,
@@ -74,7 +75,8 @@ fn assign(arena: A, n: *const model.Node, segments: []const path.Segment, replac
     return value.node(arena, .{ .map = try entries.toOwnedSlice(arena) });
 }
 const ActiveRow = struct { row: *const model.Node, suffix: []const path.Segment };
-fn layer(arena: A, initial: *const model.Node, doc: *const model.Document, target: model.Ref, root: []const u8, leaves: *std.ArrayList(Leaf), local: bool, allow_explicit_growth: bool, sparse: *bool) Error!*const model.Node {
+fn layer(arena: A, initial: *const model.Node, document: Document, target: model.Ref, root: []const u8, descriptor: context.Field, leaves: *std.ArrayList(Leaf), local: bool, allow_explicit_growth: bool, sparse: *bool) Error!*const model.Node {
+    const doc = document.document;
     if (field(doc.body, "m_Modification")) |modification| {
         if (field(modification, "m_RemovedGameObjects")) |removed| {
             if (removed.* != .seq or removed.seq.len > 0) return error.ContextRequired;
@@ -130,15 +132,19 @@ fn layer(arena: A, initial: *const model.Node, doc: *const model.Document, targe
         const reference = field(record.row, "objectReference") orelse return error.ContextRequired;
         if (reference.* != .ref) return error.ContextRequired;
         const inherited = at(items[index], record.suffix[1..]);
-        const blank = (raw.* == .map and raw.map.len == 0) or (raw.* == .scalar and raw.scalar.len == 0);
+        const blank = blankValue(document.file, raw);
         var data: model.Node = undefined;
         if (reference.ref.file_id != 0 or reference.ref.guid != null or (inherited != null and inherited.?.* == .ref)) {
             if (!blank) return error.ContextRequired;
             data = reference.*;
         } else if (blank) {
-            // A known inherited string proves the empty channel; sparse empty
-            // rows cannot distinguish null references from empty strings.
-            if (inherited == null or inherited.?.* != .scalar) return error.ContextRequired;
+            if (dictionaryChannel(descriptor, record.suffix)) |channel| {
+                if (channel != .string) return error.ContextRequired;
+            } else if (inherited == null or inherited.?.* != .scalar) {
+                // Without declared primitive evidence, sparse empty rows cannot
+                // distinguish an empty string from a null reference.
+                return error.ContextRequired;
+            }
             data = .{ .scalar = "" };
         } else if (raw.* == .scalar) data = raw.* else return error.ContextRequired;
         const leaf = try value.node(arena, data);
@@ -146,6 +152,21 @@ fn layer(arena: A, initial: *const model.Node, doc: *const model.Document, targe
         items[index] = @constCast(try assign(arena, items[index], record.suffix[1..], leaf));
     }
     return value.node(arena, .{ .seq = items });
+}
+fn blankValue(file: source.ParsedFile, raw: *const model.Node) bool {
+    if (raw.* == .scalar) return raw.scalar.len == 0;
+    if (raw.* != .map or raw.map.len != 0) return false;
+    const span = file.entry_spans.get(raw) orelse return false;
+    // The parser also represents a literal {} as an empty map. Only an empty
+    // source token is Unity's blank value channel.
+    return std.mem.trim(u8, span.value.bytes(file.bytes), " \t\r\n").len == 0;
+}
+fn dictionaryChannel(descriptor: context.Field, suffix: []const path.Segment) ?context.ValueType {
+    if (descriptor.kind != .string_dictionary and descriptor.kind != .int32_dictionary) return null;
+    if (suffix.len != 2 or suffix[0] != .index or suffix[1] != .field) return null;
+    if (std.mem.eql(u8, suffix[1].field, "key")) return if (descriptor.kind == .string_dictionary) .string else .int32;
+    if (std.mem.eql(u8, suffix[1].field, "value")) return descriptor.dictionary_value;
+    return null;
 }
 fn isAncestor(a: []const u8, b: []const u8) bool {
     return b.len > a.len and std.mem.startsWith(u8, b, a) and b[a.len] == '.';
@@ -173,24 +194,24 @@ fn validateAcceptedExplicitGrowth(inherited: *const model.Node, current: *const 
         if (!complete or !allLeavesExplicit(item, leaves)) return error.ContextRequired;
     }
 }
-pub fn project(arena: A, snapshot: context.Snapshot, doc: ?*const model.Document, target: model.Ref, root: []const u8) Error!Projection {
+pub fn project(arena: A, snapshot: context.Snapshot, doc: ?Document, target: model.Ref, root: []const u8) Error!Projection {
     return projectInternal(arena, snapshot, doc, target, root, false);
 }
 // Final rematerialization may accept a user-selected custom item only when its
 // emitted rows explicitly cover a complete serialized source-item shape.
-pub fn projectAcceptedExplicitGrowth(arena: A, snapshot: context.Snapshot, doc: *const model.Document, target: model.Ref, root: []const u8) Error!Projection {
+pub fn projectAcceptedExplicitGrowth(arena: A, snapshot: context.Snapshot, doc: Document, target: model.Ref, root: []const u8) Error!Projection {
     return projectInternal(arena, snapshot, doc, target, root, true);
 }
-fn projectInternal(arena: A, snapshot: context.Snapshot, doc: ?*const model.Document, target: model.Ref, root: []const u8, allow_explicit_growth: bool) Error!Projection {
+fn projectInternal(arena: A, snapshot: context.Snapshot, doc: ?Document, target: model.Ref, root: []const u8, allow_explicit_growth: bool) Error!Projection {
     var sources = graph.Graph.init(arena, snapshot);
     const resolved = sources.resolve(target) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         else => return error.ContextRequired,
     };
     if (doc) |outer| {
-        const source_ref = field(outer.body, "m_SourcePrefab") orelse return error.ContextRequired;
+        const source_ref = field(outer.document.body, "m_SourcePrefab") orelse return error.ContextRequired;
         if (source_ref.* != .ref or !optionalEqual(source_ref.ref.guid, target.guid)) return error.ContextRequired;
-        if (@import("merge_variant_source.zig").targetRemoved(outer, target, resolved.owner_file_id) catch return error.ContextRequired) return error.ContextRequired;
+        if (@import("merge_variant_source.zig").targetRemoved(outer.document, target, resolved.owner_file_id) catch return error.ContextRequired) return error.ContextRequired;
     }
     const guid = resolved.scriptGuid() orelse return error.ContextRequired;
     var script: ?context.Script = null;
@@ -217,9 +238,9 @@ fn projectInternal(arena: A, snapshot: context.Snapshot, doc: ?*const model.Docu
     var leaves: std.ArrayList(Leaf) = .empty;
     var current = try clone(arena, original, resolved.file, &leaves);
     var sparse = false;
-    for (resolved.layers) |inherited| current = try layer(arena, current, inherited.instance, inherited.target, root, &leaves, false, false, &sparse);
+    for (resolved.layers) |inherited| current = try layer(arena, current, .{ .file = inherited.file, .document = inherited.instance }, inherited.target, root, descriptor, &leaves, false, false, &sparse);
     const inherited = current;
-    if (doc) |outer| current = try layer(arena, current, outer, target, root, &leaves, true, allow_explicit_growth, &sparse);
+    if (doc) |outer| current = try layer(arena, current, outer, target, root, descriptor, &leaves, true, allow_explicit_growth, &sparse);
     if (allow_explicit_growth) try validateAcceptedExplicitGrowth(inherited, current, leaves.items);
     if (descriptor.kind == .int32_array) for (current.seq) |item| {
         if (item.* != .scalar) return error.ContextRequired;

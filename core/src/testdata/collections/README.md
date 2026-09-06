@@ -3,7 +3,8 @@
 Unity `6000.7.0a2` generated the 14 three-way cases and their fixed source GUIDs.
 Three additional replay cases use Unity row templates with an omitted serialized member.
 Two source-context cases use these templates to change the source independently of the Variant.
-`expected-runtime.json` records the required runtime values and the conflict choice for all 19 cases.
+One dictionary case uses the same row templates with an empty string key.
+`expected-runtime.json` records the required runtime values and the conflict choice for all 20 cases.
 These fixtures do not establish exact Unity `6000.6` runtime coverage.
 
 The `nested` files contain a separate source and two levels of Prefab Variants from the same Editor.

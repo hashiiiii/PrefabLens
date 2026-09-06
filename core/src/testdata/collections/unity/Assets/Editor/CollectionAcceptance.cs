@@ -46,10 +46,10 @@ public static class CollectionAcceptance
                 if (expected.sourceContext)
                 {
                     File.Copy(Path.Combine(directory, "output-source.prefab"), "Assets/Source.prefab", true);
-                    AssetDatabase.ImportAsset("Assets/Source.prefab", ImportAssetOptions.ForceUpdate);
                 }
                 File.WriteAllText(asset, result);
-                AssetDatabase.ImportAsset(asset, ImportAssetOptions.ForceUpdate);
+                // Refresh both files before Unity imports their dependency graph.
+                AssetDatabase.Refresh(ImportAssetOptions.ForceUpdate | ImportAssetOptions.ForceSynchronousImport);
                 var instance = PrefabUtility.LoadPrefabContents(asset);
                 try
                 {
@@ -86,9 +86,8 @@ public static class CollectionAcceptance
                 if (originalSource != null)
                 {
                     File.WriteAllBytes("Assets/Source.prefab", originalSource);
-                    AssetDatabase.ImportAsset("Assets/Source.prefab", ImportAssetOptions.ForceUpdate);
                 }
-                AssetDatabase.ImportAsset(asset, ImportAssetOptions.ForceUpdate);
+                AssetDatabase.Refresh(ImportAssetOptions.ForceUpdate | ImportAssetOptions.ForceSynchronousImport);
             }
         }
         Debug.Log("Verified " + manifest.cases.Length + " collection merge results on " + Application.unityVersion + ".");

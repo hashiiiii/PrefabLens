@@ -73,10 +73,62 @@ pub fn main(init: std.process.Init) !u8 {
     try testCompletion(io, arena, scratch, prefablens);
     try testBackspaceBeforeEditing(io, arena, scratch, prefablens);
     try testDeletionChoices(io, arena, scratch, prefablens);
+    try testCollectionChoices(io, arena, scratch, prefablens);
     try testQuit(io, arena, scratch, prefablens);
     try testTimeout(io, arena, scratch, prefablens);
     try std.Io.File.stdout().writeStreamingAll(io, "pty mergetool smoke: passed\n");
     return 0;
+}
+
+fn testCollectionChoices(
+    io: std.Io,
+    arena: std.mem.Allocator,
+    scratch: []const u8,
+    prefablens: []const u8,
+) !void {
+    const cases = [_]struct {
+        name: []const u8,
+        base: []const u8,
+        ours: []const u8,
+        theirs: []const u8,
+        keys: []const u8,
+        expected: []const u8,
+        order_buttons: bool = false,
+    }{
+        // Both insertion orders must retain each block and the unrelated scalar edits.
+        .{ .name = "collection-ours-first", .base = "[A]", .ours = "[A, Ours]", .theirs = "[A, Theirs]", .keys = "\x1bOP\r\r", .expected = "[A, Ours, Theirs]", .order_buttons = true },
+        .{ .name = "collection-theirs-first", .base = "[A]", .ours = "[A, Ours]", .theirs = "[A, Theirs]", .keys = "\x1bOQ\r\r", .expected = "[A, Theirs, Ours]", .order_buttons = true },
+        // Retaining the edited C must not restore the independently removed B.
+        .{ .name = "collection-delete-edit", .base = "[A, B, C]", .ours = "[A]", .theirs = "[A, B, Edited]", .keys = "\x1b[C\x1b[C\r\r", .expected = "[A, Edited]" },
+        // A custom interval replaces only the unresolved append gap.
+        .{ .name = "collection-custom", .base = "[A]", .ours = "[A, Ours]", .theirs = "[A, Theirs]", .keys = "\x1b[<0;83;5M[Custom]\r\r", .expected = "[A, Custom]", .order_buttons = true },
+    };
+    for (cases) |case| {
+        const repo = try prepareMergetoolRepositoryWithSides(io, arena, scratch, prefablens, case.name, .{
+            .path = "Assets/Conflict.prefab",
+            .base = try collectionFile(arena, case.base, 1, 1),
+            .ours = try collectionFile(arena, case.ours, 2, 1),
+            .theirs = try collectionFile(arena, case.theirs, 1, 3),
+        });
+        const merged = try integration.gitRun(io, arena, repo, &.{ "merge", "--no-edit", "remote" });
+        try integration.expectNonzero(merged, "prepare collection conflict");
+        _ = try integration.expectMarkers(io, arena, repo, "Assets/Conflict.prefab");
+        const result = try runMergetoolInPty(io, arena, repo, case.keys, 30);
+        try integration.expectCode(result, 0, "resolve collection in PTY");
+        if (case.order_buttons) {
+            inline for (.{ "F1 Ours + Theirs", "F2 Theirs + Ours" }) |label| {
+                try integration.require(terminalCaptureContains(result.stdout, label), "PTY omitted collection order action");
+            }
+        }
+        try integration.expectFile(io, arena, repo, "Assets/Conflict.prefab", try collectionFile(arena, case.expected, 2, 3));
+        const unmerged = try integration.gitRun(io, arena, repo, &.{ "ls-files", "-u" });
+        try integration.expectCode(unmerged, 0, "list index after collection choice");
+        try integration.require(unmerged.stdout.len == 0, "collection choice left unmerged entries");
+    }
+}
+
+fn collectionFile(arena: std.mem.Allocator, items: []const u8, left: u8, right: u8) ![]const u8 {
+    return std.fmt.allocPrint(arena, "--- !u!114 &1\nMonoBehaviour:\n  m_Items: {s}\n  m_Left: {d}\n  m_Right: {d}\n", .{ items, left, right });
 }
 
 fn testDeletionChoices(

@@ -21,7 +21,20 @@ pub fn main(init: std.process.Init) !u8 {
     const strategy_path = try std.Io.Dir.cwd().realPathFileAlloc(init.io, args[2], a);
     var env = try init.environ_map.clone(a);
     try env.put("PATH", try std.fmt.allocPrint(a, "{s}{c}{s}{c}{s}", .{ std.fs.path.dirname(strategy_path).?, std.fs.path.delimiter, std.fs.path.dirname(prefablens).?, std.fs.path.delimiter, env.get("PATH") orelse "" }));
-    const ctx: Context = .{ .git = .{ .io = init.io, .arena = a, .env = &env }, .scratch = scratch, .prefablens = prefablens };
+    const ctx: Context = .{ .git = .{ .io = init.io, .arena = a, .env = &env }, .scratch = scratch, .prefablens = prefablens, .fixture_root = args[3] };
+    if (args.len == 5 and std.mem.eql(u8, args[4], "collections")) {
+        try collectionSources(ctx);
+        return 0;
+    }
+    if (args.len == 5 and std.mem.eql(u8, args[4], "collection-conflict")) {
+        try collectionSourceConflict(ctx);
+        if (builtin.os.tag == .linux or builtin.os.tag == .macos) try collectionSourceConflictPty(ctx);
+        return 0;
+    }
+    if (args.len == 5 and std.mem.eql(u8, args[4], "collection-source-choices")) {
+        if (builtin.os.tag == .linux or builtin.os.tag == .macos) try collectionAuthoredSourceChoicesPty(ctx);
+        return 0;
+    }
     try setup(ctx);
     try automatic(ctx);
     try nonInteractive(ctx);
@@ -29,7 +42,11 @@ pub fn main(init: std.process.Init) !u8 {
     try directoryConflict(ctx);
     try mergeOptions(ctx);
     try independentEdits(ctx);
+    try collectionSources(ctx);
+    try collectionSourceConflict(ctx);
     if (builtin.os.tag == .linux or builtin.os.tag == .macos) {
+        try collectionSourceConflictPty(ctx);
+        try collectionAuthoredSourceChoicesPty(ctx);
         try contentPty(ctx);
         try concurrentContent(ctx);
         try privatePermissions(ctx);
@@ -42,6 +59,7 @@ const Context = struct {
     git: merge_git.Git,
     scratch: []const u8,
     prefablens: []const u8,
+    fixture_root: []const u8,
 
     fn repo(self: Context, name: []const u8, files: []const t.FileSides) !merge_git.Git {
         var git = self.git;
@@ -51,6 +69,200 @@ const Context = struct {
         return git;
     }
 };
+
+const CollectionInputs = struct {
+    variant: [3][]const u8,
+    source: [3][]const u8,
+    variant_path: []const u8 = "Assets/Variant.prefab",
+    source_path: []const u8 = "Assets/Source.prefab",
+};
+
+fn collectionRepository(ctx: Context, name: []const u8, inputs: CollectionInputs) !merge_git.Git {
+    const arena = ctx.git.arena;
+    const io = ctx.git.io;
+    const assets = try std.fs.path.join(arena, &.{ ctx.fixture_root, "unity", "Assets" });
+    var files: std.ArrayList(t.FileSides) = .empty;
+    var directory = try std.Io.Dir.cwd().openDir(io, assets, .{ .iterate = true });
+    defer directory.close(io);
+    var walker = try directory.walk(arena);
+    defer walker.deinit();
+    while (try walker.next(io)) |entry| {
+        if (entry.kind != .file) continue;
+        var path: []const u8 = try std.fmt.allocPrint(arena, "Assets/{s}", .{entry.path});
+        const original = try directory.readFileAlloc(io, entry.path, arena, .limited(16 * 1024 * 1024));
+        var sides: [3][]const u8 = .{ original, original, original };
+        if (std.mem.eql(u8, entry.path, "Variant.prefab")) {
+            path = inputs.variant_path;
+            sides = inputs.variant;
+        } else if (std.mem.eql(u8, entry.path, "Source.prefab")) {
+            path = inputs.source_path;
+            sides = inputs.source;
+        } else if (std.mem.eql(u8, entry.path, "Variant.prefab.meta")) {
+            path = try std.fmt.allocPrint(arena, "{s}.meta", .{inputs.variant_path});
+        } else if (std.mem.eql(u8, entry.path, "Source.prefab.meta")) {
+            path = try std.fmt.allocPrint(arena, "{s}.meta", .{inputs.source_path});
+        }
+        try files.append(arena, .{ .path = path, .base = sides[0], .ours = sides[1], .theirs = sides[2] });
+        const target = try std.fs.path.join(arena, &.{ ctx.scratch, name, path });
+        try std.Io.Dir.cwd().createDirPath(io, std.fs.path.dirname(target).?);
+    }
+    return ctx.repo(name, files.items);
+}
+
+fn collectionSources(ctx: Context) !void {
+    const arena = ctx.git.arena;
+    for ([_][]const u8{ "variant-source-and-override", "variant-source-only-remove-and-edit" }) |name| {
+        const case_root = try std.fs.path.join(arena, &.{ ctx.fixture_root, "cases", name });
+        var inputs: CollectionInputs = undefined;
+        inputs.variant_path = "Assets/Variant.prefab";
+        inputs.source_path = "Assets/Source.prefab";
+        for ([_][]const u8{ "base", "ours", "theirs" }, 0..) |side_name, index| {
+            inputs.variant[index] = try readCollectionFile(ctx, case_root, try std.fmt.allocPrint(arena, "{s}.prefab", .{side_name}));
+            inputs.source[index] = try readCollectionFile(ctx, case_root, try std.fmt.allocPrint(arena, "{s}-source.prefab", .{side_name}));
+        }
+        const git = try collectionRepository(ctx, name, inputs);
+        // Both fixtures contain paths that Git can accept without a file-driver call.
+        try t.expectCode(try git.run(&.{ "merge", "--no-commit", "remote" }), 0, "source-dependent collection merge");
+        try expectFile(git, "Assets/Variant.prefab", try readCollectionFile(ctx, case_root, "expected.prefab"));
+        try expectFile(git, "Assets/Source.prefab", try readCollectionFile(ctx, case_root, "output-source.prefab"));
+        try expectFile(git, "Assets/Plain.prefab", try readCollectionFile(ctx, ctx.fixture_root, "unity/Assets/Plain.prefab"));
+        try t.require((try git.output(&.{ "ls-files", "--unmerged", "-z" })).len == 0, "automatic collection merge retained conflict stages");
+        try git.ok(&.{ "merge", "--abort" });
+        try expectFile(git, "Assets/Variant.prefab", inputs.variant[1]);
+        try expectFile(git, "Assets/Source.prefab", inputs.source[1]);
+    }
+}
+
+fn sourceConflictInputs(ctx: Context) !CollectionInputs {
+    const root = try std.fs.path.join(ctx.git.arena, &.{ ctx.fixture_root, "cases", "variant-source-only-remove-and-edit" });
+    const variant = try readCollectionFile(ctx, root, "base.prefab");
+    const source = try readCollectionFile(ctx, root, "base-source.prefab");
+    const item = "- name: A\n    power: 1\n    speed: 1\n";
+    try t.require(std.mem.count(u8, source, item) == 1, "source conflict fixture lost its unique item span");
+    return .{
+        .variant = .{ variant, variant, variant },
+        .source = .{
+            source,
+            try std.mem.replaceOwned(u8, ctx.git.arena, source, item, "- name: A\n    power: 1\n    speed: 10\n"),
+            try std.mem.replaceOwned(u8, ctx.git.arena, source, item, "- name: A\n    power: 1\n    speed: 20\n"),
+        },
+        // The dependent sorts first by path. A source scheduler must reverse that order.
+        .variant_path = "Assets/AVariant.prefab",
+        .source_path = "Assets/ZSource.prefab",
+    };
+}
+
+fn collectionSourceConflict(ctx: Context) !void {
+    const inputs = try sourceConflictInputs(ctx);
+    const git = try collectionRepository(ctx, "collection-source-conflict", inputs);
+    try t.expectCode(try git.run(&.{ "merge", "--no-commit", "remote" }), 1, "unresolved collection source");
+    try markers(git, inputs.source_path);
+    const stages = try git.output(&.{ "ls-files", "--unmerged", "-z", "--", inputs.variant_path });
+    try t.require(std.mem.count(u8, stages, "\x00") == 3, "an unchanged dependent lost its semantic conflict stages");
+    for ([_][]const u8{ ":1:", ":2:", ":3:" }, inputs.variant) |prefix, expected| {
+        const entry = try std.fmt.allocPrint(git.arena, "{s}{s}", .{ prefix, inputs.variant_path });
+        try t.require(std.mem.eql(u8, try git.output(&.{ "show", entry }), expected), "dependent stages differ from historical bytes");
+    }
+    try git.ok(&.{ "merge", "--abort" });
+    try expectFile(git, inputs.variant_path, inputs.variant[1]);
+    try expectFile(git, inputs.source_path, inputs.source[1]);
+}
+
+fn collectionSourceConflictPty(ctx: Context) !void {
+    const inputs = try sourceConflictInputs(ctx);
+    const git = try collectionRepository(ctx, "collection-source-order-pty", inputs);
+    const command = try std.fmt.allocPrint(git.arena, "env PATH={s} git merge --no-commit remote", .{try t.shellQuote(git.arena, git.env.get("PATH").?)});
+    const result = try pty.runCommandInPty(git.io, git.arena, git.cwd, command, "\x1b[C\r\r", 30);
+    try t.expectCode(result, 0, "resolve source before unchanged dependent");
+    try t.require(pty.terminalCaptureContains(result.stdout, inputs.source_path), "source decision was not visible");
+    try t.require(!pty.terminalCaptureContains(result.stdout, inputs.variant_path), "pure inheritance opened a second decision");
+    try expectFile(git, inputs.variant_path, inputs.variant[1]);
+    try expectFile(git, inputs.source_path, inputs.source[1]);
+    try t.require((try git.output(&.{ "ls-files", "--unmerged", "-z" })).len == 0, "resolved source left a dependent unresolved");
+    try git.ok(&.{ "merge", "--abort" });
+    try expectFile(git, inputs.variant_path, inputs.variant[1]);
+    try expectFile(git, inputs.source_path, inputs.source[1]);
+}
+
+fn authoredSourceConflictInputs(ctx: Context) !CollectionInputs {
+    const root = try std.fs.path.join(ctx.git.arena, &.{ ctx.fixture_root, "cases", "variant-source-and-override" });
+    const source = try readCollectionFile(ctx, root, "base-source.prefab");
+    const item = "  - name: A\n    power: 1\n    speed: 1\n";
+    try t.require(std.mem.count(u8, source, item) == 1, "authored source fixture lost its unique A item");
+    return .{
+        .variant = .{
+            try readCollectionFile(ctx, root, "base.prefab"),
+            try readCollectionFile(ctx, root, "ours.prefab"),
+            try readCollectionFile(ctx, root, "theirs.prefab"),
+        },
+        .source = .{
+            source,
+            try std.mem.replaceOwned(u8, ctx.git.arena, source, item, "  - name: A\n    power: 1\n    speed: 10\n"),
+            try readCollectionFile(ctx, root, "theirs-source.prefab"),
+        },
+        // The dependent sorts first by path. A source scheduler must reverse that order.
+        .variant_path = "Assets/AVariant.prefab",
+        .source_path = "Assets/ZSource.prefab",
+    };
+}
+
+fn collectionAuthoredSourceChoicesPty(ctx: Context) !void {
+    const inputs = try authoredSourceConflictInputs(ctx);
+    const root = try std.fs.path.join(ctx.git.arena, &.{ ctx.fixture_root, "cases", "variant-source-and-override" });
+    const expected_keep_a = try readCollectionFile(ctx, root, "ours.prefab");
+    const expected_remove_a = try readCollectionFile(ctx, root, "expected.prefab");
+    try t.require(!std.mem.eql(u8, expected_keep_a, expected_remove_a), "source choices must author different Variant bytes");
+
+    const cases = [_]struct {
+        name: []const u8,
+        source_keys: []const u8,
+        variant_keys: []const u8,
+        expected_source: []const u8,
+        expected_variant: []const u8,
+        expected_path: []const u8,
+        unexpected_path: []const u8,
+    }{
+        .{
+            .name = "collection-source-keep-a-pty",
+            .source_keys = "\x1b[C\r\r",
+            .variant_keys = "",
+            .expected_source = inputs.source[1],
+            .expected_variant = expected_keep_a,
+            .expected_path = "items.Array.data[1].speed",
+            .unexpected_path = "items.Array.data[0].speed",
+        },
+        .{
+            .name = "collection-source-remove-a-pty",
+            .source_keys = "\x1b[C\x1b[C\r\r",
+            // If the contextual core exposes a second choice, select Source.
+            .variant_keys = "\x1b[C\x1b[C\r\r",
+            .expected_source = inputs.source[2],
+            .expected_variant = expected_remove_a,
+            .expected_path = "items.Array.data[0].speed",
+            .unexpected_path = "items.Array.data[1].speed",
+        },
+    };
+    for (cases) |case| {
+        const git = try collectionRepository(ctx, case.name, inputs);
+        const command = try std.fmt.allocPrint(git.arena, "env PATH={s} git merge --no-commit remote", .{try t.shellQuote(git.arena, git.env.get("PATH").?)});
+        const result = try pty.runCommandInPtyBatches(git.io, git.arena, git.cwd, command, case.source_keys, case.variant_keys, 30);
+        try t.expectCode(result, 0, "resolve a source before its authored Variant");
+        try t.require(pty.terminalCaptureContains(result.stdout, inputs.source_path), "source decision was not visible");
+        try t.require(std.mem.count(u8, case.expected_variant, case.expected_path) == 1, "expected Variant lost the selected-source index");
+        try t.require(std.mem.count(u8, case.expected_variant, case.unexpected_path) == 0, "expected Variant retained the other source choice's index");
+        try expectFile(git, inputs.variant_path, case.expected_variant);
+        try expectFile(git, inputs.source_path, case.expected_source);
+        try t.require((try git.output(&.{ "ls-files", "--unmerged", "-z" })).len == 0, "source choice left authored Variant stages unresolved");
+        try git.ok(&.{ "merge", "--abort" });
+        try expectFile(git, inputs.variant_path, inputs.variant[1]);
+        try expectFile(git, inputs.source_path, inputs.source[1]);
+    }
+}
+
+fn readCollectionFile(ctx: Context, root: []const u8, relative: []const u8) ![]const u8 {
+    const path = try std.fs.path.join(ctx.git.arena, &.{ root, relative });
+    return std.Io.Dir.cwd().readFileAlloc(ctx.git.io, path, ctx.git.arena, .limited(16 * 1024 * 1024));
+}
 
 fn expectFile(git: merge_git.Git, path: []const u8, expected: []const u8) !void {
     try t.expectFile(git.io, git.arena, git.cwd, path, expected);

@@ -588,7 +588,7 @@ pub fn prepareRepository(
     try gitOk(io, arena, repo, &.{ "switch", "-q", "local" });
 }
 
-fn configureHermeticRepository(io: std.Io, arena: std.mem.Allocator, repo: []const u8) !void {
+pub fn configureHermeticRepository(io: std.Io, arena: std.mem.Allocator, repo: []const u8) !void {
     const empty_attributes = try std.fs.path.join(arena, &.{ repo, ".git/prefablens-global-attributes" });
     const empty_excludes = try std.fs.path.join(arena, &.{ repo, ".git/prefablens-global-excludes" });
     const disabled_hooks = try std.fs.path.join(arena, &.{ repo, ".git/prefablens-disabled-hooks" });

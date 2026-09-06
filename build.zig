@@ -103,6 +103,22 @@ pub fn build(b: *std.Build) void {
     run_git_merge_tests.addArtifactArg(exe);
     test_step.dependOn(&run_git_merge_tests.step);
 
+    const collection_fixture_tests = b.addExecutable(.{
+        .name = "collection-fixture-tests",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("cli/src/collection_fixture_test_main.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{.{ .name = "core", .module = core_mod }},
+        }),
+    });
+    const run_collection_fixture_tests = b.addRunArtifact(collection_fixture_tests);
+    run_collection_fixture_tests.addArg(b.pathFromRoot("core/src/testdata/collections"));
+    if (b.args) |args| run_collection_fixture_tests.addArgs(args);
+    test_step.dependOn(&run_collection_fixture_tests.step);
+    const collection_test_step = b.step("test-collection-fixtures", "Check collection fixtures and optionally export Unity inputs");
+    collection_test_step.dependOn(&run_collection_fixture_tests.step);
+
     const strategy_tests = b.addExecutable(.{
         .name = "git-strategy-tests",
         .root_module = b.createModule(.{
@@ -114,6 +130,7 @@ pub fn build(b: *std.Build) void {
     const run_strategy_tests = b.addRunArtifact(strategy_tests);
     run_strategy_tests.addArtifactArg(exe);
     run_strategy_tests.addArtifactArg(strategy);
+    run_strategy_tests.addArg(b.pathFromRoot("core/src/testdata/collections"));
     test_step.dependOn(&run_strategy_tests.step);
     const strategy_test_step = b.step("test-merge-strategy", "Run the native Git strategy integration tests");
     strategy_test_step.dependOn(&run_strategy_tests.step);
@@ -195,6 +212,8 @@ pub fn build(b: *std.Build) void {
     const run_pty_smoke = b.addRunArtifact(pty_smoke);
     run_pty_smoke.addArtifactArg(exe);
     test_step.dependOn(&run_pty_smoke.step);
+    const pty_test_step = b.step("test-merge-pty", "Run merge interaction tests in a real terminal");
+    pty_test_step.dependOn(&run_pty_smoke.step);
 
     const merge_driver_test_step = b.step("test-merge-driver", "Run merge-driver fixture tests outside the checkout");
     merge_driver_test_step.dependOn(&run_merge_driver_cwd_tests.step);

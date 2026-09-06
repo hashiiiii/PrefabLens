@@ -132,7 +132,26 @@ fn changes(arena: Allocator, base: []const *const model.Node, side: []const *con
         .last = side.len,
         .ambiguous = ambiguous,
     });
-    return joinMoves(arena, base, side, hunks.items);
+    const joined = try joinMoves(arena, base, side, hunks.items);
+    return splitDeletions(arena, joined);
+}
+
+fn splitDeletions(arena: Allocator, hunks: []const Hunk) Allocator.Error![]const Hunk {
+    var result: std.ArrayList(Hunk) = .empty;
+    for (hunks) |hunk| {
+        if (!hunk.ambiguous and hunk.first == hunk.last and hunk.end - hunk.start > 1) {
+            // A proven deletion has no surviving correspondence to guess. Keep its
+            // base occurrences separate so one delete/edit choice cannot restore
+            // neighboring removals. Join possible moves before applying this rule.
+            for (hunk.start..hunk.end) |index| {
+                var deletion = hunk;
+                deletion.start = index;
+                deletion.end = index + 1;
+                try result.append(arena, deletion);
+            }
+        } else try result.append(arena, hunk);
+    }
+    return result.toOwnedSlice(arena);
 }
 
 fn joinMoves(arena: Allocator, base: []const *const model.Node, side: []const *const model.Node, hunks: []const Hunk) Allocator.Error![]const Hunk {
@@ -584,5 +603,48 @@ test "joined moves retain anchored deletions and insertion gaps" {
         try expectText(a, &plan, case[1]);
         try resolve(a, &plan, 0, .{ .take = .base });
         try expectText(a, &plan, case[0]);
+    }
+}
+
+test "shrink edit resolution does not restore independently deleted neighbors" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    for ([_]Side{ .ours, .theirs }) |shrinking_side| {
+        const input = if (shrinking_side == .ours)
+            try testInput(a, "abc", "a", "abC")
+        else
+            try testInput(a, "abc", "abC", "a");
+        const editing_side: Side = if (shrinking_side == .ours) .theirs else .ours;
+        var plan = try build(a, input);
+        // Only c is disputed. Choosing its edit must preserve the accepted b removal.
+        try std.testing.expectEqual(@as(usize, 1), plan.conflicts.len);
+        try resolve(a, &plan, 0, .{ .take = editing_side });
+        try expectText(a, &plan, "aC");
+        try resolve(a, &plan, 0, .{ .take = shrinking_side });
+        try expectText(a, &plan, "a");
+        try resolve(a, &plan, 0, .{ .take = .base });
+        try expectText(a, &plan, "ac");
+    }
+}
+
+test "shrink edit choices preserve neighboring insertions and removals" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    // Shrinking removes b, c, and d. The other side edits c and inserts X after d.
+    // The insertion gap survives even when both of its former neighbors move apart.
+    for ([_]Side{ .ours, .theirs }) |shrinking_side| {
+        const input = if (shrinking_side == .ours)
+            try testInput(a, "abcde", "ae", "abCdXe")
+        else
+            try testInput(a, "abcde", "abCdXe", "ae");
+        const editing_side: Side = if (shrinking_side == .ours) .theirs else .ours;
+        var plan = try build(a, input);
+        try std.testing.expectEqual(@as(usize, 1), plan.conflicts.len);
+        try resolve(a, &plan, 0, .{ .take = editing_side });
+        try expectText(a, &plan, "aCXe");
+        try resolve(a, &plan, 0, .remove);
+        try expectText(a, &plan, "aXe");
     }
 }

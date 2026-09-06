@@ -1349,10 +1349,11 @@ pub fn main(init: std.process.Init) !u8 {
             color,
             init.environ_map,
         ),
-        .merge_driver => |driver_args| try merge_driver.run(
+        .merge_driver => |driver_args| try merge_driver.runWithGit(
             init.io,
             arena,
             driver_args,
+            .{ .io = init.io, .arena = arena, .env = init.environ_map },
             stderr,
         ),
         .mergetool => |tool_args| blk: {

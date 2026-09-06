@@ -4,12 +4,25 @@ const atomic_file = @import("atomic_file.zig");
 const command = @import("command.zig");
 const merge_io = @import("merge_io.zig");
 const merge_fallback = @import("merge_fallback.zig");
+const merge_git = @import("merge_git.zig");
+const session_context = @import("merge_session_context.zig");
+const revision = @import("merge_revision.zig");
 const testing = std.testing;
 
 pub fn run(
     io: std.Io,
     arena: std.mem.Allocator,
     args: command.MergeDriverArgs,
+    stderr: *std.Io.Writer,
+) !u8 {
+    return runWithGit(io, arena, args, null, stderr);
+}
+
+pub fn runWithGit(
+    io: std.Io,
+    arena: std.mem.Allocator,
+    args: command.MergeDriverArgs,
+    git: ?merge_git.Git,
     stderr: *std.Io.Writer,
 ) !u8 {
     const original = merge_io.readLimited(io, arena, args.ours_output) catch
@@ -25,15 +38,30 @@ pub fn run(
         (original.len == 0 or core.isUnityYaml(original)) and
         (theirs.len == 0 or core.isUnityYaml(theirs));
     if (unity) {
-        const built = core.merge.build(arena, base, original, theirs) catch |err| switch (err) {
+        const context = if (git) |repository|
+            inputContext(repository, args.path, .{ .base = base, .ours = original, .theirs = theirs }) catch |err| switch (err) {
+                error.OutOfMemory => return merge_io.reportFailure(stderr, args.path),
+                else => core.merge_context.Context{},
+            }
+        else
+            core.merge_context.Context{};
+        const built = core.merge.buildWithContext(arena, base, original, theirs, context) catch |err| switch (err) {
             error.OutOfMemory => return merge_io.reportFailure(stderr, args.path),
             else => null,
         };
         if (built) |valid| {
             if (valid.plan.unresolvedCount() == 0) {
-                atomic_file.replace(io, arena, args.ours_output, original, valid.partial) catch
-                    return merge_io.reportFailure(stderr, args.path);
-                return 0;
+                // Automatic acceptance needs the same final validation as an
+                // interactive result, including its selected source context.
+                const output = core.merge.finish(arena, &valid.plan) catch |err| switch (err) {
+                    error.OutOfMemory => return merge_io.reportFailure(stderr, args.path),
+                    else => null,
+                };
+                if (output) |bytes| {
+                    atomic_file.replace(io, arena, args.ours_output, original, bytes) catch
+                        return merge_io.reportFailure(stderr, args.path);
+                    return 0;
+                }
             }
         }
     }
@@ -42,6 +70,15 @@ pub fn run(
     atomic_file.replace(io, arena, args.ours_output, original, fallback.bytes) catch
         return merge_io.reportFailure(stderr, args.path);
     return if (fallback.conflicted) 1 else 0;
+}
+
+fn inputContext(git: merge_git.Git, path: []const u8, inputs: session_context.Inputs) !core.merge_context.Context {
+    const revisions = (try session_context.discover(git)) orelse return .{};
+    var store = revision.Store.init(git);
+    defer store.deinit();
+    // A file driver runs before Git selects the candidate tree. Only the native
+    // strategy can provide the selected output source for Variant rebasing.
+    return (try session_context.bind(&store, revisions, .{ .base = path, .ours = path, .theirs = path }, inputs)) orelse .{};
 }
 
 fn runDriverCase(
@@ -383,15 +420,20 @@ test "merge driver: preserves a commented document" {
     try runDriverCase(base, ours, theirs_commented_document, expected_commented_document, 0);
 }
 
-test "merge driver: uses native text for non-Unity and markers for unsupported Unity" {
+test "merge driver: merges ordered arrays and marks unknown dictionary types" {
     const valid = "--- !u!114 &1\nMonoBehaviour:\n  m_Value: 1\n";
     // A misleading extension must not let non-Unity content reach the merge engine.
     try runDriverCase("not Unity YAML\n", valid, valid, valid, 0);
 
-    // Unknown changed sequences have no safe identity, so even their independent bytes cannot be guessed.
+    // A one-sided ordered edit has a proven result without field type metadata.
     const base = "--- !u!114 &1\nMonoBehaviour:\n  m_Unknown:\n  - 1\n  - 2\n";
     const ours = "--- !u!114 &1\nMonoBehaviour:\n  m_Unknown:\n  - 1\n  - 3\n";
-    try runDriverCase(base, ours, base, "<<<<<<< ours\n" ++ ours ++ "=======\n" ++ base ++ ">>>>>>> theirs\n", 1);
+    try runDriverCase(base, ours, base, ours, 0);
+
+    // Key/value shape alone cannot establish the dictionary's key equality rules.
+    const dictionary_base = "--- !u!114 &1\nMonoBehaviour:\n  m_Unknown:\n  - key: A\n    value: 1\n";
+    const dictionary_ours = "--- !u!114 &1\nMonoBehaviour:\n  m_Unknown:\n  - key: A\n    value: 2\n";
+    try runDriverCase(dictionary_base, dictionary_ours, dictionary_base, "<<<<<<< ours\n" ++ dictionary_ours ++ "=======\n" ++ dictionary_base ++ ">>>>>>> theirs\n", 1);
 }
 
 test "merge driver: malformed Unity remains a semantic parse failure" {
@@ -443,4 +485,53 @@ test "merge driver: keeps ours unchanged when an input cannot be read" {
         "prefablens: Merge failed for Assets/A.prefab. PrefabLens did not write the output.\n",
         stderr.toArrayList().items,
     );
+}
+
+test "merge driver: binds dictionary metadata to exact repository inputs" {
+    var memory = std.heap.ArenaAllocator.init(testing.allocator);
+    defer memory.deinit();
+    const arena = memory.allocator();
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var env = std.process.Environ.Map.init(arena);
+    try env.put("PATH", "/usr/bin:/bin");
+    const root = try tmp.dir.realPathFileAlloc(testing.io, ".", arena);
+    const git: merge_git.Git = .{ .io = testing.io, .arena = arena, .env = &env, .cwd = root };
+    try git.ok(&.{ "init", "-q" });
+    try git.ok(&.{ "config", "user.name", "Fixture" });
+    try git.ok(&.{ "config", "user.email", "fixture@example.invalid" });
+    try git.ok(&.{ "config", "commit.gpgsign", "false" });
+    const guid = "11111111111111111111111111111111";
+    try tmp.dir.createDir(testing.io, "Assets", .default_dir);
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "Assets/Example.cs", .data = "using UnityEngine; using System.Collections.Generic; class Example : MonoBehaviour { [SerializeField] Dictionary<string,int> values = new(); }" });
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "Assets/Example.cs.meta", .data = "guid: " ++ guid ++ "\n" });
+    const prefix = "--- !u!114 &1\nMonoBehaviour:\n  m_Script: {fileID: 11500000, guid: " ++ guid ++ ", type: 3}\n  values: ";
+    const inputs = [_][]const u8{
+        prefix ++ "[{key: A, value: 1}]\n",
+        prefix ++ "[{key: A, value: 1}, {key: Ours, value: 2}]\n",
+        prefix ++ "[{key: A, value: 1}, {key: Theirs, value: 3}]\n",
+    };
+    var revisions: [3][]const u8 = undefined;
+    for (inputs, 0..) |bytes, i| {
+        if (i == 2) try git.ok(&.{ "checkout", "-q", "--detach", revisions[0] });
+        try tmp.dir.writeFile(testing.io, .{ .sub_path = "Assets/A.prefab", .data = bytes });
+        try git.ok(&.{ "add", "--all" });
+        try git.ok(&.{ "commit", "-qm", "fixture" });
+        revisions[i] = merge_git.trim(try git.output(&.{ "rev-parse", "HEAD" }));
+    }
+    for ([_][]const u8{ "PREFABLENS_MERGE_BASE", "PREFABLENS_MERGE_OURS", "PREFABLENS_MERGE_THEIRS" }, revisions) |key, value| try env.put(key, value);
+    // The branch's serialized declaration remains authoritative after an unstaged edit.
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "Assets/Example.cs", .data = "broken dirty script" });
+    for ([_][]const u8{ "base", "ours", "theirs" }, inputs) |path, bytes| try tmp.dir.writeFile(testing.io, .{ .sub_path = path, .data = bytes });
+    const args: command.MergeDriverArgs = .{ .base = try git.path("base"), .ours_output = try git.path("ours"), .theirs = try git.path("theirs"), .path = "Assets/A.prefab" };
+    var stderr = std.Io.Writer.Allocating.init(arena);
+    try testing.expectEqual(@as(u8, 0), try runWithGit(testing.io, arena, args, git, &stderr.writer));
+    const output = try merge_io.readLimited(testing.io, arena, args.ours_output);
+    try testing.expectEqual(@as(usize, 1), std.mem.count(u8, output, "key: Ours"));
+    try testing.expectEqual(@as(usize, 1), std.mem.count(u8, output, "key: Theirs"));
+    try testing.expectEqualStrings("", stderr.written());
+    // A temporary input edit breaks the revision binding and requires an explicit choice.
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "ours", .data = prefix ++ "[{key: Edited, value: 2}]\n" });
+    try testing.expectEqual(@as(u8, 1), try runWithGit(testing.io, arena, args, git, &stderr.writer));
+    try testing.expect(std.mem.indexOf(u8, try merge_io.readLimited(testing.io, arena, args.ours_output), "<<<<<<<") != null);
 }

@@ -50,6 +50,7 @@ pub fn readIndex(store: *revision.Store) !Index {
     const unmerged = try alternate.output(&.{ "ls-files", "--unmerged", "-z" });
     var records: std.ArrayList(u8) = .empty;
     var paths: std.StringHashMap(void) = .init(git.arena);
+    var unresolved_paths: std.ArrayList([]const u8) = .empty;
     var entries = std.mem.splitScalar(u8, unmerged, 0);
     while (entries.next()) |entry| {
         if (entry.len == 0) continue;
@@ -63,6 +64,7 @@ pub fn readIndex(store: *revision.Store) !Index {
         if (item_path.len == 0) return error.InvalidIndex;
         if (paths.contains(item_path)) continue;
         try paths.put(item_path, {});
+        try unresolved_paths.append(git.arena, item_path);
         const zero = try git.arena.alloc(u8, oid.len);
         @memset(zero, '0');
         try records.appendSlice(git.arena, try std.fmt.allocPrint(git.arena, "0 {s}\t{s}\x00", .{ zero, item_path }));
@@ -70,8 +72,35 @@ pub fn readIndex(store: *revision.Store) !Index {
     if (records.items.len != 0) try alternate.input(&.{ "update-index", "-z", "--index-info" }, records.items);
     const tree = merge_git.trim(try alternate.output(&.{"write-tree"}));
     if (!validOid(tree)) return error.InvalidTree;
-    const output: Index = .{ .snapshot = try store.snapshot(tree), .path = path, .before = before };
+    const output: Index = .{ .snapshot = try maskUnresolved(git.arena, try store.snapshot(tree), unresolved_paths.items), .path = path, .before = before };
     try output.unchanged(git);
+    return output;
+}
+
+pub fn maskUnresolved(arena: std.mem.Allocator, snapshot: core.merge_context.Snapshot, paths: []const []const u8) std.mem.Allocator.Error!core.merge_context.Snapshot {
+    var output = snapshot;
+    var unknown_identity = false;
+    for (paths) |path| {
+        // An omitted competing declaration can shadow an otherwise proven type.
+        for ([_][]const u8{ ".cs", ".asmdef", ".asmref", ".dll", ".rsp", ".meta" }) |suffix| {
+            if (std.ascii.endsWithIgnoreCase(path, suffix)) output.scripts = &.{};
+        }
+        // Unresolved metadata can conceal a duplicate GUID anywhere in the tree.
+        if (std.ascii.endsWithIgnoreCase(path, ".meta")) unknown_identity = true;
+    }
+    if (unknown_identity) {
+        output.assets = &.{};
+        return output;
+    }
+    var assets: std.ArrayList(core.merge_context.Asset) = .empty;
+    for (snapshot.assets) |asset| {
+        const excluded = for (paths) |path| {
+            if (std.mem.eql(u8, path, asset.path) or
+                (std.mem.startsWith(u8, asset.path, path) and asset.path.len > path.len and asset.path[path.len] == '/')) break true;
+        } else false;
+        if (!excluded) try assets.append(arena, asset);
+    }
+    output.assets = try assets.toOwnedSlice(arena);
     return output;
 }
 
@@ -282,4 +311,36 @@ test "session context omits unresolved output sources and detects index changes"
     try testing.expectError(error.SourceChanged, output.unchanged(git));
     const refreshed = try readIndex(&store);
     try testing.expectEqualStrings(ours_bytes, refreshed.snapshot.asset(asset_guid).?.bytes);
+}
+
+test "session context cannot prove types after omitting unresolved declarations" {
+    var memory = std.heap.ArenaAllocator.init(testing.allocator);
+    defer memory.deinit();
+    const arena = memory.allocator();
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var env = std.process.Environ.Map.init(arena);
+    const git = try fixtureGit(&tmp, arena, &env);
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "Assets/Shadow.cs", .data = "class Shadow { int value = 1; }\n" });
+    const base = try fixtureCommit(git, base_bytes);
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "Assets/Shadow.cs", .data = "class Shadow { int value = 2; }\n" });
+    const ours = try fixtureCommit(git, base_bytes);
+    try git.ok(&.{ "checkout", "-q", "--detach", base });
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "Assets/Shadow.cs", .data = "class Shadow { int value = 3; }\n" });
+    const theirs = try fixtureCommit(git, base_bytes);
+    try git.ok(&.{ "checkout", "-q", "--detach", ours });
+    try testing.expectEqual(@as(u8, 1), merge_git.exitCode(try git.run(&.{ "merge", "--no-commit", theirs })));
+    var store = revision.Store.init(git);
+    defer store.deinit();
+    // Missing a competing declaration is not evidence that BCL type names are unshadowed.
+    const output = try readIndex(&store);
+    try testing.expectEqual(null, output.snapshot.kind(script_guid, "values"));
+    try testing.expectEqualStrings(base_bytes, output.snapshot.asset(asset_guid).?.bytes);
+    const known = try store.snapshot(base);
+    const metadata_conflict = try maskUnresolved(arena, known, &.{"Assets/Unknown.meta"});
+    try testing.expectEqual(@as(usize, 0), metadata_conflict.scripts.len);
+    try testing.expectEqual(@as(usize, 0), metadata_conflict.assets.len);
+    const asset_conflict = try maskUnresolved(arena, known, &.{asset_path});
+    try testing.expectEqual(null, asset_conflict.asset(asset_guid));
+    try testing.expectEqual(core.merge_context.Kind.int32_array, asset_conflict.kind(script_guid, "values").?);
 }

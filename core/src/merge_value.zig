@@ -17,7 +17,14 @@ pub const Comparisons = struct {
         try self.nodes.put(arena, n, compared);
     }
 };
-pub const Input = struct { comparisons: ?*const Comparisons = null, nodes: Nodes, schema: ?context.Field = null, context_conflict: bool = false };
+pub const Input = struct {
+    comparisons: ?*const Comparisons = null,
+    nodes: Nodes,
+    schema: ?context.Field = null,
+    context_conflict: bool = false,
+    // Only an adapter with proven shared item slots can bypass ordered alignment.
+    aligned_items: bool = false,
+};
 pub const Reason = enum { edit_edit, delete_edit, insertion_order, ambiguous_correspondence, context_required, source_bytes, invalid_dictionary, dictionary_order };
 pub const Conflict = struct { path: []const u8 = "", nodes: Nodes, reason: Reason, sequence: bool = false };
 pub const Choice = union(enum) { unresolved, take: Side, remove, custom: *const model.Node };
@@ -58,12 +65,28 @@ pub fn build(arena: A, input: Input) Error!Plan {
                 root = try planValue(arena, &conflicts, logical, false, input.comparisons);
             },
             .string_dictionary, .int32_dictionary => root = try planDictionary(arena, &conflicts, input.nodes, schema, input.comparisons),
-            .ordered => root = try planValue(arena, &conflicts, input.nodes, true, input.comparisons),
+            .ordered => root = if (input.aligned_items)
+                try planAlignedItems(arena, &conflicts, input.nodes, input.comparisons)
+            else
+                try planValue(arena, &conflicts, input.nodes, true, input.comparisons),
         }
     } else if (dictionaryShape(input.nodes) and !(eql(input.nodes.base, input.nodes.ours) and eql(input.nodes.base, input.nodes.theirs))) {
         root = try conflict(arena, &conflicts, input.nodes, .context_required, true);
     } else root = try planValue(arena, &conflicts, logical, false, input.comparisons);
     return .{ .root = root, .conflicts = try conflicts.toOwnedSlice(arena), .input = input, .packed_layout = layout, .logical_nodes = if (layout != null) logical else null };
+}
+fn planAlignedItems(arena: A, conflicts: *std.ArrayList(Conflict), nodes: Nodes, comparisons: ?*const Comparisons) Error!*const Value {
+    const base = nodes.base orelse return error.InvalidResolution;
+    const ours = nodes.ours orelse return error.InvalidResolution;
+    const theirs = nodes.theirs orelse return error.InvalidResolution;
+    if (base.* != .seq or ours.* != .seq or theirs.* != .seq or base.seq.len != ours.seq.len or base.seq.len != theirs.seq.len) return error.InvalidResolution;
+    const pieces = try arena.alloc(Piece, base.seq.len);
+    for (base.seq, ours.seq, theirs.seq, pieces, 0..) |b, o, t, *piece, i| {
+        const first = conflicts.items.len;
+        piece.* = .{ .spread = false, .value = try planValue(arena, conflicts, .{ .base = b, .ours = o, .theirs = t }, false, comparisons) };
+        try prefixConflicts(arena, conflicts, first, try std.fmt.allocPrint(arena, "[{d}]", .{i}));
+    }
+    return alloc(arena, .{ .sequence = pieces });
 }
 pub fn conflicted(arena: A, input: Input, reason: Reason) Error!Plan {
     var conflicts: std.ArrayList(Conflict) = .empty;

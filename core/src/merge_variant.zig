@@ -50,6 +50,7 @@ const Group = struct {
     collection: bool,
     raw: bool = false,
     inherit_output: bool = false,
+    source_aligned: bool = false,
     size_explicit: bool = false,
     size_choice: ?SizeChoice = null,
     promotion_binding: ?usize = null,
@@ -126,7 +127,11 @@ pub fn collect(arena: A, state: *binding.State, operations: *std.ArrayList(mm.Op
             }
         }
     }
+    const inherit_unwritten = try unchangedSourceEstablished(arena, files, document, state.context.output);
     for ([_]context.Snapshot{ state.context.base, state.context.ours, state.context.theirs }, files) |snapshot, file| {
+        // Unwritten groups inherit the selected source even if an earlier
+        // branch removed that source or cannot prove its script declarations.
+        if (inherit_unwritten) break;
         const doc = findDoc(file, document) orelse continue;
         const prefab_source = field(doc.body, "m_SourcePrefab") orelse continue;
         if (prefab_source.* != .ref or prefab_source.ref.guid == null) continue;
@@ -209,8 +214,13 @@ pub fn collect(arena: A, state: *binding.State, operations: *std.ArrayList(mm.Op
                     .{ .base = projections[3].node, .ours = projections[3].node, .theirs = projections[3].node }
                 else
                     .{ .base = projections[0].node, .ours = projections[1].node, .theirs = projections[2].node };
+                if (!group.inherit_output) if (try authoredInputs(arena, group.*, size_masks)) |aligned| {
+                    input.nodes = aligned;
+                    group.source_aligned = true;
+                };
                 input.schema = projections[0].descriptor;
                 if (input.schema.?.kind == .int32_array) input.schema.?.kind = .ordered;
+                input.aligned_items = group.source_aligned and input.schema.?.kind == .ordered;
             } else {
                 group.raw = true;
                 input.context_conflict = true;
@@ -225,7 +235,7 @@ pub fn collect(arena: A, state: *binding.State, operations: *std.ArrayList(mm.Op
             if (sameBytes(skeletons[1], skeletons[2]) or sameBytes(skeletons[0], skeletons[2])) group.template = input.nodes.ours else if (sameBytes(skeletons[0], skeletons[1])) group.template = input.nodes.theirs else bytes_conflict = true;
         }
         if (group.projections) |ps| {
-            if (!group.inherit_output) input.comparisons = try projection.comparisons(arena, ps);
+            if (!group.inherit_output) input.comparisons = try projection.comparisons(arena, ps, input.nodes);
         }
         const planned = if (bytes_conflict) value.conflicted(arena, input, .source_bytes) else value.build(arena, input);
         const plan = planned catch |err| switch (err) {
@@ -286,6 +296,67 @@ pub fn collect(arena: A, state: *binding.State, operations: *std.ArrayList(mm.Op
             );
         }
     }
+}
+fn unchangedSourceEstablished(arena: A, files: [3]source.ParsedFile, document: mm.DocumentId, output: context.Snapshot) A.Error!bool {
+    var first: ?*const model.Node = null;
+    for (files) |file| {
+        const doc = findDoc(file, document) orelse return false;
+        const ref = field(doc.body, "m_SourcePrefab") orelse return false;
+        if (ref.* != .ref) return false;
+        if (first) |base| {
+            if (!model.Node.eql(base, ref)) return false;
+        } else first = ref;
+    }
+    return selectedSourceEstablished(arena, output, first.?.ref);
+}
+
+// With no authored size, each side contributes leaf overrides and resets.
+// Rebase those contributions before merging so inherited Source conflicts do
+// not become a second Variant decision. Historical projections stay intact.
+fn authoredInputs(arena: A, group: Group, size_masks: [3]bool) mm.Error!?value.Nodes {
+    for (size_masks) |explicit| if (explicit) return null;
+    const ps = group.projections.?;
+    for (ps) |p| if (p.sparse) return null;
+    const output = ps[3].node;
+    var nodes: [3]*const model.Node = undefined;
+    for (ps[0..3], group.rows, &nodes) |p, rows, *node| {
+        if (p.node.seq.len != p.inherited.seq.len) return null;
+        for (rows.seq) |row| {
+            const active = for (p.leaves) |leaf| {
+                if (leaf.explicit and leaf.row == row) break true;
+            } else false;
+            if (!active) return null;
+        }
+        const items = try arena.dupe(*model.Node, output.seq);
+        const claimed = try arena.alloc(bool, items.len);
+        @memset(claimed, false);
+        const mapping = try @import("merge_collection.zig").correspondence(arena, p.inherited.seq, output.seq);
+        for (p.node.seq, 0..) |item, index| {
+            if (!hasAuthoredLeaf(group, item)) continue;
+            const destination = authoredDestination(p.inherited.seq, output.seq, mapping, index) orelse return null;
+            if (claimed[destination] or !projection.coverageEqual(item, output.seq[destination])) return null;
+            claimed[destination] = true;
+            items[destination] = @constCast(try overlayExplicit(arena, group, item, output.seq[destination]));
+        }
+        node.* = try value.node(arena, .{ .seq = items });
+    }
+    return .{ .base = nodes[0], .ours = nodes[1], .theirs = nodes[2] };
+}
+fn authoredDestination(inherited: []const *model.Node, output: []const *model.Node, mapping: []const ?usize, index: usize) ?usize {
+    if (mapping[index]) |destination| return destination;
+    // A moved exact value is usable only when both source snapshots contain
+    // one occurrence. Output uniqueness alone cannot identify a removed twin.
+    var inherited_count: usize = 0;
+    for (inherited) |candidate| if (model.Node.eql(candidate, inherited[index])) {
+        inherited_count += 1;
+    };
+    if (inherited_count != 1) return null;
+    var destination: ?usize = null;
+    for (output, 0..) |candidate, i| if (model.Node.eql(candidate, inherited[index])) {
+        if (destination != null) return null;
+        destination = i;
+    };
+    return destination;
 }
 fn selectedSourceEstablished(arena: A, snapshot: context.Snapshot, ref: model.Ref) A.Error!bool {
     const guid = ref.guid orelse return false;
@@ -471,6 +542,7 @@ fn hasPromotedLeaf(group: Group, result: *const model.Node, output: ?*const mode
 }
 fn followInherited(arena: A, group: Group, selected: ?*const model.Node) mm.Error!?*const model.Node {
     const current = selected orelse return null;
+    if (group.source_aligned) return current;
     const ps = group.projections orelse return current;
     if (current.* != .seq or ps[3].node.* != .seq) return current;
     const mapping = try @import("merge_collection.zig").correspondence(arena, ps[3].node.seq, current.seq);
@@ -851,7 +923,10 @@ pub fn replacement(arena: A, plan: *const mm.MergePlan, link: Link, require_all:
         try bytes.appendSlice(arena, ending);
     } else {
         if (original.seq.len == 0) {
-            try bytes.appendSlice(arena, plan.ours.bytes[span.start..entry.value.start]);
+            // The separator before [] is not trailing space on a block header.
+            // Retain any actual comment after the replaced empty value.
+            try bytes.appendSlice(arena, std.mem.trimEnd(u8, plan.ours.bytes[span.start..entry.value.start], " \t"));
+            try bytes.appendSlice(arena, std.mem.trimEnd(u8, plan.ours.bytes[entry.value.end..header_end], "\r\n"));
             try bytes.appendSlice(arena, ending);
         } else try bytes.appendSlice(arena, plan.ours.bytes[span.start..header_end]);
         for (emissions.items) |emission| {

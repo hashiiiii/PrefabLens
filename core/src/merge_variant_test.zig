@@ -225,7 +225,9 @@ test "variant public promotion preview uses a resolved custom structure" {
     const ours_source = small_source;
     const theirs_source = try std.mem.replaceOwned(u8, arena, source_two, "name: B\n    speed: 2", "name: C\n    speed: 3");
     const variant = try smallVariant(arena, try smallRow(arena, "items.Array.data[0].speed", "99"));
-    var built = try merge.buildWithContext(arena, variant, variant, variant, try smallContext(arena, .{ source_two, ours_source, theirs_source, source_two }));
+    // The short branch resets an authored size; this is a Variant decision.
+    const sized_variant = try smallVariant(arena, try std.mem.concat(arena, u8, &.{ try smallRow(arena, "items.Array.size", "2"), try smallRow(arena, "items.Array.data[0].speed", "99") }));
+    var built = try merge.buildWithContext(arena, sized_variant, variant, sized_variant, try smallContext(arena, .{ source_two, ours_source, theirs_source, source_two }));
     const local_id = try localId(&built.plan);
     const promotion_id = try promotionId(&built.plan);
     const local = for (built.plan.operations) |operation| {
@@ -377,8 +379,10 @@ test "variant public Source choice retains originless custom duplicate occurrenc
     const source_two = try std.mem.concat(arena, u8, &.{ small_source, "  - name: B\n    speed: 2\n" });
     const changed_source = try std.mem.replaceOwned(u8, arena, source_two, "name: B\n    speed: 2", "name: C\n    speed: 3");
     const variant = try smallVariant(arena, try smallRow(arena, "items.Array.data[0].speed", "99"));
+    // The short branch resets an authored size; this is a Variant decision.
+    const sized_variant = try smallVariant(arena, try std.mem.concat(arena, u8, &.{ try smallRow(arena, "items.Array.size", "2"), try smallRow(arena, "items.Array.data[0].speed", "99") }));
     inline for (.{ false, true }) |short_is_ours| {
-        var built = try merge.buildWithContext(arena, variant, variant, variant, try smallContext(arena, .{ source_two, if (short_is_ours) small_source else changed_source, if (short_is_ours) changed_source else small_source, source_two }));
+        var built = try merge.buildWithContext(arena, sized_variant, if (short_is_ours) variant else sized_variant, if (short_is_ours) sized_variant else variant, try smallContext(arena, .{ source_two, if (short_is_ours) small_source else changed_source, if (short_is_ours) changed_source else small_source, source_two }));
         try merge.resolve(arena, &built.plan, try localId(&built.plan), .{ .custom = "[{name: A, speed: 1}, {name: A, speed: 1}]" });
         const promotion_id = try promotionId(&built.plan);
         try testing.expectEqualStrings("[{name: A, speed: 99}, {name: A, speed: 1}, {name: A, speed: 1}]", (try merge.variantPromotionValue(arena, &built.plan, promotion_id, .theirs)).bytes);
@@ -408,8 +412,10 @@ test "variant public Source choice keeps a proven destination when a custom exac
         "  - name: B\n    speed: 2\n  - name: A\n    speed: 1\n",
     );
     const variant = try smallVariant(arena, try smallRow(arena, "items.Array.data[0].speed", "99"));
+    // The short branch resets an authored size; this is a Variant decision.
+    const sized_variant = try smallVariant(arena, try std.mem.concat(arena, u8, &.{ try smallRow(arena, "items.Array.size", "2"), try smallRow(arena, "items.Array.data[0].speed", "99") }));
     inline for (.{ false, true }) |short_is_ours| {
-        var built = try merge.buildWithContext(arena, variant, variant, variant, try smallContext(arena, .{ source_two, if (short_is_ours) small_source else changed_source, if (short_is_ours) changed_source else small_source, output_source }));
+        var built = try merge.buildWithContext(arena, sized_variant, if (short_is_ours) variant else sized_variant, if (short_is_ours) sized_variant else variant, try smallContext(arena, .{ source_two, if (short_is_ours) small_source else changed_source, if (short_is_ours) changed_source else small_source, output_source }));
         try merge.resolve(arena, &built.plan, try localId(&built.plan), .{ .custom = "[{name: B, speed: 2}, {name: A, speed: 1}]" });
         const promotion_id = try promotionId(&built.plan);
         try testing.expectEqualStrings("[{name: B, speed: 2}, {name: A, speed: 99}, {name: A, speed: 1}]", (try merge.variantPromotionValue(arena, &built.plan, promotion_id, .theirs)).bytes);
@@ -433,10 +439,12 @@ test "variant public Source choice preserves accepted custom data without duplic
     const source_two = try std.mem.concat(arena, u8, &.{ small_source, "  - name: B\n    speed: 2\n" });
     const theirs_source = try std.mem.replaceOwned(u8, arena, source_two, "name: B\n    speed: 2", "name: C\n    speed: 3");
     const variant = try smallVariant(arena, try smallRow(arena, "items.Array.data[0].speed", "99"));
+    // The short branch resets an authored size; this is a Variant decision.
+    const sized_variant = try smallVariant(arena, try std.mem.concat(arena, u8, &.{ try smallRow(arena, "items.Array.size", "2"), try smallRow(arena, "items.Array.data[0].speed", "99") }));
     inline for (.{ false, true }) |short_source_is_ours| {
         const ours_source = if (short_source_is_ours) small_source else theirs_source;
         const theirs_revision = if (short_source_is_ours) theirs_source else small_source;
-        var built = try merge.buildWithContext(arena, variant, variant, variant, try smallContext(arena, .{ source_two, ours_source, theirs_revision, source_two }));
+        var built = try merge.buildWithContext(arena, sized_variant, if (short_source_is_ours) variant else sized_variant, if (short_source_is_ours) sized_variant else variant, try smallContext(arena, .{ source_two, ours_source, theirs_revision, source_two }));
         const local_id = try localId(&built.plan);
         const promotion_id = try promotionId(&built.plan);
         try merge.resolve(arena, &built.plan, local_id, .{ .custom = "[{name: A, speed: 77}, {name: B, speed: 2}]" });
@@ -463,7 +471,9 @@ test "variant public Source choice rejects custom nonempty-source growth with in
     const source_two = try std.mem.concat(arena, u8, &.{ small_source, "  - name: B\n    speed: 2\n" });
     const theirs_source = try std.mem.replaceOwned(u8, arena, source_two, "name: B\n    speed: 2", "name: C\n    speed: 3");
     const variant = try smallVariant(arena, try smallRow(arena, "items.Array.data[0].speed", "99"));
-    var built = try merge.buildWithContext(arena, variant, variant, variant, try smallContext(arena, .{ source_two, small_source, theirs_source, source_two }));
+    // The short branch resets an authored size; this is a Variant decision.
+    const sized_variant = try smallVariant(arena, try std.mem.concat(arena, u8, &.{ try smallRow(arena, "items.Array.size", "2"), try smallRow(arena, "items.Array.data[0].speed", "99") }));
+    var built = try merge.buildWithContext(arena, sized_variant, variant, sized_variant, try smallContext(arena, .{ source_two, small_source, theirs_source, source_two }));
     const promotion_id = try promotionId(&built.plan);
     try merge.resolve(arena, &built.plan, try localId(&built.plan), .{ .custom = "[{name: A, speed: 77}, {name: B}]" });
     try testing.expectError(error.InvalidResolution, merge.resolve(arena, &built.plan, promotion_id, .{ .take = .theirs }));
@@ -1238,4 +1248,140 @@ test "variant public typed blank dictionary preserves blank comments and CRLF" {
     try testing.expect(std.mem.indexOf(u8, output, "value:  # empty key\r\n") != null);
     try testing.expectEqualStrings("10", try rowValue(a, output, "items.Array.data[0].value"));
     try testing.expectEqualStrings("20", try rowValue(a, output, "items.Array.data[1].value"));
+}
+
+test "variant public selected Source does not repeat its conflict around an authored leaf" {
+    var memory = std.heap.ArenaAllocator.init(testing.allocator);
+    defer memory.deinit();
+    const a = memory.allocator();
+    const base_source = @embedFile("testdata/collections/cases/variant-source-and-override/base-source.prefab");
+    const edited_source = try std.mem.replaceOwned(u8, a, base_source, "  - name: A\n    power: 1\n    speed: 1\n", "  - name: A\n    power: 1\n    speed: 10\n");
+    const removed_source = @embedFile("testdata/collections/cases/variant-source-and-override/theirs-source.prefab");
+    const base = @embedFile("testdata/collections/cases/variant-source-and-override/base.prefab");
+    const edited = @embedFile("testdata/collections/cases/variant-source-and-override/ours.prefab");
+    inline for (.{ false, true }) |swap| {
+        inline for (.{ false, true }) |remove_a| {
+            const snapshots = try a.alloc(ctx.Snapshot, 4);
+            const sources = [4][]const u8{ base_source, if (swap) removed_source else edited_source, if (swap) edited_source else removed_source, if (remove_a) removed_source else edited_source };
+            for (snapshots, sources) |*snapshot, bytes| {
+                const assets = try a.alloc(ctx.Asset, 1);
+                assets[0] = .{ .guid = "0464d347790434a4898eef837430e91e", .path = "Source.prefab", .bytes = bytes };
+                snapshot.* = .{ .assets = assets, .scripts = context().base.scripts };
+            }
+            const built = try merge.buildWithContext(a, base, if (swap) base else edited, if (swap) edited else base, .{ .base = snapshots[0], .ours = snapshots[1], .theirs = snapshots[2], .output = snapshots[3] });
+            try testing.expectEqual(@as(usize, 0), built.plan.unresolvedCount());
+            try testing.expectEqual(@as(usize, 0), (try merge.variantProvenance(a, &built.plan)).effects.len);
+            const expected = if (remove_a) @embedFile("testdata/collections/cases/variant-source-and-override/expected.prefab") else edited;
+            try testing.expectEqualStrings(expected, try merge.finish(a, &built.plan));
+        }
+    }
+}
+
+const leaf_source = small_source ++ "  - name: B\n    speed: 2\n  - name: C\n    speed: 3\n";
+fn leafSourceContext(a: std.mem.Allocator, remove_a: bool) !ctx.Context {
+    const edited_source = try std.mem.replaceOwned(u8, a, leaf_source, "name: A\n    speed: 1", "name: A\n    speed: 10");
+    const removed_source = try std.mem.replaceOwned(u8, a, leaf_source, "  - name: A\n    speed: 1\n", "");
+    return smallContext(a, .{ leaf_source, edited_source, removed_source, if (remove_a) removed_source else edited_source });
+}
+
+test "variant public selected Source merges authored leaves from both historical indices" {
+    var memory = std.heap.ArenaAllocator.init(testing.allocator);
+    defer memory.deinit();
+    const a = memory.allocator();
+    const base = try smallVariant(a, "");
+    const ours = try smallVariant(a, try smallRow(a, "items.Array.data[1].speed", "99"));
+    const theirs = try smallVariant(a, try smallRow(a, "items.Array.data[1].speed", "77"));
+    inline for (.{ false, true }) |remove_a| {
+        const built = try merge.buildWithContext(a, base, ours, theirs, try leafSourceContext(a, remove_a));
+        try testing.expectEqual(@as(usize, 0), built.plan.unresolvedCount());
+        const output = try merge.finish(a, &built.plan);
+        try testing.expectEqualStrings("99", try rowValue(a, output, if (remove_a) "items.Array.data[0].speed" else "items.Array.data[1].speed"));
+        try testing.expectEqualStrings("77", try rowValue(a, output, if (remove_a) "items.Array.data[1].speed" else "items.Array.data[2].speed"));
+        try testing.expectError(error.MissingRow, rowValue(a, output, "items.Array.size"));
+        try testing.expectEqual(@as(usize, 0), (try merge.variantProvenance(a, &built.plan)).effects.len);
+    }
+}
+
+test "variant public selected Source retains authored reset versus edit choices" {
+    var memory = std.heap.ArenaAllocator.init(testing.allocator);
+    defer memory.deinit();
+    const a = memory.allocator();
+    const base = try smallVariant(a, try smallRow(a, "items.Array.data[1].speed", "5"));
+    const ours = try smallVariant(a, try smallRow(a, "items.Array.data[2].speed", "77"));
+    const theirs = try smallVariant(a, try smallRow(a, "items.Array.data[0].speed", "99"));
+    inline for (.{ false, true }) |keep_edit| {
+        var built = try merge.buildWithContext(a, base, ours, theirs, try leafSourceContext(a, false));
+        try testing.expectEqual(@as(usize, 1), built.plan.unresolvedCount());
+        const id = try localId(&built.plan);
+        try merge.resolve(a, &built.plan, id, .{ .take = if (keep_edit) .theirs else .ours });
+        const output = try merge.finish(a, &built.plan);
+        if (keep_edit) try testing.expectEqualStrings("99", try rowValue(a, output, "items.Array.data[1].speed")) else try testing.expectError(error.MissingRow, rowValue(a, output, "items.Array.data[1].speed"));
+        try testing.expectEqualStrings("77", try rowValue(a, output, "items.Array.data[2].speed"));
+        try testing.expectEqual(@as(usize, 0), (try merge.variantProvenance(a, &built.plan)).effects.len);
+    }
+}
+
+test "variant public selected Source cannot retarget removed or ambiguous authored leaves" {
+    var memory = std.heap.ArenaAllocator.init(testing.allocator);
+    defer memory.deinit();
+    const a = memory.allocator();
+    const base = try smallVariant(a, "");
+    inline for (.{ false, true }) |duplicate| {
+        const before = if (duplicate) try std.mem.concat(a, u8, &.{ small_source, "  - name: A\n    speed: 1\n" }) else leaf_source;
+        const after = if (duplicate) small_source else try std.mem.replaceOwned(u8, a, leaf_source, "  - name: B\n    speed: 2\n", "");
+        const ours = try smallVariant(a, try smallRow(a, if (duplicate) "items.Array.data[0].speed" else "items.Array.data[1].speed", "99"));
+        const built = try merge.buildWithContext(a, base, ours, base, try smallContext(a, .{ before, before, after, after }));
+        try testing.expect(built.plan.unresolvedCount() > 0);
+        try testing.expectError(error.InvalidResolution, merge.finish(a, &built.plan));
+    }
+}
+
+test "variant public selected Source permits unwritten inheritance with missing historical context" {
+    var memory = std.heap.ArenaAllocator.init(testing.allocator);
+    defer memory.deinit();
+    const a = memory.allocator();
+    const variant = try smallVariant(a, "");
+    inline for (.{ false, true }) |missing_source| {
+        for (0..3) |side| {
+            var c = try smallContext(a, .{ small_source, small_source, small_source, small_source });
+            const snapshots = [3]*ctx.Snapshot{ &c.base, &c.ours, &c.theirs };
+            if (missing_source) snapshots[side].assets = &.{} else snapshots[side].scripts = &.{};
+            const built = try merge.buildWithContext(a, variant, variant, variant, c);
+            try testing.expectEqual(@as(usize, 0), built.plan.unresolvedCount());
+            try testing.expectEqualStrings(variant, try merge.finish(a, &built.plan));
+        }
+    }
+    inline for (.{ false, true }) |ambiguous| {
+        var c = try smallContext(a, .{ small_source, small_source, small_source, small_source });
+        c.output.assets = if (ambiguous) try std.mem.concat(a, ctx.Asset, &.{ c.output.assets, c.output.assets }) else &.{};
+        const built = try merge.buildWithContext(a, variant, variant, variant, c);
+        try testing.expect(built.plan.unresolvedCount() > 0);
+        try testing.expectError(error.InvalidResolution, merge.finish(a, &built.plan));
+    }
+}
+
+test "variant public selected Source does not reopen inherited edits beside unchanged authored rows" {
+    var memory = std.heap.ArenaAllocator.init(testing.allocator);
+    defer memory.deinit();
+    const a = memory.allocator();
+    const source_two = small_source ++ "  - name: B\n    speed: 2\n";
+    const changed_source = try std.mem.replaceOwned(u8, a, source_two, "name: B\n    speed: 2", "name: C\n    speed: 3");
+    const variant = try smallVariant(a, try smallRow(a, "items.Array.data[0].speed", "99"));
+    const built = try merge.buildWithContext(a, variant, variant, variant, try smallContext(a, .{ source_two, small_source, changed_source, source_two }));
+    try testing.expectEqual(@as(usize, 0), built.plan.unresolvedCount());
+    try testing.expectEqualStrings(variant, try merge.finish(a, &built.plan));
+    try testing.expectEqual(@as(usize, 0), (try merge.variantProvenance(a, &built.plan)).effects.len);
+}
+
+test "variant public selected Source preserves the empty modification header comment when adding rows" {
+    var memory = std.heap.ArenaAllocator.init(testing.allocator);
+    defer memory.deinit();
+    const a = memory.allocator();
+    const empty = try smallVariant(a, "");
+    const base = try std.mem.replaceOwned(u8, a, empty, "m_Modifications: []", "m_Modifications: [] # overrides");
+    const row = try smallVariant(a, try smallRow(a, "items.Array.data[0].speed", "99"));
+    const theirs = try std.mem.replaceOwned(u8, a, row, "m_Modifications:\n", "m_Modifications: # overrides\n");
+    const built = try merge.buildWithContext(a, base, base, theirs, try smallContext(a, .{ small_source, small_source, small_source, small_source }));
+    try testing.expectEqual(@as(usize, 0), built.plan.unresolvedCount());
+    try testing.expectEqualStrings(theirs, try merge.finish(a, &built.plan));
 }

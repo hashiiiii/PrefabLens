@@ -289,14 +289,18 @@ pub fn compatible(projections: []const Projection) bool {
 
 // Comparison trees carry explicit intent only during equality/correspondence.
 // Logical conflicts and materialized results always retain the original leaves.
-pub fn comparisons(arena: A, projections: [4]Projection) A.Error!*const value.Comparisons {
+pub fn comparisons(arena: A, projections: [4]Projection, nodes: value.Nodes) A.Error!*const value.Comparisons {
     const lookup = try arena.create(value.Comparisons);
     lookup.* = .empty;
-    for (projections[0..3]) |p| _ = try compareTree(arena, lookup, p, p.node, null);
+    for (projections[0..3], [_]?*const model.Node{ nodes.base, nodes.ours, nodes.theirs }) |p, node| if (node) |n| {
+        _ = try compareTree(arena, lookup, p, n, null);
+    };
     lookup.contexts = try coverageContexts(arena, projections);
     return lookup;
 }
 fn compareTree(arena: A, lookup: *value.Comparisons, p: Projection, n: *const model.Node, slot: ?usize) A.Error!*const model.Node {
+    // Aligned sides share selected-source nodes and their comparison identity.
+    if (lookup.get(n)) |existing| return existing;
     var result: *const model.Node = undefined;
     if (n.* == .map) {
         const entries = try arena.dupe(model.Entry, n.map);

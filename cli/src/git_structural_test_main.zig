@@ -57,7 +57,7 @@ pub fn main(init: std.process.Init) !u8 {
     const prefablens = try std.Io.Dir.cwd().realPathFileAlloc(init.io, args[1], a);
     const strategy = try std.Io.Dir.cwd().realPathFileAlloc(init.io, args[2], a);
     var env = try init.environ_map.clone(a);
-    try env.put("PATH", try std.fmt.allocPrint(a, "{s}{c}{s}{c}{s}", .{ std.fs.path.dirname(strategy).?, std.fs.path.delimiter, std.fs.path.dirname(prefablens).?, std.fs.path.delimiter, env.get("PATH") orelse "" }));
+    try env.put("PATH", try std.fmt.allocPrint(a, "{s}{c}{s}{c}{s}", .{ std.fs.path.dirname(prefablens).?, std.fs.path.delimiter, std.fs.path.dirname(strategy).?, std.fs.path.delimiter, env.get("PATH") orelse "" }));
     const ctx: Context = .{ .git = .{ .io = init.io, .arena = a, .env = &env }, .scratch = scratch, .prefablens = prefablens };
     if (selected(&env, "no-terminal")) try noTerminal(ctx);
     if (builtin.os.tag == .linux or builtin.os.tag == .macos) {

@@ -26,7 +26,8 @@ class Prefablens < Formula
   end
 
   test do
+    ENV.prepend_path "PATH", bin
     assert_equal "prefablens #{version}\n", shell_output("#{bin}/prefablens --version")
-    assert_equal "git-merge-prefablens #{version}\n", shell_output("#{bin}/git-merge-prefablens --version")
+    assert_equal "prefablens merge-strategy #{version}\n", shell_output("#{bin}/git-merge-prefablens --version")
   end
 end

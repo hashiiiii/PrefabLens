@@ -1,5 +1,6 @@
 *.cs text diff=csharp eol=lf
 *.zig text eol=lf
+cli/bin/git-merge-prefablens text eol=lf
 
 # Treat the testdata UnityYAML fixtures as binary (not text) to prevent automatic line-ending conversion.
 # This keeps them from being converted to CRLF when checked out on Windows.

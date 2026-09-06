@@ -40,10 +40,10 @@ namespace PrefabLens.Tests
         {
             var broken = new Cli.Location(
                 "Library/PrefabLens/0.7.1/prefablens",
-                "git-merge-prefablens was not found at '/gone/git-merge-prefablens'."
+                "prefablens was not found at '/gone/prefablens'."
             );
             Assert.AreEqual(
-                "CLI path override is invalid. git-merge-prefablens was not found at '/gone/git-merge-prefablens'.",
+                "CLI path override is invalid. prefablens was not found at '/gone/prefablens'.",
                 PrefabLensSettings.OverrideErrorNote(broken)
             );
             Assert.IsNull(PrefabLensSettings.OverrideErrorNote(new Cli.Location(null, null)));

@@ -3,6 +3,7 @@ const builtin = @import("builtin");
 const t = @import("git_merge_test_main.zig");
 const pty = @import("pty_smoke_test_main.zig");
 const merge_git = @import("merge_git.zig");
+const version = @import("build_options").version;
 
 const base = "--- !u!114 &1\nMonoBehaviour:\n  m_Left: 1\n  m_Right: 1\n";
 const ours = "--- !u!114 &1\nMonoBehaviour:\n  m_Left: 2\n  m_Right: 1\n";
@@ -19,8 +20,14 @@ pub fn main(init: std.process.Init) !u8 {
     defer std.Io.Dir.cwd().deleteTree(init.io, scratch) catch {};
     const prefablens = try std.Io.Dir.cwd().realPathFileAlloc(init.io, args[1], a);
     const strategy_path = try std.Io.Dir.cwd().realPathFileAlloc(init.io, args[2], a);
+    const strategy_version = try std.process.run(a, init.io, .{
+        .argv = &.{ prefablens, "merge-strategy", "--version" },
+        .timeout = .{ .duration = .{ .clock = .awake, .raw = .fromSeconds(10) } },
+    });
+    try t.expectCode(strategy_version, 0, "strategy version command");
+    try t.require(std.mem.eql(u8, strategy_version.stdout, "prefablens merge-strategy " ++ version ++ "\n"), "strategy version command printed the wrong output");
     var env = try init.environ_map.clone(a);
-    try env.put("PATH", try std.fmt.allocPrint(a, "{s}{c}{s}{c}{s}", .{ std.fs.path.dirname(strategy_path).?, std.fs.path.delimiter, std.fs.path.dirname(prefablens).?, std.fs.path.delimiter, env.get("PATH") orelse "" }));
+    try env.put("PATH", try std.fmt.allocPrint(a, "{s}{c}{s}{c}{s}", .{ std.fs.path.dirname(prefablens).?, std.fs.path.delimiter, std.fs.path.dirname(strategy_path).?, std.fs.path.delimiter, env.get("PATH") orelse "" }));
     const ctx: Context = .{ .git = .{ .io = init.io, .arena = a, .env = &env }, .scratch = scratch, .prefablens = prefablens, .fixture_root = args[3] };
     if (args.len == 5 and std.mem.eql(u8, args[4], "collections")) {
         try collectionSources(ctx);

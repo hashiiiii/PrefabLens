@@ -16,6 +16,7 @@ concurrency:
 jobs:
   core:
     strategy:
+      fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
@@ -31,10 +32,10 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         uses: ./.github/actions/setup-zig-cache
       - name: Packaging render test
-        if: matrix.os == 'ubuntu-latest'
+        if: matrix.os != 'windows-latest'
         run: |
-          zig build -Dtarget=x86_64-linux-gnu -Doptimize=ReleaseSafe --prefix .zig-cache/release-check/x86_64-linux-gnu
-          cli/pkg/render_test.sh .zig-cache/release-check/x86_64-linux-gnu/bin
+          zig build -Doptimize=ReleaseSafe --prefix .zig-cache/release-check/native
+          cli/pkg/render_test.sh .zig-cache/release-check/native/bin
       - name: Lint
         run: zig build lint
       - name: Test
@@ -110,8 +111,12 @@ jobs:
         working-directory: extension
         run: pnpm run e2e
 
-  editor:
-    runs-on: ubuntu-latest
+  editor_native:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
       - name: Install tools
@@ -136,6 +141,16 @@ jobs:
         env:
           PREFABLENS_TEST_BIN_DIR: ${{ github.workspace }}/zig-out/bin
           PREFABLENS_TEST_ALT_BIN_DIR: ${{ github.workspace }}/zig-out/test-alternate-bin
+
+  editor:
+    # Branch protection requires this name. All native editor runs must pass.
+    needs: editor_native
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - run: test "$EDITOR_RESULT" = success
+        env:
+          EDITOR_RESULT: ${{ needs.editor_native.result }}
 
   site:
     runs-on: ubuntu-latest

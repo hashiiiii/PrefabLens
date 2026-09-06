@@ -74,8 +74,15 @@ This includes changes that make an inherited collection length explicit.
 The change stays unresolved until you select a result.
 
 PrefabLens checks the result against the selected source before acceptance.
-A source choice changed during the UI invalidates the pending result.
-After the source decision is complete, reopen the file.
+If the selected source changes while a file is open, PrefabLens rejects the stale result.
+Reopen the file after the source decision is complete.
+
+## Missing merge context
+
+Without a unique common base, the native strategy offers explicit whole-file choices.
+It preserves the actual branch versions.
+Custom results must parse as Unity YAML.
+Source inheritance remains unverified for these whole-file choices.
 
 ## Validation fixtures
 

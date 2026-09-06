@@ -178,7 +178,7 @@ fn validOid(value: []const u8) bool {
     for (value) |byte| if (!std.ascii.isHex(byte)) return false;
     return true;
 }
-fn metadataGuid(arena: std.mem.Allocator, bytes: []const u8) !?[]const u8 {
+pub fn metadataGuid(arena: std.mem.Allocator, bytes: []const u8) !?[]const u8 {
     var result: ?[]const u8 = null;
     var lines = std.mem.splitScalar(u8, bytes, '\n');
     while (lines.next()) |line| {

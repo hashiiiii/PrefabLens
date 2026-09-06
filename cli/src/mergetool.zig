@@ -128,6 +128,23 @@ pub fn run(
     stderr: *std.Io.Writer,
 ) !u8 {
     if (!stdin_tty or !stdout_tty) return merge_io.reportFailure(stderr, args.merged);
+    const git: merge_git.Git = .{ .io = io, .arena = arena, .env = env_map };
+    if (@import("merge_unknown_context.zig").inMerge(git) catch false) {
+        const before = try merge_io.readOutputLimited(io, arena, args.merged);
+        const local = try merge_io.readLimited(io, arena, args.local);
+        const remote = try merge_io.readLimited(io, arena, args.remote);
+        var store = revision.Store.init(git);
+        defer store.deinit();
+        const captured = try session_context.readIndex(&store);
+        const selected = (try @import("merge_unknown_context.zig").choose(git, env_map, args.merged, local, remote)) orelse return 1;
+        const lock_path = try std.fmt.allocPrint(arena, "{s}.lock", .{captured.path});
+        const lock_file = try std.Io.Dir.cwd().createFile(io, lock_path, .{ .exclusive = true });
+        const lock: SourceLock = .{ .file = lock_file, .path = lock_path };
+        defer lock.deinit(io);
+        try captured.unchanged(git);
+        try atomic_file.replace(io, arena, args.merged, before, selected);
+        return 0;
+    }
     var prepared = prepareWithGit(io, arena, args, .{ .io = io, .arena = arena, .env = env_map }) catch
         return merge_io.reportFailure(stderr, args.merged);
     var state = merge_ui_state.State.init(arena, &prepared.built.plan) catch

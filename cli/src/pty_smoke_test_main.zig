@@ -535,10 +535,28 @@ pub fn runCommandInPtyBatches(
     second_keys: []const u8,
     timeout_seconds: i64,
 ) !std.process.RunResult {
+    return runCommandInPtyThreeBatches(io, arena, repository, git_command, input_keys, second_keys, "", timeout_seconds);
+}
+
+pub fn runCommandInPtyThreeBatches(
+    io: std.Io,
+    arena: std.mem.Allocator,
+    repository: []const u8,
+    git_command: []const u8,
+    input_keys: []const u8,
+    second_keys: []const u8,
+    third_keys: []const u8,
+    timeout_seconds: i64,
+) !std.process.RunResult {
+    var random: [16]u8 = undefined;
+    io.random(&random);
+    const capture = try std.fmt.allocPrint(arena, "/tmp/prefablens-pty-{x}.log", .{random});
+    defer std.Io.Dir.cwd().deleteFile(io, capture) catch {};
+    const capture_argument = try integration.shellQuote(arena, capture);
     const terminal_command = try integration.shellQuote(arena, try std.fmt.allocPrint(arena, "stty cols 100 rows 24; exec {s}", .{git_command}));
     const shell_command = switch (builtin.os.tag) {
-        .linux => try std.fmt.allocPrint(arena, "script -qfec {s} /dev/null", .{terminal_command}),
-        .macos => try std.fmt.allocPrint(arena, "script -q /dev/null sh -c {s}", .{terminal_command}),
+        .linux => try std.fmt.allocPrint(arena, "script -qfec {s} {s}", .{ terminal_command, capture_argument }),
+        .macos => try std.fmt.allocPrint(arena, "script -q {s} sh -c {s}", .{ capture_argument, terminal_command }),
         else => unreachable,
     };
     const command = try std.fmt.allocPrint(
@@ -564,6 +582,10 @@ pub fn runCommandInPtyBatches(
         \\  sleep 1
         \\  printf '%s' "$2"
         \\fi
+        \\if [ -n "$3" ]; then
+        \\  sleep 2
+        \\  printf '%s' "$3"
+        \\fi
         \\i=0
         \\while [ "$i" -lt 100 ]; do
         \\  sleep 0.1
@@ -581,10 +603,16 @@ pub fn runCommandInPtyBatches(
         .{shell_command},
     );
     return std.process.run(arena, io, .{
-        .argv = &.{ "sh", "-c", command, "prefablens-keys", input_keys, second_keys },
+        .argv = &.{ "sh", "-c", command, "prefablens-keys", input_keys, second_keys, third_keys },
         .cwd = .{ .path = repository },
         .stdout_limit = .limited(1024 * 1024),
         .stderr_limit = .limited(1024 * 1024),
         .timeout = .{ .duration = .{ .clock = .awake, .raw = .fromSeconds(timeout_seconds) } },
-    });
+    }) catch |err| {
+        if (err == error.Timeout) {
+            const bytes = std.Io.Dir.cwd().readFileAlloc(io, capture, arena, .limited(1024 * 1024)) catch "(PTY capture unavailable)";
+            try std.Io.File.stderr().writeStreamingAll(io, bytes);
+        }
+        return err;
+    };
 }

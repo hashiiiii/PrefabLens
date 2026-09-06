@@ -3,8 +3,8 @@ const vaxis = @import("vaxis");
 const merge_io = @import("merge_io.zig");
 const vxfw = vaxis.vxfw;
 
-pub const Choice = enum { keep, delete, ours, theirs, quit };
-pub const Paths = struct { base: []const u8, ours: ?[]const u8, theirs: ?[]const u8, paired_meta: bool };
+pub const Choice = enum { keep, delete, ours, theirs, custom, quit };
+pub const Paths = struct { base: []const u8, ours: ?[]const u8, theirs: ?[]const u8, paired_meta: bool, unknown_context: bool = false };
 
 /// Selection is separate from Enter so deletion and path changes are confirmed.
 /// This screen only records a decision; the caller owns all filesystem writes.
@@ -57,6 +57,7 @@ const View = struct {
                     }
                     return;
                 }
+                if (self.paths.unknown_context and key.matches('e', .{})) self.selected = .custom;
                 if (self.paths.ours != null and self.paths.theirs != null) {
                     if (key.matches('a', .{})) self.selected = .ours;
                     if (key.matches('b', .{})) self.selected = .theirs;
@@ -75,18 +76,21 @@ const View = struct {
         const self: *View = @ptrCast(@alignCast(userdata));
         const size: vxfw.Size = .{ .width = ctx.max.width orelse ctx.min.width, .height = ctx.max.height orelse ctx.min.height };
         const surface = try vxfw.Surface.init(ctx.arena, self.widget(), size);
-        const instructions = if (self.paths.ours != null and self.paths.theirs != null)
+        const instructions = if (self.paths.unknown_context)
+            "a: Whole current file   b: Whole incoming file   e: Edit custom file   q: Quit"
+        else if (self.paths.ours != null and self.paths.theirs != null)
             "a: Use current path    b: Use incoming path    q: Quit"
         else
             "k: Keep the file    d: Delete the file    q: Quit";
         const confirmation = if (self.selected) |selected| switch (selected) {
             .keep => "Keep the file. Press Enter to confirm.",
             .delete => "Delete the file. Press Enter to confirm.",
-            .ours => "Use the current path. Press Enter to confirm.",
-            .theirs => "Use the incoming path. Press Enter to confirm.",
+            .ours => if (self.paths.unknown_context) "Use the whole current file. Press Enter to confirm." else "Use the current path. Press Enter to confirm.",
+            .theirs => if (self.paths.unknown_context) "Use the whole incoming file. Press Enter to confirm." else "Use the incoming path. Press Enter to confirm.",
+            .custom => "Open the editor with the current file. Save and close to apply.",
             .quit => unreachable,
         } else "Choose an operation, then press Enter to confirm.";
-        const lines: []const []const u8 = &.{ "Unity asset file conflict", "", self.base, self.ours, self.theirs, if (self.paths.paired_meta) "The asset and its matching .meta file are handled together." else "", "", instructions, "", confirmation };
+        const lines: []const []const u8 = &.{ if (self.paths.unknown_context) "Unknown base/context: choose the whole file" else "Unity asset file conflict", "", self.base, self.ours, self.theirs, if (self.paths.paired_meta) "The asset and its matching .meta file are handled together." else "", "", instructions, "", confirmation };
         // Wrap full paths so two long names with a shared prefix stay distinguishable.
         var row: u16 = 1;
         for (lines) |line| {

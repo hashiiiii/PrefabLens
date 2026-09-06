@@ -1726,10 +1726,15 @@ fn variantPromotionPlan(arena: std.mem.Allocator, local_conflict: bool) !core.me
     const base = "--- !u!1001 &100\nPrefabInstance:\n  m_Modification:\n    m_Modifications:\n    - target: {fileID: 40, guid: " ++ guid ++ ", type: 3}\n      propertyPath: items.Array.size\n      value: 2\n      objectReference: {fileID: 0}\n  m_SourcePrefab: {fileID: 100100000, guid: " ++ guid ++ ", type: 3}\n";
     const row = "    - target: {fileID: 40, guid: " ++ guid ++ ", type: 3}\n      propertyPath: items.Array.data[0].speed\n      value: 99\n      objectReference: {fileID: 0}\n";
     const base_input = if (local_conflict)
-        try std.mem.replaceOwned(u8, arena, base, "propertyPath: items.Array.size\n      value: 2", "propertyPath: items.Array.data[0].speed\n      value: 99")
+        try std.mem.replaceOwned(u8, arena, base, "  m_SourcePrefab:", row ++ "  m_SourcePrefab:")
     else
         base;
-    const ours = if (local_conflict) base_input else try std.mem.replaceOwned(u8, arena, base, "  m_SourcePrefab:", row ++ "  m_SourcePrefab:");
+    // A reset of an authored size creates the local Variant decision. Source-only
+    // structural changes beside a leaf override correctly need no repeated choice.
+    const ours = if (local_conflict)
+        try std.mem.replaceOwned(u8, arena, base, "propertyPath: items.Array.size\n      value: 2", "propertyPath: items.Array.data[0].speed\n      value: 99")
+    else
+        try std.mem.replaceOwned(u8, arena, base, "  m_SourcePrefab:", row ++ "  m_SourcePrefab:");
     const ours_source = if (local_conflict) try std.mem.replaceOwned(u8, arena, source, "  - name: B\n    speed: 2\n    power: 2\n", "") else reordered;
     const theirs_source = if (local_conflict) try std.mem.replaceOwned(u8, arena, source, "name: B\n    speed: 2\n    power: 2", "name: C\n    speed: 3\n    power: 3") else source;
     var snapshots: [4]core.merge_context.Snapshot = undefined;

@@ -1,14 +1,14 @@
 const std = @import("std");
 const core = @import("core");
 const merge_git = @import("merge_git.zig");
-const merge_io = @import("merge_io.zig");
 const atomic_file = @import("atomic_file.zig");
 const merge_ui_state = @import("merge_ui_state.zig");
 const merge_tui = @import("merge_tui.zig");
-const fallback = @import("merge_fallback.zig");
 const file_conflict = @import("merge_file_conflict.zig");
 const installation = @import("installation.zig");
 const strategy_revisions = @import("merge_strategy_revisions.zig");
+const candidate_module = @import("merge_candidate.zig");
+const session_context = @import("merge_session_context.zig");
 const Git = merge_git.Git;
 
 pub const Stage = struct {
@@ -19,7 +19,7 @@ pub const Stage = struct {
     record: []const u8,
 };
 pub const Conflict = struct { paths: []const []const u8, kind: []const u8, message: []const u8 };
-pub const Result = struct { tree: []const u8, stages: []const Stage, conflicts: []const Conflict, ours: []const u8 = "HEAD", theirs: ?[]const u8 = null, index_before: ?[]const u8 = null, sources: ?strategy_revisions.Sources = null };
+pub const Result = struct { tree: []const u8, stages: []const Stage, conflicts: []const Conflict, ours: []const u8 = "HEAD", theirs: ?[]const u8 = null, index_before: ?[]const u8 = null, sources: ?strategy_revisions.Sources = null, strategy_options: []const []const u8 = &.{} };
 
 fn validOid(oid: []const u8) bool {
     if (oid.len != 40 and oid.len != 64) return false;
@@ -108,62 +108,49 @@ pub fn run(io: std.Io, arena: std.mem.Allocator, args: []const []const u8, env: 
     result.theirs = sources.theirs;
     result.index_before = index_before;
     result.sources = sources;
-    try install(git, sources.ours, result);
-    return resolveSession(git, result, env, stderr) catch |err| {
+    result.strategy_options = options.items;
+    var candidate = try candidate_module.Candidate.init(git, result);
+    defer candidate.deinit();
+    try candidate.automatic();
+    try install(git, sources.ours, candidate.result);
+    return resolveSession(git, &candidate, env, stderr) catch |err| {
         try stderr.print("prefablens: Merge remains unresolved: {s}.\n", .{@errorName(err)});
         return 1;
     };
 }
 
-fn resolveSession(git: Git, result: Result, env: *std.process.Environ.Map, stderr: *std.Io.Writer) !u8 {
-    // Git still owns MERGE_HEAD, merge commits, squash and abort after this command returns.
+fn resolveSession(git: Git, candidate: *candidate_module.Candidate, env: *std.process.Environ.Map, stderr: *std.Io.Writer) !u8 {
+    // Git owns MERGE_HEAD, merge commits, squash and abort after this command returns.
     const tty = (std.Io.File.stdin().isTty(git.io) catch false) and (std.Io.File.stdout().isTty(git.io) catch false);
-    var resolved: std.StringHashMap(void) = .init(git.arena);
-    var aborted = false;
-    // File groups retire matching metadata conflicts before the content pass considers them.
-    if (tty) for (result.conflicts) |conflict| {
-        if (!isStructural(conflict.kind) or allResolved(conflict.paths, &resolved)) continue;
-        switch (try file_conflict.resolve(git, result, conflict, env)) {
-            .unresolved => {},
-            .aborted => {
-                aborted = true;
-                break;
-            },
-            .resolved => |paths| for (paths) |path| {
-                try resolved.put(path, {});
-            },
-        }
-    };
-    for (result.conflicts) |conflict| {
-        if (aborted) break;
-        if (allResolved(conflict.paths, &resolved)) continue;
-        if (tty and std.mem.eql(u8, conflict.kind, "CONFLICT (contents)") and conflict.paths.len == 1) {
-            const path = conflict.paths[0];
-            switch (try resolveContent(git, result, path, env)) {
-                .resolved => try resolved.put(path, {}),
+    if (tty) while (true) {
+        const index = for (candidate.items.items, 0..) |_, i| {
+            if (candidate.ready(i)) break i;
+        } else break;
+        candidate.items.items[index].attempted = true;
+        const item = candidate.items.items[index];
+        var captured = try session_context.readIndex(&candidate.store);
+        captured.snapshot = try session_context.maskUnresolved(git.arena, captured.snapshot, try candidate.pendingPaths());
+        if (item.conflict != null and isStructural(item.conflict.?.kind)) {
+            switch (try file_conflict.resolveWithContext(git, candidate.result, item.conflict.?, env, captured)) {
+                .unresolved => {},
+                .aborted => break,
+                .resolved => |paths| try candidate.refresh(paths),
+            }
+        } else {
+            switch (try resolveContent(git, candidate, index, captured, env)) {
+                .resolved => try candidate.refresh(item.paths),
                 .aborted => break,
                 .unresolved => {},
             }
         }
-    }
-    var unresolved = false;
-    for (result.conflicts) |conflict| {
-        if ((isStructural(conflict.kind) or std.mem.eql(u8, conflict.kind, "CONFLICT (contents)")) and allResolved(conflict.paths, &resolved)) continue;
-        unresolved = true;
-        try stderr.writeAll(conflict.message);
-    }
+    };
+    for (candidate.result.conflicts) |conflict| try stderr.writeAll(conflict.message);
     const remaining = try git.output(&.{ "ls-files", "--unmerged", "-z" });
-    return if (unresolved or remaining.len != 0) 1 else 0;
+    return if (candidate.result.conflicts.len != 0 or remaining.len != 0) 1 else 0;
 }
 
 fn isStructural(kind: []const u8) bool {
     return std.mem.eql(u8, kind, "CONFLICT (modify/delete)") or std.mem.eql(u8, kind, "CONFLICT (rename/delete)") or std.mem.eql(u8, kind, "CONFLICT (rename/rename)");
-}
-
-fn allResolved(paths: []const []const u8, resolved: *std.StringHashMap(void)) bool {
-    if (paths.len == 0) return false;
-    for (paths) |path| if (!resolved.contains(path)) return false;
-    return true;
 }
 
 fn indexPath(git: Git) ![]const u8 {
@@ -243,14 +230,21 @@ pub fn blob(git: Git, stage: ?Stage) ![]const u8 {
 
 const ContentOutcome = enum { resolved, unresolved, aborted };
 
-fn resolveContent(git: Git, result: Result, path: []const u8, env: *std.process.Environ.Map) !ContentOutcome {
-    const base = blob(git, side(result.stages, path, 1)) catch return .unresolved;
-    const ours = blob(git, side(result.stages, path, 2)) catch return .unresolved;
-    const theirs = blob(git, side(result.stages, path, 3)) catch return .unresolved;
-    if (fallback.isBinary(base) or fallback.isBinary(ours) or fallback.isBinary(theirs)) return .unresolved;
-    if (!core.isUnityYaml(ours) or !core.isUnityYaml(theirs) or (base.len != 0 and !core.isUnityYaml(base))) return .unresolved;
-    var built = core.merge.build(git.arena, base, ours, theirs) catch return .unresolved;
-    const prepared = try file_conflict.prepareContent(git, result, path) orelse return .unresolved;
+fn resolveContent(git: Git, candidate: *candidate_module.Candidate, index: usize, captured: session_context.Index, env: *std.process.Environ.Map) !ContentOutcome {
+    const path = candidate.items.items[index].paths[0];
+    if (candidate.result.sources.?.known == null) {
+        if (candidate.items.items[index].paths.len != 1) return .unresolved;
+        const inputs = candidate.readInputs(path) catch return .unresolved;
+        if (!core.isUnityYaml(inputs.ours) or !core.isUnityYaml(inputs.theirs)) return .unresolved;
+        const prepared = try file_conflict.prepareContent(git, candidate.result, path) orelse return .unresolved;
+        if (!std.mem.eql(u8, captured.before, prepared.index_before)) return error.SourceChanged;
+        const bytes = (try @import("merge_unknown_context.zig").choose(git, env, path, inputs.ours, inputs.theirs)) orelse return .aborted;
+        try file_conflict.finishContent(git, prepared, bytes);
+        return .resolved;
+    }
+    var built = (try candidate.build(index, captured.snapshot)) orelse return .unresolved;
+    const prepared = try file_conflict.prepareContent(git, candidate.result, path) orelse return .unresolved;
+    if (!std.mem.eql(u8, captured.before, prepared.index_before)) return error.SourceChanged;
     var state = try merge_ui_state.State.init(git.arena, &built.plan);
     if (state.outcome != .ready) try merge_tui.run(git.io, git.arena, env, &state, path, built.partial);
     if (state.outcome == .aborted) return .aborted;

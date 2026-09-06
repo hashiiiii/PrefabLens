@@ -7,6 +7,8 @@ const fallback = @import("merge_fallback.zig");
 const file_choice = @import("merge_file_choice.zig");
 const merge_tui = @import("merge_tui.zig");
 const merge_ui_state = @import("merge_ui_state.zig");
+const session_context = @import("merge_session_context.zig");
+const revision = @import("merge_revision.zig");
 const Git = merge_git.Git;
 const Stage = strategy.Stage;
 
@@ -56,6 +58,10 @@ pub fn finishContent(git: Git, prepared: ContentPrepared, canonical_bytes: []con
 }
 
 pub fn resolve(git: Git, result: strategy.Result, conflict: strategy.Conflict, env: *std.process.Environ.Map) !Outcome {
+    return resolveWithContext(git, result, conflict, env, null);
+}
+
+pub fn resolveWithContext(git: Git, result: strategy.Result, conflict: strategy.Conflict, env: *std.process.Environ.Map, captured: ?session_context.Index) !Outcome {
     const classified = classify(result.stages, conflict) orelse return .unresolved;
     const layout = originals(git, result, classified) catch return .unresolved;
     for (layout.paths) |path| if (!safePath(path) or std.mem.endsWith(u8, path, ".meta")) return .unresolved;
@@ -67,9 +73,21 @@ pub fn resolve(git: Git, result: strategy.Result, conflict: strategy.Conflict, e
     }
     if (base.len == 0 or (layout.ours != null and ours.len == 0) or (layout.theirs != null and theirs.len == 0)) return .unresolved;
 
+    var context: core.merge_context.Context = .{};
+    if (captured) |output| {
+        var store = revision.Store.init(git);
+        defer store.deinit();
+        const known = (result.sources orelse return .unresolved).known orelse return .unresolved;
+        context = (try session_context.bind(&store, known, .{
+            .base = layout.base_path,
+            .ours = layout.ours_path orelse layout.base_path,
+            .theirs = layout.theirs_path orelse layout.base_path,
+        }, .{ .base = base, .ours = ours, .theirs = theirs })) orelse return .unresolved;
+        context.output = output.snapshot;
+    }
     // Unsupported input must be refused before the first interactive decision.
     var built: ?core.merge.BuildResult = if (layout.ours != null and layout.theirs != null)
-        core.merge.build(git.arena, base, ours, theirs) catch return .unresolved
+        core.merge.buildWithContext(git.arena, base, ours, theirs, context) catch return .unresolved
     else
         null;
     const meta = metadata(git, result, layout) catch return .unresolved;
@@ -94,6 +112,7 @@ pub fn resolve(git: Git, result: strategy.Result, conflict: strategy.Conflict, e
     const index_before = try std.Io.Dir.cwd().readFileAlloc(git.io, index_path, git.arena, .limited(256 * 1024 * 1024));
     try checkIndexPaths(git, result, paths.items);
     try checkIndexBytes(git, index_path, index_before);
+    if (captured) |output| if (!std.mem.eql(u8, output.before, index_before)) return error.SourceChanged;
     const decision = try file_choice.run(git.io, git.arena, env, .{ .base = layout.base_path, .ours = layout.ours_path, .theirs = layout.theirs_path, .paired_meta = meta != null });
     if (decision == .quit) return .aborted;
     var replacements: std.ArrayList(Replacement) = .empty;
@@ -175,7 +194,7 @@ fn safePath(path: []const u8) bool {
     return true;
 }
 
-fn treeEntry(git: Git, tree: []const u8, path: []const u8) !?Stage {
+pub fn treeEntry(git: Git, tree: []const u8, path: []const u8) !?Stage {
     const bytes = try git.output(&.{ "--literal-pathspecs", "ls-tree", "-z", tree, "--", path });
     if (bytes.len == 0) return null;
     if (bytes[bytes.len - 1] != 0 or std.mem.count(u8, bytes, "\x00") != 1) return error.AmbiguousPath;

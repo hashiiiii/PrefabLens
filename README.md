@@ -126,6 +126,9 @@ If a Unity YAML conflict remains and a terminal is available, the merge UI opens
 
 Resolve the values. Then select **Complete**.
 
+Array conflicts offer both insertion orders with **F1 Ours + Theirs** and **F2 Theirs + Ours**.
+See [collection merges](docs/collection-merge.md) for dictionaries, Prefab Variants, and type requirements.
+
 File deletion and rename conflicts offer a file choice before content resolution.
 PrefabLens applies the asset choice to matching `.meta` files.
 Ambiguous metadata conflicts stay unresolved.

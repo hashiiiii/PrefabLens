@@ -1,4 +1,5 @@
 const std = @import("std");
+const binding = @import("merge_binding.zig");
 const merge_identity = @import("merge_identity.zig");
 const merge_order = @import("merge_order.zig");
 const merge_model = @import("merge_model.zig");
@@ -39,6 +40,7 @@ const SelectedItem = struct {
 };
 
 const ComponentOwnerIndexes = struct {
+    collection_state: ?*binding.State = null,
     base: merge_identity.ComponentOwnerIndex,
     ours: merge_identity.ComponentOwnerIndex,
     theirs: merge_identity.ComponentOwnerIndex,
@@ -87,9 +89,15 @@ pub fn buildSemantic(
     ours: source.ParsedFile,
     theirs: source.ParsedFile,
 ) merge_model.Error!merge_model.MergePlan {
+    return buildSemanticWithContext(arena, base, ours, theirs, .{});
+}
+
+pub fn buildSemanticWithContext(arena: std.mem.Allocator, base: source.ParsedFile, ours: source.ParsedFile, theirs: source.ParsedFile, context: @import("merge_context.zig").Context) merge_model.Error!merge_model.MergePlan {
+    var collection_state: binding.State = .{ .context = context };
     var operations: std.ArrayList(merge_model.Operation) = .empty;
     var atomic_operations: std.ArrayList(merge_model.AtomicOperation) = .empty;
     const component_owners = ComponentOwnerIndexes{
+        .collection_state = &collection_state,
         .base = try merge_identity.componentOwners(arena, base.documents),
         .ours = try merge_identity.componentOwners(arena, ours.documents),
         .theirs = try merge_identity.componentOwners(arena, theirs.documents),
@@ -166,6 +174,7 @@ pub fn buildSemantic(
         .theirs = theirs,
         .operations = try operations.toOwnedSlice(arena),
         .atomic_operations = try atomic_operations.toOwnedSlice(arena),
+        .collections = try collection_state.bindings.toOwnedSlice(arena),
     };
 }
 
@@ -1241,6 +1250,10 @@ fn collectField(
     else
         try std.fmt.allocPrint(arena, "{s}.{s}", .{ parent_path, key });
 
+    const collection_schema = binding.schema(component_owners.collection_state.?.context, document_id, property_path, .{ base_file, ours_file, theirs_file });
+    if ((hasSequence(nodes) or collection_schema.field != null or collection_schema.conflict) and merge_identity.sequenceKind(document_id.class_id, property_path) == null) {
+        return binding.collect(arena, component_owners.collection_state.?, operations, atomic_operations, document_id, property_path, hierarchy_path, .{ .base = nodes.base, .ours = nodes.ours, .theirs = nodes.theirs }, .{ base_file, ours_file, theirs_file });
+    }
     if (hasMap(nodes)) {
         if (hasNonMap(nodes)) return error.UnsupportedStructure;
         if (nodes.base == null or nodes.ours == null or nodes.theirs == null) {
@@ -2650,13 +2663,15 @@ test "merge planner: compares the complete object reference" {
     try testing.expectEqual(@as(usize, 1), built.plan.unresolvedCount());
 }
 
-test "merge planner: rejects a changed sequence without a safe identity" {
+test "merge planner: accepts a one-sided ordered sequence edit" {
     const base = "--- !u!114 &1\nMonoBehaviour:\n  m_Unknown:\n  - 1\n  - 2\n";
     const ours = "--- !u!114 &1\nMonoBehaviour:\n  m_Unknown:\n  - 1\n  - 3\n";
     const theirs = "--- !u!114 &1\nMonoBehaviour:\n  m_Unknown:\n  - 1\n  - 2\n";
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
-    try testing.expectError(error.UnsupportedStructure, @import("merge.zig").build(arena_state.allocator(), base, ours, theirs));
+    var built = try @import("merge.zig").build(arena_state.allocator(), base, ours, theirs);
+    try testing.expectEqual(@as(usize, 0), built.plan.unresolvedCount());
+    try testing.expectEqualStrings(ours, try @import("merge.zig").finish(arena_state.allocator(), &built.plan));
 }
 
 test "merge planner: combines independent component additions" {

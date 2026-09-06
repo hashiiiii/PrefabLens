@@ -98,9 +98,7 @@ test "merge fixtures: errors keep ours unchanged" {
         "  m_Unknown:\n  - 1\n  - 3\n  m_Name: Root\n",
     );
     const original_unknown_ours = try arena.dupe(u8, unknown_sequence_ours);
-    try testing.expectError(
-        error.UnsupportedStructure,
-        merge.build(arena, base, unknown_sequence_ours, base),
-    );
+    var built = try merge.build(arena, base, unknown_sequence_ours, base);
+    try testing.expectEqualStrings(original_unknown_ours, try merge.finish(arena, &built.plan));
     try testing.expectEqualStrings(original_unknown_ours, unknown_sequence_ours);
 }

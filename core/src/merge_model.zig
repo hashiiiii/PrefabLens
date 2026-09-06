@@ -59,7 +59,11 @@ pub const Resolution = union(enum) {
     custom: []const u8,
 };
 
+pub const CollectionRef = struct { binding: usize, conflict: usize };
+
 pub const Operation = struct {
+    // Bindings read this operation resolution on each composition, including abort.
+    collection: ?CollectionRef = null,
     id: OperationId,
     atomic_id: AtomicId,
     kind: OperationKind,
@@ -86,6 +90,7 @@ pub const MergePlan = struct {
     theirs: source.ParsedFile,
     operations: []Operation,
     atomic_operations: []AtomicOperation,
+    collections: []const @import("merge_binding.zig").Binding = &.{},
 
     pub fn unresolvedCount(self: MergePlan) usize {
         var count: usize = 0;

@@ -85,6 +85,20 @@ pub fn applyResolved(
             try appendComposedPrefabSequencePatch(arena, &patches, plan, operation);
         }
     }
+    collection_loop: for (plan.collections) |collection| {
+        for (collection.operation_ids) |id| {
+            const operation = merge_model.operationByIdConst(plan, id) orelse return error.InvalidMerge;
+            const atomic = atomicByIdConst(plan, operation.atomic_id) orelse return error.InvalidMerge;
+            dependency_path.clearRetainingCapacity();
+            if (!try atomicIsReady(arena, plan, atomic.*, &dependency_path)) {
+                if (require_all) return error.InvalidResolution;
+                continue :collection_loop;
+            }
+        }
+        if (try @import("merge_binding.zig").replacement(arena, plan, collection, require_all)) |replacement| {
+            try patches.append(arena, .{ .span = replacement.span, .replacement = replacement.bytes, .atomic_id = 0, .order = @import("merge_binding.zig").patchOrder(plan, collection) });
+        }
+    }
     return applyPatches(arena, plan.ours.bytes, patches.items);
 }
 
@@ -124,6 +138,7 @@ fn appendPatch(
     plan: *const merge_model.MergePlan,
     operation: *const merge_model.Operation,
 ) merge_model.Error!void {
+    if (operation.collection != null) return;
     if (operation.kind == .sequence_membership) return;
     if (operation.kind == .sequence_content) return;
     if (operation.kind == .prefab_override) return;
@@ -199,7 +214,7 @@ fn appendPatch(
         .span = .{ .start = insert_at, .end = insert_at },
         .replacement = inserted,
         .atomic_id = operation.atomic_id,
-        .order = operation.id,
+        .order = entry.whole.start,
     });
 }
 
@@ -1376,7 +1391,7 @@ fn fileForSide(plan: *const merge_model.MergePlan, side: merge_model.Side) sourc
     };
 }
 
-fn insertionOffset(
+pub fn insertionOffset(
     plan: *const merge_model.MergePlan,
     operation: *const merge_model.Operation,
 ) merge_model.Error!usize {

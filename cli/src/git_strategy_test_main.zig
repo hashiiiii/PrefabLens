@@ -4,6 +4,7 @@ const t = @import("git_merge_test_main.zig");
 const pty = @import("pty_smoke_test_main.zig");
 const merge_git = @import("merge_git.zig");
 const version = @import("build_options").version;
+const supports_pty = builtin.os.tag == .linux or builtin.os.tag == .macos;
 
 const base = "--- !u!114 &1\nMonoBehaviour:\n  m_Left: 1\n  m_Right: 1\n";
 const ours = "--- !u!114 &1\nMonoBehaviour:\n  m_Left: 2\n  m_Right: 1\n";
@@ -47,12 +48,12 @@ pub fn main(init: std.process.Init) !u8 {
         return 0;
     }
     if (args.len == 5 and std.mem.eql(u8, args[4], "transaction-guards")) {
-        try concurrentContent(ctx);
+        if (supports_pty) try concurrentContent(ctx);
         try guards(ctx);
         return 0;
     }
     if (args.len == 5 and std.mem.eql(u8, args[4], "required-promotion")) {
-        try requiredPromotion(ctx);
+        if (supports_pty) try requiredPromotion(ctx);
         return 0;
     }
     if (args.len == 5 and std.mem.eql(u8, args[4], "candidate-safety")) {
@@ -65,13 +66,15 @@ pub fn main(init: std.process.Init) !u8 {
     }
     if (args.len == 5 and std.mem.eql(u8, args[4], "native-fixtures")) {
         try nativeFixtures(ctx);
-        try nativeLocalChoices(ctx);
+        if (supports_pty) try nativeLocalChoices(ctx);
         try candidateEncoding(ctx);
         return 0;
     }
     if (args.len == 5 and std.mem.eql(u8, args[4], "dependency-seams")) {
-        try transitiveSource(ctx);
-        try structuralSource(ctx);
+        if (supports_pty) {
+            try transitiveSource(ctx);
+            try structuralSource(ctx);
+        }
         try replacedGuid(ctx);
         try addedUnity(ctx);
         try unresolvedSchema(ctx);
@@ -79,7 +82,7 @@ pub fn main(init: std.process.Init) !u8 {
     }
     if (args.len == 5 and std.mem.eql(u8, args[4], "candidate-boundaries")) {
         try collectionSourceConflict(ctx);
-        try unknownAncestry(ctx);
+        if (supports_pty) try unknownAncestry(ctx);
         return 0;
     }
     if (args.len == 5 and std.mem.eql(u8, args[4], "collections")) {
@@ -88,11 +91,11 @@ pub fn main(init: std.process.Init) !u8 {
     }
     if (args.len == 5 and std.mem.eql(u8, args[4], "collection-conflict")) {
         try collectionSourceConflict(ctx);
-        if (builtin.os.tag == .linux or builtin.os.tag == .macos) try collectionSourceConflictPty(ctx);
+        if (supports_pty) try collectionSourceConflictPty(ctx);
         return 0;
     }
     if (args.len == 5 and std.mem.eql(u8, args[4], "collection-source-choices")) {
-        if (builtin.os.tag == .linux or builtin.os.tag == .macos) try collectionAuthoredSourceChoicesPty(ctx);
+        if (supports_pty) try collectionAuthoredSourceChoicesPty(ctx);
         return 0;
     }
     try setup(ctx);
@@ -112,7 +115,7 @@ pub fn main(init: std.process.Init) !u8 {
     try unresolvedSchema(ctx);
     try zeroStageSource(ctx);
     try uncertainMetadata(ctx);
-    if (builtin.os.tag == .linux or builtin.os.tag == .macos) {
+    if (supports_pty) {
         try collectionSourceConflictPty(ctx);
         try collectionAuthoredSourceChoicesPty(ctx);
         try transitiveSource(ctx);
@@ -657,6 +660,11 @@ fn nativeFixtures(ctx: Context) !void {
             try t.expectCode(try git.run(&.{ "merge", "--no-commit", "remote" }), 1, "native fixture retains local choice");
             try t.require((try git.output(&.{ "ls-files", "--unmerged", "--", inputs.variant_path })).len != 0, "native fixture lost local stages");
             try git.ok(&.{ "merge", "--abort" });
+            try expectFile(git, inputs.variant_path, inputs.variant[1]);
+            try t.require((try git.output(&.{ "ls-files", "--unmerged" })).len == 0, "native fixture abort retained stages");
+            // All platforms check the unresolved transaction. Only POSIX hosts
+            // can make the real terminal choice and check its resolved output.
+            if (!supports_pty) continue;
             const keys: []const u8 = if (std.mem.eql(u8, case.choice.?, "ours_first")) "\x1bOP\r\r" else "\x1b[C\x1b[C\r\r";
             const command = try std.fmt.allocPrint(git.arena, "env PATH={s} git merge --no-commit remote", .{try t.shellQuote(git.arena, git.env.get("PATH").?)});
             try t.expectCode(try pty.runCommandInPty(git.io, git.arena, git.cwd, command, keys, 30), 0, "native fixture local choice");
@@ -892,8 +900,9 @@ fn requiredPromotion(ctx: Context) !void {
 
 fn candidateEncoding(ctx: Context) !void {
     const root = try std.fs.path.join(ctx.git.arena, &.{ ctx.fixture_root, "cases", "variant-source-and-override" });
+    const crlf_path = if (builtin.os.tag == .windows) "Assets/CRLF.prefab" else "Assets/a\tb\nc.prefab";
     for ([_]bool{ false, true }) |filtered| {
-        var inputs: CollectionInputs = .{ .variant = undefined, .source = undefined, .variant_path = if (filtered) "Assets/Filtered.prefab" else "Assets/a\tb\nc.prefab" };
+        var inputs: CollectionInputs = .{ .variant = undefined, .source = undefined, .variant_path = if (filtered) "Assets/Filtered.prefab" else crlf_path };
         for ([_][]const u8{ "base", "ours", "theirs" }, 0..) |name, i| {
             const bytes = try readCollectionFile(ctx, root, try std.fmt.allocPrint(ctx.git.arena, "{s}.prefab", .{name}));
             inputs.variant[i] = if (filtered) try std.fmt.allocPrint(ctx.git.arena, "{s}# canonical-token\n", .{bytes}) else try std.mem.replaceOwned(u8, ctx.git.arena, bytes, "\n", "\r\n");
@@ -921,6 +930,7 @@ fn candidateEncoding(ctx: Context) !void {
         if (!filtered) try t.require(std.mem.startsWith(u8, try git.output(&.{ "ls-files", "--stage", "-z", "--", inputs.variant_path }), "100755 "), "candidate lost executable mode");
         try git.ok(&.{ "merge", "--abort" });
         try expectFile(git, inputs.variant_path, if (filtered) try std.mem.replaceOwned(u8, git.arena, inputs.variant[1], "canonical-token", "worktree-token") else inputs.variant[1]);
+        if (!filtered) try t.require(std.mem.startsWith(u8, try git.output(&.{ "ls-files", "--stage", "-z", "--", inputs.variant_path }), "100755 "), "abort lost executable index mode");
     }
 }
 
@@ -1013,7 +1023,7 @@ fn cleanRenames(ctx: Context) !void {
         try t.require(std.mem.eql(u8, try git.output(&.{ "show", spec }), inputs.variant[i]), "renamed synthetic stage lost original side bytes");
     }
     try git.ok(&.{ "merge", "--abort" });
-    if (builtin.os.tag != .linux and builtin.os.tag != .macos) return;
+    if (!supports_pty) return;
     const command = try std.fmt.allocPrint(git.arena, "env PATH={s} git merge --no-commit remote", .{try t.shellQuote(git.arena, git.env.get("PATH").?)});
     const selected = try pty.runCommandInPty(git.io, git.arena, git.cwd, command, "\x1b[C\r\r", 30);
     try t.expectCode(selected, 0, "renamed dependent uses selected source");

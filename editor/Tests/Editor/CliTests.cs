@@ -269,10 +269,7 @@ namespace PrefabLens.Tests
         [Test]
         public void ExtractToRejectsAnArchiveWithoutTheExactNativeCliEntry()
         {
-            var archive = CreateNativeArchive(
-                NativeCliDirectory(),
-                (Cli.BinaryName, "nested/" + Cli.BinaryName)
-            );
+            var archive = CreateNativeArchive(NativeCliDirectory(), (Cli.BinaryName, "nested/" + Cli.BinaryName));
             var dir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
             Directory.CreateDirectory(dir);
             try

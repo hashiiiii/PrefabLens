@@ -30,7 +30,7 @@ You do not need to set a token.
   <img width="924" src="docs/images/editor.png" alt="Semantic diff in the Unity Editor" />
 </p>
 
-The package requires Unity 2022.3 or newer.
+The package requires Unity 2022.3 or later.
 
 ### Installation
 

@@ -73,6 +73,11 @@ const FooterGeometry = struct {
     }
 };
 
+const ours_first_label = "[F1 Ours + Theirs]";
+const theirs_first_label = "[F2 Theirs + Ours]";
+const ours_first_button: Range = .{ .start = horizontal_padding, .end = horizontal_padding + ours_first_label.len };
+const theirs_first_button: Range = .{ .start = ours_first_button.end + 2, .end = ours_first_button.end + 2 + theirs_first_label.len };
+
 const QuitDialogGeometry = struct {
     top: u16,
     bottom: u16,
@@ -439,6 +444,13 @@ pub const View = struct {
         const geometry = Geometry.init(size.width);
         const body = BodyGeometry.init(size.height);
         if (row == body.inspector_rows.start and inRange(col, geometry.result)) return;
+        if (row == FooterGeometry.init(size.width, size.height).row and self.canCombine() and
+            (inRange(col, ours_first_button) or inRange(col, theirs_first_button)))
+        {
+            // Choosing another preview replaces this draft; submitting it would advance to another conflict.
+            try self.leaveEditorWithoutApply(ctx);
+            return self.previewCombined(ctx, inRange(col, ours_first_button));
+        }
 
         if (!try self.finishEditorForNavigation(ctx)) return;
         try self.handleMouse(ctx, mouse, size);
@@ -829,6 +841,44 @@ pub const View = struct {
         }
     }
 
+    fn canCombine(self: *const View) bool {
+        const operation = self.selectedOperation() orelse return false;
+        const conflict = core.merge.collectionConflict(self.state.plan, operation.id) orelse return false;
+        return conflict.both_orders;
+    }
+
+    fn previewCombined(self: *View, ctx: *vxfw.EventContext, ours_first: bool) !void {
+        if (!self.canCombine()) return;
+        try self.state.handle(if (ours_first) .combine_ours_first else .combine_theirs_first);
+        try self.focusInspector(ctx);
+        self.selected_value = .result;
+        self.horizontal_offset = 0;
+        ctx.consumeAndRedraw();
+    }
+
+    fn handleCombineEditorKey(self: *View, ctx: *vxfw.EventContext, key: vaxis.Key) !bool {
+        if (!self.editing or !self.canCombine()) return false;
+        if (!key.matches(vaxis.Key.f1, .{}) and !key.matches(vaxis.Key.f2, .{})) return false;
+        try self.leaveEditorWithoutApply(ctx);
+        try self.previewCombined(ctx, key.matches(vaxis.Key.f1, .{}));
+        return true;
+    }
+
+    fn collectionHint(self: *const View) []const u8 {
+        const operation = self.selectedOperation() orelse return "";
+        const conflict = core.merge.collectionConflict(self.state.plan, operation.id) orelse return "";
+        return switch (conflict.reason) {
+            .insertion_order => "Both sides inserted items at the same position. Choose an order.",
+            .ambiguous_correspondence => "Item matching is ambiguous. Select a result or edit the local items.",
+            .context_required => "Collection type or source context needs a choice.",
+            .source_bytes => "Collection comments or formatting need a source choice.",
+            .invalid_dictionary => "Dictionary keys need a valid result without duplicate keys.",
+            .dictionary_order => "Both sides changed dictionary order. Choose an order.",
+            .delete_edit => "One side removed this item; the other side changed it.",
+            .edit_edit => "Both sides changed this value.",
+        };
+    }
+
     fn handleMouse(
         self: *View,
         ctx: *vxfw.EventContext,
@@ -845,6 +895,10 @@ pub const View = struct {
         const row: u16 = @intCast(mouse.row);
         const footer = FooterGeometry.init(size.width, size.height);
         const body = BodyGeometry.init(size.height);
+        if (row == footer.row and self.canCombine()) {
+            if (inRange(col, ours_first_button)) return self.previewCombined(ctx, true);
+            if (inRange(col, theirs_first_button)) return self.previewCombined(ctx, false);
+        }
         if (self.state.outcome == .ready and
             row == footer.row and inRange(col, footer.complete))
         {
@@ -1167,6 +1221,12 @@ fn draw(
         }
     }
 
+    if (self.canCombine()) {
+        writeClipped(surface, ours_first_button.start, footer.row, ours_first_button.end - ours_first_button.start, ours_first_label);
+        writeClipped(surface, theirs_first_button.start, footer.row, theirs_first_button.end - theirs_first_button.start, theirs_first_label);
+        styleRange(surface, footer.row, ours_first_button, .{ .fg = Palette.accent });
+        styleRange(surface, footer.row, theirs_first_button, .{ .fg = Palette.accent });
+    }
     if (self.state.outcome == .ready) {
         writeClipped(
             surface,
@@ -1184,7 +1244,7 @@ fn draw(
         content_start,
         body.status_row,
         content_end - content_start,
-        self.state.status,
+        if (self.state.status.len != 0) self.state.status else self.collectionHint(),
     );
     if (self.state.status.len != 0) {
         styleRange(
@@ -1387,7 +1447,7 @@ fn captureEvent(
         else => {},
     };
     switch (event) {
-        .key_press => |key| if (self.editing and
+        .key_press => |key| if (try self.handleCombineEditorKey(ctx, key)) {} else if (self.editing and
             (key.matches(vaxis.Key.left, .{}) or
                 key.matches(vaxis.Key.right, .{}) or
                 key.matches(vaxis.Key.up, .{}) or
@@ -1428,6 +1488,7 @@ fn handleEvent(
     if (self.editing) {
         switch (event) {
             .key_press => |key| {
+                if (try self.handleCombineEditorKey(ctx, key)) return;
                 if (key.matches(vaxis.Key.escape, .{})) {
                     return self.leaveResultForHierarchy(ctx);
                 }
@@ -1458,6 +1519,8 @@ fn handleEvent(
             if (key.matches(vaxis.Key.up, .{})) return self.moveUp(ctx, size);
             if (key.matches(vaxis.Key.down, .{})) return self.moveDown(ctx, size);
             if (key.matches(vaxis.Key.enter, .{})) return self.activate(ctx, size);
+            if (key.matches(vaxis.Key.f1, .{})) return self.previewCombined(ctx, true);
+            if (key.matches(vaxis.Key.f2, .{})) return self.previewCombined(ctx, false);
             if (self.focus_area == .inspector and self.selected_value == .result and
                 key.matches(vaxis.Key.backspace, .{}))
             {
@@ -1497,6 +1560,41 @@ fn screenPlan(arena: std.mem.Allocator) !core.merge.BuildResult {
         "--- !u!54 &54\nRigidbody:\n  m_Mass: 12\n  m_Drag: 2\n",
         "--- !u!54 &54\nRigidbody:\n  m_Mass: 8\n  m_Drag: 3\n",
     );
+}
+
+test "merge TUI: collection insertion orders are visible and preview both blocks" {
+    for ([_]bool{ false, true }) |click| for ([_]u21{ vaxis.Key.f1, vaxis.Key.f2 }) |key| {
+        var memory = std.heap.ArenaAllocator.init(testing.allocator);
+        defer memory.deinit();
+        const arena = memory.allocator();
+        var built = try core.merge.build(arena, "--- !u!114 &1\nMonoBehaviour:\n  items: [A]\n", "--- !u!114 &1\nMonoBehaviour:\n  items: [A, Ours]\n", "--- !u!114 &1\nMonoBehaviour:\n  items: [A, Theirs]\n");
+        var state = try merge_ui_state.State.init(arena, &built.plan);
+        var view = try viewForTest(arena, &state, "Array.prefab", built.partial);
+        defer view.deinit();
+        const surface = try drawForTest(arena, view.widget(), 80, 10);
+        const text = try surfaceText(arena, surface);
+        try testing.expect(std.mem.indexOf(u8, text, "F1 Ours + Theirs") != null);
+        try testing.expect(std.mem.indexOf(u8, text, "F2 Theirs + Ours") != null);
+        try testing.expect(std.mem.indexOf(u8, text, "Both sides inserted") != null);
+        var ctx = eventContext(arena);
+        if (click) {
+            const button = if (key == vaxis.Key.f1) ours_first_button else theirs_first_button;
+            try view.widget().handleEvent(&ctx, .{ .mouse = .{
+                .col = @intCast(button.start + 1),
+                .row = @intCast(FooterGeometry.init(80, 10).row),
+                .button = .left,
+                .mods = .{},
+                .type = .press,
+            } });
+        } else try pressKeyForTest(&view, &ctx, key);
+        // Function keys and buttons choose a preview, so users can inspect or edit its order.
+        try testing.expectEqual(@as(usize, 1), state.unresolvedCount());
+        try testing.expect(view.selected_value == .result);
+        try testing.expectEqualStrings(if (key == vaxis.Key.f1) "[Ours, Theirs]" else "[Theirs, Ours]", state.pending.?.custom);
+        try pressKeyForTest(&view, &ctx, vaxis.Key.enter);
+        try testing.expectEqual(merge_ui_state.Outcome.ready, state.outcome);
+        try testing.expect(std.mem.indexOf(u8, try core.merge.finish(arena, &built.plan), if (key == vaxis.Key.f1) "[A, Ours, Theirs]" else "[A, Theirs, Ours]") != null);
+    };
 }
 
 fn deleteEditPlan(arena: std.mem.Allocator) !core.merge.BuildResult {
@@ -4612,4 +4710,57 @@ test "merge TUI: a small terminal reports its required size" {
     // The minimum-size branch must avoid geometry underflow and show one concise line.
     try testing.expect(std.mem.indexOf(u8, try rowText(arena, surface, 0), "Needs 80 columns and 10 rows") != null);
     try testing.expectEqual(@as(usize, 0), surface.children.len);
+}
+
+test "merge TUI: collection clicking order during edit keeps selected conflict" {
+    for ([_][]const u8{ "[Edited]", "[invalid" }) |draft| for ([_]bool{ false, true }) |use_key| {
+        var memory = std.heap.ArenaAllocator.init(testing.allocator);
+        defer memory.deinit();
+        const arena = memory.allocator();
+        var built = try core.merge.build(arena, "--- !u!114 &1\nMonoBehaviour:\n  items: [A]\n  other: [B]\n", "--- !u!114 &1\nMonoBehaviour:\n  items: [A, Ours]\n  other: [B, Left]\n", "--- !u!114 &1\nMonoBehaviour:\n  items: [A, Theirs]\n  other: [B, Right]\n");
+        var state = try merge_ui_state.State.init(arena, &built.plan);
+        var view = try viewForTest(arena, &state, "Array.prefab", built.partial);
+        defer view.deinit();
+        _ = try drawForTest(arena, view.widget(), 100, 20);
+        var ctx = eventContext(arena);
+        try pressKeyForTest(&view, &ctx, vaxis.Key.f1);
+        const selected = state.selected_conflict;
+        try view.widget().handleEvent(&ctx, .{ .key_press = .{ .codepoint = '[', .text = draft } });
+        try testing.expect(view.editing);
+        const surface = try drawForTest(arena, view.widget(), 100, 20);
+        try routeFocusedEventForTest(arena, surface, view.editor.widget(), &ctx, if (use_key) .{ .key_press = .{ .codepoint = vaxis.Key.f2 } } else .{ .mouse = .{
+            .col = @intCast(theirs_first_button.start + 1),
+            .row = @intCast(FooterGeometry.init(100, 20).row),
+            .button = .left,
+            .mods = .{},
+            .type = .press,
+        } });
+        try testing.expectEqual(selected, state.selected_conflict);
+        try testing.expectEqualStrings("[Theirs, Ours]", state.pending.?.custom);
+        try testing.expectEqual(@as(usize, 2), state.unresolvedCount());
+        try testing.expect(!view.editing);
+    };
+}
+
+test "merge TUI: collection confirmed result repreview hides Complete" {
+    var memory = std.heap.ArenaAllocator.init(testing.allocator);
+    defer memory.deinit();
+    const arena = memory.allocator();
+    var built = try core.merge.build(arena, "--- !u!114 &1\nMonoBehaviour:\n  items: [A]\n", "--- !u!114 &1\nMonoBehaviour:\n  items: [A, Ours]\n", "--- !u!114 &1\nMonoBehaviour:\n  items: [A, Theirs]\n");
+    var state = try merge_ui_state.State.init(arena, &built.plan);
+    var view = try viewForTest(arena, &state, "Array.prefab", built.partial);
+    defer view.deinit();
+    _ = try drawForTest(arena, view.widget(), 100, 20);
+    var ctx = eventContext(arena);
+    try pressKeyForTest(&view, &ctx, vaxis.Key.f1);
+    try pressKeyForTest(&view, &ctx, vaxis.Key.enter);
+    try testing.expectEqual(merge_ui_state.Outcome.ready, state.outcome);
+    try pressKeyForTest(&view, &ctx, vaxis.Key.f2);
+    const surface = try drawForTest(arena, view.widget(), 100, 20);
+    const screen = try surfaceText(arena, surface);
+    try testing.expect(std.mem.indexOf(u8, screen, "[Complete]") == null);
+    try testing.expectEqual(merge_ui_state.Outcome.active, state.outcome);
+    try view.widget().handleEvent(&ctx, .{ .mouse = .{ .col = 70, .row = 18, .button = .left, .mods = .{}, .type = .press } });
+    try testing.expect(!ctx.quit);
+    try testing.expectEqualStrings("[Theirs, Ours]", state.pending.?.custom);
 }

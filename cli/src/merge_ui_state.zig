@@ -14,6 +14,8 @@ pub const Action = union(enum) {
     select_conflict: usize,
     choose_ours,
     choose_theirs,
+    combine_ours_first,
+    combine_theirs_first,
     edit_result: []const u8,
     apply_result,
     reopen_result,
@@ -21,6 +23,37 @@ pub const Action = union(enum) {
 };
 
 const DependencyState = enum { ready, unresolved, invalid };
+
+test "merge UI state: combined insertion orders keep both additions and support abort" {
+    for ([_]bool{ true, false }) |ours_first| {
+        var memory = std.heap.ArenaAllocator.init(testing.allocator);
+        defer memory.deinit();
+        const arena = memory.allocator();
+        var built = try core.merge.build(arena, "--- !u!114 &1\nMonoBehaviour:\n  items: [A]\n  independent: 0\n", "--- !u!114 &1\nMonoBehaviour:\n  items: [A, Ours]\n  independent: 0\n", "--- !u!114 &1\nMonoBehaviour:\n  items: [A, Theirs]\n  independent: 1\n");
+        var state = try State.init(arena, &built.plan);
+        try state.handle(if (ours_first) .combine_ours_first else .combine_theirs_first);
+        // The order stays a preview until the user applies the selected result.
+        try testing.expectEqual(@as(usize, 1), state.unresolvedCount());
+        try state.handle(.apply_result);
+        try testing.expectEqual(Outcome.ready, state.outcome);
+        const result = try core.merge.finish(arena, &built.plan);
+        try testing.expect(std.mem.indexOf(u8, result, if (ours_first) "items: [A, Ours, Theirs]" else "items: [A, Theirs, Ours]") != null);
+        try testing.expect(std.mem.indexOf(u8, result, "independent: 1") != null);
+        try state.handle(if (ours_first) .combine_theirs_first else .combine_ours_first);
+        // Complete must not save the previous order while a new preview is shown.
+        try testing.expectEqual(Outcome.active, state.outcome);
+        try testing.expectEqual(@as(usize, 1), state.unresolvedCount());
+        try state.handle(.reopen_result);
+        try testing.expectEqual(@as(usize, 1), state.unresolvedCount());
+        try state.handle(.abort);
+        // Restoring operation resolutions also restores the collection plan.
+        var reopened = try State.init(arena, &built.plan);
+        try testing.expectEqual(@as(usize, 1), reopened.unresolvedCount());
+        try reopened.handle(.choose_ours);
+        try reopened.handle(.apply_result);
+        try testing.expect(std.mem.indexOf(u8, try core.merge.finish(arena, &built.plan), "items: [A, Ours]") != null);
+    }
+}
 
 pub const State = struct {
     allocator: std.mem.Allocator,
@@ -203,6 +236,23 @@ pub const State = struct {
             },
             .choose_theirs => if (self.operation()) |operation_item| {
                 self.pending = resolutionForSide(operation_item, .theirs);
+            },
+            .combine_ours_first, .combine_theirs_first => if (self.operation()) |operation_item| {
+                const value = core.merge.combinedCollectionValue(
+                    self.allocator,
+                    self.plan,
+                    operation_item.id,
+                    if (action == .combine_ours_first) .ours_first else .theirs_first,
+                ) catch |err| switch (err) {
+                    error.OutOfMemory => return error.OutOfMemory,
+                    else => {
+                        self.status = "This conflict has no combined order.";
+                        return;
+                    },
+                };
+                if (operation_item.resolution != .unresolved) try self.handle(.reopen_result);
+                self.pending = .{ .custom = value };
+                self.status = "";
             },
             .edit_result => |value| if (self.operation() != null) {
                 self.pending = .{ .custom = try self.allocator.dupe(u8, value) };

@@ -72,17 +72,6 @@ The CLI must run and report its version.
 A local CLI can use a version other than the pinned version.
 If the override is invalid, PrefabLens uses a valid downloaded CLI or offers a download.
 
-### Troubleshooting
-
-| Symptom                                               | What to do                                                                                 |
-| ----------------------------------------------------- | ------------------------------------------------------------------------------------------ |
-| `Download failed: …`                                  | Retry. If the retry fails, download the release zip. Then set the CLI path override.       |
-| `CLI path override … is invalid. …`                   | Select a working `prefablens` executable. Or clear the CLI path override.                  |
-| `prefablens exited with N` / one-line CLI error       | Check that the project is in a git repository. Check that git finishes within the timeout. |
-| `Could not parse CLI output (CLI version mismatch?):` | Clear the CLI path override or update the CLI.                                             |
-| `prefablens timed out after 90s and was killed`       | Check that `git status` is fast in the repository.                                         |
-| Changed assets never appear                           | Switch Asset Serialization to Force Text.                                                  |
-
 ## CLI
 
 <p align="center">
@@ -129,10 +118,10 @@ prefablens                              # HEAD vs working tree, all changed Unit
 prefablens Assets/Foo.prefab            # HEAD vs working tree, one file
 prefablens main                         # ref vs working tree, all changed Unity files
 prefablens HEAD~1 HEAD Assets/Foo.prefab  # ref vs ref, one file
-prefablens before.prefab after.prefab   # plain two-file compare (no git)
+prefablens before.prefab after.prefab   # plain two files compare
 
 prefablens --json before.prefab after.prefab
-prefablens --html main                  # self-contained HTML report on stdout
+prefablens --html main                  # self contained HTML report on stdout
 prefablens --open main                  # write the report to a temp file and open it
 ```
 
@@ -141,7 +130,7 @@ All other operands are Git references (refs).
 
 ### Git merge
 
-PrefabLens uses Git 2.39 or later to resolve UnityYAML conflicts during `git merge`.
+PrefabLens uses Git **2.39** or later to resolve UnityYAML conflicts during `git merge`.
 
 Install `prefablens` and the packaged `git-merge-prefablens` script on `PATH`.
 The script runs `prefablens merge-strategy`.
@@ -169,40 +158,13 @@ Setup keeps existing attributes and unrelated Git configuration.
 Use the normal merge command:
 
 ```bash
-git merge main
+git merge origin/main
 ```
 
 PrefabLens merges independent UnityYAML changes automatically.
 If a UnityYAML conflict remains and a terminal is available, the merge UI opens.
 
 Resolve the values. Then select **Complete**.
-
-For file deletion and rename conflicts, PrefabLens offers a file choice before you resolve the content.
-PrefabLens applies the asset choice to matching `.meta` files.
-Ambiguous metadata conflicts stay unresolved.
-
-Other file formats use normal Git merge behavior.
-If files in other formats also conflict, those conflicts remain unresolved after PrefabLens resolves the UnityYAML conflicts.
-Git can complete the merge only after every conflict is resolved.
-`--no-commit`, `--squash`, and `git merge --abort` remain available.
-Strategy options (`-X`) require Git 2.43 or later.
-
-If you quit or no terminal is available, Git conflict markers remain in unresolved text.
-The `merge.conflictStyle` configuration and `conflict-marker-size` attribute control the markers.
-Even when a line-based merge is clean, a semantic conflict can require markers.
-Files with binary, deletion, or rename conflicts keep their normal Git representation.
-
-To complete the merge with another editor:
-
-1. Resolve the conflicts with your editor.
-2. Stage the resolved files with `git add`.
-3. Run `git merge --continue`.
-
-To reopen the UI for UnityYAML content at one unresolved path:
-
-```bash
-git mergetool --tool=prefablens -- Assets/Prefabs/Robot.prefab
-```
 
 ## Development
 

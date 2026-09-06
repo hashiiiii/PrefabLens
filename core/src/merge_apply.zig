@@ -86,6 +86,10 @@ pub fn applyResolved(
         }
     }
     collection_loop: for (plan.collections) |collection| {
+        if (collection.variant) |link| {
+            if (try @import("merge_variant.zig").replacement(arena, plan, link, require_all)) |replacement| try patches.append(arena, .{ .span = replacement.span, .replacement = replacement.bytes, .atomic_id = 0 });
+            continue;
+        }
         for (collection.operation_ids) |id| {
             const operation = merge_model.operationByIdConst(plan, id) orelse return error.InvalidMerge;
             const atomic = atomicByIdConst(plan, operation.atomic_id) orelse return error.InvalidMerge;
@@ -99,7 +103,9 @@ pub fn applyResolved(
             try patches.append(arena, .{ .span = replacement.span, .replacement = replacement.bytes, .atomic_id = 0, .order = @import("merge_binding.zig").patchOrder(plan, collection) });
         }
     }
-    return applyPatches(arena, plan.ours.bytes, patches.items);
+    const output = try applyPatches(arena, plan.ours.bytes, patches.items);
+    try @import("merge_variant.zig").validateSources(arena, plan, output);
+    return output;
 }
 
 fn atomicIsReady(

@@ -4,7 +4,7 @@ const mm = @import("merge_model.zig");
 const value = @import("merge_value.zig");
 const yaml = @import("merge_yaml.zig");
 const source = @import("source.zig");
-pub const Binding = struct { plan: value.Plan, source_nodes: value.Nodes, origins: []const value.Origin = &.{}, original: ?*const model.Node, identity: mm.SemanticId, operation_ids: []const mm.OperationId };
+pub const Binding = struct { variant: ?@import("merge_variant.zig").Link = null, plan: value.Plan, source_nodes: value.Nodes, origins: []const value.Origin = &.{}, original: ?*const model.Node, identity: mm.SemanticId, operation_ids: []const mm.OperationId };
 pub const State = struct { bindings: std.ArrayList(Binding) = .empty, context: @import("merge_context.zig").Context = .{} };
 pub fn collect(arena: std.mem.Allocator, state: *State, operations: *std.ArrayList(mm.Operation), atomics: *std.ArrayList(mm.AtomicOperation), document: mm.DocumentId, path: []const u8, hierarchy: []const u8, nodes: value.Nodes, files: [3]source.ParsedFile) mm.Error!void {
     const original = nodes.ours;
@@ -72,6 +72,7 @@ pub fn choices(arena: std.mem.Allocator, plan: *const mm.MergePlan, binding: Bin
     return result;
 }
 pub fn replacement(arena: std.mem.Allocator, plan: *const mm.MergePlan, binding: Binding, require_all: bool) mm.Error!?yaml.Replacement {
+    if (binding.variant) |link| return @import("merge_variant.zig").replacement(arena, plan, link, require_all);
     const selected = try choices(arena, plan, binding);
     const result = value.materialize(arena, binding.plan, selected) catch |err| switch (err) {
         error.UnresolvedConflict => {

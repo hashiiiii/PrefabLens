@@ -41,6 +41,39 @@ pub const Graph = struct {
         return self.resolveInner(target, &.{});
     }
 
+    pub fn targets(self: *Graph, guid: []const u8) Error![]const model.Ref {
+        return self.targetsInner(guid, &.{});
+    }
+
+    fn targetsInner(self: *Graph, guid: []const u8, ancestors: []const []const u8) Error![]const model.Ref {
+        if (ancestors.len >= model.max_prefab_nesting) return error.SourceCycle;
+        for (ancestors) |ancestor| if (std.mem.eql(u8, ancestor, guid)) return error.SourceCycle;
+        const chain = try self.arena.alloc([]const u8, ancestors.len + 1);
+        @memcpy(chain[0..ancestors.len], ancestors);
+        chain[ancestors.len] = guid;
+        const parsed = try self.file(guid);
+        var result: std.ArrayList(model.Ref) = .empty;
+        for (parsed.documents) |*doc| {
+            if (doc.class_id != 1001) {
+                if (!doc.stripped) try result.append(self.arena, .{ .file_id = doc.file_id, .guid = guid, .type_id = 3 });
+                continue;
+            }
+            const inner_guid = sourceGuid(doc) orelse return error.InvalidSource;
+            const inner = try self.targetsInner(inner_guid, chain);
+            for (inner) |target| {
+                var file_id = target.file_id ^ doc.file_id;
+                for (parsed.documents) |*stripped| {
+                    if (!stripped.stripped) continue;
+                    const owner = reference(field(stripped.body, "m_PrefabInstance")) orelse return error.InvalidSource;
+                    const corresponding = reference(field(stripped.body, "m_CorrespondingSourceObject")) orelse return error.InvalidSource;
+                    if (owner.file_id == doc.file_id and corresponding.file_id == target.file_id and corresponding.guid != null and std.mem.eql(u8, corresponding.guid.?, inner_guid)) file_id = stripped.file_id;
+                }
+                try result.append(self.arena, .{ .file_id = file_id, .guid = guid, .type_id = 3 });
+            }
+        }
+        return result.toOwnedSlice(self.arena);
+    }
+
     fn file(self: *Graph, guid: []const u8) Error!source.ParsedFile {
         if (self.parsed.get(guid)) |cached| return cached;
         var asset: ?context.Asset = null;
@@ -146,7 +179,7 @@ fn sourceGuid(document: *const model.Document) ?[]const u8 {
     return (reference(field(document.body, "m_SourcePrefab")) orelse return null).guid;
 }
 
-fn targetRemoved(instance: *const model.Document, target: model.Ref, owner_file_id: ?i64) Error!bool {
+pub fn targetRemoved(instance: *const model.Document, target: model.Ref, owner_file_id: ?i64) Error!bool {
     const modification = field(instance.body, "m_Modification") orelse return false;
     if (modification.* != .map) return error.InvalidSource;
     const component_removed = try removedRef(field(modification, "m_RemovedComponents"), target);
@@ -361,4 +394,22 @@ test "variant source rejects malformed removal list" {
         .{ .guid = review_middle_guid, .path = "Malformed.prefab", .bytes = invalid_modification },
     } });
     try testing.expectError(error.InvalidSource, bad.resolve(.{ .guid = review_middle_guid, .file_id = 100 ^ 40 }));
+}
+
+// Native strategy uses only declared prefab source edges, never loose path text.
+pub fn dependencies(arena: std.mem.Allocator, bytes: []const u8) Error![]const []const u8 {
+    const parsed = try parser.parseSpanned(arena, bytes);
+    if (parsed.diagnostics.len != 0) return error.InvalidSource;
+    var result: std.ArrayList([]const u8) = .empty;
+    for (parsed.documents) |*doc| {
+        if (doc.class_id != 1001 or doc.stripped) continue;
+        const guid = sourceGuid(doc) orelse return error.InvalidSource;
+        var found = false;
+        for (result.items) |existing| if (std.mem.eql(u8, existing, guid)) {
+            found = true;
+            break;
+        };
+        if (!found) try result.append(arena, guid);
+    }
+    return result.toOwnedSlice(arena);
 }

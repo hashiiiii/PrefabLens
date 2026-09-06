@@ -648,3 +648,21 @@ test "shrink edit choices preserve neighboring insertions and removals" {
         try expectText(a, &plan, "aXe");
     }
 }
+
+// Expose only correspondence already established by mandatory anchors. Adapters
+// use this to attach local context decisions without inferring domain identity.
+pub fn correspondence(arena: Allocator, base: []const *const model.Node, side: []const *const model.Node) Allocator.Error![]?usize {
+    const result = try arena.alloc(?usize, base.len);
+    @memset(result, null);
+    const hunks = try changes(arena, base, side, .ours);
+    var bi: usize = 0;
+    var si: usize = 0;
+    for (hunks) |hunk| {
+        for (bi..hunk.start, si..) |i, j| result[i] = j;
+        if (!hunk.ambiguous and hunk.end == hunk.start + 1 and hunk.last == hunk.first + 1) result[hunk.start] = hunk.first;
+        bi = hunk.end;
+        si = hunk.last;
+    }
+    for (bi..base.len, si..) |i, j| result[i] = j;
+    return result;
+}

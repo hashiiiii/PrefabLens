@@ -15,6 +15,21 @@ pub const OperationId = merge_model.OperationId;
 pub const Resolution = merge_model.Resolution;
 pub const Side = merge_model.Side;
 pub const SideValue = merge_model.SideValue;
+pub const VariantEffectKind = @import("merge_variant.zig").VariantEffectKind;
+pub const VariantEffect = @import("merge_variant.zig").VariantEffect;
+pub const VariantProvenance = @import("merge_variant.zig").VariantProvenance;
+
+pub fn isVariantPromotion(plan: *const MergePlan, operation_id: OperationId) bool {
+    return @import("merge_variant.zig").isPromotion(plan, operation_id);
+}
+
+pub fn variantProvenance(arena: std.mem.Allocator, plan: *const MergePlan) Error!VariantProvenance {
+    return @import("merge_variant.zig").provenance(arena, plan);
+}
+
+pub fn variantPromotionValue(arena: std.mem.Allocator, plan: *const MergePlan, operation_id: OperationId, side: Side) Error!SideValue {
+    return @import("merge_variant.zig").promotionValue(arena, plan, operation_id, side);
+}
 
 pub const BuildResult = struct {
     plan: MergePlan,
@@ -54,10 +69,10 @@ fn verifyTheirsCoverage(
 ) Error!void {
     if (std.mem.eql(u8, ours.bytes, theirs.bytes)) return;
 
-    var replay = try merge_planner.buildSemanticWithContext(arena, base, base, theirs, .{ .base = context.base, .ours = context.base, .theirs = context.theirs, .output = context.output });
+    var replay = try merge_planner.buildSemanticWithContext(arena, base, base, theirs, .{ .base = context.base, .ours = context.base, .theirs = context.theirs, .output = context.theirs });
     // Coverage checks reachability of Theirs bytes, including explicit context choices.
     for (replay.operations) |*operation| {
-        if (operation.collection != null and operation.resolution == .unresolved) operation.resolution = .{ .take = .theirs };
+        if ((operation.collection != null or std.mem.eql(u8, operation.property_path, "m_SourcePrefab")) and operation.resolution == .unresolved) operation.resolution = .{ .take = .theirs };
     }
     // Invalid source dictionaries still need raw byte coverage before the real
     // plan exposes repair. Only this throwaway copy skips key and shape checks.
@@ -75,7 +90,20 @@ fn verifyTheirsCoverage(
     replay.collections = replay_collections;
     if (replay.unresolvedCount() != 0) return error.UnsupportedStructure;
     const replayed = try merge_apply.applyResolved(arena, &replay, false);
-    if (!std.mem.eql(u8, replayed, theirs.bytes)) return error.UnsupportedStructure;
+    const has_variant = for (replay.collections) |collection| {
+        if (collection.variant != null) break true;
+    } else false;
+    if (has_variant) {
+        // Index rebasing and inactive-row removal intentionally change authored
+        // group bytes. Compare both sides through the same proven compositor;
+        // all bytes outside those boundaries still have to match exactly.
+        var expected = try merge_planner.buildSemanticWithContext(arena, theirs, theirs, theirs, .{ .base = context.theirs, .ours = context.theirs, .theirs = context.theirs, .output = context.theirs });
+        for (expected.operations) |*operation| {
+            if ((operation.collection != null or std.mem.eql(u8, operation.property_path, "m_SourcePrefab")) and operation.resolution == .unresolved) operation.resolution = .{ .take = .theirs };
+        }
+        const canonical = try merge_apply.applyResolved(arena, &expected, false);
+        if (!std.mem.eql(u8, replayed, canonical)) return error.UnsupportedStructure;
+    } else if (!std.mem.eql(u8, replayed, theirs.bytes)) return error.UnsupportedStructure;
 }
 
 fn verifyOursDocumentCoverage(plan: *const MergePlan) Error!void {
@@ -115,6 +143,7 @@ pub fn resolve(
         .take => |side| if (side == .base or valueForSide(operation, side) == null)
             return error.InvalidResolution,
         .custom => |value| {
+            if (isVariantPromotion(plan, operation_id)) return error.InvalidResolution;
             if (operation.collection) |binding_ref| {
                 const parsed = @import("merge_yaml.zig").parseValue(arena, value) catch |err| switch (err) {
                     error.OutOfMemory => return error.OutOfMemory,
@@ -131,7 +160,7 @@ pub fn resolve(
             }
             stored_resolution = .{ .custom = try arena.dupe(u8, value) };
         },
-        .remove => {},
+        .remove => if (isVariantPromotion(plan, operation_id)) return error.InvalidResolution,
     }
     const previous = try arena.alloc(merge_model.Resolution, atomic.operation_ids.len);
     for (atomic.operation_ids) |id| {
@@ -149,7 +178,10 @@ pub fn resolve(
             merge_model.operationById(plan, id).?.resolution = old_resolution;
         }
     }
-    if (operation.collection) |reference| try @import("merge_binding.zig").validateSelection(arena, plan, reference);
+    if (operation.collection) |reference| {
+        try @import("merge_binding.zig").validateSelection(arena, plan, reference);
+        try @import("merge_variant.zig").validateSelection(arena, plan, reference);
+    }
     const candidate = try merge_apply.applyResolved(arena, plan, false);
     merge_validate.validate(arena, candidate) catch |validation_error| switch (validation_error) {
         error.OutOfMemory => return error.OutOfMemory,
@@ -178,6 +210,7 @@ pub fn combinedCollectionValue(arena: std.mem.Allocator, plan: *const MergePlan,
 }
 pub fn supportsCustomResolution(plan: *const MergePlan, operation_id: OperationId) bool {
     const operation = merge_model.operationByIdConst(plan, operation_id) orelse return false;
+    if (isVariantPromotion(plan, operation_id)) return false;
     if (operation.collection != null) return true;
     return (operation.kind == .field or (operation.kind == .prefab_override and operation.item_path != null)) and supportsCustomValue(operation) and wasConflict(operation);
 }

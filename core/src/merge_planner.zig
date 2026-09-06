@@ -168,6 +168,8 @@ pub fn buildSemanticWithContext(arena: std.mem.Allocator, base: source.ParsedFil
         theirs,
     );
 
+    @import("merge_variant.zig").linkSourceChoices(collection_state, operations.items);
+
     return .{
         .base = base,
         .ours = ours,
@@ -1250,6 +1252,9 @@ fn collectField(
     else
         try std.fmt.allocPrint(arena, "{s}.{s}", .{ parent_path, key });
 
+    if (document_id.class_id == 1001 and std.mem.eql(u8, property_path, "m_Modification.m_Modifications") and (try @import("merge_variant.zig").handles(arena, .{ .base = nodes.base, .ours = nodes.ours, .theirs = nodes.theirs }) or @import("merge_variant.zig").hasContext(component_owners.collection_state.?.context))) {
+        return @import("merge_variant.zig").collect(arena, component_owners.collection_state.?, operations, atomic_operations, document_id, hierarchy_path, .{ .base = nodes.base, .ours = nodes.ours, .theirs = nodes.theirs }, .{ base_file, ours_file, theirs_file });
+    }
     const collection_schema = binding.schema(component_owners.collection_state.?.context, document_id, property_path, .{ base_file, ours_file, theirs_file });
     if ((hasSequence(nodes) or collection_schema.field != null or collection_schema.conflict) and merge_identity.sequenceKind(document_id.class_id, property_path) == null) {
         return binding.collect(arena, component_owners.collection_state.?, operations, atomic_operations, document_id, property_path, hierarchy_path, .{ .base = nodes.base, .ours = nodes.ours, .theirs = nodes.theirs }, .{ base_file, ours_file, theirs_file });

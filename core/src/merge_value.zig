@@ -6,7 +6,18 @@ const packed_int = @import("merge_packed.zig");
 const A = std.mem.Allocator;
 pub const Side = enum { base, ours, theirs };
 pub const Nodes = struct { base: ?*const model.Node, ours: ?*const model.Node, theirs: ?*const model.Node };
-pub const Input = struct { nodes: Nodes, schema: ?context.Field = null, context_conflict: bool = false };
+pub const Comparisons = struct {
+    nodes: std.AutoHashMapUnmanaged(*const model.Node, *const model.Node) = .empty,
+    contexts: []const Nodes = &.{},
+    pub const empty: Comparisons = .{};
+    pub fn get(self: *const Comparisons, n: *const model.Node) ?*const model.Node {
+        return self.nodes.get(n);
+    }
+    pub fn put(self: *Comparisons, arena: A, n: *const model.Node, compared: *const model.Node) A.Error!void {
+        try self.nodes.put(arena, n, compared);
+    }
+};
+pub const Input = struct { comparisons: ?*const Comparisons = null, nodes: Nodes, schema: ?context.Field = null, context_conflict: bool = false };
 pub const Reason = enum { edit_edit, delete_edit, insertion_order, ambiguous_correspondence, context_required, source_bytes, invalid_dictionary, dictionary_order };
 pub const Conflict = struct { path: []const u8 = "", nodes: Nodes, reason: Reason, sequence: bool = false };
 pub const Choice = union(enum) { unresolved, take: Side, remove, custom: *const model.Node };
@@ -22,6 +33,9 @@ pub const Plan = struct { root: *const Value, conflicts: []const Conflict, input
 
 /// Build an immutable recursive plan. Conflict indexes address the choices slice.
 pub fn build(arena: A, input: Input) Error!Plan {
+    if (input.comparisons) |comparisons| {
+        for ([_]?*const model.Node{ input.nodes.base, input.nodes.ours, input.nodes.theirs }) |optional| if (optional) |n| try validateComparison(comparisons, n);
+    }
     var conflicts: std.ArrayList(Conflict) = .empty;
     var logical = input.nodes;
     var layout: ?packed_int.Layout = null;
@@ -41,14 +55,14 @@ pub fn build(arena: A, input: Input) Error!Plan {
                 const ours_layout = tokenLayout(input.nodes.ours);
                 const theirs_layout = tokenLayout(input.nodes.theirs);
                 layout = if (ours_layout == theirs_layout or base_layout == theirs_layout) ours_layout else theirs_layout;
-                root = try planValue(arena, &conflicts, logical, false);
+                root = try planValue(arena, &conflicts, logical, false, input.comparisons);
             },
-            .string_dictionary, .int32_dictionary => root = try planDictionary(arena, &conflicts, input.nodes, schema),
-            .ordered => root = try planValue(arena, &conflicts, input.nodes, true),
+            .string_dictionary, .int32_dictionary => root = try planDictionary(arena, &conflicts, input.nodes, schema, input.comparisons),
+            .ordered => root = try planValue(arena, &conflicts, input.nodes, true, input.comparisons),
         }
     } else if (dictionaryShape(input.nodes) and !(eql(input.nodes.base, input.nodes.ours) and eql(input.nodes.base, input.nodes.theirs))) {
         root = try conflict(arena, &conflicts, input.nodes, .context_required, true);
-    } else root = try planValue(arena, &conflicts, logical, false);
+    } else root = try planValue(arena, &conflicts, logical, false, input.comparisons);
     return .{ .root = root, .conflicts = try conflicts.toOwnedSlice(arena), .input = input, .packed_layout = layout, .logical_nodes = if (layout != null) logical else null };
 }
 pub fn conflicted(arena: A, input: Input, reason: Reason) Error!Plan {
@@ -93,13 +107,14 @@ fn conflict(arena: A, list: *std.ArrayList(Conflict), n: Nodes, reason: Reason, 
     try list.append(arena, .{ .nodes = n, .reason = reason, .sequence = sequence });
     return alloc(arena, .{ .conflict = id });
 }
-fn planValue(arena: A, list: *std.ArrayList(Conflict), n: Nodes, ordered_schema: bool) Error!*const Value {
+fn planValue(arena: A, list: *std.ArrayList(Conflict), n: Nodes, ordered_schema: bool, comparisons: ?*const Comparisons) Error!*const Value {
+    if (contextMatch(comparisons, n)) return conflict(arena, list, n, .context_required, anySequence(n));
     if (n.base == null and n.ours != null and n.theirs != null and n.ours.?.* == .seq and n.theirs.?.* == .seq) {
-        return planValue(arena, list, .{ .base = try node(arena, .{ .seq = &.{} }), .ours = n.ours, .theirs = n.theirs }, ordered_schema);
+        return planValue(arena, list, .{ .base = try node(arena, .{ .seq = &.{} }), .ours = n.ours, .theirs = n.theirs }, ordered_schema, comparisons);
     }
     if (!ordered_schema and dictionaryShape(n) and !(eql(n.base, n.ours) and eql(n.base, n.theirs))) return conflict(arena, list, n, .context_required, true);
-    if (eql(n.ours, n.theirs) or eql(n.base, n.theirs)) return alloc(arena, .{ .accepted = n.ours });
-    if (eql(n.base, n.ours)) return alloc(arena, .{ .accepted = n.theirs });
+    if (comparisonEqual(comparisons, n.ours, n.theirs) or comparisonEqual(comparisons, n.base, n.theirs)) return alloc(arena, .{ .accepted = n.ours });
+    if (comparisonEqual(comparisons, n.base, n.ours)) return alloc(arena, .{ .accepted = n.theirs });
     if (n.base != null and n.ours != null and n.theirs != null and n.base.?.* == .map and n.ours.?.* == .map and n.theirs.?.* == .map) {
         var fields: std.ArrayList(Field) = .empty;
         inline for (.{ n.ours.?, n.theirs.?, n.base.? }) |map| for (map.map) |entry| {
@@ -112,28 +127,33 @@ fn planValue(arena: A, list: *std.ArrayList(Conflict), n: Nodes, ordered_schema:
             }
             if (found) continue;
             const first_conflict = list.items.len;
-            try fields.append(arena, .{ .key = entry.key, .value = try planValue(arena, list, .{ .base = model.findValue(n.base.?.map, entry.key), .ours = model.findValue(n.ours.?.map, entry.key), .theirs = model.findValue(n.theirs.?.map, entry.key) }, false) });
+            try fields.append(arena, .{ .key = entry.key, .value = try planValue(arena, list, .{ .base = model.findValue(n.base.?.map, entry.key), .ours = model.findValue(n.ours.?.map, entry.key), .theirs = model.findValue(n.theirs.?.map, entry.key) }, false, comparisons) });
             try prefixConflicts(arena, list, first_conflict, entry.key);
         };
         return alloc(arena, .{ .map = try fields.toOwnedSlice(arena) });
     }
     if (n.base != null and n.ours != null and n.theirs != null and n.base.?.* == .seq and n.ours.?.* == .seq and n.theirs.?.* == .seq) {
         const input: ordered.Input = .{ .base = n.base.?.seq, .ours = n.ours.?.seq, .theirs = n.theirs.?.seq };
-        const plan = ordered.build(arena, input) catch |err| switch (err) {
+        const compared: ordered.Input = .{ .base = comparisonNode(comparisons, n.base.?).seq, .ours = comparisonNode(comparisons, n.ours.?).seq, .theirs = comparisonNode(comparisons, n.theirs.?).seq };
+        const plan = ordered.build(arena, compared) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             else => return error.InvalidResolution,
         };
         var pieces: std.ArrayList(Piece) = .empty;
         for (plan.segments) |segment| switch (segment) {
             .accepted => |refs| for (refs) |ref| {
-                try pieces.append(arena, .{ .spread = false, .value = try alloc(arena, .{ .accepted = acceptedNode(input, ref) }) });
+                const selected = acceptedNode(input, ref, comparisons);
+                const required = contextFor(comparisons, selected);
+                const first = list.items.len;
+                try pieces.append(arena, .{ .spread = false, .value = if (required) |required_nodes| try conflict(arena, list, required_nodes, .context_required, false) else try alloc(arena, .{ .accepted = selected }) });
+                if (required != null) try prefixConflicts(arena, list, first, try std.fmt.allocPrint(arena, "[{d}]", .{ref.index}));
             },
             .conflict => |id| {
                 const c = plan.conflicts[id];
                 const first_conflict = list.items.len;
                 // A one-item replacement bounded by proven anchors permits recursive fields.
                 if (c.kind == .edit_edit and c.base.len == 1 and c.ours.len == 1 and c.theirs.len == 1 and referenced(input, c.base[0]).* == .map and referenced(input, c.ours[0]).* == .map and referenced(input, c.theirs[0]).* == .map) {
-                    try pieces.append(arena, .{ .spread = false, .value = try planValue(arena, list, .{ .base = referenced(input, c.base[0]), .ours = referenced(input, c.ours[0]), .theirs = referenced(input, c.theirs[0]) }, false) });
+                    try pieces.append(arena, .{ .spread = false, .value = try planValue(arena, list, .{ .base = referenced(input, c.base[0]), .ours = referenced(input, c.ours[0]), .theirs = referenced(input, c.theirs[0]) }, false, comparisons) });
                 } else {
                     try pieces.append(arena, .{ .spread = true, .value = try conflict(arena, list, .{ .base = try refsNode(arena, input, c.base), .ours = try refsNode(arena, input, c.ours), .theirs = try refsNode(arena, input, c.theirs) }, switch (c.kind) {
                         .edit_edit => .edit_edit,
@@ -150,17 +170,17 @@ fn planValue(arena: A, list: *std.ArrayList(Conflict), n: Nodes, ordered_schema:
     }
     return conflict(arena, list, n, if (n.ours == null or n.theirs == null) .delete_edit else .edit_edit, anySequence(n));
 }
-fn acceptedNode(input: ordered.Input, ref: ordered.ItemRef) *const model.Node {
+fn acceptedNode(input: ordered.Input, ref: ordered.ItemRef, comparisons: ?*const Comparisons) *const model.Node {
     const original = referenced(input, ref);
     if (ref.side != .base) return original;
     var base_count: usize = 0;
     var ours_count: usize = 0;
     var ours: ?*const model.Node = null;
     for (input.base) |item| {
-        if (model.Node.eql(item, original)) base_count += 1;
+        if (comparisonEqual(comparisons, item, original)) base_count += 1;
     }
     for (input.ours) |item| {
-        if (model.Node.eql(item, original)) {
+        if (comparisonEqual(comparisons, item, original)) {
             ours_count += 1;
             ours = item;
         }
@@ -393,9 +413,9 @@ fn keyOrder(arena: A, n: ?*const model.Node, schema: context.Field, base: ?*cons
     }
     return node(arena, .{ .seq = try items.toOwnedSlice(arena) });
 }
-fn planDictionary(arena: A, list: *std.ArrayList(Conflict), n: Nodes, schema: context.Field) Error!*const Value {
+fn planDictionary(arena: A, list: *std.ArrayList(Conflict), n: Nodes, schema: context.Field, comparisons: ?*const Comparisons) Error!*const Value {
     if (n.base == null and n.ours != null and n.theirs != null and n.ours.?.* == .seq and n.theirs.?.* == .seq) {
-        return planDictionary(arena, list, .{ .base = try node(arena, .{ .seq = &.{} }), .ours = n.ours, .theirs = n.theirs }, schema);
+        return planDictionary(arena, list, .{ .base = try node(arena, .{ .seq = &.{} }), .ours = n.ours, .theirs = n.theirs }, schema, comparisons);
     }
     if (schema.dictionary_equality != .default) return conflict(arena, list, n, .context_required, true);
     inline for (.{ n.base, n.ours, n.theirs }) |optional| {
@@ -406,8 +426,8 @@ fn planDictionary(arena: A, list: *std.ArrayList(Conflict), n: Nodes, schema: co
             };
         }
     }
-    if (eql(n.ours, n.theirs) or eql(n.base, n.theirs)) return alloc(arena, .{ .accepted = n.ours });
-    if (eql(n.base, n.ours)) return alloc(arena, .{ .accepted = n.theirs });
+    if (comparisonEqual(comparisons, n.ours, n.theirs) or comparisonEqual(comparisons, n.base, n.theirs)) return alloc(arena, .{ .accepted = n.ours });
+    if (comparisonEqual(comparisons, n.base, n.ours)) return alloc(arena, .{ .accepted = n.theirs });
     if (n.base == null or n.ours == null or n.theirs == null) return conflict(arena, list, n, .delete_edit, true);
     var fields: std.ArrayList(Field) = .empty;
     // Base keys retain their position; independent new keys append Ours then Theirs.
@@ -422,7 +442,7 @@ fn planDictionary(arena: A, list: *std.ArrayList(Conflict), n: Nodes, schema: co
         }
         if (exists) continue;
         const first_conflict = list.items.len;
-        try fields.append(arena, .{ .key = key, .value = try planValue(arena, list, .{ .base = try dictionaryItem(arena, n.base, key, schema), .ours = try dictionaryItem(arena, n.ours, key, schema), .theirs = try dictionaryItem(arena, n.theirs, key, schema) }, false) });
+        try fields.append(arena, .{ .key = key, .value = try planValue(arena, list, .{ .base = try dictionaryItem(arena, n.base, key, schema), .ours = try dictionaryItem(arena, n.ours, key, schema), .theirs = try dictionaryItem(arena, n.theirs, key, schema) }, false, comparisons) });
         try prefixConflicts(arena, list, first_conflict, try std.fmt.allocPrint(arena, "[{s}]", .{key}));
     };
     const base = try keyOrder(arena, n.base, schema, n.base, n);
@@ -553,4 +573,75 @@ test "value packed byte-only choices retain their source or expose a conflict" {
     try std.testing.expectEqual(Reason.source_bytes, plan.conflicts[0].reason);
     const selected = (try materialize(arena, plan, &.{.{ .take = .theirs }})).?;
     try std.testing.expect(selected == t);
+}
+
+fn comparisonNode(comparisons: ?*const Comparisons, n: *const model.Node) *const model.Node {
+    return if (comparisons) |lookup| lookup.get(n) orelse n else n;
+}
+fn comparisonEqual(comparisons: ?*const Comparisons, a: ?*const model.Node, b: ?*const model.Node) bool {
+    if (a == null or b == null) return a == null and b == null;
+    if (comparisons) |policy| for (policy.contexts) |c| {
+        for ([_]?*const model.Node{ c.base, c.ours, c.theirs }) |optional| if (optional) |target| {
+            if (containsNode(a.?, target) or containsNode(b.?, target)) return false;
+        };
+    };
+    return model.Node.eql(comparisonNode(comparisons, a.?), comparisonNode(comparisons, b.?));
+}
+
+test "comparison projections reject mismatched sequence shape before occurrence planning" {
+    var memory = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer memory.deinit();
+    const arena = memory.allocator();
+    const logical = try @import("merge_yaml.zig").parseValue(arena, "[A, B]");
+    const other = try @import("merge_yaml.zig").parseValue(arena, "[A]");
+    var comparisons: Comparisons = .empty;
+    try comparisons.put(arena, logical, other);
+    try std.testing.expectError(error.InvalidResolution, build(arena, .{ .nodes = .{ .base = logical, .ours = logical, .theirs = logical }, .comparisons = &comparisons }));
+}
+
+fn validateComparison(comparisons: *const Comparisons, n: *const model.Node) Error!void {
+    const compared = comparisons.get(n) orelse n;
+    switch (n.*) {
+        .map => |entries| {
+            if (compared.* != .map or compared.map.len != entries.len) return error.InvalidResolution;
+            for (entries, compared.map) |entry, other| {
+                if (!std.mem.eql(u8, entry.key, other.key) or other.value != (comparisons.get(entry.value) orelse entry.value)) return error.InvalidResolution;
+                try validateComparison(comparisons, entry.value);
+            }
+        },
+        .seq => |items| {
+            if (compared.* != .seq or compared.seq.len != items.len) return error.InvalidResolution;
+            for (items, compared.seq) |item, other| {
+                if (other != (comparisons.get(item) orelse item)) return error.InvalidResolution;
+                try validateComparison(comparisons, item);
+            }
+        },
+        .scalar, .ref => {},
+    }
+}
+
+fn containsNode(n: *const model.Node, target: *const model.Node) bool {
+    if (n == target) return true;
+    switch (n.*) {
+        .map => |entries| for (entries) |entry| {
+            if (containsNode(entry.value, target)) return true;
+        },
+        .seq => |items| for (items) |item| {
+            if (containsNode(item, target)) return true;
+        },
+        else => {},
+    }
+    return false;
+}
+fn contextFor(comparisons: ?*const Comparisons, n: *const model.Node) ?Nodes {
+    if (comparisons) |policy| for (policy.contexts) |c| {
+        if (n == c.base or n == c.ours or n == c.theirs) return c;
+    };
+    return null;
+}
+fn contextMatch(comparisons: ?*const Comparisons, n: Nodes) bool {
+    for ([_]?*const model.Node{ n.base, n.ours, n.theirs }) |optional| if (optional) |v| {
+        if (contextFor(comparisons, v) != null) return true;
+    };
+    return false;
 }

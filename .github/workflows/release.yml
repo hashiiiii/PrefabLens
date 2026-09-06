@@ -48,7 +48,7 @@ jobs:
           mkdir -p dist
           build() {
             zig build -Dtarget="$1" -Doptimize=ReleaseSafe
-            (cd zig-out/bin && zip -j "../../dist/prefablens-$2.zip" "$3" "git-merge-$3")
+            (cd zig-out/bin && zip -j "../../dist/prefablens-$2.zip" "$3" git-merge-prefablens)
           }
           build aarch64-macos      macos-arm64   prefablens
           build x86_64-macos       macos-x64     prefablens

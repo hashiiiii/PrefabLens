@@ -42,7 +42,7 @@ namespace PrefabLens
                 // Commit on Enter or focus loss so each edit re-resolves exactly once.
                 isDelayed = true,
                 tooltip =
-                    $"Select prefablens next to {Cli.MergeBinaryName}. Empty = auto-download v{Cli.Version} under Library. "
+                    $"Select the prefablens executable. Leave this field empty to download v{Cli.Version} under Library. "
                     + $"Stored in EditorPrefs '{Cli.CliPathPref}'.",
             };
             path.RegisterValueChangedCallback(e =>

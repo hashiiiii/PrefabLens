@@ -97,7 +97,7 @@ namespace PrefabLens
                 throw new TimeoutException($"download timed out after {DownloadTimeoutMs / 1000}s");
             }
             VerifySha256(bytes, sums, asset);
-            var installed = InstallBundle(bytes, dir, Version);
+            var installed = InstallArchive(bytes, dir, Version);
             DeleteStaleVersions(Path.GetDirectoryName(dir), Version);
             return installed;
         }
@@ -178,28 +178,18 @@ namespace PrefabLens
         public static void ExtractTo(byte[] zipBytes, string dir)
         {
             using var zip = new ZipArchive(new MemoryStream(zipBytes));
-            var hasCli = false;
-            var hasMerge = false;
-            foreach (var entry in zip.Entries)
-            {
-                hasCli |= entry.FullName == BinaryName;
-                hasMerge |= entry.FullName == MergeBinaryName;
-            }
-            if (!hasCli)
+            var entry = zip.GetEntry(BinaryName);
+            if (entry == null)
                 throw new InvalidOperationException($"The release archive does not contain {BinaryName}.");
-            if (!hasMerge)
-                throw new InvalidOperationException($"The release archive does not contain {MergeBinaryName}.");
-            foreach (var entry in zip.Entries)
-            {
-                // ZipFileExtensions (ExtractToFile) isn't referenceable under netstandard, so copy manually
-                var dest = Path.Combine(dir, entry.Name);
-                using var src = entry.Open();
-                using var dst = File.Create(dest);
-                src.CopyTo(dst);
-            }
+
+            // ZipFileExtensions is not available under netstandard, so copy the entry manually.
+            var dest = Path.Combine(dir, BinaryName);
+            using var src = entry.Open();
+            using var dst = File.Create(dest);
+            src.CopyTo(dst);
         }
 
-        public static string InstallBundle(byte[] zipBytes, string finalDirectory, string requiredVersion)
+        public static string InstallArchive(byte[] zipBytes, string finalDirectory, string requiredVersion)
         {
             var fullFinalDirectory = Path.GetFullPath(finalDirectory);
             var root = Path.GetDirectoryName(fullFinalDirectory);
@@ -214,7 +204,7 @@ namespace PrefabLens
                 ExtractTo(zipBytes, stagingDirectory);
                 var stagedCliPath = Path.Combine(stagingDirectory, BinaryName);
                 MarkExecutable(stagedCliPath);
-                var validation = ValidateBundle(stagedCliPath, requiredVersion);
+                var validation = ValidateCli(stagedCliPath, requiredVersion);
                 if (!validation.IsValid)
                     throw new InvalidOperationException(validation.Error);
 
@@ -257,13 +247,12 @@ namespace PrefabLens
             catch (UnauthorizedAccessException) { }
         }
 
-        /// Make both extracted commands executable (no-op on Windows).
+        /// Make the extracted CLI executable. This operation does nothing on Windows.
         public static void MarkExecutable(string cliPath)
         {
             if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
                 return;
             MarkExecutableFile(cliPath);
-            MarkExecutableFile(MergePath(cliPath));
         }
 
         /// A failed chmod must stop installation before the first CLI run.

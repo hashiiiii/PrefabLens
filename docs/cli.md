@@ -44,6 +44,7 @@ The schema stays stable unless a release notes a break on purpose.
 | `cli/src/unity_path.zig` | Unity YAML extension detection |
 | `cli/src/builtin_refs.zig` | Built-in Unity resource names |
 | `cli/src/render_tree.zig`, `render_html.zig`, `display.zig` | Tree, HTML, and ANSI output |
+| `cli/bin/git-merge-prefablens` | Script that runs `prefablens merge-strategy` for Git |
 | `cli/pkg/` | Templates and scripts for Homebrew and Scoop |
 
 Dependencies point from `cli/` into `core/`.
@@ -63,21 +64,30 @@ Dependencies point from `cli/` into `core/`.
 
 `prefablens setup-merge` configures one clone.
 With `--team`, this command writes shared `.gitattributes` instead of `.git/info/attributes`.
-Both native executables must be on `PATH`: `prefablens` and `git-merge-prefablens`.
-Before setup writes attributes or Git configuration, it makes sure that both commands match its release.
-Setup runs the version command through the terminal `PATH` and through Git.
+One native executable and the packaged `git-merge-prefablens` script must be on `PATH`.
+The script contains only this command:
+
+```sh
+#!/bin/sh
+exec prefablens merge-strategy "$@"
+```
+
+Git needs the script name to select the merge strategy.
+Git for Windows recognizes its shebang and starts `sh` for the script.
+
+Before setup writes attributes or Git configuration, it checks the strategy and driver routes through Git.
+Each route must reach the installed `prefablens` version.
 
 The `git --exec-path` command prints the directory that Git searches before the other `PATH` directories.
-The helper must be a custom Git command on `PATH`, outside this directory.
+The script must be a custom Git command on `PATH`, outside this directory.
 
-Copies and symlinks from the same release are compatible.
 Setup keeps existing attribute lines and unrelated configuration.
 The configuration uses command names without absolute paths.
-A complete upgrade of both commands does not require another setup.
+A complete upgrade does not require another setup.
 
-Before the strategy writes merge objects, the index, or working files, it makes sure that the commands match its release.
+Before the strategy writes merge objects, the index, or working files, it checks the installed CLI version.
 
-If a command is missing or has a different version, restore both commands from one release.
+If a command is missing or has a different version, reinstall the release archive.
 
 The `pull.twohead=prefablens` configuration entry selects the strategy for ordinary two-head `git merge` commands.
 The strategy uses `git merge-tree --write-tree -z --messages` and requires Git 2.39 or later.
@@ -295,7 +305,7 @@ zig build perf
 zig build run -- before.prefab after.prefab
 ```
 
-Build the two native executables before you run the package test:
+Build the native CLI and Git strategy script before you run the package test:
 
 ```bash
 zig build -Doptimize=ReleaseSafe
@@ -303,8 +313,8 @@ cli/pkg/render_test.sh zig-out/bin
 ```
 
 The package test creates real ZIP files for all six release target names.
-It makes sure that the ZIP roots and the generated package files meet the distribution requirements.
-It also runs both executables from the ZIP for the host platform.
+It checks the ZIP roots and the generated package files.
+It also runs the extracted script through Git with the real host CLI.
 CI also runs `.github/scripts/check-version-sync.sh` on Ubuntu.
 
 CI runs these checks in the `core` job of
@@ -333,17 +343,25 @@ It builds platform ZIP files under `dist/`:
 - `prefablens-windows-x64.zip`
 - `prefablens-windows-arm64.zip`
 
-Each CLI ZIP contains `prefablens` and `git-merge-prefablens` at its root.
-Windows ZIP files contain the two `.exe` names.
+Each CLI ZIP contains one native CLI and `git-merge-prefablens` at its root.
+The native CLI name is `prefablens.exe` in the Windows ZIP files.
+The script has no file-name extension on all platforms.
 
 The workflow commits, tags `v$VERSION`, and creates the GitHub Release with `SHA256SUMS`.
 After the release exists, `publish-packages` downloads all six CLI ZIP files.
-It makes sure that each ZIP file contains the required pair of executables.
+It checks that each ZIP file contains the native CLI and the script.
 It generates the Homebrew formula and Scoop manifest with `cli/pkg/render.sh`.
 Then it pushes each file to its package repository.
 
-The Homebrew formula installs both commands and runs their version commands in its test.
-The Scoop manifest creates a shim for each command.
+The Homebrew formula installs the native CLI and the script.
+Its test runs the version commands for the CLI and the strategy.
+The Scoop manifest creates a shim for `prefablens.exe`.
+It also adds the release directory to `PATH`, so Git can find the script.
+Scoop removes the old `git-merge-prefablens` shim when it updates from the two-executable manifest.
+
+For an older manual Windows installation, remove `git-merge-prefablens.exe` before you add the new release directory to `PATH`.
+The old executable can hide the new script.
+
 The Release workflow owns package updates in both repositories.
 The Scoop bucket has no separate update workflow or `checkver` / `autoupdate` configuration.
 Users install new versions with `scoop update prefablens` after the Release workflow updates the bucket.

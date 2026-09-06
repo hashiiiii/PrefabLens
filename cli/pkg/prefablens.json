@@ -13,8 +13,6 @@
             "hash": "{{SHA256_WINDOWS_ARM64}}"
         }
     },
-    "bin": [
-        "prefablens.exe",
-        "git-merge-prefablens.exe"
-    ]
+    "bin": "prefablens.exe",
+    "env_add_path": "."
 }

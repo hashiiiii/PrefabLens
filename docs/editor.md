@@ -75,24 +75,21 @@ The pinned CLI version is `Cli.Version` in `Editor/Cli.cs`.
 Release automation keeps it in sync with `editor/package.json` and
 `build.zig.zon`.
 
-The package treats two commands from one release as one CLI bundle:
-
-- `Library/PrefabLens/<version>/prefablens`
-- `Library/PrefabLens/<version>/git-merge-prefablens`
-
-Both names have an `.exe` suffix on Windows.
+The package installs one native CLI at `Library/PrefabLens/<version>/prefablens`.
+The name has an `.exe` suffix on Windows.
 
 `Library/` is not for version control.
-The CLI bundle must not enter the repository.
+The CLI must not enter the repository.
 
 On first use, the package downloads the pinned ZIP from GitHub Releases.
 It compares the ZIP digest with `SHA256SUMS` before extraction.
-The archive must contain both command names at its root.
+The archive must contain the exact native CLI name at its root.
 
 The package extracts the archive into a staging directory.
-On macOS and Linux, it marks both commands as executable.
-It runs `--version` for both commands from the staging directory.
-Both commands must report `Cli.Version`.
+It extracts only the native CLI.
+On macOS and Linux, it marks the CLI as executable.
+It runs `--version` from the staging directory.
+The CLI must report `Cli.Version`.
 
 After these checks pass, the package replaces the version directory.
 A failed check leaves an existing cache unchanged.
@@ -107,19 +104,18 @@ The window can cancel it.
 Preferences store an optional absolute path in EditorPrefs key
 `PrefabLens.CliPath` (per machine, not per project).
 This path selects `prefablens`.
-The package requires `git-merge-prefablens` in the same directory.
 
 Resolution order:
 
-1. If both commands run and report the same version, the package uses the override.
-   A manual bundle can use a version other than `Cli.Version`.
+1. If the CLI runs and reports a version, the package uses the override.
+   A manual CLI can use a version other than `Cli.Version`.
 2. If the override is invalid, the package reports the cause.
-   If a valid downloaded bundle exists, the package uses that bundle.
+   If a valid downloaded CLI exists, the package uses that CLI.
    Otherwise, the window offers the pinned download.
-3. If the override is empty, the package uses a downloaded bundle that matches `Cli.Version`.
-   If either command fails the version check, the window offers the pinned download.
+3. If the override is empty, the package uses a downloaded CLI that matches `Cli.Version`.
+   If the CLI fails the version check, the window offers the pinned download.
 
-During a window refresh or a Preferences update, the package makes sure that the command versions are compatible.
+During a window refresh or a Preferences update, the package checks the CLI version.
 It does not run version commands during a UI repaint.
 
 The package reports an invalid override in the console once per distinct error.
@@ -157,7 +153,7 @@ The headless C# harness does not need the Unity Editor app.
 
 For `Tests/Editor/` EditMode tests:
 
-1. Build the two native test bundles with the build command in this section.
+1. Build the two native test CLIs with the build command in this section.
 2. Set `PREFABLENS_TEST_BIN_DIR` and `PREFABLENS_TEST_ALT_BIN_DIR` for the Unity process.
 3. Open the package in Unity 2022.3 or newer.
 4. Run the EditMode test runner there.
@@ -168,12 +164,12 @@ Windows executable names have an `.exe` suffix.
 
 1. Build the CLI with `zig build` at the repository root.
 2. Set `PrefabLens.CliPath` to the absolute path of `zig-out/bin/prefablens`.
-3. Keep `git-merge-prefablens` in the same directory.
-4. Open **Window > PrefabLens**.
-5. Refresh the window.
+3. Open **Window > PrefabLens**.
+4. Refresh the window.
 
-CI runs csharpier and `DotNetTests~/` in the `editor` job of
+CI runs csharpier and `DotNetTests~/` on Windows, macOS, and Linux in the `editor_native` job of
 [`.github/workflows/ci.yml`](../.github/workflows/ci.yml).
+The `editor` job reports the combined result for branch protection.
 CI does not run the in-Editor EditMode suite.
 
 ## Deploy

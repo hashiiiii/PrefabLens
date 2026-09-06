@@ -58,24 +58,18 @@ namespace PrefabLens.Tests
         public void InvalidOverrideWarnsOncePerErrorAndRearmsWhenCleared()
         {
             var gate = new RefreshGate();
-            Assert.AreEqual(
-                "missing companion",
-                gate.OnRefresh(InvalidOverride("missing companion", "bin/prefablens")).Warn
-            );
+            Assert.AreEqual("missing CLI", gate.OnRefresh(InvalidOverride("missing CLI", "bin/prefablens")).Warn);
             Assert.IsFalse(gate.OnRunDone(canceled: false));
             // The next refresh keeps the state visible without a duplicate warning.
-            var repeat = gate.OnRefresh(InvalidOverride("missing companion", "bin/prefablens"));
+            var repeat = gate.OnRefresh(InvalidOverride("missing CLI", "bin/prefablens"));
             Assert.IsNull(repeat.Warn);
-            Assert.AreEqual("missing companion", gate.OverrideError);
+            Assert.AreEqual("missing CLI", gate.OverrideError);
             gate.OnRunDone(canceled: false);
             // A valid override clears the state. The same later error produces a warning.
             gate.OnRefresh(Found("bin/prefablens"));
             Assert.IsNull(gate.OverrideError);
             gate.OnRunDone(canceled: false);
-            Assert.AreEqual(
-                "missing companion",
-                gate.OnRefresh(InvalidOverride("missing companion", "bin/prefablens")).Warn
-            );
+            Assert.AreEqual("missing CLI", gate.OnRefresh(InvalidOverride("missing CLI", "bin/prefablens")).Warn);
         }
 
         [Test]

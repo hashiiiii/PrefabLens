@@ -23,22 +23,21 @@ validate_archive() {
   local target=$1
   local archive="$dist/prefablens-$target.zip"
   local primary=prefablens
-  local helper=git-merge-prefablens
+  local script=git-merge-prefablens
   local actual
   local expected
 
   if [[ "$target" == windows-* ]]; then
     primary=prefablens.exe
-    helper=git-merge-prefablens.exe
   fi
 
   if ! actual=$(unzip -Z1 "$archive" 2>/dev/null | LC_ALL=C sort); then
     echo "error: cannot read release archive: $archive" >&2
     return 1
   fi
-  expected=$(printf '%s\n' "$helper" "$primary" | LC_ALL=C sort)
+  expected=$(printf '%s\n' "$script" "$primary" | LC_ALL=C sort)
   if [ "$actual" != "$expected" ]; then
-    echo "error: $archive must contain only $primary and $helper at the ZIP root" >&2
+    echo "error: $archive must contain only $primary and $script at the ZIP root" >&2
     return 1
   fi
 }

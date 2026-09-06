@@ -236,7 +236,7 @@ namespace PrefabLens
                 Note($"Download failed: {downloadError}");
             if (gate.OverrideError != null)
                 Note($"CLI path override '{Cli.CliPathPref}' is invalid. {gate.OverrideError}");
-            Note($"PrefabLens CLI bundle v{Cli.Version} was not found.");
+            Note($"PrefabLens CLI v{Cli.Version} was not found.");
             content.Add(
                 new Button(StartDownload)
                 {
@@ -244,7 +244,7 @@ namespace PrefabLens
                     style = { alignSelf = Align.FlexStart, marginLeft = 6 },
                 }
             );
-            Note("Or select a complete CLI bundle in Preferences > PrefabLens.");
+            Note("Select a CLI executable in Preferences > PrefabLens.");
         }
 
         /// Shared by the automatic trigger in Refresh and the manual retry button.

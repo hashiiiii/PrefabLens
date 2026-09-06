@@ -36,17 +36,9 @@ pub fn build(b: *std.Build) void {
         }),
     });
     b.installArtifact(exe);
-
-    const strategy = b.addExecutable(.{
-        .name = "git-merge-prefablens",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("cli/src/git_merge_main.zig"),
-            .target = target,
-            .optimize = optimize,
-            .imports = cli_imports,
-        }),
-    });
-    b.installArtifact(strategy);
+    const strategy_script = b.addInstallBinFile(b.path("cli/bin/git-merge-prefablens"), "git-merge-prefablens");
+    b.getInstallStep().dependOn(&strategy_script.step);
+    const installed_strategy_script = b.getInstallPath(.bin, "git-merge-prefablens");
 
     const run_cmd = b.addRunArtifact(exe);
     run_cmd.step.dependOn(b.getInstallStep());
@@ -109,11 +101,15 @@ pub fn build(b: *std.Build) void {
             .root_source_file = b.path("cli/src/git_strategy_test_main.zig"),
             .target = target,
             .optimize = optimize,
+            .imports = &.{
+                .{ .name = "build_options", .module = build_options_mod },
+            },
         }),
     });
     const run_strategy_tests = b.addRunArtifact(strategy_tests);
     run_strategy_tests.addArtifactArg(exe);
-    run_strategy_tests.addArtifactArg(strategy);
+    run_strategy_tests.addArg(installed_strategy_script);
+    run_strategy_tests.step.dependOn(&strategy_script.step);
     test_step.dependOn(&run_strategy_tests.step);
     const strategy_test_step = b.step("test-merge-strategy", "Run the native Git strategy integration tests");
     strategy_test_step.dependOn(&run_strategy_tests.step);
@@ -135,15 +131,6 @@ pub fn build(b: *std.Build) void {
             .imports = alternate_imports,
         }),
     });
-    const alternate_strategy = b.addExecutable(.{
-        .name = "git-merge-prefablens",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("cli/src/git_merge_main.zig"),
-            .target = target,
-            .optimize = optimize,
-            .imports = alternate_imports,
-        }),
-    });
     const installation_tests = b.addExecutable(.{
         .name = "cli-installation-tests",
         .root_module = b.createModule(.{
@@ -154,20 +141,18 @@ pub fn build(b: *std.Build) void {
     });
     const run_installation_tests = b.addRunArtifact(installation_tests);
     run_installation_tests.addArtifactArg(exe);
-    run_installation_tests.addArtifactArg(strategy);
+    run_installation_tests.addArg(installed_strategy_script);
     run_installation_tests.addArtifactArg(alternate_exe);
-    run_installation_tests.addArtifactArg(alternate_strategy);
+    run_installation_tests.step.dependOn(&strategy_script.step);
     test_step.dependOn(&run_installation_tests.step);
     const installation_test_step = b.step("test-cli-installation", "Run native CLI installation integration tests");
     installation_test_step.dependOn(&run_installation_tests.step);
 
     const installation_binaries_step = b.step("test-installation-binaries", "Install two native releases for installation tests");
     installation_binaries_step.dependOn(b.getInstallStep());
-    for ([_]*std.Build.Step.Compile{ alternate_exe, alternate_strategy }) |artifact| {
-        installation_binaries_step.dependOn(&b.addInstallArtifact(artifact, .{
-            .dest_dir = .{ .override = .{ .custom = "test-alternate-bin" } },
-        }).step);
-    }
+    installation_binaries_step.dependOn(&b.addInstallArtifact(alternate_exe, .{
+        .dest_dir = .{ .override = .{ .custom = "test-alternate-bin" } },
+    }).step);
 
     const structural_tests = b.addExecutable(.{
         .name = "git-structural-tests",
@@ -179,7 +164,8 @@ pub fn build(b: *std.Build) void {
     });
     const run_structural_tests = b.addRunArtifact(structural_tests);
     run_structural_tests.addArtifactArg(exe);
-    run_structural_tests.addArtifactArg(strategy);
+    run_structural_tests.addArg(installed_strategy_script);
+    run_structural_tests.step.dependOn(&strategy_script.step);
     test_step.dependOn(&run_structural_tests.step);
     const structural_test_step = b.step("test-merge-structural", "Run structural Unity merge integration tests");
     structural_test_step.dependOn(&run_structural_tests.step);

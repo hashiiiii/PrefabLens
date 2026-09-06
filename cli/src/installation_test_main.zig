@@ -10,48 +10,47 @@ const theirs = "--- !u!114 &1\nMonoBehaviour:\n  m_Left: 1\n  m_Right: 3\n";
 const merged = "--- !u!114 &1\nMonoBehaviour:\n  m_Left: 2\n  m_Right: 3\n";
 const suffix = if (builtin.os.tag == .windows) ".exe" else "";
 const primary_name = "prefablens" ++ suffix;
-const helper_name = "git-merge-prefablens" ++ suffix;
+const strategy_name = "git-merge-prefablens";
+const stale_strategy_name = "git-merge-prefablens" ++ suffix;
 const driver = "prefablens merge-driver %O %A %B %P %L";
 
-const Binary = enum { missing, primary, helper, alternate_primary, alternate_helper };
+const File = enum { missing, primary, script, alternate_primary };
 const SetupCase = struct {
     name: []const u8,
-    primary: Binary = .primary,
-    helper: Binary = .helper,
-    exec_primary: Binary = .missing,
-    exec_helper: Binary = .missing,
+    primary: File = .primary,
+    strategy: File = .script,
+    exec_primary: File = .missing,
+    exec_strategy: File = .missing,
     valid: bool = false,
     split: bool = false,
     symlinks: bool = false,
 };
 const setup_cases = [_]SetupCase{
     .{ .name = "mixed-primary", .primary = .alternate_primary },
-    .{ .name = "mixed-helper", .helper = .alternate_helper },
-    .{ .name = "different-running-release", .primary = .alternate_primary, .helper = .alternate_helper },
     .{ .name = "missing-primary", .primary = .missing },
-    .{ .name = "missing-helper", .helper = .missing },
-    .{ .name = "wrong-primary-output", .primary = .helper },
-    .{ .name = "wrong-helper-output", .helper = .primary },
-    .{ .name = "exec-path-helper-shadow", .exec_helper = .alternate_helper },
+    .{ .name = "missing-strategy", .strategy = .missing },
+    .{ .name = "stale-native-helper", .strategy = .primary },
+    .{ .name = "exec-path-strategy-shadow", .exec_strategy = .primary },
     // Git prepends exec-path for the driver too, so a valid terminal PATH alone is insufficient.
     .{ .name = "exec-path-primary-shadow", .exec_primary = .alternate_primary },
     // Git excludes unknown exec-path commands from its custom merge strategy list, even when PATH also contains the name.
-    .{ .name = "exec-path-hidden-strategy", .exec_helper = .helper },
+    .{ .name = "exec-path-hidden-strategy", .exec_strategy = .script },
     .{ .name = "complete", .valid = true },
     .{ .name = "same-release-copies", .valid = true, .split = true },
     .{ .name = "same-release-symlinks", .valid = true, .symlinks = true },
 };
-const Drift = enum { primary, helper, missing_primary, exec_primary, upgrade };
+const Drift = enum { missing_primary, missing_strategy, stale_strategy, upgrade };
 
 pub fn main(init: std.process.Init) !u8 {
     var arena_state = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena_state.deinit();
     const a = arena_state.allocator();
     const args = try init.minimal.args.toSlice(a);
-    const scratch = try t.scratchDirectory(init.io, a, "installation");
+    const scratch = try t.scratchDirectory(init.io, a, "installation space 日本語");
     defer std.Io.Dir.cwd().deleteTree(init.io, scratch) catch {};
-    var artifacts: [4][]const u8 = undefined;
-    for (&artifacts, args[1..5]) |*artifact, path| artifact.* = try std.Io.Dir.cwd().realPathFileAlloc(init.io, path, a);
+    try t.require(args.len == 4, "expected the primary CLI, installed script, and alternate CLI paths");
+    var artifacts: [3][]const u8 = undefined;
+    for (&artifacts, args[1..4]) |*artifact, path| artifact.* = try std.Io.Dir.cwd().realPathFileAlloc(init.io, path, a);
     var env = try init.environ_map.clone(a);
     try env.put("GIT_CONFIG_NOSYSTEM", "1");
     try env.put("GIT_CONFIG_GLOBAL", try std.fs.path.join(a, &.{ scratch, "empty-config" }));
@@ -68,7 +67,7 @@ pub fn main(init: std.process.Init) !u8 {
             failures += 1;
         };
     }
-    for ([_]Drift{ .primary, .helper, .missing_primary, .exec_primary, .upgrade }) |drift| {
+    for ([_]Drift{ .missing_primary, .missing_strategy, .stale_strategy, .upgrade }) |drift| {
         runtimeCase(ctx, drift) catch |err| {
             std.debug.print("installation runtime {s}: {s}\n", .{ @tagName(drift), @errorName(err) });
             failures += 1;
@@ -82,7 +81,7 @@ pub fn main(init: std.process.Init) !u8 {
 const Context = struct {
     git: Git,
     scratch: []const u8,
-    artifacts: [4][]const u8,
+    artifacts: [3][]const u8,
     clean_path: []const u8,
 
     fn repo(self: Context, name: []const u8) !Git {
@@ -97,18 +96,19 @@ const Context = struct {
         return git;
     }
 
-    fn layout(self: Context, name: []const u8, primary: Binary, helper: Binary, symlinks: bool) ![]const u8 {
-        const path = try std.fs.path.join(self.git.arena, &.{ self.scratch, name });
+    fn layout(self: Context, name: []const u8, primary: File, strategy: File, symlinks: bool) ![]const u8 {
+        const directory = try std.fmt.allocPrint(self.git.arena, "{s} bin 日本語", .{name});
+        const path = try std.fs.path.join(self.git.arena, &.{ self.scratch, directory });
         const cwd = std.Io.Dir.cwd();
         try cwd.createDirPath(self.git.io, path);
-        for ([_]Binary{ primary, helper }, [_][]const u8{ primary_name, helper_name }) |binary, filename| {
-            const source = switch (binary) {
+        for ([_]File{ primary, strategy }, [_][]const u8{ primary_name, strategy_name }, [_]bool{ false, true }) |file, default_name, is_strategy| {
+            const source = switch (file) {
                 .missing => continue,
                 .primary => self.artifacts[0],
-                .helper => self.artifacts[1],
+                .script => self.artifacts[1],
                 .alternate_primary => self.artifacts[2],
-                .alternate_helper => self.artifacts[3],
             };
+            const filename = if (is_strategy and file == .primary) stale_strategy_name else default_name;
             const destination = try std.fs.path.join(self.git.arena, &.{ path, filename });
             if (symlinks) {
                 try cwd.symLink(self.git.io, source, destination, .{});
@@ -140,7 +140,7 @@ fn cleanPath(git: Git, exec_path: []const u8) ![]const u8 {
     while (paths.next()) |path| {
         if (path.len == 0) continue;
         var contaminated = false;
-        for ([_][]const u8{ primary_name, helper_name }) |name| {
+        for ([_][]const u8{ primary_name, strategy_name, stale_strategy_name }) |name| {
             const full = try std.fs.path.join(git.arena, &.{ path, name });
             std.Io.Dir.cwd().access(git.io, full, .{}) catch continue;
             contaminated = true;
@@ -167,10 +167,10 @@ fn setup(ctx: Context, git: Git, team: bool) !std.process.RunResult {
 
 fn setupCase(ctx: Context, case: SetupCase) !void {
     const a = ctx.git.arena;
-    const primary = try ctx.layout(try std.fmt.allocPrint(a, "{s}-bin", .{case.name}), case.primary, if (case.split) .missing else case.helper, case.symlinks);
-    const helper = if (case.split) try ctx.layout(try std.fmt.allocPrint(a, "{s}-helper", .{case.name}), .missing, case.helper, false) else primary;
-    const exec_path = try ctx.layout(try std.fmt.allocPrint(a, "{s}-exec", .{case.name}), case.exec_primary, case.exec_helper, false);
-    var env = try ctx.environment(&.{ primary, helper }, exec_path);
+    const primary = try ctx.layout(try std.fmt.allocPrint(a, "{s}-primary", .{case.name}), case.primary, if (case.split) .missing else case.strategy, case.symlinks);
+    const strategy = if (case.split) try ctx.layout(try std.fmt.allocPrint(a, "{s}-strategy", .{case.name}), .missing, case.strategy, false) else primary;
+    const exec_path = try ctx.layout(try std.fmt.allocPrint(a, "{s}-exec", .{case.name}), case.exec_primary, case.exec_strategy, false);
+    var env = try ctx.environment(&.{ primary, strategy }, exec_path);
     for ([_]bool{ false, true }) |team| {
         var git = try ctx.repo(try std.fmt.allocPrint(a, "{s}-{s}", .{ case.name, if (team) "team" else "local" }));
         git.env = &env;
@@ -200,19 +200,22 @@ fn setupCase(ctx: Context, case: SetupCase) !void {
 fn runtimeCase(ctx: Context, drift: Drift) !void {
     const a = ctx.git.arena;
     const name = try std.fmt.allocPrint(a, "runtime-{s}", .{@tagName(drift)});
-    const current = try ctx.layout(try std.fmt.allocPrint(a, "{s}-current", .{name}), .primary, .helper, false);
+    const current = try ctx.layout(try std.fmt.allocPrint(a, "{s}-current", .{name}), .primary, .script, false);
     const empty_exec = try ctx.layout(try std.fmt.allocPrint(a, "{s}-empty-exec", .{name}), .missing, .missing, false);
     var env = try ctx.environment(&.{current}, empty_exec);
     var git = try ctx.repo(name);
     git.env = &env;
     try t.expectCode(try setup(ctx, git, false), 0, "setup before PATH drift");
     const changed = try ctx.layout(try std.fmt.allocPrint(a, "{s}-changed", .{name}), switch (drift) {
-        .primary, .upgrade => .alternate_primary,
+        .upgrade => .alternate_primary,
         .missing_primary => .missing,
         else => .primary,
-    }, if (drift == .helper or drift == .upgrade) .alternate_helper else .helper, false);
-    const changed_exec = if (drift == .exec_primary) try ctx.layout(try std.fmt.allocPrint(a, "{s}-changed-exec", .{name}), .alternate_primary, .missing, false) else empty_exec;
-    env = try ctx.environment(&.{changed}, changed_exec);
+    }, switch (drift) {
+        .missing_strategy => .missing,
+        .stale_strategy => .primary,
+        else => .script,
+    }, false);
+    env = try ctx.environment(&.{changed}, empty_exec);
     try git.ok(&.{ "update-index", "--refresh" });
     const index = try git.output(&.{ "ls-files", "--stage", "-z" });
     const head = try git.output(&.{ "rev-parse", "HEAD" });
@@ -223,8 +226,7 @@ fn runtimeCase(ctx: Context, drift: Drift) !void {
         try t.expectFile(git.io, a, git.cwd, "Assets/A.prefab", merged);
         return;
     }
-    try t.expectCode(result, 2, "reject PATH drift before the merge tree is written");
-    try t.require(std.mem.indexOf(u8, result.stderr, "PATH") != null, "runtime error omitted the PATH repair");
+    try t.expectNonzero(result, "reject missing or stale commands before the merge tree is written");
     try t.expectFile(git.io, a, git.cwd, "Assets/A.prefab", ours);
     try t.require(std.mem.eql(u8, index, try git.output(&.{ "ls-files", "--stage", "-z" })), "PATH drift changed the index");
     try t.require(std.mem.eql(u8, head, try git.output(&.{ "rev-parse", "HEAD" })), "PATH drift changed HEAD");

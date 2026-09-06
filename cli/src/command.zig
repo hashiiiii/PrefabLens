@@ -18,6 +18,7 @@ pub const MergetoolArgs = struct {
 
 pub const Command = union(enum) {
     diff: []const []const u8,
+    merge_strategy: []const []const u8,
     merge_driver: MergeDriverArgs,
     mergetool: MergetoolArgs,
     setup_merge: []const []const u8,
@@ -31,6 +32,7 @@ pub const Error = error{
 pub fn parse(args: []const []const u8) Error!Command {
     if (args.len == 0) return .{ .diff = args };
     if (std.mem.eql(u8, args[0], "setup-merge")) return .{ .setup_merge = args[1..] };
+    if (std.mem.eql(u8, args[0], "merge-strategy")) return .{ .merge_strategy = args[1..] };
     if (std.mem.eql(u8, args[0], "merge-driver")) {
         if (args.len != 5 and args.len != 6) return error.InvalidArguments;
         const marker_size = if (args.len == 6)

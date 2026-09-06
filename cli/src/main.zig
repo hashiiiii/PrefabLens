@@ -11,6 +11,7 @@ const merge_tree = @import("merge_tree.zig");
 const merge_tui = @import("merge_tui.zig");
 const merge_ui_state = @import("merge_ui_state.zig");
 const mergetool = @import("mergetool.zig");
+const merge_strategy = @import("git_merge_strategy.zig");
 const merge_setup = @import("merge_setup.zig");
 const installation = @import("installation.zig");
 pub const resolve = @import("resolve.zig");
@@ -31,7 +32,7 @@ test {
     _ = merge_tui;
     _ = merge_ui_state;
     _ = mergetool;
-    _ = @import("git_merge_strategy.zig");
+    _ = merge_strategy;
     _ = resolve;
     _ = input;
     _ = display;
@@ -1329,6 +1330,17 @@ pub fn main(init: std.process.Init) !u8 {
         return 2;
     };
     const code = switch (parsed) {
+        .merge_strategy => |strategy_args| blk: {
+            if (strategy_args.len == 1 and std.mem.eql(u8, strategy_args[0], "--version")) {
+                try stdout.writeAll("prefablens merge-strategy " ++ version ++ "\n");
+                break :blk @as(u8, 0);
+            }
+            break :blk merge_strategy.run(init.io, arena, strategy_args, init.environ_map, stderr) catch |err| {
+                if (!try installation.writeError(stderr, err))
+                    try stderr.print("prefablens: Merge strategy failed: {s}.\n", .{@errorName(err)});
+                break :blk @as(u8, 2);
+            };
+        },
         .setup_merge => |setup_args| blk: {
             merge_setup.run(init.io, arena, setup_args, init.environ_map, stdout) catch |err| {
                 if (!try installation.writeError(stderr, err)) switch (err) {

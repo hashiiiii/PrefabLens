@@ -67,6 +67,14 @@ mise use -g github:hashiiiii/PrefabLens
 #### Manual
 
 Download the zip for your platform from [GitHub Releases](https://github.com/hashiiiii/PrefabLens/releases).
+Each zip contains one native `prefablens` executable and the `git-merge-prefablens` script.
+
+Git needs the script name to select the PrefabLens merge strategy.
+Git for Windows reads the script shebang and runs the script with `sh`.
+
+If you replace an older manual installation on Windows, remove `git-merge-prefablens.exe`.
+The old executable can hide the new script.
+Scoop removes its old `git-merge-prefablens` shim during `scoop update prefablens`.
 
 ### Unity Editor package (OpenUPM)
 
@@ -94,7 +102,8 @@ You do not need to set a token.
 
 PrefabLens uses Git 2.39 or later to resolve Unity YAML conflicts during `git merge`.
 
-Install both `prefablens` and `git-merge-prefablens` on `PATH`.
+Install `prefablens` and the packaged `git-merge-prefablens` script on `PATH`.
+The script runs `prefablens merge-strategy`.
 
 For one clone, run:
 
@@ -190,29 +199,28 @@ The right pane shows the semantic diff for the selected asset.
 The window refreshes on focus.
 The **Refresh** control also refreshes the window.
 
-On first use, the package downloads a pinned CLI bundle from GitHub Releases.
-The bundle contains `prefablens` and `git-merge-prefablens` from the same release.
-The package installs both commands in `Library/PrefabLens/`.
+On first use, the package downloads a pinned CLI archive from GitHub Releases.
+The package extracts only `prefablens` into `Library/PrefabLens/`.
+On Windows, the file name is `prefablens.exe`.
 Git does not track this directory.
 
-To use a local CLI bundle:
+To use a local CLI:
 
 1. Open Preferences > PrefabLens.
 2. Set **CLI path override** to the absolute path of `prefablens`.
 
 Alternatively, set the `PrefabLens.CliPath` EditorPrefs key to an absolute path.
-Keep `git-merge-prefablens` in the same directory.
 
-Both commands must report the same version.
-A manual bundle can use a version other than the pinned version.
-If the override is invalid, PrefabLens uses a valid downloaded bundle or offers a download.
+The CLI must run and report its version.
+A manual CLI can use a version other than the pinned version.
+If the override is invalid, PrefabLens uses a valid downloaded CLI or offers a download.
 
 | Symptom                                               | What to do                                                                                         |
 | ----------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
 | `Download failed: …`                                  | Retry. If the retry fails, download the release zip. Then set the CLI path override.               |
-| `CLI path override … is invalid. …`                   | Put both commands from one release in the same directory. Or clear the CLI path override.          |
+| `CLI path override … is invalid. …`                   | Select a working `prefablens` executable. Or clear the CLI path override.                           |
 | `prefablens exited with N` / one-line CLI error       | Make sure that the project is in a git repository. Make sure that git finishes within the timeout. |
-| `Could not parse CLI output (CLI version mismatch?):` | Clear the CLI path override. Or update both commands.                                              |
+| `Could not parse CLI output (CLI version mismatch?):` | Clear the CLI path override. Or update the CLI.                                                    |
 | `prefablens timed out after 90s and was killed`       | Make sure that `git status` is fast in the repository.                                             |
 | Changed assets never appear                           | Switch Asset Serialization to Force Text.                                                          |
 

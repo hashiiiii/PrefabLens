@@ -344,4 +344,6 @@ Then it pushes each file to its package repository.
 
 The Homebrew formula installs both commands and runs their version commands in its test.
 The Scoop manifest creates a shim for each command.
-It keeps `checkver` and `autoupdate` for later package upgrades.
+The Release workflow owns package updates in both repositories.
+The Scoop bucket has no separate update workflow or `checkver` / `autoupdate` configuration.
+Users install new versions with `scoop update prefablens` after the Release workflow updates the bucket.

@@ -16,22 +16,5 @@
     "bin": [
         "prefablens.exe",
         "git-merge-prefablens.exe"
-    ],
-    "checkver": "github",
-    "autoupdate": {
-        "architecture": {
-            "64bit": {
-                "url": "https://github.com/hashiiiii/PrefabLens/releases/download/v$version/prefablens-windows-x64.zip",
-                "hash": {
-                    "url": "https://github.com/hashiiiii/PrefabLens/releases/download/v$version/SHA256SUMS"
-                }
-            },
-            "arm64": {
-                "url": "https://github.com/hashiiiii/PrefabLens/releases/download/v$version/prefablens-windows-arm64.zip",
-                "hash": {
-                    "url": "https://github.com/hashiiiii/PrefabLens/releases/download/v$version/SHA256SUMS"
-                }
-            }
-        }
-    }
+    ]
 }

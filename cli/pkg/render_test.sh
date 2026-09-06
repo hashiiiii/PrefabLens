@@ -99,12 +99,7 @@ jq -e \
     .architecture["64bit"].hash == $x64_hash and
     .architecture.arm64.url == "https://github.com/hashiiiii/PrefabLens/releases/download/v1.2.3/prefablens-windows-arm64.zip" and
     .architecture.arm64.hash == $arm64_hash and
-    .bin == ["prefablens.exe", "git-merge-prefablens.exe"] and
-    .checkver == "github" and
-    .autoupdate.architecture["64bit"].url == "https://github.com/hashiiiii/PrefabLens/releases/download/v$version/prefablens-windows-x64.zip" and
-    .autoupdate.architecture["64bit"].hash.url == "https://github.com/hashiiiii/PrefabLens/releases/download/v$version/SHA256SUMS" and
-    .autoupdate.architecture.arm64.url == "https://github.com/hashiiiii/PrefabLens/releases/download/v$version/prefablens-windows-arm64.zip" and
-    .autoupdate.architecture.arm64.hash.url == "https://github.com/hashiiiii/PrefabLens/releases/download/v$version/SHA256SUMS"
+    .bin == ["prefablens.exe", "git-merge-prefablens.exe"]
   ' "$tmp/out/prefablens.json" >/dev/null || fail "Scoop manifest contract"
 
 if grep -R -q '{{' "$tmp/out"; then

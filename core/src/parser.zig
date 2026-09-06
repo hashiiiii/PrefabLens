@@ -682,19 +682,58 @@ fn tokenize(arena: std.mem.Allocator, source_bytes: []const u8) std.mem.Allocato
         const raw = source_bytes[raw_start..raw_end];
         var indent: usize = 0;
         while (indent < raw.len and raw[indent] == ' ') indent += 1;
-        const content = raw[indent..];
+        const content = withoutComment(raw[indent..]);
         if (content.len != 0 and content[0] != '%' and content[0] != '#') {
             try lines.append(arena, .{
                 .indent = indent,
                 .text = content,
                 .whole = .{ .start = start, .end = whole_end },
-                .content = .{ .start = raw_start + indent, .end = raw_end },
+                .content = .{ .start = raw_start + indent, .end = raw_start + indent + content.len },
             });
         }
         if (end == source_bytes.len) break;
         start = whole_end;
     }
     return lines.toOwnedSlice(arena);
+}
+
+fn withoutComment(line: []const u8) []const u8 {
+    var quote: ?u8 = null;
+    var scalar_start = true;
+    var flow_depth: usize = 0;
+    var i: usize = 0;
+    while (i < line.len) : (i += 1) {
+        const ch = line[i];
+        if (quote) |delimiter| {
+            if (delimiter == '"' and ch == '\\') {
+                i += 1;
+            } else if (ch == delimiter) {
+                if (delimiter == '\'' and i + 1 < line.len and line[i + 1] == '\'') {
+                    i += 1;
+                } else quote = null;
+            }
+            continue;
+        }
+        if (ch == '#' and (i == 0 or std.ascii.isWhitespace(line[i - 1])))
+            return std.mem.trimEnd(u8, line[0..i], " \t");
+        if ((ch == '\'' or ch == '"') and scalar_start) {
+            quote = ch;
+            scalar_start = false;
+        } else if ((ch == '[' or ch == '{') and scalar_start) {
+            flow_depth += 1;
+            scalar_start = true;
+        } else if ((ch == ']' or ch == '}') and flow_depth != 0) {
+            flow_depth -= 1;
+            scalar_start = false;
+        } else if (ch == ',' and flow_depth != 0) {
+            scalar_start = true;
+        } else if ((ch == ':' or (ch == '-' and scalar_start)) and
+            (i + 1 == line.len or std.ascii.isWhitespace(line[i + 1])))
+        {
+            scalar_start = true;
+        } else if (!std.ascii.isWhitespace(ch)) scalar_start = false;
+    }
+    return line;
 }
 
 pub fn parse(arena: std.mem.Allocator, source_bytes: []const u8) Error![]Document {
@@ -1045,8 +1084,14 @@ fn parseValue(p: *Parser, raw: []const u8, depth: usize) Error!*Node {
         if (s.len < 2 or s[s.len - 1] != ']') try p.diagnostics.append(arena, .invalid_flow_value);
         break :blk try parseFlowSeq(p, s, depth);
     } else blk: {
-        if (!quotedScalarIsValid(s)) try p.diagnostics.append(arena, .invalid_flow_value);
-        break :blk try makeNode(arena, .{ .scalar = try unquote(arena, s) });
+        const scalar = @import("yaml_scalar.zig").decode(arena, s) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.InvalidValue => {
+                try p.diagnostics.append(arena, .invalid_flow_value);
+                break :blk try makeNode(arena, .{ .scalar = s });
+            },
+        };
+        break :blk try makeNode(arena, .{ .scalar = scalar });
     };
     if (p.track_source) {
         if (spanForSlice(p.source_bytes, s)) |span| {
@@ -1170,66 +1215,8 @@ fn stripBrackets(s: []const u8, open: u8, close: u8) []const u8 {
     return t;
 }
 
-fn quotedScalarIsValid(s: []const u8) bool {
-    if (s[0] != '\'' and s[0] != '"') return true;
-    const quote = s[0];
-    var index: usize = 1;
-    while (index < s.len) {
-        if (quote == '"' and s[index] == '\\') {
-            if (index + 1 >= s.len) return false;
-            if (!supportedDoubleQuoteEscape(s[index + 1])) return false;
-            index += 2;
-            continue;
-        }
-        if (s[index] == quote) {
-            if (quote == '\'' and index + 1 < s.len and s[index + 1] == '\'') {
-                index += 2;
-                continue;
-            }
-            return index + 1 == s.len;
-        }
-        index += 1;
-    }
-    return false;
-}
-
 fn supportedDoubleQuoteEscape(byte: u8) bool {
-    return byte == '"' or byte == '\\';
-}
-
-// Strip enclosing quotes. Double-quoted scalars also resolve YAML backslash
-// escapes `\"` and `\\` (the only escapes Unity emits), so that scalar
-// holds the literal value rather than the source form.
-fn unquote(arena: std.mem.Allocator, s: []const u8) std.mem.Allocator.Error![]const u8 {
-    if (s.len >= 2 and s[0] == '\'' and s[s.len - 1] == '\'') {
-        const inner = s[1 .. s.len - 1];
-        if (std.mem.indexOf(u8, inner, "''") == null) return inner;
-        var out: std.ArrayList(u8) = .empty;
-        var index: usize = 0;
-        while (index < inner.len) : (index += 1) {
-            try out.append(arena, inner[index]);
-            if (inner[index] == '\'' and index + 1 < inner.len and inner[index + 1] == '\'')
-                index += 1;
-        }
-        return out.toOwnedSlice(arena);
-    }
-    if (s.len >= 2 and s[0] == '"' and s[s.len - 1] == '"') {
-        const inner = s[1 .. s.len - 1];
-        if (std.mem.indexOfScalar(u8, inner, '\\') == null) return inner;
-        var out: std.ArrayList(u8) = .empty;
-        var i: usize = 0;
-        while (i < inner.len) : (i += 1) {
-            const c = inner[i];
-            if (c == '\\' and i + 1 < inner.len and (inner[i + 1] == '"' or inner[i + 1] == '\\')) {
-                try out.append(arena, inner[i + 1]);
-                i += 1;
-            } else {
-                try out.append(arena, c);
-            }
-        }
-        return out.toOwnedSlice(arena);
-    }
-    return s;
+    return std.mem.indexOfScalar(u8, "0abtnvfre \t\"/\\N_LPxuU", byte) != null;
 }
 
 // Iterator over comma-separated parts at brace/bracket depth 0.

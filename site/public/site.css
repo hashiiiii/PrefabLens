@@ -1,6 +1,6 @@
 /* Minimal shell + demo-content styles. The shell follows prefers-color-scheme
  * through the variables below. The simulated GitHub page (.gh-page) scopes the
- * Primer variables the PrefabLens renderer and toggle read on github.com
+ * Primer variables read by the PrefabLens renderer and toggle on GitHub
  * (exact fallback palette from extension/src/renderer/styles.ts), switched by
  * the same media query. The terminal stays dark in both schemes. */
 
@@ -334,9 +334,9 @@ h3 {
   color: var(--fgColor-muted);
 }
 
-/* Primer's collapse rule from github.com: the chevron toggles Details--on on
- * .file, and this hides anything carrying the class (including the shadow host
- * the demo script inserts, exactly like the extension on github.com). */
+/* Primer's collapse rule from GitHub: the chevron toggles Details--on on
+ * .file, and this hides anything carrying the class, including the shadow host
+ * inserted by the demo script, exactly as in the extension on GitHub. */
 .Details:not(.Details--on) .Details-content--hidden {
   display: none !important;
 }

@@ -32,7 +32,7 @@ const DEMO_FILES = [
 const ANSI_CLASSES = { 1: "b", 2: "dim", 31: "red", 32: "green", 33: "yellow" };
 
 function assertBuilt(path, hint) {
-  if (!existsSync(path)) throw new Error(`${path} not found — run \`${hint}\``);
+  if (!existsSync(path)) throw new Error(`${path} not found. Run \`${hint}\`.`);
 }
 
 function runGit(cwd, ...args) {
@@ -170,7 +170,7 @@ function createFileEntry(repo, { before, after }, index) {
 }
 
 // path = "Assets/Scripts/FixtureBehaviour.cs.meta"
-// guid = "guid: abc123..."
+// GUID field = "guid: abc123..."
 // index["abc123..."] = "Assets/Scripts/FixtureBehaviour.cs"
 function createGuidIndex(side) {
   const root = join(FIXTURES, side);
@@ -206,10 +206,10 @@ function createFragments(repo) {
   if (!heroReport.includes("Head") || !heroReport.includes("Sensor")) {
     throw new Error("hero report is missing the Head → Sensor rename");
   }
-  if (!heroReport.includes("Assets/Scripts/FixtureBehaviour.cs")) throw new Error("hero report lost guid resolution");
-  if (tree.includes("unresolved")) throw new Error("tree output has unresolved guid references");
+  if (!heroReport.includes("Assets/Scripts/FixtureBehaviour.cs")) throw new Error("hero report lost GUID resolution");
+  if (tree.includes("unresolved")) throw new Error("tree output has unresolved GUID references");
   if (!report.includes("(built-in)")) throw new Error("report lost built-in ref names");
-  if (report.includes("guid:0000000000000000")) throw new Error("report shows raw built-in guids");
+  if (report.includes("guid:0000000000000000")) throw new Error("report shows raw built-in GUIDs");
   if (!convertAnsiToHtml(tree).includes("<span")) throw new Error("tree output lost its ANSI colors");
   const paths = files.map((f) => f.after ?? f.before);
   if (paths.join("\n") !== DEMO_FILES.join("\n")) {

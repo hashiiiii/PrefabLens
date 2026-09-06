@@ -10,6 +10,6 @@
     <polygon points="52.67,51.54 85.43,32.62 85.43,70.46 52.67,89.38" fill="#14c6cb"/>
   </g>
   <text x="560" y="308" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="96" font-weight="700" fill="#ffffff">PrefabLens</text>
-  <text x="562" y="376" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="38" fill="#b2b6bd">Human-readable diffs</text>
+  <text x="562" y="376" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="38" fill="#b2b6bd">Semantic diffs</text>
   <text x="562" y="428" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="38" fill="#b2b6bd">for UnityYAML assets</text>
 </svg>

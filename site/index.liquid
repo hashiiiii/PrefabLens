@@ -3,15 +3,15 @@ title: PrefabLens
 permalink: index.html
 layout: layout.liquid
 ---
-<h1>Human-readable diffs for UnityYAML assets</h1>
+<h1>Semantic diffs for UnityYAML assets</h1>
 <p>
-  PrefabLens shows UnityYAML diffs in a view like the Hierarchy and the Inspector.
+  PrefabLens shows semantic diffs in views like Unity's Hierarchy and Inspector.
   You can use PrefabLens on GitHub pull requests, in the terminal, and in the Unity Editor.
 </p>
 
 <!--
-  Same Robot.prefab change, both views from the real tools at build time:
-  git for the raw diff, the prefablens binary for the report.
+  The same Robot.prefab change appears in both views. The build generates the raw diff with Git
+  and the semantic diff report with the prefablens binary.
 -->
 <div class="compare">
   <div>
@@ -25,7 +25,7 @@ layout: layout.liquid
     <p class="label">With PrefabLens</p>
     <div class="window">
       <div class="window-title">Robot.prefab</div>
-      <iframe class="hero-frame" src="hero-report.html" title="PrefabLens human-readable diff"></iframe>
+      <iframe class="hero-frame" src="hero-report.html" title="PrefabLens semantic diff"></iframe>
     </div>
   </div>
 </div>
@@ -37,7 +37,7 @@ layout: layout.liquid
     extension and the WASM diff engine.
   </li>
   <li><a href="cli.html">CLI</a>: the terminal tree and the HTML report.</li>
-  <li><a href="editor.html">Unity Editor</a>: a window that shows a diff for every changed asset.</li>
+  <li><a href="editor.html">Unity Editor</a>: a window that shows semantic diffs for changed assets.</li>
 </ul>
 
 <h2>Install</h2>
@@ -53,7 +53,7 @@ layout: layout.liquid
 
 <h3>Unity Editor</h3>
 <pre><code><span class="cmd">openupm</span> add com.hashiiiii.prefablens</code></pre>
-<p>Or use the Package Manager git URL: <code>https://github.com/hashiiiii/PrefabLens.git?path=editor</code></p>
+<p>Or use the Package Manager Git URL: <code>https://github.com/hashiiiii/PrefabLens.git?path=editor</code></p>
 
 <h3>Other installs</h3>
-<p>Get the prebuilt binaries from the <a href="https://github.com/hashiiiii/PrefabLens/releases">releases page</a>.</p>
+<p>Download prebuilt binaries from the <a href="https://github.com/hashiiiii/PrefabLens/releases">releases page</a>.</p>

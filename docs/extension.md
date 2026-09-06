@@ -1,15 +1,15 @@
 # Chrome extension
 
-This page is for people who change `extension/`.
+This page describes the `extension/` code for contributors.
 For install steps and product overview, see the [README](../README.md).
 For the contribution process, see [CONTRIBUTING.md](../CONTRIBUTING.md).
 
-## Why
+## Purpose
 
 The extension uses the same Zig diff engine as the CLI.
-The build compiles that engine to WASM.
+The build compiles the engine to WASM.
 The extension does not send asset contents to a PrefabLens server.
-GitHub API access uses the GitHub Device Flow from the PR panel.
+The PR panel uses GitHub Device Flow for GitHub API access.
 
 ## Tech stack
 
@@ -19,13 +19,13 @@ GitHub API access uses the GitHub Device Flow from the PR panel.
 | Language | TypeScript |
 | Diff engine | Zig `core/`, built with `zig build wasm` |
 | Bundle | esbuild (`extension/build.mjs`) → `extension/dist/` |
-| Unit tests | Vitest (`pnpm test`). Builds WASM via `pretest` |
+| Unit tests | Vitest (`pnpm test`), with `pretest` building WASM |
 | E2E | Playwright with Chromium and `--load-extension` |
 | Lint / format | Biome |
 | Package manager | pnpm (see root `mise.toml` for the Node version) |
 
-The release package is a zip of `extension/dist/`.
-`manifest.json` sits at the root of that zip.
+The release package is a ZIP archive of `extension/dist/`.
+The archive places `manifest.json` at its root.
 The live demo site uses a `--demo` bundle from the same build script.
 
 ## Design
@@ -33,7 +33,7 @@ The live demo site uses a `--demo` bundle from the same build script.
 ### Overview
 
 Dependencies point inward. Infrastructure also depends on
-`application/gateway/` to implement gateways:
+`application/gateway/` so its clients can implement gateways:
 
 ```
 Presentation -> Application -> Domain
@@ -49,13 +49,13 @@ Presentation -> Application -> Domain
 - the domain isolation
 - infrastructure does not import application public functions
 - only presentation entry points import `src/container.ts`
-- `infrastructure/clients/` holds only `*-client.ts` interface implementations
-- an `internal/` directory is private: only files under its parent directory
-  import it (`src/internal/` is under the root, so every file can use it)
+- `infrastructure/clients/` contains only interface implementations in `*-client.ts` files
+- an `internal/` directory is private. Only files under its parent directory can import it.
+  Because `src/internal/` is under the source root, every source file can import it.
 - a presentation object type has no `Map` or `Set` field
 - a presentation value has no exported function that takes the value and mutates it
 
-Two modules sit outside the four layers:
+Two modules are outside the four layers:
 
 | Module | Role |
 |---|---|
@@ -75,7 +75,7 @@ Each JS context has its own entry point and its own container wiring:
 
 `<area>` matches an existing concept folder (`diff`, `guid`, `auth`, …).
 Add a new area only when a new concept appears.
-Use kebab-case file names.
+Use kebab-case for file names.
 
 #### Domain (`src/domain/`)
 
@@ -118,10 +118,10 @@ application/
   put it in `application/<area>/<verb>-<noun>.ts`.
   Export one function per file.
   If a helper serves one public function only, keep it non-exported in that file.
-- If two or more application callers share work that is not a public function,
+- If two or more application callers share work that is not itself a public function,
   put it in `application/internal/<noun>.ts`
   (for example `raw-diff.ts`, `repo-index.ts`).
-- Gateway types that application owns live in `application/gateway/<name>.ts`
+- Gateway types owned by the application live in `application/gateway/<name>.ts`
   as `XxxGateway`:
   `GithubGateway`, `DifferGateway` (WASM), `MessengerGateway` (chrome.runtime),
   `GithubAuthGateway` (Device Flow), `FixturesGateway` (demo fixture files).
@@ -142,7 +142,7 @@ infrastructure/
   (for example `github-client.ts`, `chrome-auth-client.ts`).
 - Put helpers that implement no interface in `internal/`
   (for example `fetch-queue.ts`, `merge-store.ts`, `storage-area.ts`).
-- Only infrastructure files import `internal/` (the internal rule in Overview).
+- Only infrastructure files can import `internal/` (the internal rule in Overview).
 
 #### Presentation (`src/presentation/`)
 
@@ -159,8 +159,8 @@ presentation/
 - Per-file UI state lives next to the content script under `content/overlay/`.
 - Use explicit subscriptions when a UI event has more than one consumer.
 - Register subscriptions before initial activation.
-- If two or more presentation contexts share a helper (render, the toggle,
-  the view state), put it in `presentation/internal/`.
+- If two or more presentation contexts share a helper (such as rendering, the
+  view toggle, or view state), put it in `presentation/internal/`.
 - Presentation types are values or objects.
 - Do not mix the two shapes in one type.
 - This split applies to `presentation/` only.
@@ -171,14 +171,14 @@ presentation/
 - Do not put value queries under `fn/`. That layout is for `domain/` only.
 - An object is the return value of a factory
   (`Toggle`, `FileView`, `FileViewController`, `ViewState`).
-- A method is a function on the object type. Methods are the public surface.
+- A method is a function on the object type. Methods define the public surface.
 - Keep `Map`, `Set`, and listener collections inside the factory.
-- A public `Map` or `Set` field lets a caller change working memory and skip
+- A public `Map` or `Set` field lets a caller change working memory and bypass
   the methods.
 - If a caller must change working memory, call a method on the object.
 - A type alias that is a `Map` is not an object field (`FileRegistry`).
-- If an object only wraps nodes that a scan already holds, the scan can build
-  that adapter inline (`FileEntry`).
+- If an object only wraps nodes already held by a scan, the scan can build that
+  adapter inline (`FileEntry`).
 - Do not export a function that takes a value and mutates that value.
   That shape belongs to domain types and `domain/<area>/fn/`.
 
@@ -272,7 +272,7 @@ Transport-only work can call a gateway or repository method directly.
 - Outbound transport-only work can call a gateway or repository method
   directly (content → background messaging, thin repository reads for UI pre-fill).
 - Multi-step business work stays in application public functions
-  (Device Flow sign-in, semantic diff pipeline, PR prefetch).
+  (GitHub Device Flow sign-in, semantic diff pipeline, PR prefetch).
   Presentation passes gateways, repositories, and working memory into those verbs.
 - Inbound transport events are presentation work, like HTTP routes
   (`chrome.runtime.onMessage`, `chrome.storage.onChanged`, DOM events).
@@ -310,7 +310,7 @@ pnpm run build
 ```
 
 `pnpm run size`, `pnpm test`, and `pnpm run build` each run `zig build wasm` when they need the WASM file.
-If the gzip WASM bundle is larger than the budget in
+If the gzip-compressed WASM bundle exceeds the budget in
 `scripts/check-wasm-size.mjs`, `pnpm run size` fails.
 
 For end-to-end checks:
@@ -321,15 +321,14 @@ pnpm exec playwright install --with-deps chromium   # first time on a machine
 pnpm run e2e
 ```
 
-`pnpm run e2e` builds with `--e2e` (local API origin).
-Then it runs Playwright.
+`pnpm run e2e` builds with `--e2e` to use the local API origin, then runs Playwright.
 
-To load a local build in Chrome by hand:
+To load a local build in Chrome manually:
 
 1. Run `pnpm run build` in `extension/`.
 2. Open `chrome://extensions`.
 3. Enable Developer mode.
-4. Choose Load unpacked.
+4. Select **Load unpacked**.
 5. Select `extension/dist/`.
 
 CI runs the same checks in the `extension` job of
@@ -341,17 +340,17 @@ Maintainers publish the extension through the Release workflow on `main`.
 
 1. Run [`.github/workflows/release.yml`](../.github/workflows/release.yml)
    with `workflow_dispatch` and a version `X.Y.Z` (no `v` prefix).
-2. Make sure that the `CWS_*` repository secrets are set before you rely on
+2. Verify that the `CWS_*` repository secrets are set before you rely on
    `publish-extension`.
 
-After you start the workflow, it bumps versions.
-It builds the CLI zips and `prefablens-extension-$VERSION.zip`.
-It commits, tags `v$VERSION`, and creates the GitHub Release.
-Then the `publish-extension` job downloads that zip.
-The job uploads the zip to the Chrome Web Store and submits it for review.
+The workflow updates the versions.
+It builds the CLI ZIP files and `prefablens-extension-$VERSION.zip`.
+The workflow commits the changes, tags `v$VERSION`, and creates the GitHub Release.
+The `publish-extension` job then downloads that ZIP file.
+The job uploads the ZIP file to the Chrome Web Store and submits it for review.
 The store publishes the extension after approval.
 
-If a submission is still in review, a re-run of `publish-extension` fails
-until the store finishes.
+If a submission remains under review, rerunning `publish-extension` fails
+until the store finishes processing it.
 If no Chrome Web Store submission is pending, you can re-run
 `publish-extension` alone.

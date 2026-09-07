@@ -39,6 +39,23 @@ jobs:
         # Windows runners are too noisy; the measurements swing too much, so skip them here
         if: matrix.os == 'ubuntu-latest'
         run: zig build perf
+      - name: Compare core performance
+        if: always() && matrix.os == 'ubuntu-latest'
+        shell: bash
+        env:
+          BASE_REVISION: 14a7f6505780d23c6cfc2042781bc15ae4740053
+        run: |
+          lscpu
+          git fetch --no-tags --depth=1 origin "$BASE_REVISION"
+          baseline_dir="$RUNNER_TEMP/core-perf-baseline"
+          mkdir -p "$baseline_dir"
+          git archive "$BASE_REVISION" core | tar -x -C "$baseline_dir"
+          zig build-exe "$baseline_dir/core/src/perf_main.zig" -O ReleaseFast -femit-bin="$RUNNER_TEMP/base-perf"
+          zig build-exe core/src/perf_main.zig -O ReleaseFast -femit-bin="$RUNNER_TEMP/head-perf"
+          for revision in base head head base base head; do
+            printf 'Revision: %s\n' "$revision"
+            /usr/bin/time -f 'wall=%e user=%U system=%S max_rss_kb=%M' "$RUNNER_TEMP/$revision-perf" || true
+          done
 
   release-builds:
     runs-on: ubuntu-latest

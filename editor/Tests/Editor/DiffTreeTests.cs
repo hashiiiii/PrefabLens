@@ -18,17 +18,6 @@ namespace PrefabLens.Tests
         }
 
         [Test]
-        public void BadgeMarksMirrorTheChromeRenderer()
-        {
-            // + / − / ~ prefixes tinted with the status color; unchanged keeps a
-            // two-space placeholder (no tint) so names stay column-aligned.
-            AssertSpan(DiffTree.Badge(DiffStatus.Added).Spans[0], "+ ", Palette.Added);
-            AssertSpan(DiffTree.Badge(DiffStatus.Removed).Spans[0], "− ", Palette.Removed);
-            AssertSpan(DiffTree.Badge(DiffStatus.Modified).Spans[0], "~ ", Palette.Modified);
-            AssertSpan(DiffTree.Badge(DiffStatus.Unchanged).Spans[0], "  ", null);
-        }
-
-        [Test]
         public void RowSuppressesNullAndEmptySpans()
         {
             // A node with no name must not emit an empty Label after the badge.
@@ -48,10 +37,10 @@ namespace PrefabLens.Tests
             }";
             var items = Build(json);
             Assert.AreEqual(2, items.Count);
-            AssertSpan(items[0].Row.Spans[1], "Plane", null);
-            AssertSpan(items[1].Row.Spans[1], "Components (1)", Palette.Muted);
-            AssertSpan(items[1].Children[0].Row.Spans[0], "+ ", Palette.Added);
-            AssertSpan(items[1].Children[0].Row.Spans[1], "SphereCollider", null);
+            AssertSpan(items[0].Row.Spans[0], "Plane", null);
+            AssertSpan(items[1].Row.Spans[0], "Components (1)", Palette.Muted);
+            Assert.AreEqual(DiffStatus.Added, items[1].Children[0].Row.Status);
+            AssertSpan(items[1].Children[0].Row.Spans[0], "SphereCollider", null);
         }
 
         [Test]
@@ -67,11 +56,11 @@ namespace PrefabLens.Tests
                 ""loose"":[]
             }";
             var items = Build(json);
-            AssertSpan(items[0].Row.Spans[0], "~ ", Palette.Modified);
+            Assert.AreEqual(DiffStatus.Modified, items[0].Row.Status);
             var group = items[0].Children[0];
-            AssertSpan(group.Row.Spans[0], "  ", null);
-            AssertSpan(group.Row.Spans[1], "Components (1)", Palette.Muted);
-            AssertSpan(group.Children[0].Row.Spans[1], "Transform", null);
+            Assert.AreEqual(RowKind.Group, group.Row.Kind);
+            AssertSpan(group.Row.Spans[0], "Components (1)", Palette.Muted);
+            AssertSpan(group.Children[0].Row.Spans[0], "Transform", null);
         }
 
         [Test]
@@ -95,13 +84,13 @@ namespace PrefabLens.Tests
 
             Assert.AreEqual(1, root.Children.Count);
             var components = root.Children[0];
-            AssertSpan(components.Row.Spans[1], "Components (3)", Palette.Muted);
+            AssertSpan(components.Row.Spans[0], "Components (3)", Palette.Muted);
             Assert.AreEqual(3, components.Children.Count);
-            AssertSpan(components.Children[0].Row.Spans[1], "GameObject", null);
-            AssertSpan(components.Children[0].Children[0].Row.Spans[1], "Name ", Palette.Muted);
-            AssertSpan(components.Children[1].Row.Spans[1], "Transform", null);
+            AssertSpan(components.Children[0].Row.Spans[0], "GameObject", null);
+            AssertSpan(components.Children[0].Children[0].Row.Spans[0], "Name ", Palette.Muted);
+            AssertSpan(components.Children[1].Row.Spans[0], "Transform", null);
             Assert.AreEqual(2, components.Children[1].Children.Count);
-            AssertSpan(components.Children[2].Row.Spans[1], "Transform", null);
+            AssertSpan(components.Children[2].Row.Spans[0], "Transform", null);
         }
 
         [Test]
@@ -115,11 +104,11 @@ namespace PrefabLens.Tests
                     ""fields"":[{""path"":""Position"",""status"":""modified"",""before"":""(0, 0, 0)"",""after"":""(1, 0, 0)""}]}]
             }";
             var field = Build(json)[0].Children[0].Children[0].Row;
-            AssertSpan(field.Spans[0], "~ ", Palette.Modified);
-            AssertSpan(field.Spans[1], "Position ", Palette.Muted); // trailing space separates label and value
-            AssertSpan(field.Spans[2], "(0, 0, 0)", Palette.Removed);
-            AssertSpan(field.Spans[3], " → ", Palette.Muted);
-            AssertSpan(field.Spans[4], "(1, 0, 0)", Palette.Added);
+            Assert.AreEqual(DiffStatus.Modified, field.Status);
+            AssertSpan(field.Spans[0], "Position ", Palette.Muted); // trailing space separates label and value
+            AssertSpan(field.Spans[1], "(0, 0, 0)", Palette.Removed);
+            AssertSpan(field.Spans[2], " → ", Palette.Muted);
+            AssertSpan(field.Spans[3], "(1, 0, 0)", Palette.Added);
         }
 
         [Test]
@@ -139,12 +128,12 @@ namespace PrefabLens.Tests
                     ]}]
             }";
             var fields = Build(json)[0].Children[0].Children;
-            Assert.AreEqual(3, fields[0].Row.Spans.Count);
-            AssertSpan(fields[0].Row.Spans[2], "2", Palette.Removed);
-            Assert.AreEqual(3, fields[1].Row.Spans.Count);
-            AssertSpan(fields[1].Row.Spans[2], "10", Palette.Added);
-            Assert.AreEqual(3, fields[2].Row.Spans.Count);
-            AssertSpan(fields[2].Row.Spans[2], "0", null);
+            Assert.AreEqual(2, fields[0].Row.Spans.Count);
+            AssertSpan(fields[0].Row.Spans[1], "2", Palette.Removed);
+            Assert.AreEqual(2, fields[1].Row.Spans.Count);
+            AssertSpan(fields[1].Row.Spans[1], "10", Palette.Added);
+            Assert.AreEqual(2, fields[2].Row.Spans.Count);
+            AssertSpan(fields[2].Row.Spans[1], "0", null);
         }
 
         [Test]
@@ -165,12 +154,12 @@ namespace PrefabLens.Tests
 
             Assert.AreEqual(RowKind.Summary, fields[0].Row.Kind);
             Assert.AreEqual(DiffStatus.Added, fields[0].Row.Status);
-            Assert.AreEqual(2, fields[0].Row.Spans.Count);
-            AssertSpan(fields[0].Row.Spans[1], "Added Components (1)", Palette.Muted);
+            Assert.AreEqual(1, fields[0].Row.Spans.Count);
+            AssertSpan(fields[0].Row.Spans[0], "Added Components (1)", Palette.Muted);
             Assert.AreEqual(RowKind.Summary, fields[1].Row.Kind);
             Assert.AreEqual(DiffStatus.Removed, fields[1].Row.Status);
-            Assert.AreEqual(2, fields[1].Row.Spans.Count);
-            AssertSpan(fields[1].Row.Spans[1], "Removed Components (1)", Palette.Muted);
+            Assert.AreEqual(1, fields[1].Row.Spans.Count);
+            AssertSpan(fields[1].Row.Spans[0], "Removed Components (1)", Palette.Muted);
         }
 
         [Test]
@@ -188,9 +177,9 @@ namespace PrefabLens.Tests
                 ""loose"":[]
             }";
             var items = Build(json);
-            AssertSpan(items[0].Row.Spans[1], "Cylinder", null);
-            AssertSpan(items[0].Row.Spans[2], " ‹Prefab: Assets/Prefabs/Cylinder.prefab›", Palette.Muted);
-            AssertSpan(items[1].Row.Spans[2], " ‹Prefab: xyz›", Palette.Muted);
+            AssertSpan(items[0].Row.Spans[0], "Cylinder", null);
+            AssertSpan(items[0].Row.Spans[1], " ‹Prefab: Assets/Prefabs/Cylinder.prefab›", Palette.Muted);
+            AssertSpan(items[1].Row.Spans[1], " ‹Prefab: xyz›", Palette.Muted);
         }
 
         [Test]
@@ -210,16 +199,16 @@ namespace PrefabLens.Tests
                 ""loose"":[]
             }";
             var cards = Build(json)[0].Children[0].Children;
-            AssertSpan(cards[0].Row.Spans[1], "Transform", null);
-            AssertSpan(cards[0].Children[0].Row.Spans[1], "Position ", Palette.Muted);
-            AssertSpan(cards[1].Row.Spans[1], "Overrides", null);
-            AssertSpan(cards[1].Children[0].Row.Spans[1], "Active ", Palette.Muted);
-            AssertSpan(cards[2].Row.Spans[1], "Overrides", null);
-            AssertSpan(cards[2].Children[0].Row.Spans[1], "Name ", Palette.Muted);
+            AssertSpan(cards[0].Row.Spans[0], "Transform", null);
+            AssertSpan(cards[0].Children[0].Row.Spans[0], "Position ", Palette.Muted);
+            AssertSpan(cards[1].Row.Spans[0], "Overrides", null);
+            AssertSpan(cards[1].Children[0].Row.Spans[0], "Active ", Palette.Muted);
+            AssertSpan(cards[2].Row.Spans[0], "Overrides", null);
+            AssertSpan(cards[2].Children[0].Row.Spans[0], "Name ", Palette.Muted);
         }
 
         [Test]
-        public void ComponentNamePrefersClassNameThenResolvedScriptThenTypeName()
+        public void ComponentNamesUseScriptMetadataOrTheUnityType()
         {
             const string json =
                 @"{
@@ -234,17 +223,17 @@ namespace PrefabLens.Tests
                 ]
             }";
             var items = Build(json)[0].Children;
-            // The C# class name from the CLI wins outright.
-            AssertSpan(items[0].Row.Spans[1], "Mover", null);
-            AssertSpan(items[0].Row.Spans[2], " ‹Script›", Palette.Muted);
+            // The class name labels a script when no path was resolved.
+            AssertSpan(items[0].Row.Spans[0], "Mover", null);
+            AssertSpan(items[0].Row.Spans[1], " ‹Script›", Palette.Muted);
             // A resolved script guid shows the file stem and the full source path.
-            AssertSpan(items[1].Row.Spans[1], "Runner", null);
-            AssertSpan(items[1].Row.Spans[2], " ‹Script: Assets/Scripts/Runner.cs›", Palette.Muted);
+            AssertSpan(items[1].Row.Spans[0], "Runner", null);
+            AssertSpan(items[1].Row.Spans[1], " ‹Script: Assets/Scripts/Runner.cs›", Palette.Muted);
             // Unresolved guid falls back to the Unity type name, without the Script tag.
-            Assert.AreEqual(2, items[2].Row.Spans.Count);
-            AssertSpan(items[2].Row.Spans[1], "MonoBehaviour", null);
+            Assert.AreEqual(1, items[2].Row.Spans.Count);
+            AssertSpan(items[2].Row.Spans[0], "MonoBehaviour", null);
             // Built-in components always read as the type name.
-            AssertSpan(items[3].Row.Spans[1], "Transform", null);
+            AssertSpan(items[3].Row.Spans[0], "Transform", null);
         }
 
         [Test]
@@ -259,13 +248,13 @@ namespace PrefabLens.Tests
                 ""loose"":[]
             }";
             var components = Build(json)[0].Children[0];
-            AssertSpan(components.Row.Spans[1], "Components (1)", Palette.Muted);
+            AssertSpan(components.Row.Spans[0], "Components (1)", Palette.Muted);
             var card = components.Children[0];
-            AssertSpan(card.Row.Spans[1], "Overrides", null);
-            AssertSpan(card.Children[0].Row.Spans[1], "Name ", Palette.Muted);
-            AssertSpan(card.Children[0].Row.Spans[2], "Old", Palette.Removed);
-            AssertSpan(card.Children[0].Row.Spans[3], " → ", Palette.Muted);
-            AssertSpan(card.Children[0].Row.Spans[4], "New", Palette.Added);
+            AssertSpan(card.Row.Spans[0], "Overrides", null);
+            AssertSpan(card.Children[0].Row.Spans[0], "Name ", Palette.Muted);
+            AssertSpan(card.Children[0].Row.Spans[1], "Old", Palette.Removed);
+            AssertSpan(card.Children[0].Row.Spans[2], " → ", Palette.Muted);
+            AssertSpan(card.Children[0].Row.Spans[3], "New", Palette.Added);
         }
 
         [Test]
@@ -283,10 +272,10 @@ namespace PrefabLens.Tests
             }";
             var children = Build(json)[0].Children;
             Assert.AreEqual(2, children.Count);
-            AssertSpan(children[0].Row.Spans[1], "Components (2)", Palette.Muted);
-            AssertSpan(children[0].Children[0].Row.Spans[1], "Transform", null);
-            AssertSpan(children[0].Children[1].Row.Spans[1], "Transform", null);
-            AssertSpan(children[1].Row.Spans[1], "Cap", null);
+            AssertSpan(children[0].Row.Spans[0], "Components (2)", Palette.Muted);
+            AssertSpan(children[0].Children[0].Row.Spans[0], "Transform", null);
+            AssertSpan(children[0].Children[1].Row.Spans[0], "Transform", null);
+            AssertSpan(children[1].Row.Spans[0], "Cap", null);
         }
     }
 }

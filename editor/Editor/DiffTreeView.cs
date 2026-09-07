@@ -13,8 +13,7 @@ namespace PrefabLens
         public static float ListItemHeight => ListRowHeight;
 
         public static Row EntryRow(BulkEntry entry) =>
-            DiffTree
-                .Badge(BulkModel.AggregateStatus(entry.Diff))
+            new Row(BulkModel.AggregateStatus(entry.Diff))
                 .WithIcon(AssetDatabase.GetCachedIcon(entry.Path))
                 .Add(entry.Path);
 
@@ -99,9 +98,8 @@ namespace PrefabLens
             if (row.Icon != null)
                 element.Add(Icon(row.Icon));
 
-            for (var i = 1; i < row.Spans.Count; i++)
+            foreach (var span in row.Spans)
             {
-                var span = row.Spans[i];
                 var label = new Label(span.Text)
                 {
                     style =

@@ -1,10 +1,10 @@
 const std = @import("std");
 const merge_identity = @import("merge_identity.zig");
 const merge_model = @import("merge_model.zig");
-const merge_planner = @import("merge_planner.zig");
 const model = @import("model.zig");
 const parser = @import("parser.zig");
 const source = @import("source.zig");
+const merge_yaml = @import("merge_yaml.zig");
 
 const testing = std.testing;
 
@@ -152,7 +152,7 @@ fn appendPatch(
         const ours = operation.values.ours orelse return;
         const node = ours.node orelse return error.InvalidMerge;
         return patches.append(arena, .{
-            .span = completeEntrySpan(plan.ours, node) orelse return error.UnsupportedStructure,
+            .span = plan.ours.completeEntrySpan(node) orelse return error.UnsupportedStructure,
             .replacement = "",
             .atomic_id = operation.atomic_id,
             .order = operation.id,
@@ -161,7 +161,7 @@ fn appendPatch(
 
     const replacement = switch (operation.resolution) {
         .unresolved, .remove => return error.InvalidResolution,
-        .take => |side| (valueForSide(operation, side) orelse return error.InvalidResolution).bytes,
+        .take => |side| (operation.values.get(side) orelse return error.InvalidResolution).bytes,
         .custom => |input| blk: {
             _ = try parseCustomValue(arena, input);
             break :blk input;
@@ -172,10 +172,10 @@ fn appendPatch(
             if (ours_node.* == .map or ours_node.* == .seq) {
                 const selected = selectedValue(operation) orelse return error.InvalidResolution;
                 const selected_node = selected.value.node orelse return error.InvalidMerge;
-                const selected_file = fileForSide(plan, selected.side);
-                const ours_span = completeEntrySpan(plan.ours, ours_node) orelse
+                const selected_file = plan.file(selected.side);
+                const ours_span = plan.ours.completeEntrySpan(ours_node) orelse
                     return error.UnsupportedStructure;
-                const selected_span = completeEntrySpan(selected_file, selected_node) orelse
+                const selected_span = selected_file.completeEntrySpan(selected_node) orelse
                     return error.UnsupportedStructure;
                 const selected_bytes = selected_span.bytes(selected_file.bytes);
                 if (std.mem.eql(u8, ours_span.bytes(plan.ours.bytes), selected_bytes)) return;
@@ -199,11 +199,11 @@ fn appendPatch(
 
     const template = insertionTemplate(operation) orelse return error.InvalidResolution;
     const node = template.value.node orelse return error.InvalidMerge;
-    const template_file = fileForSide(plan, template.side);
+    const template_file = plan.file(template.side);
     const entry = template_file.entry_spans.get(node) orelse return error.UnsupportedStructure;
     const inserted = switch (operation.resolution) {
         .take => if (node.* == .map or node.* == .seq)
-            (completeEntrySpan(template_file, node) orelse return error.UnsupportedStructure).bytes(template_file.bytes)
+            (template_file.completeEntrySpan(node) orelse return error.UnsupportedStructure).bytes(template_file.bytes)
         else
             entry.whole.bytes(template_file.bytes),
         .custom => try entryWithValue(arena, template_file, entry, template.value, replacement),
@@ -216,15 +216,6 @@ fn appendPatch(
         .atomic_id = operation.atomic_id,
         .order = entry.whole.start,
     });
-}
-
-fn completeEntrySpan(file: source.ParsedFile, node: *const model.Node) ?source.Span {
-    const entry = file.entry_spans.get(node) orelse return null;
-    const node_span = file.node_spans.get(node) orelse return entry.whole;
-    return .{
-        .start = @min(entry.whole.start, node_span.start),
-        .end = @max(entry.whole.end, node_span.end),
-    };
 }
 
 fn isComponentSequenceOrder(
@@ -287,7 +278,7 @@ fn appendComposedHierarchySequencePatch(
             return error.InvalidResolution,
         .take => |side| SelectedValue{
             .side = side,
-            .value = valueForSide(order_operation, side) orelse return error.InvalidResolution,
+            .value = order_operation.values.get(side) orelse return error.InvalidResolution,
         },
         .remove, .custom => return error.InvalidResolution,
     };
@@ -311,8 +302,8 @@ fn appendComposedHierarchySequencePatch(
         }
     }
 
-    const destination_indent = sequenceIndent(plan.ours, ours_sequence) orelse
-        (sequenceFieldIndent(plan.ours, ours_sequence) orelse return error.UnsupportedStructure);
+    const destination_indent = merge_yaml.sequenceIndent(plan.ours, ours_sequence) orelse
+        (merge_yaml.sequenceFieldIndent(plan.ours, ours_sequence) orelse return error.UnsupportedStructure);
     const merged_bytes = try renderHierarchySequence(
         arena,
         plan,
@@ -322,7 +313,7 @@ fn appendComposedHierarchySequencePatch(
         choices.items,
         destination_indent,
     );
-    const replacement = try merge_planner.sequenceReplacement(arena, plan.ours, ours_sequence, merged_bytes);
+    const replacement = try merge_yaml.sequenceReplacement(arena, plan.ours, ours_sequence, merged_bytes);
     var ours_value = order_operation.values.ours orelse return error.UnsupportedStructure;
     if (order.items.len == 0 and ours_sequence.seq.len != 0) {
         const entry = plan.ours.entry_spans.get(ours_sequence) orelse return error.UnsupportedStructure;
@@ -351,7 +342,7 @@ fn effectiveHierarchyChoice(
             else => return error.InvalidMerge,
         },
         .remove => null,
-        .take => |side| if (valueForSide(operation, side)) |value|
+        .take => |side| if (operation.values.get(side)) |value|
             .{ .side = side, .value = value }
         else
             null,
@@ -393,7 +384,7 @@ fn insertHierarchyId(
     selected_side: merge_model.Side,
     file_id: i64,
 ) merge_model.Error!void {
-    const selected_file = fileForSide(plan, selected_side);
+    const selected_file = plan.file(selected_side);
     const selected_sequence = findSequence(selected_file, operation) orelse return error.UnsupportedStructure;
     if (selected_sequence.* != .seq) return error.UnsupportedStructure;
     const selected_index = for (selected_sequence.seq, 0..) |item, index| {
@@ -426,7 +417,7 @@ fn renderHierarchySequence(
             try output.appendSlice(arena, selected.value.bytes);
             try appendOursHierarchyGap(arena, &output, plan.ours, ours_sequence, file_id);
         } else {
-            try output.appendSlice(arena, try merge_planner.reindentSequenceItem(
+            try output.appendSlice(arena, try merge_yaml.reindentSequenceItem(
                 arena,
                 selected.value.bytes,
                 destination_indent,
@@ -445,7 +436,7 @@ fn hierarchyItem(
 ) ?SelectedValue {
     for (choices) |choice| if (choice.file_id == file_id) return choice.selected;
     for ([_]merge_model.Side{ .ours, .base, .theirs }) |side| {
-        const file = fileForSide(plan, side);
+        const file = plan.file(side);
         const sequence = findSequence(file, operation) orelse continue;
         if (sequence.* != .seq) continue;
         const item = findHierarchyItem(sequence.seq, file_id) orelse continue;
@@ -517,7 +508,7 @@ fn appendComposedPrefabSequencePatch(
             return error.InvalidResolution,
         .take => |side| SelectedValue{
             .side = side,
-            .value = valueForSide(order_operation, side) orelse return error.InvalidResolution,
+            .value = order_operation.values.get(side) orelse return error.InvalidResolution,
         },
         .remove, .custom => return error.InvalidResolution,
     };
@@ -548,8 +539,8 @@ fn appendComposedPrefabSequencePatch(
         }
     }
 
-    const destination_indent = sequenceIndent(plan.ours, ours_sequence) orelse
-        (sequenceFieldIndent(plan.ours, ours_sequence) orelse return error.UnsupportedStructure);
+    const destination_indent = merge_yaml.sequenceIndent(plan.ours, ours_sequence) orelse
+        (merge_yaml.sequenceFieldIndent(plan.ours, ours_sequence) orelse return error.UnsupportedStructure);
     const merged_bytes = try renderPrefabSequence(
         arena,
         plan,
@@ -560,7 +551,7 @@ fn appendComposedPrefabSequencePatch(
         destination_indent,
         kind,
     );
-    const replacement = try merge_planner.sequenceReplacement(
+    const replacement = try merge_yaml.sequenceReplacement(
         arena,
         plan.ours,
         ours_sequence,
@@ -589,7 +580,7 @@ fn effectivePrefabChoice(operation: *const merge_model.Operation) merge_model.Er
     return switch (operation.resolution) {
         .unresolved => if (operation.values.base) |value| .{ .side = .base, .value = value } else null,
         .remove => null,
-        .take => |side| if (valueForSide(operation, side)) |value|
+        .take => |side| if (operation.values.get(side)) |value|
             .{ .side = side, .value = value }
         else
             null,
@@ -620,7 +611,7 @@ fn prefabOrder(
     const modification = model.findValue(parsed.documents[0].body.map, "m_Modification") orelse
         return error.UnsupportedStructure;
     if (modification.* != .map) return error.UnsupportedStructure;
-    const sequence = model.findValue(modification.map, prefabField(kind)) orelse
+    const sequence = modification.get(prefabField(kind)) orelse
         return error.UnsupportedStructure;
     if (sequence.* != .seq) return error.UnsupportedStructure;
     var result: std.ArrayList([]const u8) = .empty;
@@ -668,7 +659,7 @@ fn prefabItemId(
 ) merge_model.Error![]const u8 {
     const identity = merge_identity.sequenceItemId(kind, item) orelse
         return error.UnsupportedStructure;
-    return merge_planner.sequenceId(arena, identity);
+    return identity.key(arena);
 }
 
 fn removePrefabId(order: *std.ArrayList([]const u8), id: []const u8) void {
@@ -700,7 +691,7 @@ fn insertPrefabId(
     id: []const u8,
     kind: merge_identity.SequenceKind,
 ) merge_model.Error!void {
-    const selected_file = fileForSide(plan, selected_side);
+    const selected_file = plan.file(selected_side);
     const selected_sequence = findSequence(selected_file, operation) orelse
         return error.UnsupportedStructure;
     if (selected_sequence.* != .seq) return error.UnsupportedStructure;
@@ -739,7 +730,7 @@ fn renderPrefabSequence(
             );
         } else {
             if (hasPrefabItemFields(plan, operation, id)) return error.UnsupportedStructure;
-            try output.appendSlice(arena, try merge_planner.reindentSequenceItem(
+            try output.appendSlice(arena, try merge_yaml.reindentSequenceItem(
                 arena,
                 selected.value.bytes,
                 destination_indent,
@@ -803,7 +794,7 @@ fn appendPrefabItemFieldPatch(
         else
             null,
         .remove => null,
-        .take => |side| if (valueForSide(operation, side)) |value|
+        .take => |side| if (operation.values.get(side)) |value|
             SelectedValue{ .side = side, .value = value }
         else
             null,
@@ -813,15 +804,15 @@ fn appendPrefabItemFieldPatch(
         const ours_node = ours.node orelse return error.InvalidMerge;
         const absolute_span = if (operation.resolution == .remove or
             ours_node.* == .map or ours_node.* == .seq)
-            completeEntrySpan(plan.ours, ours_node) orelse return error.UnsupportedStructure
+            plan.ours.completeEntrySpan(ours_node) orelse return error.UnsupportedStructure
         else
             ours.span orelse return error.UnsupportedStructure;
         const replacement = switch (operation.resolution) {
             .unresolved, .take => if (selected) |value| blk: {
                 if (ours_node.* == .map or ours_node.* == .seq) {
                     const selected_node = value.value.node orelse return error.InvalidMerge;
-                    const selected_file = fileForSide(plan, value.side);
-                    const span = completeEntrySpan(selected_file, selected_node) orelse
+                    const selected_file = plan.file(value.side);
+                    const span = selected_file.completeEntrySpan(selected_node) orelse
                         return error.UnsupportedStructure;
                     break :blk span.bytes(selected_file.bytes);
                 }
@@ -838,11 +829,11 @@ fn appendPrefabItemFieldPatch(
         else => return,
     };
     const template_node = selected_value.value.node orelse return error.InvalidMerge;
-    const template_file = fileForSide(plan, selected_value.side);
+    const template_file = plan.file(selected_value.side);
     const template_entry = template_file.entry_spans.get(template_node) orelse
         return error.UnsupportedStructure;
     const template_span = if (template_node.* == .map or template_node.* == .seq)
-        completeEntrySpan(template_file, template_node) orelse return error.UnsupportedStructure
+        template_file.completeEntrySpan(template_node) orelse return error.UnsupportedStructure
     else
         template_entry.whole;
     const inserted = switch (operation.resolution) {
@@ -905,7 +896,7 @@ fn prefabItemFieldInsertionOffset(
         operation.property_path,
     ) orelse return error.UnsupportedStructure;
     const ours_item = try findPrefabItemNode(arena, plan.ours, operation, item_id, kind);
-    const template_file = fileForSide(plan, template_side);
+    const template_file = plan.file(template_side);
     const template_item = try findPrefabItemNode(arena, template_file, operation, item_id, kind);
     const ours_parent = try fieldParent(ours_item, item_path);
     const template_parent = try fieldParent(template_item, item_path);
@@ -916,15 +907,15 @@ fn prefabItemFieldInsertionOffset(
     } else return error.UnsupportedStructure;
     var next_index = template_index + 1;
     while (next_index < template_parent.map.len) : (next_index += 1) {
-        const ours_next = model.findValue(ours_parent.map, template_parent.map[next_index].key) orelse continue;
+        const ours_next = ours_parent.get(template_parent.map[next_index].key) orelse continue;
         const entry = plan.ours.entry_spans.get(ours_next) orelse return error.UnsupportedStructure;
         return entry.whole.start;
     }
     var previous_index = template_index;
     while (previous_index > 0) {
         previous_index -= 1;
-        const ours_previous = model.findValue(ours_parent.map, template_parent.map[previous_index].key) orelse continue;
-        const span = completeEntrySpan(plan.ours, ours_previous) orelse return error.UnsupportedStructure;
+        const ours_previous = ours_parent.get(template_parent.map[previous_index].key) orelse continue;
+        const span = plan.ours.completeEntrySpan(ours_previous) orelse return error.UnsupportedStructure;
         return span.end;
     }
     if (plan.ours.node_spans.get(ours_parent)) |span| return span.end;
@@ -959,7 +950,7 @@ fn prefabItem(
         if (std.mem.eql(u8, choice.id, id)) return choice.selected;
     }
     for ([_]merge_model.Side{ .ours, .base, .theirs }) |side| {
-        const file = fileForSide(plan, side);
+        const file = plan.file(side);
         const sequence = findSequence(file, operation) orelse continue;
         if (sequence.* != .seq) continue;
         for (sequence.seq) |item| {
@@ -1013,7 +1004,7 @@ fn appendComposedComponentSequencePatch(
             return error.InvalidResolution,
         .take => |side| SelectedValue{
             .side = side,
-            .value = valueForSide(order_operation, side) orelse return error.InvalidResolution,
+            .value = order_operation.values.get(side) orelse return error.InvalidResolution,
         },
         .remove => return error.InvalidResolution,
         .custom => return error.InvalidResolution,
@@ -1038,8 +1029,8 @@ fn appendComposedComponentSequencePatch(
         }
     }
 
-    const destination_indent = sequenceIndent(plan.ours, ours_sequence) orelse
-        (sequenceFieldIndent(plan.ours, ours_sequence) orelse return error.UnsupportedStructure);
+    const destination_indent = merge_yaml.sequenceIndent(plan.ours, ours_sequence) orelse
+        (merge_yaml.sequenceFieldIndent(plan.ours, ours_sequence) orelse return error.UnsupportedStructure);
     const merged_bytes = try renderComponentSequence(
         arena,
         plan,
@@ -1049,7 +1040,7 @@ fn appendComposedComponentSequencePatch(
         choices.items,
         destination_indent,
     );
-    const replacement = try merge_planner.sequenceReplacement(arena, plan.ours, ours_sequence, merged_bytes);
+    const replacement = try merge_yaml.sequenceReplacement(arena, plan.ours, ours_sequence, merged_bytes);
     var ours_value = order_operation.values.ours orelse return error.UnsupportedStructure;
     if (order.items.len == 0 and ours_sequence.seq.len != 0) {
         const entry = plan.ours.entry_spans.get(ours_sequence) orelse return error.UnsupportedStructure;
@@ -1071,7 +1062,7 @@ fn effectiveComponentChoice(operation: *const merge_model.Operation) merge_model
     return switch (operation.resolution) {
         .unresolved => if (operation.values.base) |value| .{ .side = .base, .value = value } else null,
         .remove => null,
-        .take => |side| if (valueForSide(operation, side)) |value|
+        .take => |side| if (operation.values.get(side)) |value|
             .{ .side = side, .value = value }
         else
             null,
@@ -1131,7 +1122,7 @@ fn insertComponentId(
     selected_side: merge_model.Side,
     file_id: i64,
 ) merge_model.Error!void {
-    const selected_file = fileForSide(plan, selected_side);
+    const selected_file = plan.file(selected_side);
     const selected_sequence = findSequence(selected_file, operation) orelse return error.UnsupportedStructure;
     if (selected_sequence.* != .seq) return error.UnsupportedStructure;
     const selected_index = for (selected_sequence.seq, 0..) |item, index| {
@@ -1164,7 +1155,7 @@ fn renderComponentSequence(
             try output.appendSlice(arena, selected.value.bytes);
             try appendOursComponentGap(arena, &output, plan.ours, ours_sequence, file_id);
         } else {
-            try output.appendSlice(arena, try merge_planner.reindentSequenceItem(
+            try output.appendSlice(arena, try merge_yaml.reindentSequenceItem(
                 arena,
                 selected.value.bytes,
                 destination_indent,
@@ -1185,7 +1176,7 @@ fn componentItem(
         if (choice.file_id == file_id) return choice.selected;
     }
     for ([_]merge_model.Side{ .ours, .base, .theirs }) |side| {
-        const file = fileForSide(plan, side);
+        const file = plan.file(side);
         const sequence = findSequence(file, operation) orelse continue;
         if (sequence.* != .seq) continue;
         const item = findComponentItem(sequence.seq, file_id) orelse continue;
@@ -1226,7 +1217,7 @@ fn findSequence(file: source.ParsedFile, operation: *const merge_model.Operation
         var path = std.mem.splitScalar(u8, operation.property_path, '.');
         while (path.next()) |field| {
             if (node.* != .map) return null;
-            node = model.findValue(node.map, field) orelse return null;
+            node = node.get(field) orelse return null;
         }
         return node;
     }
@@ -1235,7 +1226,7 @@ fn findSequence(file: source.ParsedFile, operation: *const merge_model.Operation
 
 fn componentFileId(item: *const model.Node) ?i64 {
     if (item.* != .map) return null;
-    const component = model.findValue(item.map, "component") orelse return null;
+    const component = item.get("component") orelse return null;
     if (component.* != .ref) return null;
     return component.ref.file_id;
 }
@@ -1243,25 +1234,6 @@ fn componentFileId(item: *const model.Node) ?i64 {
 fn findComponentItem(items: []const *model.Node, file_id: i64) ?*const model.Node {
     for (items) |item| if (componentFileId(item) == file_id) return item;
     return null;
-}
-
-fn sequenceIndent(file: source.ParsedFile, sequence: *const model.Node) ?usize {
-    if (sequence.* != .seq or sequence.seq.len == 0) return null;
-    const span = file.sequence_item_spans.get(sequence.seq[0]) orelse return null;
-    const end = std.mem.indexOfScalarPos(u8, file.bytes, span.start, '\n') orelse span.end;
-    return leadingSpaces(file.bytes[span.start..end]);
-}
-
-fn sequenceFieldIndent(file: source.ParsedFile, sequence: *const model.Node) ?usize {
-    const entry = file.entry_spans.get(sequence) orelse return null;
-    const line_start = if (std.mem.lastIndexOfScalar(u8, file.bytes[0..entry.key.start], '\n')) |lf| lf + 1 else 0;
-    return entry.key.start - line_start;
-}
-
-fn leadingSpaces(line: []const u8) usize {
-    var count: usize = 0;
-    while (count < line.len and line[count] == ' ') count += 1;
-    return count;
 }
 
 fn appendDocumentPatch(
@@ -1273,7 +1245,7 @@ fn appendDocumentPatch(
     const selected = switch (operation.resolution) {
         .unresolved => return error.InvalidResolution,
         .remove => null,
-        .take => |side| valueForSide(operation, side),
+        .take => |side| operation.values.get(side),
         .custom => return error.InvalidResolution,
     };
     if (operation.values.ours) |ours| {
@@ -1315,7 +1287,7 @@ fn documentInsertionOrder(
     operation: *const merge_model.Operation,
     selected_side: merge_model.Side,
 ) usize {
-    const selected_file = fileForSide(plan, selected_side);
+    const selected_file = plan.file(selected_side);
     return for (selected_file.documents, 0..) |document, index| {
         if (document.class_id == operation.identity.document.class_id and
             document.file_id == operation.identity.document.file_id) break index;
@@ -1327,7 +1299,7 @@ fn documentInsertionOffset(
     operation: *const merge_model.Operation,
     selected_side: merge_model.Side,
 ) usize {
-    const selected_file = fileForSide(plan, selected_side);
+    const selected_file = plan.file(selected_side);
     const selected_index = for (selected_file.documents, 0..) |document, index| {
         if (document.class_id == operation.identity.document.class_id and
             document.file_id == operation.identity.document.file_id) break index;
@@ -1346,7 +1318,7 @@ const SelectedValue = struct { side: merge_model.Side, value: merge_model.SideVa
 
 fn selectedValue(operation: *const merge_model.Operation) ?SelectedValue {
     return switch (operation.resolution) {
-        .take => |side| if (valueForSide(operation, side)) |value| .{ .side = side, .value = value } else null,
+        .take => |side| if (operation.values.get(side)) |value| .{ .side = side, .value = value } else null,
         else => null,
     };
 }
@@ -1375,22 +1347,6 @@ fn entryWithValue(
     return bytes.toOwnedSlice(arena);
 }
 
-fn valueForSide(operation: *const merge_model.Operation, side: merge_model.Side) ?merge_model.SideValue {
-    return switch (side) {
-        .base => operation.values.base,
-        .ours => operation.values.ours,
-        .theirs => operation.values.theirs,
-    };
-}
-
-fn fileForSide(plan: *const merge_model.MergePlan, side: merge_model.Side) source.ParsedFile {
-    return switch (side) {
-        .base => plan.base,
-        .ours => plan.ours,
-        .theirs => plan.theirs,
-    };
-}
-
 pub fn insertionOffset(
     plan: *const merge_model.MergePlan,
     operation: *const merge_model.Operation,
@@ -1401,7 +1357,7 @@ pub fn insertionOffset(
 
         const parent = try fieldParent(document.body, operation.property_path);
         if (insertionTemplate(operation)) |template| {
-            const template_file = fileForSide(plan, template.side);
+            const template_file = plan.file(template.side);
             const template_document = findDocument(template_file, operation.identity.document) orelse
                 return error.UnsupportedStructure;
             const template_parent = try fieldParent(template_document.body, operation.property_path);
@@ -1412,15 +1368,15 @@ pub fn insertionOffset(
             } else return error.UnsupportedStructure;
             var next_index = template_index + 1;
             while (next_index < template_parent.map.len) : (next_index += 1) {
-                const ours_next = model.findValue(parent.map, template_parent.map[next_index].key) orelse continue;
+                const ours_next = parent.get(template_parent.map[next_index].key) orelse continue;
                 const entry = plan.ours.entry_spans.get(ours_next) orelse return error.UnsupportedStructure;
                 return entry.whole.start;
             }
             var previous_index = template_index;
             while (previous_index > 0) {
                 previous_index -= 1;
-                const ours_previous = model.findValue(parent.map, template_parent.map[previous_index].key) orelse continue;
-                const span = completeEntrySpan(plan.ours, ours_previous) orelse return error.UnsupportedStructure;
+                const ours_previous = parent.get(template_parent.map[previous_index].key) orelse continue;
+                const span = plan.ours.completeEntrySpan(ours_previous) orelse return error.UnsupportedStructure;
                 return span.end;
             }
         }
@@ -1535,6 +1491,7 @@ fn hasYamlComment(input: []const u8) bool {
 }
 
 test "merge apply: reuses selected token bytes and keeps untouched bytes" {
+    const merge_planner = @import("merge_planner.zig");
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
@@ -1662,6 +1619,7 @@ test "merge apply: keeps the declared order of inserts at one offset" {
 }
 
 fn threeFieldPlan(arena: std.mem.Allocator) !merge_model.MergePlan {
+    const merge_planner = @import("merge_planner.zig");
     const base = "--- !u!114 &1\nMonoBehaviour:\n  first: 0\n  second: 0\n  third: 0\n";
     const ours = "--- !u!114 &1\nMonoBehaviour:\n  first: 1\n  second: 1\n  third: 1\n";
     const theirs = "--- !u!114 &1\nMonoBehaviour:\n  first: 2\n  second: 2\n  third: 2\n";

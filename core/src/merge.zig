@@ -74,7 +74,7 @@ fn verifyOursDocumentCoverage(plan: *const MergePlan) Error!void {
         const selected = switch (operation.resolution) {
             .unresolved => continue,
             .remove => null,
-            .take => |side| valueForSide(operation, side),
+            .take => |side| operation.values.get(side),
             .custom => return error.InvalidMerge,
         };
         if (selected) |value| {
@@ -98,7 +98,7 @@ pub fn resolve(
     var stored_resolution = resolution;
     switch (resolution) {
         .unresolved => return error.InvalidResolution,
-        .take => |side| if (side == .base or valueForSide(operation, side) == null)
+        .take => |side| if (side == .base or operation.values.get(side) == null)
             return error.InvalidResolution,
         .custom => |value| {
             if (operation.collection) |binding_ref| {
@@ -168,14 +168,6 @@ pub fn supportsCustomResolution(plan: *const MergePlan, operation_id: OperationI
     const operation = merge_model.operationByIdConst(plan, operation_id) orelse return false;
     if (operation.collection != null) return true;
     return (operation.kind == .field or (operation.kind == .prefab_override and operation.item_path != null)) and supportsCustomValue(operation) and wasConflict(operation);
-}
-
-fn valueForSide(operation: *const Operation, side: merge_model.Side) ?SideValue {
-    return switch (side) {
-        .base => operation.values.base,
-        .ours => operation.values.ours,
-        .theirs => operation.values.theirs,
-    };
 }
 
 fn supportsCustomValue(operation: *const Operation) bool {

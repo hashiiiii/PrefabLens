@@ -53,13 +53,13 @@ const Index = struct {
         var owners: std.AutoHashMapUnmanaged(i64, i64) = .empty;
         for (self.all_documents) |document| {
             if (document.class_id != 1) continue;
-            const components = model.findValue(document.body.map, "m_Component") orelse
+            const components = document.body.get("m_Component") orelse
                 return error.InvalidMerge;
             if (components.* != .seq) return error.InvalidMerge;
             var transform_count: usize = 0;
             for (components.seq) |item| {
                 if (item.* != .map) return error.InvalidMerge;
-                const component_node = model.findValue(item.map, "component") orelse
+                const component_node = item.get("component") orelse
                     return error.InvalidMerge;
                 if (component_node.* != .ref or component_node.ref.guid != null or
                     component_node.ref.file_id == 0) return error.InvalidMerge;
@@ -69,7 +69,7 @@ const Index = struct {
                 const owner = try owners.getOrPut(self.arena, component.file_id);
                 if (owner.found_existing) return error.InvalidMerge;
                 owner.value_ptr.* = document.file_id;
-                const back_reference = model.findValue(component.body.map, "m_GameObject") orelse
+                const back_reference = component.body.get("m_GameObject") orelse
                     return error.InvalidMerge;
                 if (back_reference.* != .ref or back_reference.ref.guid != null or
                     back_reference.ref.file_id != document.file_id) return error.InvalidMerge;
@@ -77,7 +77,7 @@ const Index = struct {
             if (transform_count != 1) return error.InvalidMerge;
         }
         for (self.all_documents) |document| {
-            const game_object = model.findValue(document.body.map, "m_GameObject") orelse {
+            const game_object = document.body.get("m_GameObject") orelse {
                 if (document.class_id == 4 or document.class_id == 224) return error.InvalidMerge;
                 continue;
             };
@@ -92,7 +92,7 @@ const Index = struct {
         var parents: std.AutoHashMapUnmanaged(i64, i64) = .empty;
         for (self.all_documents) |document| {
             if (document.class_id != 4 and document.class_id != 224) continue;
-            const children = model.findValue(document.body.map, "m_Children") orelse
+            const children = document.body.get("m_Children") orelse
                 return error.InvalidMerge;
             if (children.* != .seq) return error.InvalidMerge;
             for (children.seq) |item| {
@@ -107,7 +107,7 @@ const Index = struct {
         }
         for (self.all_documents) |document| {
             if (document.class_id != 4 and document.class_id != 224) continue;
-            const father = model.findValue(document.body.map, "m_Father") orelse
+            const father = document.body.get("m_Father") orelse
                 return error.InvalidMerge;
             if (father.* != .ref or father.ref.guid != null) return error.InvalidMerge;
             if (father.ref.file_id == 0) {
@@ -133,7 +133,7 @@ const Index = struct {
                 if (complete.contains(transform.file_id)) break;
                 const visited = try path.getOrPut(self.arena, transform.file_id);
                 if (visited.found_existing) return error.InvalidMerge;
-                const father = model.findValue(transform.body.map, "m_Father") orelse break;
+                const father = transform.body.get("m_Father") orelse break;
                 if (father.* != .ref or father.ref.guid != null) return error.InvalidMerge;
                 if (father.ref.file_id == 0) break;
                 const parent = self.documents.get(father.ref.file_id) orelse break;

@@ -10,14 +10,6 @@ pub fn isTransformClass(class_id: u32) bool {
     return class_id == 4 or class_id == 224;
 }
 
-pub fn reference(node: ?*const model.Node) ?model.Ref {
-    const value = node orelse return null;
-    return switch (value.*) {
-        .ref => |ref_value| ref_value,
-        else => null,
-    };
-}
-
 pub const Modification = struct {
     target: ?model.Ref,
     property_path: []const u8,
@@ -54,21 +46,13 @@ pub const ModificationIterator = struct {
         while (self.index < self.items.len) {
             const item = self.items[self.index];
             self.index += 1;
-            if (item.* != .map) continue;
-            const path = model.findValue(item.map, "propertyPath") orelse continue;
-            if (path.* != .scalar) continue;
-            const target = if (model.findValue(item.map, "target")) |node|
-                switch (node.*) {
-                    .ref => |value| value,
-                    else => null,
-                }
-            else
-                null;
+            const path = Node.asScalar(item.get("propertyPath")) orelse continue;
+            const target = Node.asRef(item.get("target"));
             return Modification.init(
                 target,
-                path.scalar,
-                model.findValue(item.map, "value"),
-                model.findValue(item.map, "objectReference"),
+                path,
+                item.get("value"),
+                item.get("objectReference"),
             );
         }
         return null;
@@ -76,9 +60,9 @@ pub const ModificationIterator = struct {
 };
 
 pub fn modifications(doc: *const model.Document) ModificationIterator {
-    const modification = model.findValue(doc.body.map, "m_Modification") orelse return .{ .items = &.{} };
+    const modification = doc.body.get("m_Modification") orelse return .{ .items = &.{} };
     if (modification.* != .map) return .{ .items = &.{} };
-    const list = model.findValue(modification.map, "m_Modifications") orelse return .{ .items = &.{} };
+    const list = modification.get("m_Modifications") orelse return .{ .items = &.{} };
     if (list.* != .seq) return .{ .items = &.{} };
     return .{ .items = list.seq };
 }
@@ -118,7 +102,7 @@ pub const OverrideIterator = struct {
 };
 
 pub fn overrides(doc: *const model.Document) OverrideIterator {
-    const modification = model.findValue(doc.body.map, "m_Modification") orelse
+    const modification = doc.body.get("m_Modification") orelse
         return .{ .fields = &.{} };
     if (modification.* != .map) return .{ .fields = &.{} };
     return .{ .fields = modification.map };
@@ -135,30 +119,23 @@ fn overrideKind(field: []const u8) ?merge_model.PrefabOverrideKind {
 
 pub fn overrideItem(kind: merge_model.PrefabOverrideKind, item: *const model.Node) Override {
     if (kind == .removed_component or kind == .removed_game_object) {
-        const removed = reference(item);
+        const removed = Node.asRef(item);
         return .{ .kind = kind, .target = removed, .object = removed, .item = item };
     }
-    const entries = switch (item.*) {
-        .map => |value| value,
-        else => &.{},
-    };
     if (kind == .property) {
-        const path = model.findValue(entries, "propertyPath");
+        const path = item.get("propertyPath");
         return .{
             .kind = kind,
-            .target = reference(model.findValue(entries, "target")),
-            .property_path = if (path) |value| switch (value.*) {
-                .scalar => |scalar| scalar,
-                else => "",
-            } else "",
-            .object = reference(setObjectReference(model.findValue(entries, "objectReference"))),
+            .target = Node.asRef(item.get("target")),
+            .property_path = Node.asScalar(path) orelse "",
+            .object = Node.asRef(setObjectReference(item.get("objectReference"))),
             .item = item,
         };
     }
     return .{
         .kind = kind,
-        .target = reference(model.findValue(entries, "targetCorrespondingSourceObject")),
-        .object = reference(model.findValue(entries, "addedObject")),
+        .target = Node.asRef(item.get("targetCorrespondingSourceObject")),
+        .object = Node.asRef(item.get("addedObject")),
         .item = item,
     };
 }
@@ -172,11 +149,8 @@ fn setObjectReference(node: ?*Node) ?*Node {
 }
 
 pub fn sourceGuid(doc: *const model.Document) ?[]const u8 {
-    const source = model.findValue(doc.body.map, "m_SourcePrefab") orelse return null;
-    return switch (source.*) {
-        .ref => |value| value.guid,
-        else => null,
-    };
+    const source = Node.asRef(doc.body.get("m_SourcePrefab")) orelse return null;
+    return source.guid;
 }
 
 pub fn scalarModificationValue(doc: *const model.Document, property_path: []const u8) ?[]const u8 {
@@ -184,10 +158,7 @@ pub fn scalarModificationValue(doc: *const model.Document, property_path: []cons
     while (iterator.next()) |modification| {
         if (!std.mem.eql(u8, modification.property_path, property_path)) continue;
         const value = modification.value orelse continue;
-        return switch (value.*) {
-            .scalar => |scalar| scalar,
-            else => null,
-        };
+        return value.asScalar();
     }
     return null;
 }
@@ -240,9 +211,9 @@ test "prefab: merge helpers classify transforms and references" {
     try testing.expect(isTransformClass(4));
     try testing.expect(isTransformClass(224));
     try testing.expect(!isTransformClass(1));
-    try testing.expectEqual(@as(i64, 42), reference(&ref_node).?.file_id);
-    try testing.expect(reference(&scalar_node) == null);
-    try testing.expect(reference(null) == null);
+    try testing.expectEqual(@as(i64, 42), Node.asRef(&ref_node).?.file_id);
+    try testing.expect(Node.asRef(&scalar_node) == null);
+    try testing.expect(Node.asRef(null) == null);
 }
 
 test "prefab: source and scalar lookups keep serialized values" {

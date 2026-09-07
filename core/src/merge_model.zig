@@ -50,6 +50,14 @@ pub const Values = struct {
     base: ?SideValue,
     ours: ?SideValue,
     theirs: ?SideValue,
+
+    pub fn get(self: Values, side: Side) ?SideValue {
+        return switch (side) {
+            .base => self.base,
+            .ours => self.ours,
+            .theirs => self.theirs,
+        };
+    }
 };
 
 pub const Resolution = union(enum) {
@@ -91,6 +99,14 @@ pub const MergePlan = struct {
     operations: []Operation,
     atomic_operations: []AtomicOperation,
     collections: []const @import("merge_binding.zig").Binding = &.{},
+
+    pub fn file(self: MergePlan, side: Side) source.ParsedFile {
+        return switch (side) {
+            .base => self.base,
+            .ours => self.ours,
+            .theirs => self.theirs,
+        };
+    }
 
     pub fn unresolvedCount(self: MergePlan) usize {
         var count: usize = 0;

@@ -47,6 +47,15 @@ pub const ParsedFile = struct {
         return span.bytes(self.bytes);
     }
 
+    pub fn completeEntrySpan(self: ParsedFile, node: *const model.Node) ?Span {
+        const entry = self.entry_spans.get(node) orelse return null;
+        const span = self.node_spans.get(node) orelse return entry.whole;
+        return .{
+            .start = @min(entry.whole.start, span.start),
+            .end = @max(entry.whole.end, span.end),
+        };
+    }
+
     pub fn sequenceItemBytes(self: ParsedFile, node: *const model.Node) ?[]const u8 {
         const span = self.sequence_item_spans.get(node) orelse return null;
         return span.bytes(self.bytes);

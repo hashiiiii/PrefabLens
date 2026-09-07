@@ -7,6 +7,7 @@ const model = @import("model.zig");
 const parser = @import("parser.zig");
 const prefab = @import("prefab.zig");
 const source = @import("source.zig");
+const merge_yaml = @import("merge_yaml.zig");
 
 const testing = std.testing;
 
@@ -424,12 +425,12 @@ fn operationMatchesOverrideObject(
     }) |value| {
         const body = (value orelse continue).node orelse continue;
         if (body.* != .map) continue;
-        const owner = prefab.reference(model.findValue(body.map, "m_PrefabInstance")) orelse
+        const owner = model.Node.asRef(body.get("m_PrefabInstance")) orelse
             continue;
         if (owner.guid != null or owner.file_id != prefab_instance) continue;
         if (object.guid == null and operation.identity.document.file_id == object.file_id) return true;
-        const corresponding = prefab.reference(
-            model.findValue(body.map, "m_CorrespondingSourceObject"),
+        const corresponding = model.Node.asRef(
+            body.get("m_CorrespondingSourceObject"),
         ) orelse continue;
         if (modelRefEql(corresponding, object)) return true;
     }
@@ -572,7 +573,7 @@ fn transformParent(
     child: merge_model.DocumentId,
 ) merge_model.Error!?merge_model.DocumentId {
     const document = index.document(child) orelse return error.UnsupportedStructure;
-    const father = model.findValue(document.body.map, "m_Father") orelse return null;
+    const father = document.body.get("m_Father") orelse return null;
     if (father.* != .ref or father.ref.guid != null) return error.UnsupportedStructure;
     if (father.ref.file_id == 0) return null;
     const parent = try indexedDocumentByFileId(index, father.ref.file_id);
@@ -598,7 +599,7 @@ pub fn gameObjectBundle(
 ) merge_model.Error!GameObjectBundle {
     const game_object = index.document(.{ .class_id = 1, .file_id = game_object_file_id }) orelse
         return error.UnsupportedStructure;
-    const component_node = model.findValue(game_object.body.map, "m_Component") orelse
+    const component_node = game_object.body.get("m_Component") orelse
         return error.UnsupportedStructure;
     if (component_node.* != .seq) return error.UnsupportedStructure;
 
@@ -624,7 +625,7 @@ pub fn gameObjectBundle(
     }
     const transform_id = transform orelse return error.UnsupportedStructure;
     const transform_document = index.document(transform_id) orelse return error.UnsupportedStructure;
-    const father = model.findValue(transform_document.body.map, "m_Father") orelse
+    const father = transform_document.body.get("m_Father") orelse
         return error.UnsupportedStructure;
     if (father.* != .ref or father.ref.guid != null) return error.UnsupportedStructure;
 
@@ -632,7 +633,7 @@ pub fn gameObjectBundle(
     if (father.ref.file_id != 0) {
         const parent = try indexedDocumentByFileId(index, father.ref.file_id);
         if (parent.class_id != 4 and parent.class_id != 224) return error.UnsupportedStructure;
-        const children = model.findValue(parent.body.map, "m_Children") orelse
+        const children = parent.body.get("m_Children") orelse
             return error.UnsupportedStructure;
         if (children.* != .seq) return error.UnsupportedStructure;
         var matches: usize = 0;
@@ -761,7 +762,7 @@ fn changedGameObjectParent(
         const bundle = try gameObjectBundle(arena, index, game_object_file_id);
         const parent_item = bundle.parent_child_item orelse return false;
         const parent_transform = index.document(parent_item.document) orelse return error.UnsupportedStructure;
-        const parent_game_object = model.findValue(parent_transform.body.map, "m_GameObject") orelse
+        const parent_game_object = parent_transform.body.get("m_GameObject") orelse
             return error.UnsupportedStructure;
         if (parent_game_object.* != .ref or parent_game_object.ref.guid != null) return error.UnsupportedStructure;
         const parent_file_id = parent_game_object.ref.file_id;
@@ -796,14 +797,14 @@ fn appendGameObjectSubtree(
     const bundle = try gameObjectBundle(arena, index, game_object_file_id);
     try bundles.append(arena, bundle);
     const transform = index.document(bundle.transform) orelse return error.UnsupportedStructure;
-    const children = model.findValue(transform.body.map, "m_Children") orelse return;
+    const children = transform.body.get("m_Children") orelse return;
     if (children.* != .seq) return error.UnsupportedStructure;
     for (children.seq) |child_node| {
         if (child_node.* != .ref or child_node.ref.guid != null) return error.UnsupportedStructure;
         const child_transform = try indexedDocumentByFileId(index, child_node.ref.file_id);
         if (child_transform.class_id != 4 and child_transform.class_id != 224)
             return error.UnsupportedStructure;
-        const child_game_object = model.findValue(child_transform.body.map, "m_GameObject") orelse
+        const child_game_object = child_transform.body.get("m_GameObject") orelse
             return error.UnsupportedStructure;
         if (child_game_object.* != .ref or child_game_object.ref.guid != null)
             return error.UnsupportedStructure;
@@ -820,7 +821,7 @@ fn appendGameObjectSubtree(
 fn gameObjectChangeHasFather(indexes: MergeIndexes, game_object_file_id: i64) bool {
     for ([_]*const merge_identity.Index{ &indexes.base, &indexes.ours, &indexes.theirs }) |index| {
         const game_object = index.document(.{ .class_id = 1, .file_id = game_object_file_id }) orelse continue;
-        const components = model.findValue(game_object.body.map, "m_Component") orelse continue;
+        const components = game_object.body.get("m_Component") orelse continue;
         if (components.* != .seq) continue;
         for (components.seq) |item| {
             const item_id = merge_identity.sequenceItemId(.components, item) orelse continue;
@@ -829,7 +830,7 @@ fn gameObjectChangeHasFather(indexes: MergeIndexes, game_object_file_id: i64) bo
                 const component = entry.value_ptr.*;
                 if (component.file_id != item_id.target.file_id or
                     (component.class_id != 4 and component.class_id != 224)) continue;
-                if (model.findValue(component.body.map, "m_Father") != null) return true;
+                if (component.body.get("m_Father") != null) return true;
             }
         }
     }
@@ -1117,7 +1118,7 @@ fn semanticValue(
     while (path.next()) |field| {
         if (field.len == 0) continue;
         if (node.* != .map) return null;
-        node = model.findValue(node.map, field) orelse return null;
+        node = node.get(field) orelse return null;
     }
     const item_ref = identity.item_ref orelse return sideValue(file, node);
     if (node.* != .seq) return null;
@@ -1140,14 +1141,14 @@ fn validateComponentOwners(
     while (owner_iterator.next()) |entry| {
         const document = findDocumentByFileId(file.documents, entry.key_ptr.*) orelse
             return error.UnsupportedStructure;
-        const game_object = model.findValue(document.body.map, "m_GameObject") orelse
+        const game_object = document.body.get("m_GameObject") orelse
             return error.UnsupportedStructure;
         if (game_object.* != .ref or game_object.ref.file_id != entry.value_ptr.*) {
             return error.UnsupportedStructure;
         }
     }
     for (file.documents) |*document| {
-        const game_object = model.findValue(document.body.map, "m_GameObject") orelse continue;
+        const game_object = document.body.get("m_GameObject") orelse continue;
         if (game_object.* != .ref) return error.UnsupportedStructure;
         const owner = owners.get(document.file_id) orelse return error.UnsupportedStructure;
         if (owner != game_object.ref.file_id) return error.UnsupportedStructure;
@@ -1182,8 +1183,8 @@ fn collectMapFields(
             entry.key,
             .{
                 .base = entry.value,
-                .ours = findValueConst(ours_entries, entry.key),
-                .theirs = findValueConst(theirs_entries, entry.key),
+                .ours = model.findValue(ours_entries, entry.key),
+                .theirs = model.findValue(theirs_entries, entry.key),
             },
             base_file,
             ours_file,
@@ -1192,7 +1193,7 @@ fn collectMapFields(
         );
     }
     for (ours_entries) |entry| {
-        if (findValueConst(base_entries, entry.key) != null) continue;
+        if (model.findValue(base_entries, entry.key) != null) continue;
         try collectField(
             arena,
             operations,
@@ -1204,7 +1205,7 @@ fn collectMapFields(
             .{
                 .base = null,
                 .ours = entry.value,
-                .theirs = findValueConst(theirs_entries, entry.key),
+                .theirs = model.findValue(theirs_entries, entry.key),
             },
             base_file,
             ours_file,
@@ -1213,7 +1214,7 @@ fn collectMapFields(
         );
     }
     for (theirs_entries) |entry| {
-        if (findValueConst(base_entries, entry.key) != null or findValueConst(ours_entries, entry.key) != null) continue;
+        if (model.findValue(base_entries, entry.key) != null or model.findValue(ours_entries, entry.key) != null) continue;
         try collectField(
             arena,
             operations,
@@ -1704,8 +1705,8 @@ fn collectPrefabItemMapFields(
             entry.key,
             .{
                 .base = entry.value,
-                .ours = findValueConst(ours_entries, entry.key),
-                .theirs = findValueConst(theirs_entries, entry.key),
+                .ours = model.findValue(ours_entries, entry.key),
+                .theirs = model.findValue(theirs_entries, entry.key),
             },
             base_file,
             ours_file,
@@ -1713,7 +1714,7 @@ fn collectPrefabItemMapFields(
         );
     }
     for (ours_entries) |entry| {
-        if (findValueConst(base_entries, entry.key) != null) continue;
+        if (model.findValue(base_entries, entry.key) != null) continue;
         try collectPrefabItemField(
             arena,
             operations,
@@ -1728,7 +1729,7 @@ fn collectPrefabItemMapFields(
             .{
                 .base = null,
                 .ours = entry.value,
-                .theirs = findValueConst(theirs_entries, entry.key),
+                .theirs = model.findValue(theirs_entries, entry.key),
             },
             base_file,
             ours_file,
@@ -1736,8 +1737,8 @@ fn collectPrefabItemMapFields(
         );
     }
     for (theirs_entries) |entry| {
-        if (findValueConst(base_entries, entry.key) != null or
-            findValueConst(ours_entries, entry.key) != null) continue;
+        if (model.findValue(base_entries, entry.key) != null or
+            model.findValue(ours_entries, entry.key) != null) continue;
         try collectPrefabItemField(
             arena,
             operations,
@@ -1869,7 +1870,7 @@ fn childHasFather(
 ) bool {
     for ([_]source.ParsedFile{ base, ours, theirs }) |file| {
         const transform = findDocumentByFileId(file.documents, transform_file_id) orelse continue;
-        if (model.findValue(transform.body.map, "m_Father") != null) return true;
+        if (transform.body.get("m_Father") != null) return true;
     }
     return false;
 }
@@ -1885,29 +1886,12 @@ fn identifiedItems(
     var seen: std.StringHashMapUnmanaged(void) = .empty;
     for (sequence.seq) |item| {
         const identity = merge_identity.sequenceItemId(kind, item) orelse return error.UnsupportedStructure;
-        const id = try sequenceId(arena, identity);
+        const id = try identity.key(arena);
         const entry = try seen.getOrPut(arena, id);
         if (entry.found_existing) return error.MalformedInput;
         try result.append(arena, .{ .id = id, .identity = identity, .node = item });
     }
     return result.toOwnedSlice(arena);
-}
-
-pub fn sequenceId(arena: std.mem.Allocator, identity: merge_identity.SequenceItemId) std.mem.Allocator.Error![]const u8 {
-    return std.fmt.allocPrint(
-        arena,
-        "{d}|{s}|{?d}|{s}|{?d}|{s}|{?d}|{?d}",
-        .{
-            identity.target.file_id,
-            identity.target.guid orelse "",
-            identity.target.type_id,
-            identity.property_path orelse "",
-            if (identity.added_object) |added| added.file_id else null,
-            if (identity.added_object) |added| added.guid orelse "" else "",
-            if (identity.added_object) |added| added.type_id else null,
-            if (identity.override_kind) |override_kind| @intFromEnum(override_kind) else null,
-        },
-    );
 }
 
 fn unionIds(arena: std.mem.Allocator, items: SequenceItems) std.mem.Allocator.Error![]const []const u8 {
@@ -2081,7 +2065,7 @@ fn appendOrderOperation(
     const replacement = if (keep_ours)
         if (ours_value) |value| value.bytes else ""
     else if (!has_conflict)
-        try sequenceReplacement(arena, ours_file, nodes.ours, merged_bytes)
+        try merge_yaml.sequenceReplacement(arena, ours_file, nodes.ours, merged_bytes)
     else
         merged_bytes;
     if (!keep_ours and !has_conflict and merged_bytes.len == 0) {
@@ -2111,15 +2095,13 @@ fn appendOrderOperation(
 }
 
 fn sequenceSideValue(file: source.ParsedFile, node: ?*const model.Node) ?merge_model.SideValue {
-    var value = sideValue(file, node) orelse return null;
-    const present = node.?;
-    if (present.* == .seq and present.seq.len == 0 and value.span.?.start > 0 and
-        file.bytes[value.span.?.start - 1] == ' ')
-    {
-        value.span.?.start -= 1;
-        value.bytes = value.span.?.bytes(file.bytes);
-    }
-    return value;
+    const present = node orelse return null;
+    const span = merge_yaml.sequenceSpan(file, present);
+    return .{
+        .node = present,
+        .bytes = if (span) |value| value.bytes(file.bytes) else "",
+        .span = span,
+    };
 }
 
 fn renderSequence(
@@ -2132,12 +2114,12 @@ fn renderSequence(
     nodes: DocumentNodes,
 ) merge_model.Error![]const u8 {
     var output: std.ArrayList(u8) = .empty;
-    const destination_indent = sequenceIndent(ours_file, nodes.ours) orelse
-        sequenceFieldIndent(ours_file, nodes.ours) orelse
-        sequenceIndent(base_file, nodes.base) orelse
-        sequenceFieldIndent(base_file, nodes.base) orelse
-        sequenceIndent(theirs_file, nodes.theirs) orelse
-        sequenceFieldIndent(theirs_file, nodes.theirs) orelse 0;
+    const destination_indent = merge_yaml.sequenceIndent(ours_file, nodes.ours) orelse
+        merge_yaml.sequenceFieldIndent(ours_file, nodes.ours) orelse
+        merge_yaml.sequenceIndent(base_file, nodes.base) orelse
+        merge_yaml.sequenceFieldIndent(base_file, nodes.base) orelse
+        merge_yaml.sequenceIndent(theirs_file, nodes.theirs) orelse
+        merge_yaml.sequenceFieldIndent(theirs_file, nodes.theirs) orelse 0;
     for (order, 0..) |id, index| {
         const base_item = findSequenceItem(items.base, id);
         const ours_item = findSequenceItem(items.ours, id);
@@ -2164,7 +2146,7 @@ fn renderSequence(
             try output.appendSlice(arena, bytes);
         } else {
             const offset = insertionOffsetForItem(ours_file, items.ours, order, index, nodes.ours);
-            try output.appendSlice(arena, try reindentSequenceItem(
+            try output.appendSlice(arena, try merge_yaml.reindentSequenceItem(
                 arena,
                 bytes,
                 destination_indent,
@@ -2174,33 +2156,6 @@ fn renderSequence(
         try appendOursGap(arena, &output, ours_file, items.ours, id);
     }
     return output.toOwnedSlice(arena);
-}
-
-pub fn sequenceReplacement(
-    arena: std.mem.Allocator,
-    ours_file: source.ParsedFile,
-    ours_node: ?*const model.Node,
-    merged_bytes: []const u8,
-) std.mem.Allocator.Error![]const u8 {
-    const node = ours_node orelse return merged_bytes;
-    if (merged_bytes.len == 0) {
-        if (node.* != .seq or node.seq.len == 0) {
-            return if (sequenceSideValue(ours_file, node)) |value| value.bytes else "[]";
-        }
-        const span = ours_file.node_spans.get(node) orelse return " []";
-        const source_bytes = span.bytes(ours_file.bytes);
-        if (std.mem.endsWith(u8, source_bytes, "\r\n")) return " []\r\n";
-        if (std.mem.endsWith(u8, source_bytes, "\n")) return " []\n";
-        return " []";
-    }
-    if (node.* != .seq or node.seq.len != 0) return merged_bytes;
-    const span = ours_file.node_spans.get(node) orelse return merged_bytes;
-    const line_ending = ours_file.lineEndingAt(span.end);
-    const item_bytes = if (std.mem.endsWith(u8, merged_bytes, line_ending))
-        merged_bytes[0 .. merged_bytes.len - line_ending.len]
-    else
-        merged_bytes;
-    return std.fmt.allocPrint(arena, "{s}{s}", .{ line_ending, item_bytes });
 }
 
 fn sequenceEmptyPatchValue(file: source.ParsedFile, node: ?*const model.Node) ?merge_model.SideValue {
@@ -2236,21 +2191,6 @@ fn appendOursGap(
     try output.appendSlice(arena, gap);
 }
 
-fn sequenceIndent(file: source.ParsedFile, node: ?*const model.Node) ?usize {
-    const sequence = node orelse return null;
-    if (sequence.* != .seq or sequence.seq.len == 0) return null;
-    const span = file.sequence_item_spans.get(sequence.seq[0]) orelse return null;
-    const end = std.mem.indexOfScalarPos(u8, file.bytes, span.start, '\n') orelse span.end;
-    return leadingSpaces(file.bytes[span.start..end]);
-}
-
-fn sequenceFieldIndent(file: source.ParsedFile, node: ?*const model.Node) ?usize {
-    const sequence = node orelse return null;
-    const entry = file.entry_spans.get(sequence) orelse return null;
-    const line_start = if (std.mem.lastIndexOfScalar(u8, file.bytes[0..entry.key.start], '\n')) |lf| lf + 1 else 0;
-    return entry.key.start - line_start;
-}
-
 fn insertionOffsetForItem(
     file: source.ParsedFile,
     ours_items: []const SequenceItem,
@@ -2273,40 +2213,6 @@ fn insertionOffsetForItem(
     }
     if (sequence_node) |node| if (file.node_spans.get(node)) |span| return span.end;
     return file.bytes.len;
-}
-
-fn leadingSpaces(line: []const u8) usize {
-    var count: usize = 0;
-    while (count < line.len and line[count] == ' ') count += 1;
-    return count;
-}
-
-pub fn reindentSequenceItem(
-    arena: std.mem.Allocator,
-    source_item: []const u8,
-    destination_indent: usize,
-    line_ending: []const u8,
-) merge_model.Error![]const u8 {
-    const first_lf = std.mem.indexOfScalar(u8, source_item, '\n') orelse source_item.len;
-    const first_line = std.mem.trimEnd(u8, source_item[0..first_lf], "\r");
-    const source_indent = leadingSpaces(first_line);
-    var output: std.ArrayList(u8) = .empty;
-    var cursor: usize = 0;
-    while (cursor < source_item.len) {
-        const relative_lf = std.mem.indexOfScalar(u8, source_item[cursor..], '\n');
-        const end = if (relative_lf) |line_index| cursor + line_index else source_item.len;
-        const raw_line = source_item[cursor..end];
-        const line = std.mem.trimEnd(u8, raw_line, "\r");
-        const indent = leadingSpaces(line);
-        if (line.len != 0 and indent < source_indent) return error.UnsupportedStructure;
-        if (line.len != 0) {
-            try output.appendNTimes(arena, ' ', destination_indent + indent - source_indent);
-            try output.appendSlice(arena, line[indent..]);
-        }
-        if (relative_lf != null) try output.appendSlice(arena, line_ending);
-        cursor = if (relative_lf != null) end + 1 else end;
-    }
-    return output.toOwnedSlice(arena);
 }
 
 fn appendComponentDocumentOperation(
@@ -2502,7 +2408,7 @@ fn gameObjectId(
     transform_file_id: i64,
 ) ?i64 {
     const transform = findDocumentByFileId(file.documents, transform_file_id) orelse return null;
-    const game_object = model.findValue(transform.body.map, "m_GameObject") orelse return null;
+    const game_object = transform.body.get("m_GameObject") orelse return null;
     if (game_object.* != .ref) return null;
     return game_object.ref.file_id;
 }
@@ -2520,13 +2426,6 @@ fn mapEntries(node: ?*const model.Node) []const model.Entry {
         .map => |entries| entries,
         else => &.{},
     };
-}
-
-fn findValueConst(entries: []const model.Entry, key: []const u8) ?*const model.Node {
-    for (entries) |entry| {
-        if (std.mem.eql(u8, entry.key, key)) return entry.value;
-    }
-    return null;
 }
 
 fn hasMap(nodes: DocumentNodes) bool {

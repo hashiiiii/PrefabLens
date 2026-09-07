@@ -24,23 +24,7 @@ fn instanceName(idx: *Index, pi_id: i64) []const u8 {
 
 fn goName(idx: *Index, go_id: i64) []const u8 {
     const go = idx.structuralDoc(go_id) orelse return "";
-    const n = model.findValue(go.body.map, "m_Name") orelse return "";
-    return switch (n.*) {
-        .scalar => |s| s,
-        else => "",
-    };
-}
-
-fn makeComponent(dd: diffmod.DocDiff) ComponentDiff {
-    return .{
-        .file_id = dd.file_id,
-        .class_id = dd.class_id,
-        .type_name = dd.type_name,
-        .script_guid = dd.script_guid,
-        .class_name = dd.class_name,
-        .status = dd.status,
-        .fields = dd.fields,
-    };
+    return model.Node.asScalar(go.body.get("m_Name")) orelse "";
 }
 
 fn goFieldsToOverrides(arena: std.mem.Allocator, fields: []const model.FieldDiff) ![]model.OverrideDiff {
@@ -64,7 +48,7 @@ pub fn build(arena: std.mem.Allocator, fd: diffmod.FlatDiff) !model.DiffResult {
         .diff_by_id = std.AutoHashMap(i64, diffmod.DocDiff).init(arena),
         .doc_by_id = std.AutoHashMap(i64, *model.Document).init(arena),
     };
-    for (fd.docs) |d| try idx.diff_by_id.put(d.file_id, d);
+    for (fd.docs) |d| try idx.diff_by_id.put(d.component.file_id, d);
     // Structural-resolution docs: after preferred, removed objects fall back to before.
     for (fd.before) |*d| try idx.doc_by_id.put(d.file_id, d);
     for (fd.after) |*d| try idx.doc_by_id.put(d.file_id, d); // overwrite makes after win
@@ -76,7 +60,8 @@ pub fn build(arena: std.mem.Allocator, fd: diffmod.FlatDiff) !model.DiffResult {
     var comps_by_owner = std.AutoHashMap(i64, std.ArrayList(ComponentDiff)).init(arena);
     var loose: std.ArrayList(ComponentDiff) = .empty;
 
-    for (fd.docs) |d| {
+    for (fd.docs) |document| {
+        const d = document.component;
         if (d.class_id == 1) {
             try go_ids.append(arena, d.file_id);
             continue;
@@ -99,7 +84,7 @@ pub fn build(arena: std.mem.Allocator, fd: diffmod.FlatDiff) !model.DiffResult {
             // be stripped (nested prefab), so walk the chain to the nearest instance that
             // gets materialized.
             const owner_id = if (go_doc.stripped) inner: {
-                const pi_id = tree_chain.refFileId(model.findValue(go_doc.body.map, "m_PrefabInstance")) orelse break :blk null;
+                const pi_id = tree_chain.refFileId(go_doc.body.get("m_PrefabInstance")) orelse break :blk null;
                 break :inner tree_chain.resolveInstanceChain(&idx, pi_id) orelse break :blk null;
             } else go_id;
             // A stripped doc is excluded from fd.docs and does not become a node.
@@ -110,10 +95,10 @@ pub fn build(arena: std.mem.Allocator, fd: diffmod.FlatDiff) !model.DiffResult {
             const gop = try comps_by_owner.getOrPut(owner_id);
             if (!gop.found_existing) gop.value_ptr.* = .empty;
             // Collapse unchanged components that have no fields.
-            if (d.status != .unchanged) try gop.value_ptr.append(arena, makeComponent(d));
+            if (d.status != .unchanged) try gop.value_ptr.append(arena, d);
         } else {
             // No owning GameObject/PrefabInstance -> loose (ScriptableObject etc.).
-            if (d.status != .unchanged) try loose.append(arena, makeComponent(d));
+            if (d.status != .unchanged) try loose.append(arena, d);
         }
     }
 
@@ -125,8 +110,8 @@ pub fn build(arena: std.mem.Allocator, fd: diffmod.FlatDiff) !model.DiffResult {
         try obj_by_id.put(go_id, .{
             .file_id = go_id,
             .name = goName(&idx, go_id),
-            .status = gd.status,
-            .overrides = try goFieldsToOverrides(arena, gd.fields),
+            .status = gd.component.status,
+            .overrides = try goFieldsToOverrides(arena, gd.component.fields),
             .components = comps,
             .children = &.{},
         });
@@ -140,7 +125,7 @@ pub fn build(arena: std.mem.Allocator, fd: diffmod.FlatDiff) !model.DiffResult {
             .file_id = pi_id,
             .name = instanceName(&idx, pi_id),
             .source_guid = if (doc) |value| prefab.sourceGuid(value) else null,
-            .status = dd.status,
+            .status = dd.component.status,
             .overrides = dd.overrides,
             .components = comps,
             .children = &.{},

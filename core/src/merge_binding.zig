@@ -77,7 +77,7 @@ pub fn replacement(arena: std.mem.Allocator, plan: *const mm.MergePlan, binding:
     };
     if (result == null) {
         const original = binding.original orelse return null;
-        return .{ .span = yaml.completeEntrySpan(plan.ours, original) orelse return error.InvalidMerge, .bytes = "" };
+        return .{ .span = plan.ours.completeEntrySpan(original) orelse return error.InvalidMerge, .bytes = "" };
     }
     var final = result.?;
     const borrowed = final == binding.plan.input.nodes.ours or final == binding.plan.input.nodes.theirs or final == binding.plan.input.nodes.base;
@@ -97,7 +97,7 @@ pub fn replacement(arena: std.mem.Allocator, plan: *const mm.MergePlan, binding:
     if (binding.plan.input.schema) |descriptor| {
         if (descriptor.kind == .int32_array and final.* == .scalar and final.scalar.len == 0) {
             const entry = plan.ours.entry_spans.get(original) orelse return error.InvalidMerge;
-            const span = yaml.completeEntrySpan(plan.ours, original) orelse return error.InvalidMerge;
+            const span = plan.ours.completeEntrySpan(original) orelse return error.InvalidMerge;
             return .{ .span = span, .bytes = try std.mem.concat(arena, u8, &.{ plan.ours.bytes[span.start..entry.value.start], plan.ours.bytes[entry.value.end..span.end] }) };
         }
     }
@@ -112,7 +112,7 @@ const Evidence = struct { field: ?ctx.Field = null, conflict: bool = false };
 fn field(snapshot: ctx.Snapshot, file: source.ParsedFile, document: mm.DocumentId, path: []const u8) ?ctx.Field {
     for (file.documents) |doc| {
         if (doc.class_id != document.class_id or doc.file_id != document.file_id) continue;
-        const script = model.findValue(doc.body.map, "m_Script") orelse return null;
+        const script = doc.body.get("m_Script") orelse return null;
         if (script.* != .ref) return null;
         return snapshot.field(script.ref.guid orelse return null, path);
     }

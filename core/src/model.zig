@@ -19,6 +19,30 @@ pub const Node = union(enum) {
     scalar: []const u8,
     ref: Ref,
 
+    pub fn get(node: ?*const Node, key: []const u8) ?*Node {
+        const value = node orelse return null;
+        return switch (value.*) {
+            .map => |entries| findValue(entries, key),
+            else => null,
+        };
+    }
+
+    pub fn asScalar(node: ?*const Node) ?[]const u8 {
+        const value = node orelse return null;
+        return switch (value.*) {
+            .scalar => |scalar| scalar,
+            else => null,
+        };
+    }
+
+    pub fn asRef(node: ?*const Node) ?Ref {
+        const value = node orelse return null;
+        return switch (value.*) {
+            .ref => |reference| reference,
+            else => null,
+        };
+    }
+
     pub fn eql(a: *const Node, b: *const Node) bool {
         if (std.meta.activeTag(a.*) != std.meta.activeTag(b.*)) return false;
         return switch (a.*) {

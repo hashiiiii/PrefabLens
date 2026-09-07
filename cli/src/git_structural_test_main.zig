@@ -301,28 +301,22 @@ fn concurrentChanges(ctx: Context) !void {
 }
 
 fn runWithUiAction(git: merge_git.Git, keys: []const u8, second_keys: []const u8, action: []const u8) !std.process.RunResult {
-    // Raw terminal mode begins only after the resolver snapshots all paths.
-    // The other process performs a real concurrent change while the UI waits.
-    const script = try std.fmt.allocPrint(git.arena,
-        \\(
-        \\i=0
-        \\while [ "$i" -lt 100 ]; do
-        \\  case "$(stty -a < /dev/tty 2>/dev/null)" in
-        \\    *-icanon*) {s}; exit $? ;;
-        \\  esac
-        \\  sleep 0.05
-        \\  i=$((i + 1))
-        \\done
-        \\exit 90
-        \\) &
-        \\watch_pid=$!
-        \\git merge --no-edit remote
-        \\status=$?
-        \\wait "$watch_pid" || exit 90
-        \\exit "$status"
-    , .{action});
-    const command = try std.fmt.allocPrint(git.arena, "env PATH={s} sh -c {s}", .{ try t.shellQuote(git.arena, git.env.get("PATH").?), try t.shellQuote(git.arena, script) });
-    return pty.runCommandInPtyBatches(git.io, git.arena, git.cwd, command, keys, second_keys, 30);
+    const command = try std.fmt.allocPrint(
+        git.arena,
+        "env PATH={s} git merge --no-edit remote",
+        .{try t.shellQuote(git.arena, git.env.get("PATH").?)},
+    );
+    // Wait for the first UI, then finish the mutation before sending input.
+    return pty.runCommandInPtyWithUiAction(
+        git.io,
+        git.arena,
+        git.cwd,
+        command,
+        action,
+        keys,
+        second_keys,
+        30,
+    );
 }
 
 fn escapedPaths(ctx: Context) !void {

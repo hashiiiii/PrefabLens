@@ -441,6 +441,49 @@ test "parse: single-quoted scalar is unquoted" {
     try testing.expectEqualStrings("Hello: World", model.findValue(doc.body.map, "m_Name").?.scalar);
 }
 
+test "parse: a quoted scalar can span lines, and a blank line in it is a newline" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    // A blank line, plus a `#` and a `---` that land inside the value.
+    const src =
+        \\--- !u!1 &1
+        \\GameObject:
+        \\  m_Name: 'first
+        \\
+        \\    --- # second'
+        \\  m_IsActive: 1
+    ;
+    const doc = try parseOne(arena, src);
+    try testing.expectEqualStrings("first\n--- # second", model.findValue(doc.body.map, "m_Name").?.scalar);
+    try testing.expectEqualStrings("1", model.findValue(doc.body.map, "m_IsActive").?.scalar);
+}
+
+test "parse: a folded sequence map item keeps its later keys and the next item apart" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const src =
+        \\--- !u!1001 &1
+        \\PrefabInstance:
+        \\  m_Modification:
+        \\    m_Modifications:
+        \\    - target: {fileID: 7, guid: aaa,
+        \\        type: 3}
+        \\      propertyPath: m_Name
+        \\    - target: {fileID: 8}
+        \\      propertyPath: m_Layer
+    ;
+    const doc = try parseOne(arena, src);
+    const mods = model.findValue(model.findValue(doc.body.map, "m_Modification").?.map, "m_Modifications").?;
+    try testing.expectEqual(@as(usize, 2), mods.seq.len);
+    const target = model.findValue(mods.seq[0].map, "target").?;
+    try testing.expectEqualStrings("aaa", target.ref.guid.?);
+    try testing.expectEqual(@as(i64, 3), target.ref.type_id.?);
+    try testing.expectEqualStrings("m_Name", model.findValue(mods.seq[0].map, "propertyPath").?.scalar);
+    try testing.expectEqualStrings("m_Layer", model.findValue(mods.seq[1].map, "propertyPath").?.scalar);
+}
+
 test "parseSpanned: quoted punctuation stays in one flow entry" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
@@ -668,12 +711,15 @@ const Parser = struct {
 
 // Break into meaningful logical lines (indent + content). Drop blank lines, `%` directives,
 // and `#` comments.
-fn tokenize(arena: std.mem.Allocator, source_bytes: []const u8) std.mem.Allocator.Error![]Line {
+fn tokenize(arena: std.mem.Allocator, source_bytes: []const u8, join_folded_lines: bool) std.mem.Allocator.Error![]Line {
     var lines: std.ArrayList(Line) = .empty;
+    var folded_text: std.ArrayList(u8) = .empty;
+    var blank_lines: usize = 0;
     var start: usize = 0;
-    while (start <= source_bytes.len) {
+    while (start < source_bytes.len) {
         const end = std.mem.indexOfScalarPos(u8, source_bytes, start, '\n') orelse source_bytes.len;
         const whole_end = if (end < source_bytes.len) end + 1 else end;
+        defer start = whole_end;
         const raw_end = if (end > start and source_bytes[end - 1] == '\r') end - 1 else end;
         // Treat a leading UTF-8 BOM as metadata. Keep the original line span so
         // source patches still include the BOM and retain all original offsets.
@@ -682,8 +728,25 @@ fn tokenize(arena: std.mem.Allocator, source_bytes: []const u8) std.mem.Allocato
         const raw = source_bytes[raw_start..raw_end];
         var indent: usize = 0;
         while (indent < raw.len and raw[indent] == ' ') indent += 1;
-        const content = withoutComment(raw[indent..]);
+        const raw_content = raw[indent..];
+        if (raw_content.len == 0) {
+            blank_lines += 1;
+            continue;
+        }
+        defer blank_lines = 0;
+        if (join_folded_lines and lines.items.len > 0 and shouldContinueLine(lines.getLast(), indent)) {
+            const prev = &lines.items[lines.items.len - 1];
+            if (folded_text.items.len == 0) try folded_text.appendSlice(arena, prev.text);
+            if (blank_lines == 0) try folded_text.append(arena, ' ') else try folded_text.appendNTimes(arena, '\n', blank_lines);
+            try folded_text.appendSlice(arena, raw_content);
+            // The opening quote may be on an earlier physical line.
+            folded_text.items.len = withoutComment(folded_text.items).len;
+            prev.text = folded_text.items;
+            continue;
+        }
+        const content = withoutComment(raw_content);
         if (content.len != 0 and content[0] != '%' and content[0] != '#') {
+            folded_text = .empty;
             try lines.append(arena, .{
                 .indent = indent,
                 .text = content,
@@ -691,10 +754,21 @@ fn tokenize(arena: std.mem.Allocator, source_bytes: []const u8) std.mem.Allocato
                 .content = .{ .start = raw_start + indent, .end = raw_start + indent + content.len },
             });
         }
-        if (end == source_bytes.len) break;
-        start = whole_end;
     }
     return lines.toOwnedSlice(arena);
+}
+
+fn shouldContinueLine(prev: Line, indent: usize) bool {
+    if (std.mem.startsWith(u8, prev.text, "- ")) {
+        const text = std.mem.trimStart(u8, prev.text[1..], " ");
+        const kv = splitKeyValue(text);
+        const value = if (kv.has_colon) kv.value else text;
+        if (value.len == 0) return false;
+        if (looksLikeMapEntry(text)) return indent > prev.indent + 2;
+        return indent > prev.indent;
+    }
+    const kv = splitKeyValue(prev.text);
+    return kv.has_colon and kv.value.len > 0 and indent > prev.indent;
 }
 
 fn withoutComment(line: []const u8) []const u8 {
@@ -740,7 +814,7 @@ pub fn parse(arena: std.mem.Allocator, source_bytes: []const u8) Error![]Documen
     var p = Parser{
         .arena = arena,
         .source_bytes = source_bytes,
-        .lines = try tokenize(arena, source_bytes),
+        .lines = try tokenize(arena, source_bytes, true),
         .track_source = false,
     };
     return parseDocuments(&p);
@@ -750,7 +824,9 @@ pub fn parseSpanned(arena: std.mem.Allocator, source_bytes: []const u8) Error!so
     var p = Parser{
         .arena = arena,
         .source_bytes = source_bytes,
-        .lines = try tokenize(arena, source_bytes),
+        // Joined text has no direct source offsets. Keep physical lines so merge
+        // callers retain diagnostics for folded input and fall back safely.
+        .lines = try tokenize(arena, source_bytes, false),
         .track_source = true,
     };
     const documents = try parseDocuments(&p);

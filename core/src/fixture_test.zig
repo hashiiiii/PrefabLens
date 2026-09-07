@@ -266,3 +266,63 @@ test "fixture: .controller shows only the changed AnimatorState" {
     try testing.expectEqualStrings("1", state.fields[1].before.?.scalar);
     try testing.expectEqualStrings("2", state.fields[1].after.?.scalar);
 }
+
+// Unity folds a long serialized line onto a following, deeper-indented line (issue #328).
+// These pairs came out of Unity 6000.0.82f1; each differs in exactly one value that sits in
+// the same document as a folded line, and the diff used to come out empty.
+
+const folded_flow_before = @embedFile("testdata/folded_flow_before.prefab");
+const folded_flow_after = @embedFile("testdata/folded_flow_after.prefab");
+const folded_string_before = @embedFile("testdata/folded_string_before.prefab");
+const folded_string_after = @embedFile("testdata/folded_string_after.prefab");
+
+test "fixture: override whose target flow mapping is folded still diffs" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    // Saved with Serialize Inline Mappings On One Line off: the modification's `target:`
+    // folds after the guid, and so does the stripped Transform's source object.
+    const res = try root.diffBytes(arena, folded_flow_before, folded_flow_after);
+
+    try testing.expectEqual(@as(usize, 0), res.loose.len);
+    try testing.expectEqual(@as(usize, 1), res.roots.len);
+    const parent = res.roots[0];
+    try testing.expectEqualStrings("Parent", parent.name);
+    try testing.expectEqual(@as(usize, 1), parent.children.len);
+    const instance = parent.children[0];
+    try testing.expectEqual(model.ObjectKind.prefab_instance, instance.kind);
+    try testing.expectEqual(model.Status.modified, instance.status);
+    try testing.expectEqual(@as(usize, 1), instance.overrides.len);
+    try testing.expectEqualStrings("Transform", instance.overrides[0].group);
+    try testing.expectEqualStrings("Position.x", instance.overrides[0].label);
+    try testing.expectEqualStrings("1", instance.overrides[0].before.?.scalar);
+    try testing.expectEqualStrings("2", instance.overrides[0].after.?.scalar);
+}
+
+test "fixture: GameObject whose long name is folded still diffs its later fields" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    // Saved with the project defaults: only the 85-character m_Name folds, between two
+    // words. The m_IsActive change below it in the same document is the diff.
+    const res = try root.diffBytes(arena, folded_string_before, folded_string_after);
+
+    try testing.expectEqual(@as(usize, 0), res.loose.len);
+    try testing.expectEqual(@as(usize, 1), res.roots.len);
+    const parent = res.roots[0];
+    try testing.expectEqualStrings("Parent", parent.name);
+    try testing.expectEqual(@as(usize, 1), parent.children.len);
+    const spawner = parent.children[0];
+    try testing.expectEqualStrings(
+        "Spawner Root For The Long Level Section That Definitely Needs A Very Long Name Indeed",
+        spawner.name,
+    );
+    try testing.expectEqual(model.Status.modified, spawner.status);
+    // A GameObject's own field changes surface as its "GameObject" override group.
+    try testing.expectEqual(@as(usize, 0), spawner.components.len);
+    try testing.expectEqual(@as(usize, 1), spawner.overrides.len);
+    try testing.expectEqualStrings("GameObject", spawner.overrides[0].group);
+    try testing.expectEqualStrings("Active", spawner.overrides[0].label);
+    try testing.expectEqualStrings("1", spawner.overrides[0].before.?.scalar);
+    try testing.expectEqualStrings("0", spawner.overrides[0].after.?.scalar);
+}

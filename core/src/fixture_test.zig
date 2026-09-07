@@ -326,3 +326,42 @@ test "fixture: GameObject whose long name is folded still diffs its later fields
     try testing.expectEqualStrings("1", spawner.overrides[0].before.?.scalar);
     try testing.expectEqualStrings("0", spawner.overrides[0].after.?.scalar);
 }
+
+test "fixture: quoted array changes include the entire scalar and folded continuation" {
+    // Unity 6000.5.2f1 saved these ScriptableObjects. Only the array element changes;
+    // the folded pair changes only on its continuation line, which used to disappear from the diff.
+    const cases = [_]struct {
+        before: []const u8,
+        after: []const u8,
+        before_value: []const u8,
+        after_value: []const u8,
+    }{
+        .{
+            .before = @embedFile("testdata/quoted_array_before.asset"),
+            .after = @embedFile("testdata/quoted_array_after.asset"),
+            .before_value = "foo: hoge:bar",
+            .after_value = "foo: hoge:BAZ",
+        },
+        .{
+            .before = @embedFile("testdata/folded_quoted_array_before.asset"),
+            .after = @embedFile("testdata/folded_quoted_array_after.asset"),
+            .before_value = "prefix: A long string that contains several words and reaches the line width limit with enough characters",
+            .after_value = "prefix: A long string that contains several words and reaches the line width limit with enough CHARACTERS",
+        },
+    };
+    for (cases) |case| {
+        var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+        defer arena_state.deinit();
+
+        const res = try root.diffBytes(arena_state.allocator(), case.before, case.after);
+
+        try testing.expectEqual(@as(usize, 0), res.roots.len);
+        try testing.expectEqual(@as(usize, 1), res.loose.len);
+        try testing.expectEqual(@as(usize, 1), res.loose[0].fields.len);
+        const field = res.loose[0].fields[0];
+        try testing.expectEqualStrings("Texts[0]", field.path);
+        try testing.expectEqual(model.Status.modified, field.status);
+        try testing.expectEqualStrings(case.before_value, field.before.?.scalar);
+        try testing.expectEqualStrings(case.after_value, field.after.?.scalar);
+    }
+}

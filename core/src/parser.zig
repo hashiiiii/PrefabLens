@@ -284,6 +284,83 @@ test "parse: block sequence of plain scalars" {
     try testing.expectEqualStrings("Water", layers.seq[1].scalar);
 }
 
+test "parse: quoted array elements keep colons inside the scalar" {
+    const cases = [_]struct { yaml: []const u8, value: []const u8 }{
+        .{ .yaml = "'foo:hoge:bar'", .value = "foo:hoge:bar" },
+        .{ .yaml = "'foo: hoge:bar'", .value = "foo: hoge:bar" },
+        .{ .yaml = "\"foo: hoge:bar\"", .value = "foo: hoge:bar" },
+        .{ .yaml = "'it''s: a value'", .value = "it's: a value" },
+        .{ .yaml = "\"say \\\"hello: world\\\"\"", .value = "say \"hello: world\"" },
+        .{ .yaml = "\"C:\\\\path: value\"", .value = "C:\\path: value" },
+    };
+    for (cases) |case| {
+        var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+        defer arena_state.deinit();
+        const arena = arena_state.allocator();
+        const src = try std.fmt.allocPrint(arena, "--- !u!114 &1\nMonoBehaviour:\n  texts:\n  - {s}\n", .{case.yaml});
+
+        const doc = try parseOne(arena, src);
+        const parsed = try parseSpanned(arena, src);
+
+        // Both diff and merge parsing must keep the complete array element and its source span.
+        try testing.expectEqual(@as(usize, 1), parsed.documents.len);
+        try testing.expectEqual(@as(usize, 0), parsed.diagnostics.len);
+        for ([_]Document{ doc, parsed.documents[0] }) |document| {
+            const items = model.findValue(document.body.map, "texts").?.seq;
+            try testing.expectEqual(@as(usize, 1), items.len);
+            try testing.expect(items[0].* == .scalar);
+            try testing.expectEqualStrings(case.value, items[0].scalar);
+        }
+        const item = model.findValue(parsed.documents[0].body.map, "texts").?.seq[0];
+        try testing.expectEqualStrings(case.yaml, parsed.nodeBytes(item).?);
+    }
+}
+
+test "parse: folded quoted array elements keep continuations and the next item" {
+    for ([_]u8{ '\'', '"' }) |quote| {
+        var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+        defer arena_state.deinit();
+        const arena = arena_state.allocator();
+        // Unity aligns scalar continuations two spaces past the dash, just like later map keys.
+        const src = try std.fmt.allocPrint(
+            arena,
+            "--- !u!114 &1\nMonoBehaviour:\n  texts:\n  - {c}prefix: first\n    second{c}\n  - next\n  m_Enabled: 1\n",
+            .{ quote, quote },
+        );
+
+        const doc = try parseOne(arena, src);
+
+        const items = model.findValue(doc.body.map, "texts").?.seq;
+        try testing.expectEqual(@as(usize, 2), items.len);
+        try testing.expect(items[0].* == .scalar);
+        try testing.expectEqualStrings("prefix: first second", items[0].scalar);
+        try testing.expectEqualStrings("next", items[1].scalar);
+        try testing.expectEqualStrings("1", model.findValue(doc.body.map, "m_Enabled").?.scalar);
+    }
+}
+
+test "parse: quoted keys and apostrophes in plain keys remain map entries" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    // Quotes around a key do not quote the entire mapping; an apostrophe inside a plain key is literal.
+    const src =
+        \\--- !u!114 &1
+        \\MonoBehaviour:
+        \\  items:
+        \\  - 'key': first
+        \\    other: second
+        \\  - can't: third
+    ;
+
+    const doc = try parseOne(arena_state.allocator(), src);
+
+    const items = model.findValue(doc.body.map, "items").?.seq;
+    try testing.expectEqual(@as(usize, 2), items.len);
+    try testing.expectEqualStrings("first", model.findValue(items[0].map, "'key'").?.scalar);
+    try testing.expectEqualStrings("second", model.findValue(items[0].map, "other").?.scalar);
+    try testing.expectEqualStrings("third", model.findValue(items[1].map, "can't").?.scalar);
+}
+
 test "parse: same-indent sequence inside a sequence map item" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
@@ -1129,9 +1206,26 @@ const KV = struct { key: []const u8, value: []const u8, has_colon: bool };
 
 // Split "key: value" / "key:" at the first ": " or a trailing ":".
 // Don't split inside a flow value (the value starts after the first colon).
-fn splitKeyValue(line: []const u8) KV {
-    // Find the first ":" followed by a space or end of line.
+fn splitKeyValue(raw: []const u8) KV {
+    const line = std.mem.trimStart(u8, raw, " ");
     var i: usize = 0;
+    // Only a leading quote can hide separators. Keep quote handling out of the scan for plain keys.
+    if (line.len > 0 and (line[0] == '\'' or line[0] == '"')) {
+        const delimiter = line[0];
+        i = 1;
+        while (i < line.len) : (i += 1) {
+            if (delimiter == '"' and line[i] == '\\') {
+                i += 1;
+            } else if (line[i] == delimiter) {
+                if (delimiter == '\'' and i + 1 < line.len and line[i + 1] == '\'') {
+                    i += 1;
+                } else {
+                    i += 1;
+                    break;
+                }
+            }
+        }
+    }
     while (i < line.len) : (i += 1) {
         if (line[i] == ':' and (i + 1 == line.len or line[i + 1] == ' ')) {
             const key = std.mem.trim(u8, line[0..i], " ");

@@ -23,24 +23,21 @@ pub const Index = struct {
 };
 
 pub fn refFileId(node: ?*model.Node) ?i64 {
-    const n = node orelse return null;
-    return switch (n.*) {
-        .ref => |r| r.file_id,
-        else => null,
-    };
+    const reference = model.Node.asRef(node) orelse return null;
+    return reference.file_id;
 }
 
 pub fn gameObjectIdOfComponent(doc: *model.Document) ?i64 {
-    return refFileId(model.findValue(doc.body.map, "m_GameObject"));
+    return refFileId(doc.body.get("m_GameObject"));
 }
 
 pub fn transformOf(idx: *Index, go_id: i64) ?*model.Document {
     // Find the Transform/RectTransform among the components the GameObject lists.
     const go = idx.structuralDoc(go_id) orelse return null;
-    const comps = model.findValue(go.body.map, "m_Component") orelse return null;
+    const comps = go.body.get("m_Component") orelse return null;
     if (comps.* != .seq) return null;
     for (comps.seq) |item| {
-        const cref = if (item.* == .map) model.findValue(item.map, "component") else null;
+        const cref = item.get("component");
         const cid = refFileId(cref) orelse continue;
         const cdoc = idx.structuralDoc(cid) orelse continue;
         if (isTransformClass(cdoc.class_id)) return cdoc;
@@ -67,7 +64,7 @@ pub fn resolveInstanceChain(idx: *Index, start_id: i64) ?i64 {
         const doc = idx.structuralDoc(id) orelse return null;
         if (doc.class_id != 1001) return null;
         if (!doc.stripped) return id;
-        id = refFileId(model.findValue(doc.body.map, "m_PrefabInstance")) orelse return null;
+        id = refFileId(doc.body.get("m_PrefabInstance")) orelse return null;
     }
     return null;
 }
@@ -79,7 +76,7 @@ pub fn ownerNodeIdOfTransform(idx: *Index, tr_id: i64) ?i64 {
     const tr = idx.structuralDoc(tr_id) orelse return null;
     if (!isTransformClass(tr.class_id)) return null;
     if (tr.stripped) {
-        const pi_id = refFileId(model.findValue(tr.body.map, "m_PrefabInstance")) orelse return null;
+        const pi_id = refFileId(tr.body.get("m_PrefabInstance")) orelse return null;
         return resolveInstanceChain(idx, pi_id);
     }
     return gameObjectIdOfComponent(tr);
@@ -87,15 +84,15 @@ pub fn ownerNodeIdOfTransform(idx: *Index, tr_id: i64) ?i64 {
 
 pub fn instanceParentId(idx: *Index, pi_id: i64) ?i64 {
     const doc = idx.structuralDoc(pi_id) orelse return null;
-    const m = model.findValue(doc.body.map, "m_Modification") orelse return null;
+    const m = doc.body.get("m_Modification") orelse return null;
     if (m.* != .map) return null;
-    const tp = refFileId(model.findValue(m.map, "m_TransformParent")) orelse return null;
+    const tp = refFileId(m.get("m_TransformParent")) orelse return null;
     return ownerNodeIdOfTransform(idx, tp);
 }
 
 pub fn parentGoId(idx: *Index, go_id: i64) ?i64 {
     const tr = transformOf(idx, go_id) orelse return null;
-    const father_id = refFileId(model.findValue(tr.body.map, "m_Father")) orelse return null;
+    const father_id = refFileId(tr.body.get("m_Father")) orelse return null;
     return ownerNodeIdOfTransform(idx, father_id);
 }
 

@@ -16,7 +16,7 @@ pub fn parseValue(arena: std.mem.Allocator, input: []const u8) Error!*const mode
     if (parsed.diagnostics.len != 0 or parsed.documents.len != 1) return error.InvalidValue;
     const body = parsed.documents[0].body;
     if (body.* != .map or body.map.len != 1) return error.InvalidValue;
-    const value = model.findValue(body.map, "value") orelse return error.InvalidValue;
+    const value = body.get("value") orelse return error.InvalidValue;
     const raw = parsed.nodeBytes(value) orelse return error.InvalidValue;
     if (!std.mem.eql(u8, raw, input)) return error.InvalidValue;
     try validateFlowNode(arena, parsed, value);
@@ -118,12 +118,6 @@ fn appendScalar(arena: std.mem.Allocator, output: *std.ArrayList(u8), scalar: []
     try output.appendSlice(arena, scalar);
 }
 
-pub fn completeEntrySpan(file: source.ParsedFile, node: *const model.Node) ?source.Span {
-    const entry = file.entry_spans.get(node) orelse return null;
-    const span = file.node_spans.get(node) orelse return entry.whole;
-    return .{ .start = @min(entry.whole.start, span.start), .end = @max(entry.whole.end, span.end) };
-}
-
 pub fn replaceEntry(
     arena: std.mem.Allocator,
     ours: source.ParsedFile,
@@ -132,10 +126,10 @@ pub fn replaceEntry(
     inputs: []const source.ParsedFile,
 ) Error!Replacement {
     const entry = ours.entry_spans.get(original) orelse return error.InvalidValue;
-    const span = completeEntrySpan(ours, original) orelse return error.InvalidValue;
+    const span = ours.completeEntrySpan(original) orelse return error.InvalidValue;
     // Selecting a complete side must also select its formatting and comments.
     for (inputs) |input| {
-        if (completeEntrySpan(input, result)) |selected| {
+        if (input.completeEntrySpan(result)) |selected| {
             const selected_entry = input.entry_spans.get(result).?;
             if (entry.key.start - entry.whole.start != selected_entry.key.start - selected_entry.whole.start) continue;
             const bytes = selected.bytes(input.bytes);
@@ -197,7 +191,7 @@ fn lineEnd(bytes: []const u8, offset: usize) usize {
     return if (std.mem.indexOfScalarPos(u8, bytes, offset, '\n')) |end| end + 1 else bytes.len;
 }
 
-fn leadingSpaces(bytes: []const u8) usize {
+pub fn leadingSpaces(bytes: []const u8) usize {
     var count: usize = 0;
     while (count < bytes.len and bytes[count] == ' ') : (count += 1) {}
     return count;
@@ -222,6 +216,84 @@ fn appendIndented(arena: std.mem.Allocator, output: *std.ArrayList(u8), raw: []c
 }
 
 const decodeScalar = @import("yaml_scalar.zig").decode;
+
+pub fn sequenceSpan(file: source.ParsedFile, node: *const model.Node) ?source.Span {
+    var span = file.node_spans.get(node) orelse return null;
+    // An inline empty sequence includes the separator before [] when replaced by block items.
+    if (node.* == .seq and node.seq.len == 0 and span.start > 0 and file.bytes[span.start - 1] == ' ')
+        span.start -= 1;
+    return span;
+}
+
+pub fn sequenceReplacement(
+    arena: std.mem.Allocator,
+    ours_file: source.ParsedFile,
+    ours_node: ?*const model.Node,
+    merged_bytes: []const u8,
+) std.mem.Allocator.Error![]const u8 {
+    const node = ours_node orelse return merged_bytes;
+    if (merged_bytes.len == 0) {
+        if (node.* != .seq or node.seq.len == 0) {
+            return if (sequenceSpan(ours_file, node)) |span| span.bytes(ours_file.bytes) else "[]";
+        }
+        const span = ours_file.node_spans.get(node) orelse return " []";
+        const source_bytes = span.bytes(ours_file.bytes);
+        if (std.mem.endsWith(u8, source_bytes, "\r\n")) return " []\r\n";
+        if (std.mem.endsWith(u8, source_bytes, "\n")) return " []\n";
+        return " []";
+    }
+    if (node.* != .seq or node.seq.len != 0) return merged_bytes;
+    const span = ours_file.node_spans.get(node) orelse return merged_bytes;
+    const line_ending = ours_file.lineEndingAt(span.end);
+    const item_bytes = if (std.mem.endsWith(u8, merged_bytes, line_ending))
+        merged_bytes[0 .. merged_bytes.len - line_ending.len]
+    else
+        merged_bytes;
+    return std.fmt.allocPrint(arena, "{s}{s}", .{ line_ending, item_bytes });
+}
+
+pub fn sequenceIndent(file: source.ParsedFile, node: ?*const model.Node) ?usize {
+    const sequence = node orelse return null;
+    if (sequence.* != .seq or sequence.seq.len == 0) return null;
+    const span = file.sequence_item_spans.get(sequence.seq[0]) orelse return null;
+    const end = std.mem.indexOfScalarPos(u8, file.bytes, span.start, '\n') orelse span.end;
+    return leadingSpaces(file.bytes[span.start..end]);
+}
+
+pub fn sequenceFieldIndent(file: source.ParsedFile, node: ?*const model.Node) ?usize {
+    const sequence = node orelse return null;
+    const entry = file.entry_spans.get(sequence) orelse return null;
+    const line_start = if (std.mem.lastIndexOfScalar(u8, file.bytes[0..entry.key.start], '\n')) |lf| lf + 1 else 0;
+    return entry.key.start - line_start;
+}
+
+pub fn reindentSequenceItem(
+    arena: std.mem.Allocator,
+    source_item: []const u8,
+    destination_indent: usize,
+    line_ending: []const u8,
+) (std.mem.Allocator.Error || error{UnsupportedStructure})![]const u8 {
+    const first_lf = std.mem.indexOfScalar(u8, source_item, '\n') orelse source_item.len;
+    const first_line = std.mem.trimEnd(u8, source_item[0..first_lf], "\r");
+    const source_indent = leadingSpaces(first_line);
+    var output: std.ArrayList(u8) = .empty;
+    var cursor: usize = 0;
+    while (cursor < source_item.len) {
+        const relative_lf = std.mem.indexOfScalar(u8, source_item[cursor..], '\n');
+        const end = if (relative_lf) |line_index| cursor + line_index else source_item.len;
+        const raw_line = source_item[cursor..end];
+        const line = std.mem.trimEnd(u8, raw_line, "\r");
+        const indent = leadingSpaces(line);
+        if (line.len != 0 and indent < source_indent) return error.UnsupportedStructure;
+        if (line.len != 0) {
+            try output.appendNTimes(arena, ' ', destination_indent + indent - source_indent);
+            try output.appendSlice(arena, line[indent..]);
+        }
+        if (relative_lf != null) try output.appendSlice(arena, line_ending);
+        cursor = if (relative_lf != null) end + 1 else end;
+    }
+    return output.toOwnedSlice(arena);
+}
 
 test "collection YAML flow keeps quoted punctuation and object references" {
     var memory = std.heap.ArenaAllocator.init(testing.allocator);

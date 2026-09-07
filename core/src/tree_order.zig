@@ -51,7 +51,7 @@ pub fn orderChildren(arena: std.mem.Allocator, idx: *Index, parent_id: i64, list
     const parent = idx.structuralDoc(parent_id) orelse return;
     if (parent.class_id != 1) return;
     const tr = tree_chain.transformOf(idx, parent_id) orelse return;
-    const kids = model.findValue(tr.body.map, "m_Children") orelse return;
+    const kids = tr.body.get("m_Children") orelse return;
     if (kids.* != .seq) return;
     try orderByTransformRefs(arena, idx, kids.seq, list);
 }
@@ -63,11 +63,8 @@ fn rootOrderOf(idx: *Index, id: i64) ?i64 {
         return std.fmt.parseInt(i64, s, 10) catch null;
     }
     const tr = tree_chain.transformOf(idx, id) orelse return null;
-    const v = model.findValue(tr.body.map, "m_RootOrder") orelse return null;
-    return switch (v.*) {
-        .scalar => |s| std.fmt.parseInt(i64, s, 10) catch null,
-        else => null,
-    };
+    const value = model.Node.asScalar(tr.body.get("m_RootOrder")) orelse return null;
+    return std.fmt.parseInt(i64, value, 10) catch null;
 }
 
 // Scene root order: SceneRoots.m_Roots when present, else the per-transform
@@ -75,7 +72,7 @@ fn rootOrderOf(idx: *Index, id: i64) ?i64 {
 // so they fall through untouched.
 pub fn orderRoots(arena: std.mem.Allocator, idx: *Index, fd: diffmod.FlatDiff, roots_ids: *std.ArrayList(i64)) !void {
     if (sceneRootsDoc(fd)) |doc| {
-        const roots = model.findValue(doc.body.map, "m_Roots") orelse return;
+        const roots = doc.body.get("m_Roots") orelse return;
         if (roots.* != .seq) return;
         try orderByTransformRefs(arena, idx, roots.seq, roots_ids);
         return;

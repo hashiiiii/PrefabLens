@@ -5,7 +5,7 @@ const testing = std.testing;
 // Test-only lookup of one document's diff by fileID.
 // pub: diff_overrides' tests use it too.
 pub fn findDoc(fd: FlatDiff, file_id: i64) ?DocDiff {
-    for (fd.docs) |d| if (d.file_id == file_id) return d;
+    for (fd.docs) |d| if (d.component.file_id == file_id) return d;
     return null;
 }
 
@@ -27,13 +27,13 @@ test "diff: modified scalar field is detected old->new" {
     ;
     const fd = try compute(arena, before, after);
     const d = findDoc(fd, 5).?;
-    try testing.expectEqual(model.Status.modified, d.status);
-    try testing.expectEqualStrings("abc", d.script_guid.?);
-    try testing.expectEqual(@as(usize, 1), d.fields.len);
-    try testing.expectEqualStrings("Max Hp", d.fields[0].path);
-    try testing.expectEqual(model.Status.modified, d.fields[0].status);
-    try testing.expectEqualStrings("100", d.fields[0].before.?.scalar);
-    try testing.expectEqualStrings("150", d.fields[0].after.?.scalar);
+    try testing.expectEqual(model.Status.modified, d.component.status);
+    try testing.expectEqualStrings("abc", d.component.script_guid.?);
+    try testing.expectEqual(@as(usize, 1), d.component.fields.len);
+    try testing.expectEqualStrings("Max Hp", d.component.fields[0].path);
+    try testing.expectEqual(model.Status.modified, d.component.fields[0].status);
+    try testing.expectEqualStrings("100", d.component.fields[0].before.?.scalar);
+    try testing.expectEqualStrings("150", d.component.fields[0].after.?.scalar);
 }
 
 test "diff: unknown classID falls back to the document top-level key" {
@@ -54,8 +54,8 @@ test "diff: unknown classID falls back to the document top-level key" {
     ;
     const fd = try compute(arena, before, after);
     const d = findDoc(fd, 7).?;
-    try testing.expectEqualStrings("MyCustomThing", d.type_name);
-    try testing.expectEqual(model.Status.modified, d.status);
+    try testing.expectEqualStrings("MyCustomThing", d.component.type_name);
+    try testing.expectEqual(model.Status.modified, d.component.status);
 }
 
 test "diff: added and removed documents" {
@@ -76,16 +76,16 @@ test "diff: added and removed documents" {
         \\  m_Name: B
     ;
     const fd = try compute(arena, before, after);
-    try testing.expectEqual(model.Status.unchanged, findDoc(fd, 1).?.status);
-    try testing.expectEqual(model.Status.added, findDoc(fd, 2).?.status);
+    try testing.expectEqual(model.Status.unchanged, findDoc(fd, 1).?.component.status);
+    try testing.expectEqual(model.Status.added, findDoc(fd, 2).?.component.status);
 
     const fd2 = try compute(arena, after, before);
     const removed = findDoc(fd2, 2).?;
-    try testing.expectEqual(model.Status.removed, removed.status);
+    try testing.expectEqual(model.Status.removed, removed.component.status);
     // Removed side enumerates fully too: the Name visible in the hierarchy remains with its before value.
-    try testing.expectEqual(@as(usize, 1), removed.fields.len);
-    try testing.expectEqualStrings("Name", removed.fields[0].path);
-    try testing.expectEqualStrings("B", removed.fields[0].before.?.scalar);
+    try testing.expectEqual(@as(usize, 1), removed.component.fields.len);
+    try testing.expectEqualStrings("Name", removed.component.fields[0].path);
+    try testing.expectEqualStrings("B", removed.component.fields[0].before.?.scalar);
 }
 
 test "diff: nested field path and added field" {
@@ -105,12 +105,12 @@ test "diff: nested field path and added field" {
     ;
     const fd = try compute(arena, before, after);
     const d = findDoc(fd, 4).?;
-    try testing.expectEqual(model.Status.modified, d.status);
+    try testing.expectEqual(model.Status.modified, d.component.status);
     // Expect: the modified leaf (m_LocalPosition.y) plus the added m_LocalScale
     // collapsed as a vector into a single "Scale" row.
     var saw_y = false;
     var saw_added_scale = false;
-    for (d.fields) |f| {
+    for (d.component.fields) |f| {
         if (std.mem.eql(u8, f.path, "Position.y")) {
             saw_y = true;
             try testing.expectEqual(model.Status.modified, f.status);
@@ -148,11 +148,11 @@ test "diff: duplicate before fileIDs match the first occurrence" {
     ;
     const fd = try compute(arena, before, after);
     const d = findDoc(fd, 5).?;
-    try testing.expectEqual(model.Status.modified, d.status);
-    try testing.expectEqual(@as(usize, 1), d.fields.len);
+    try testing.expectEqual(model.Status.modified, d.component.status);
+    try testing.expectEqual(@as(usize, 1), d.component.fields.len);
     // First occurrence wins: before is 100, not the duplicate's 999.
-    try testing.expectEqualStrings("100", d.fields[0].before.?.scalar);
-    try testing.expectEqualStrings("150", d.fields[0].after.?.scalar);
+    try testing.expectEqualStrings("100", d.component.fields[0].before.?.scalar);
+    try testing.expectEqualStrings("150", d.component.fields[0].after.?.scalar);
 }
 
 test "diff: unresolved guids collected from external refs" {
@@ -249,8 +249,8 @@ test "diff: hidden fields are dropped and paths humanized" {
     const fd = try compute(arena, before, after);
     const d = findDoc(fd, 4).?;
     // The m_GameObject change is hidden. m_LocalPosition.x becomes "Position.x".
-    try testing.expectEqual(@as(usize, 1), d.fields.len);
-    try testing.expectEqualStrings("Position.x", d.fields[0].path);
+    try testing.expectEqual(@as(usize, 1), d.component.fields.len);
+    try testing.expectEqualStrings("Position.x", d.component.fields[0].path);
 }
 
 test "diff: hidden-only changes leave the document unchanged" {
@@ -268,7 +268,7 @@ test "diff: hidden-only changes leave the document unchanged" {
         \\  m_LocalEulerAnglesHint: {x: 0, y: 90, z: 0}
     ;
     const fd = try compute(arena, before, after);
-    try testing.expectEqual(model.Status.unchanged, findDoc(fd, 4).?.status);
+    try testing.expectEqual(model.Status.unchanged, findDoc(fd, 4).?.component.status);
 }
 
 test "diff: editor class identifier tail is extracted" {
@@ -288,7 +288,7 @@ test "diff: editor class identifier tail is extracted" {
         \\  hp: 2
     ;
     const fd = try compute(arena, src, src2);
-    try testing.expectEqualStrings("Cylinder1", findDoc(fd, 5).?.class_name.?);
+    try testing.expectEqualStrings("Cylinder1", findDoc(fd, 5).?.component.class_name.?);
 }
 
 test "diff: editor class identifier without separator or with empty tail" {
@@ -305,8 +305,8 @@ test "diff: editor class identifier without separator or with empty tail" {
     ;
     const fd = try compute(arena, src, src);
     // No separator uses the whole string as the class name; an empty tail means no class_name.
-    try testing.expectEqualStrings("Cylinder1", findDoc(fd, 5).?.class_name.?);
-    try testing.expect(findDoc(fd, 6).?.class_name == null);
+    try testing.expectEqualStrings("Cylinder1", findDoc(fd, 5).?.component.class_name.?);
+    try testing.expect(findDoc(fd, 6).?.component.class_name == null);
 }
 
 test "diff: unresolved guids are deduplicated in first-reference order" {
@@ -346,12 +346,12 @@ test "diff: added document enumerates fields with vector collapse" {
     ;
     const fd = try compute(arena, before, after);
     const d = findDoc(fd, 4).?;
-    try testing.expectEqual(model.Status.added, d.status);
+    try testing.expectEqual(model.Status.added, d.component.status);
     // m_GameObject is hidden. Position is a single vector row, maxHp is Max Hp.
-    try testing.expectEqual(@as(usize, 2), d.fields.len);
-    try testing.expectEqualStrings("Position", d.fields[0].path);
-    try testing.expectEqualStrings("(4, 0, 0)", d.fields[0].after.?.scalar);
-    try testing.expectEqualStrings("Max Hp", d.fields[1].path);
+    try testing.expectEqual(@as(usize, 2), d.component.fields.len);
+    try testing.expectEqualStrings("Position", d.component.fields[0].path);
+    try testing.expectEqualStrings("(4, 0, 0)", d.component.fields[0].after.?.scalar);
+    try testing.expectEqualStrings("Max Hp", d.component.fields[1].path);
 }
 
 test "diff: removed document enumerates fields with vector collapse" {
@@ -367,15 +367,15 @@ test "diff: removed document enumerates fields with vector collapse" {
     ;
     const fd = try compute(arena, before, "");
     const d = findDoc(fd, 4).?;
-    try testing.expectEqual(model.Status.removed, d.status);
+    try testing.expectEqual(model.Status.removed, d.component.status);
     // Symmetric with the added side: m_GameObject hidden, Position a single vector row, values on before.
-    try testing.expectEqual(@as(usize, 2), d.fields.len);
-    try testing.expectEqualStrings("Position", d.fields[0].path);
-    try testing.expectEqual(model.Status.removed, d.fields[0].status);
-    try testing.expectEqualStrings("(4, 0, 0)", d.fields[0].before.?.scalar);
-    try testing.expect(d.fields[0].after == null);
-    try testing.expectEqualStrings("Max Hp", d.fields[1].path);
-    try testing.expectEqualStrings("100", d.fields[1].before.?.scalar);
+    try testing.expectEqual(@as(usize, 2), d.component.fields.len);
+    try testing.expectEqualStrings("Position", d.component.fields[0].path);
+    try testing.expectEqual(model.Status.removed, d.component.fields[0].status);
+    try testing.expectEqualStrings("(4, 0, 0)", d.component.fields[0].before.?.scalar);
+    try testing.expect(d.component.fields[0].after == null);
+    try testing.expectEqualStrings("Max Hp", d.component.fields[1].path);
+    try testing.expectEqualStrings("100", d.component.fields[1].before.?.scalar);
 }
 
 const parser = @import("parser.zig");
@@ -387,13 +387,7 @@ const Status = model.Status;
 const FieldDiff = model.FieldDiff;
 
 pub const DocDiff = struct {
-    file_id: i64,
-    class_id: u32,
-    type_name: []const u8,
-    script_guid: ?[]const u8 = null,
-    class_name: ?[]const u8 = null,
-    status: Status,
-    fields: []FieldDiff,
+    component: model.ComponentDiff,
     overrides: []model.OverrideDiff = &.{},
 };
 
@@ -417,20 +411,13 @@ fn buildIndex(arena: std.mem.Allocator, docs: []model.Document) !std.AutoHashMap
 }
 
 fn scriptGuid(doc: *const model.Document) ?[]const u8 {
-    const s = model.findValue(doc.body.map, "m_Script") orelse return null;
-    return switch (s.*) {
-        .ref => |r| r.guid,
-        else => null,
-    };
+    const script = Node.asRef(doc.body.get("m_Script")) orelse return null;
+    return script.guid;
 }
 
 // "Assembly-CSharp::Cylinder1" -> "Cylinder1" (after the last ':').
 fn editorClassName(doc: *const model.Document) ?[]const u8 {
-    const v = model.findValue(doc.body.map, "m_EditorClassIdentifier") orelse return null;
-    const s = switch (v.*) {
-        .scalar => |s| s,
-        else => return null,
-    };
+    const s = Node.asScalar(doc.body.get("m_EditorClassIdentifier")) orelse return null;
     const tail = if (std.mem.lastIndexOfScalar(u8, s, ':')) |idx| s[idx + 1 ..] else s;
     return if (tail.len != 0) tail else null;
 }
@@ -477,88 +464,14 @@ pub fn computeParsed(arena: std.mem.Allocator, before: []model.Document, after: 
         if (ad.stripped) continue;
         try collectGuids(arena, &guids, ad.body);
         const bd = before_idx.get(ad.file_id);
-        if (bd) |b| {
-            try collectGuids(arena, &guids, b.body);
-            if (ad.class_id == 1001) {
-                const overrides = try diff_overrides.diffOverrides(arena, b, ad);
-                try docs.append(arena, .{
-                    .file_id = ad.file_id,
-                    .class_id = ad.class_id,
-                    .type_name = resolvedTypeName(ad),
-                    .script_guid = scriptGuid(ad),
-                    .status = if (overrides.len == 0) .unchanged else .modified,
-                    .fields = &.{},
-                    .overrides = overrides,
-                });
-            } else {
-                var raw: std.ArrayList(FieldDiff) = .empty;
-                try diffNode(arena, &raw, "", b.body, ad.body);
-                const fields = try presentFields(arena, raw.items);
-                try docs.append(arena, .{
-                    .file_id = ad.file_id,
-                    .class_id = ad.class_id,
-                    .type_name = resolvedTypeName(ad),
-                    .script_guid = scriptGuid(ad),
-                    .class_name = editorClassName(ad),
-                    .status = if (fields.len == 0) .unchanged else .modified,
-                    .fields = fields,
-                });
-            }
-        } else {
-            if (ad.class_id == 1001) {
-                try docs.append(arena, .{
-                    .file_id = ad.file_id,
-                    .class_id = ad.class_id,
-                    .type_name = resolvedTypeName(ad),
-                    .script_guid = scriptGuid(ad),
-                    .status = .added,
-                    .fields = &.{},
-                    .overrides = try diff_overrides.soleInstanceOverrides(arena, ad, .added),
-                });
-            } else {
-                var raw: std.ArrayList(FieldDiff) = .empty;
-                for (ad.body.map) |e| try flattenSubtree(arena, &raw, e.key, e.value, .added);
-                try docs.append(arena, .{
-                    .file_id = ad.file_id,
-                    .class_id = ad.class_id,
-                    .type_name = resolvedTypeName(ad),
-                    .script_guid = scriptGuid(ad),
-                    .class_name = editorClassName(ad),
-                    .status = .added,
-                    .fields = try presentFields(arena, raw.items),
-                });
-            }
-        }
+        if (bd) |b| try collectGuids(arena, &guids, b.body);
+        try docs.append(arena, try diffDocument(arena, bd, ad));
     }
     for (before) |*bd| {
         if (bd.stripped) continue;
         if (after_idx.contains(bd.file_id)) continue;
         try collectGuids(arena, &guids, bd.body);
-        if (bd.class_id == 1001) {
-            try docs.append(arena, .{
-                .file_id = bd.file_id,
-                .class_id = bd.class_id,
-                .type_name = resolvedTypeName(bd),
-                .script_guid = scriptGuid(bd),
-                .class_name = editorClassName(bd),
-                .status = .removed,
-                .fields = &.{},
-                .overrides = try diff_overrides.soleInstanceOverrides(arena, bd, .removed),
-            });
-        } else {
-            // Full enumeration symmetric with the added side (flattenSubtree ~ presentFields).
-            var raw: std.ArrayList(FieldDiff) = .empty;
-            for (bd.body.map) |e| try flattenSubtree(arena, &raw, e.key, e.value, .removed);
-            try docs.append(arena, .{
-                .file_id = bd.file_id,
-                .class_id = bd.class_id,
-                .type_name = resolvedTypeName(bd),
-                .script_guid = scriptGuid(bd),
-                .class_name = editorClassName(bd),
-                .status = .removed,
-                .fields = try presentFields(arena, raw.items),
-            });
-        }
+        try docs.append(arena, try diffDocument(arena, bd, null));
     }
 
     return .{
@@ -567,6 +480,37 @@ pub fn computeParsed(arena: std.mem.Allocator, before: []model.Document, after: 
         .before = before,
         .after = after,
     };
+}
+
+fn diffDocument(arena: std.mem.Allocator, before: ?*const model.Document, after: ?*const model.Document) !DocDiff {
+    const doc = after orelse before.?;
+    const status: Status = if (before == null) .added else if (after == null) .removed else .unchanged;
+    var result = DocDiff{ .component = .{
+        .file_id = doc.file_id,
+        .class_id = doc.class_id,
+        .type_name = resolvedTypeName(doc),
+        .script_guid = scriptGuid(doc),
+        .class_name = if (doc.class_id != 1001 or after == null) editorClassName(doc) else null,
+        .status = status,
+        .fields = &.{},
+    } };
+    if (doc.class_id == 1001) {
+        result.overrides = if (status == .unchanged)
+            try diff_overrides.diffOverrides(arena, before.?, after.?)
+        else
+            try diff_overrides.soleInstanceOverrides(arena, doc, status);
+        if (status == .unchanged and result.overrides.len != 0) result.component.status = .modified;
+    } else {
+        var raw: std.ArrayList(FieldDiff) = .empty;
+        if (status == .unchanged) {
+            try diffNode(arena, &raw, "", before.?.body, after.?.body);
+        } else {
+            for (doc.body.map) |entry| try flattenSubtree(arena, &raw, entry.key, entry.value, status);
+        }
+        result.component.fields = try presentFields(arena, raw.items);
+        if (status == .unchanged and result.component.fields.len != 0) result.component.status = .modified;
+    }
+    return result;
 }
 
 // Recursive field diff. `prefix` is the dot/index-separated path into `a`/`b`.

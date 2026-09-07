@@ -64,8 +64,8 @@ test "diff: prefab instance override keyed by target+propertyPath" {
     const diffmod = @import("diff.zig");
     const fd = try diffmod.compute(arena, before, after);
     const d = diffmod.findDoc(fd, 1001).?;
-    try testing.expectEqual(model.Status.modified, d.status);
-    try testing.expectEqual(@as(usize, 0), d.fields.len);
+    try testing.expectEqual(model.Status.modified, d.component.status);
+    try testing.expectEqual(@as(usize, 0), d.component.fields.len);
     try testing.expectEqual(@as(usize, 1), d.overrides.len);
     try testing.expectEqualStrings("Transform", d.overrides[0].group);
     try testing.expectEqualStrings("Position.x", d.overrides[0].label);
@@ -102,7 +102,7 @@ test "diff: prefab instance name rename emits GameObject override" {
     const diffmod = @import("diff.zig");
     const fd = try diffmod.compute(arena, before, after);
     const d = diffmod.findDoc(fd, 1001).?;
-    try testing.expectEqual(model.Status.modified, d.status);
+    try testing.expectEqual(model.Status.modified, d.component.status);
     try testing.expectEqual(@as(usize, 1), d.overrides.len);
     try testing.expectEqualStrings("GameObject", d.overrides[0].group);
     try testing.expectEqualStrings("Name", d.overrides[0].label);
@@ -157,7 +157,7 @@ test "diff: modified instance overrides are sorted group-contiguous, Transform f
     const diffmod = @import("diff.zig");
     const fd = try diffmod.compute(arena, before, after);
     const d = diffmod.findDoc(fd, 1001).?;
-    try testing.expectEqual(model.Status.modified, d.status);
+    try testing.expectEqual(model.Status.modified, d.component.status);
     try testing.expectEqual(@as(usize, 3), d.overrides.len);
     try testing.expectEqualStrings("Transform", d.overrides[0].group);
     try testing.expectEqualStrings("Overrides", d.overrides[1].group);
@@ -208,7 +208,7 @@ test "diff: added prefab instance emits placement summary rows" {
     const diffmod = @import("diff.zig");
     const fd = try diffmod.compute(arena, "", after);
     const d = diffmod.findDoc(fd, 1001).?;
-    try testing.expectEqual(model.Status.added, d.status);
+    try testing.expectEqual(model.Status.added, d.component.status);
     // Recorded placement is emitted as a single synthesized row even at default values (identity Rotation).
     // EulerAnglesHint (hidden in Inspector) is not emitted; m_Name appears as a GameObject row.
     try testing.expectEqual(@as(usize, 3), d.overrides.len);
@@ -266,7 +266,7 @@ test "diff: removed prefab instance mirrors overrides to before" {
     const diffmod = @import("diff.zig");
     const fd = try diffmod.compute(arena, before, "");
     const d = diffmod.findDoc(fd, 1001).?;
-    try testing.expectEqual(model.Status.removed, d.status);
+    try testing.expectEqual(model.Status.removed, d.component.status);
     // Mirror of added: values on the before side, structural summary removed with the before-side count.
     try testing.expectEqual(@as(usize, 2), d.overrides.len);
     try testing.expectEqualStrings("Scale.y", d.overrides[0].label);
@@ -422,14 +422,6 @@ const placements = [_]Placement{
     .{ .prefix = "m_LocalScale", .label = "Scale", .comps = &.{ "x", "y", "z" } },
 };
 
-fn scalarOf(n: ?*Node) ?[]const u8 {
-    const node = n orelse return null;
-    return switch (node.*) {
-        .scalar => |s| s,
-        else => null,
-    };
-}
-
 fn findMod(mods: []Mod, path: []const u8) ?Mod {
     for (mods) |m| if (std.mem.eql(u8, m.property_path, path)) return m;
     return null;
@@ -478,7 +470,7 @@ fn soleOverridesFromMods(arena: std.mem.Allocator, doc: *const model.Document, m
                 all = false;
                 break;
             };
-            const v = scalarOf(m.value) orelse {
+            const v = Node.asScalar(m.value) orelse {
                 all = false;
                 break;
             };
@@ -530,9 +522,9 @@ fn soleOverridesFromMods(arena: std.mem.Allocator, doc: *const model.Document, m
 }
 
 fn modificationSeqLen(doc: *const model.Document, key: []const u8) usize {
-    const m = model.findValue(doc.body.map, "m_Modification") orelse return 0;
+    const m = doc.body.get("m_Modification") orelse return 0;
     if (m.* != .map) return 0;
-    const v = model.findValue(m.map, key) orelse return 0;
+    const v = m.get(key) orelse return 0;
     return switch (v.*) {
         .seq => |s| s.len,
         else => 0,

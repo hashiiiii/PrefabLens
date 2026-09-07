@@ -135,9 +135,9 @@ fn concatObjects(arena: std.mem.Allocator, a: []model.ObjectDiff, b: []model.Obj
 // Mark the referents of m_RemovedComponents (source-internal fileIDs) as stripped
 // (computeParsed excludes stripped docs).
 fn applyRemovedComponents(inst_doc: *const model.Document, src_docs: []model.Document) void {
-    const m = model.findValue(inst_doc.body.map, "m_Modification") orelse return;
+    const m = inst_doc.body.get("m_Modification") orelse return;
     if (m.* != .map) return;
-    const list = model.findValue(m.map, "m_RemovedComponents") orelse return;
+    const list = m.get("m_RemovedComponents") orelse return;
     if (list.* != .seq) return;
     for (list.seq) |item| {
         if (item.* != .ref) continue;
@@ -198,9 +198,9 @@ fn pushDown(arena: std.mem.Allocator, src_docs: []model.Document, target_id: i64
 }
 
 fn appendMod(arena: std.mem.Allocator, pi_doc: *model.Document, inner_id: i64, pguid: []const u8, property_path: []const u8, value: ?*model.Node, obj_ref: ?*model.Node) !bool {
-    const m = model.findValue(pi_doc.body.map, "m_Modification") orelse return false;
+    const m = pi_doc.body.get("m_Modification") orelse return false;
     if (m.* != .map) return false;
-    const list = model.findValue(m.map, "m_Modifications") orelse return false;
+    const list = m.get("m_Modifications") orelse return false;
     if (list.* != .seq) return false;
     const target = try arena.create(model.Node);
     target.* = .{ .ref = .{ .file_id = inner_id, .guid = pguid, .type_id = 3 } };
@@ -614,7 +614,7 @@ test "instantiate: setByPropertyPath handles nested and array paths" {
     // Nested path.
     setByPropertyPath(docs[0].body, "m_LocalScale.y", &value);
     const scale = model.findValue(docs[0].body.map, "m_LocalScale").?;
-    try testing.expectEqualStrings("9", model.findValue(scale.map, "y").?.scalar);
+    try testing.expectEqualStrings("9", scale.get("y").?.scalar);
 
     // Array.data[i] path (leaf replacement).
     setByPropertyPath(docs[0].body, "m_Materials.Array.data[1]", &value);

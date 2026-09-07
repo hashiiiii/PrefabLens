@@ -53,11 +53,11 @@ pub fn componentOwners(
     var owners: ComponentOwnerIndex = .empty;
     for (documents) |document| {
         if (document.class_id != 1) continue;
-        const components = model.findValue(document.body.map, "m_Component") orelse continue;
+        const components = document.body.get("m_Component") orelse continue;
         if (components.* != .seq) return error.UnsupportedStructure;
         for (components.seq) |item| {
             if (item.* != .map) return error.UnsupportedStructure;
-            const component = prefab.reference(model.findValue(item.map, "component")) orelse
+            const component = model.Node.asRef(item.get("component")) orelse
                 return error.UnsupportedStructure;
             const result = try owners.getOrPut(arena, component.file_id);
             if (result.found_existing) return error.InvalidMerge;
@@ -94,6 +94,23 @@ pub const SequenceItemId = struct {
     property_path: ?[]const u8 = null,
     added_object: ?merge_model.RefId = null,
     override_kind: ?merge_model.PrefabOverrideKind = null,
+
+    pub fn key(identity: SequenceItemId, arena: std.mem.Allocator) std.mem.Allocator.Error![]const u8 {
+        return std.fmt.allocPrint(
+            arena,
+            "{d}|{s}|{?d}|{s}|{?d}|{s}|{?d}|{?d}",
+            .{
+                identity.target.file_id,
+                identity.target.guid orelse "",
+                identity.target.type_id,
+                identity.property_path orelse "",
+                if (identity.added_object) |added| added.file_id else null,
+                if (identity.added_object) |added| added.guid orelse "" else "",
+                if (identity.added_object) |added| added.type_id else null,
+                if (identity.override_kind) |override_kind| @intFromEnum(override_kind) else null,
+            },
+        );
+    }
 };
 
 pub fn sequenceItemId(kind: SequenceKind, item: *const model.Node) ?SequenceItemId {
@@ -110,11 +127,11 @@ pub fn sequenceItemId(kind: SequenceKind, item: *const model.Node) ?SequenceItem
 
 fn itemFileIdField(item: *const model.Node, field: []const u8) ?SequenceItemId {
     if (item.* != .map) return null;
-    return directFileId(model.findValue(item.map, field) orelse return null);
+    return directFileId(item.get(field) orelse return null);
 }
 
 fn directFileId(item: *const model.Node) ?SequenceItemId {
-    const target = prefab.reference(item) orelse return null;
+    const target = model.Node.asRef(item) orelse return null;
     return .{ .target = .{ .file_id = target.file_id, .guid = null, .type_id = null } };
 }
 

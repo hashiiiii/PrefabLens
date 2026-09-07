@@ -7,11 +7,9 @@ const merge_git = @import("merge_git.zig");
 const files = @import("merge_file_conflict.zig");
 const Git = merge_git.Git;
 
-const Identity = struct { guid: []const u8, path: []const u8 };
 const Entry = struct { path: []const u8, mode: []const u8, oid: []const u8 };
 const Node = struct {
     path: []const u8,
-    deps: std.StringHashMap(void),
     unity: bool = false,
     relevant: bool = false,
     changed: bool = false,
@@ -39,7 +37,6 @@ pub const Candidate = struct {
     relevance: std.StringHashMap(bool),
     items: std.ArrayList(Item) = .empty,
     snapshots: std.ArrayList([]const Entry) = .empty,
-    identities: std.ArrayList(Identity) = .empty,
     evidence_paths: []const []const u8 = &.{},
 
     pub fn init(git: Git, result: strategy.Result) !Candidate {
@@ -75,7 +72,7 @@ pub const Candidate = struct {
     fn node(self: *Candidate, path: []const u8) !usize {
         if (self.node_index.get(path)) |index| return index;
         const index = self.nodes.items.len;
-        try self.nodes.append(self.git.arena, .{ .path = path, .deps = .init(self.git.arena) });
+        try self.nodes.append(self.git.arena, .{ .path = path });
         try self.node_index.put(path, index);
         return index;
     }
@@ -98,7 +95,7 @@ pub const Candidate = struct {
             return true;
         };
         const relevant = for (built.plan.ours.documents) |document| {
-            if (document.class_id == 1001 or collectionNode(document.body)) break true;
+            if (document.class_id == 1001 or containsSequence(document.body)) break true;
         } else false;
         try self.relevance.put(oid, relevant);
         return relevant;
@@ -108,9 +105,6 @@ pub const Candidate = struct {
         const a = self.git.arena;
         const entries = try treeEntries(self.git, tree);
         try self.snapshots.append(a, entries);
-        // Keep every strict metadata identity, including duplicates: a conflict
-        // cannot make the other occurrence look uniquely identified for scheduling.
-        var identities: std.ArrayList(Identity) = .empty;
         for (entries) |entry| {
             _ = try self.node(entry.path);
             if (!std.ascii.endsWithIgnoreCase(entry.path, ".meta")) continue;
@@ -119,11 +113,7 @@ pub const Candidate = struct {
                 continue;
             }
             const bytes = try self.readBlob(entry.oid);
-            if (try revision.metadataGuid(a, bytes)) |guid| {
-                const identity: Identity = .{ .guid = guid, .path = entry.path[0 .. entry.path.len - 5] };
-                try identities.append(a, identity);
-                try self.rememberIdentity(identity);
-            } else self.nodes.items[self.node_index.get(entry.path).?].uncertain_identity = true;
+            if ((try revision.metadataGuid(a, bytes)) == null) self.nodes.items[self.node_index.get(entry.path).?].uncertain_identity = true;
         }
         for (entries) |entry| {
             if (!regular(entry.mode) or !assetPath(entry.path)) continue;
@@ -132,46 +122,13 @@ pub const Candidate = struct {
             const index = try self.node(entry.path);
             self.nodes.items[index].unity = true;
             self.nodes.items[index].relevant = self.nodes.items[index].relevant or try self.collectionRelevant(entry.oid, bytes);
-            const dependencies = core.merge_variant_source.dependencies(a, bytes) catch &.{};
-            for (dependencies) |guid| for (identities.items) |identity| {
-                if (!std.mem.eql(u8, guid, identity.guid)) continue;
-                try self.nodes.items[index].deps.put(identity.path, {});
-                try self.nodes.items[index].deps.put(try std.fmt.allocPrint(a, "{s}.meta", .{identity.path}), {});
-            };
-        }
-    }
-
-    fn rememberIdentity(self: *Candidate, value: Identity) !void {
-        for (self.identities.items) |existing| if (std.mem.eql(u8, existing.guid, value.guid) and std.mem.eql(u8, existing.path, value.path)) return;
-        try self.identities.append(self.git.arena, value);
-    }
-
-    fn discoverAccepted(self: *Candidate, paths: []const []const u8) !void {
-        // Only committed paths can introduce new edges. Historical and previous
-        // selected identities remain in the union until all dependents finish.
-        for (paths) |path| {
-            if (!std.ascii.endsWithIgnoreCase(path, ".meta")) continue;
-            const entry = (try files.treeEntry(self.git, self.result.tree, path)) orelse continue;
-            if (try revision.metadataGuid(self.git.arena, try self.readBlob(entry.oid))) |guid| {
-                try self.rememberIdentity(.{ .guid = guid, .path = path[0 .. path.len - 5] });
-            }
-        }
-        for (paths) |path| {
-            if (!assetPath(path)) continue;
-            const entry = (try files.treeEntry(self.git, self.result.tree, path)) orelse continue;
-            const dependencies = core.merge_variant_source.dependencies(self.git.arena, try self.readBlob(entry.oid)) catch continue;
-            const index = try self.node(path);
-            for (dependencies) |guid| for (self.identities.items) |identity| {
-                if (!std.mem.eql(u8, guid, identity.guid)) continue;
-                try self.nodes.items[index].deps.put(identity.path, {});
-                try self.nodes.items[index].deps.put(try std.fmt.allocPrint(self.git.arena, "{s}.meta", .{identity.path}), {});
-            };
         }
     }
 
     fn seed(self: *Candidate) !void {
         const a = self.git.arena;
-        // A comparison across the union retains deleted and replacement GUID edges.
+        // Compare every path across all revisions so deleted and replacement files
+        // remain part of the candidate set.
         for (self.nodes.items) |*n| {
             const first = findEntry(self.snapshots.items[0], n.path);
             for (self.snapshots.items[1..]) |entries| if (!equalEntry(first, findEntry(entries, n.path))) {
@@ -187,8 +144,8 @@ pub const Candidate = struct {
                 if (std.ascii.endsWithIgnoreCase(path, ".meta")) self.nodes.items[index].uncertain_identity = true;
             }
         }
-        // Declaration/assembly changes can alter name lookup anywhere. They are
-        // dependencies of semantic work, not proof that unrelated assets conflict.
+        // Declaration/assembly changes can alter name lookup anywhere. Evidence
+        // for semantic work does not prove that unrelated assets conflict.
         var schema_paths: std.ArrayList([]const u8) = .empty;
         for (self.nodes.items) |n| if (n.changed and (schemaPath(n.path) or n.uncertain_identity)) try schema_paths.append(a, n.path);
         self.evidence_paths = schema_paths.items;
@@ -197,21 +154,6 @@ pub const Candidate = struct {
             // The core can still establish that a scalar-only file is unaffected.
             if (n.unity) n.changed = true;
         };
-        var progress = true;
-        while (progress) {
-            progress = false;
-            for (self.nodes.items) |*n| {
-                if (n.changed) continue;
-                var deps = n.deps.keyIterator();
-                while (deps.next()) |path| {
-                    const index = self.node_index.get(path.*) orelse continue;
-                    if (!self.nodes.items[index].changed) continue;
-                    n.changed = true;
-                    progress = true;
-                    break;
-                }
-            }
-        }
         for (self.nodes.items) |n| {
             if (!n.unity or !n.relevant or !n.changed or self.covered(n.path)) continue;
             // Deleted paths and structural groups retain Git's own relationship.
@@ -222,16 +164,6 @@ pub const Candidate = struct {
         for (self.items.items) |*item| {
             if (item.paths.len != 1 or (item.conflict != null and !std.mem.eql(u8, item.conflict.?.kind, "CONFLICT (contents)"))) continue;
             item.input_paths = try mapping.resolve(item.paths[0]);
-            const inputs = item.input_paths orelse continue;
-            const index = self.node_index.get(item.paths[0]).?;
-            for ([_][]const u8{ inputs.base, inputs.ours, inputs.theirs }) |path| {
-                const historical = self.node_index.get(path) orelse continue;
-                if (historical == index) continue;
-                var deps = self.nodes.items[historical].deps.keyIterator();
-                while (deps.next()) |dep| try self.nodes.items[index].deps.put(dep.*, {});
-                // Consumers of an old source path must wait for its checkout path.
-                for (self.nodes.items) |*n| if (n.deps.contains(path)) try n.deps.put(item.paths[0], {});
-            }
         }
     }
 
@@ -267,20 +199,11 @@ pub const Candidate = struct {
                 }
             };
         }
-
-        for (item.paths) |path| {
-            const n = self.node_index.get(path) orelse continue;
-            var deps = self.nodes.items[n].deps.keyIterator();
-            while (deps.next()) |dep| for (self.items.items, 0..) |other, j| {
-                if (index == j or other.done) continue;
-                for (other.paths) |p| if (pathUnder(dep.*, p)) return false;
-            };
-        }
         return true;
     }
 
     pub fn selected(self: *Candidate) !core.merge_context.Snapshot {
-        return session.maskUnresolved(self.git.arena, try self.store.snapshot(self.result.tree), try self.pendingPaths());
+        return session.maskUnresolved(try self.store.snapshot(self.result.tree), try self.pendingPaths());
     }
 
     pub fn build(self: *Candidate, index: usize, output: core.merge_context.Snapshot) !?core.merge.BuildResult {
@@ -367,7 +290,7 @@ pub const Candidate = struct {
             try stages.append(a, stage);
         };
         self.result.stages = stages.items;
-        const c: strategy.Conflict = .{ .paths = self.items.items[index].paths, .kind = "CONFLICT (contents)", .message = try std.fmt.allocPrint(a, "CONFLICT (semantic context): {s} {s}.\n", .{ path, if (self.inputPaths(path) == null) "has an unknown historical file relationship" else "needs a collection/source decision" }) };
+        const c: strategy.Conflict = .{ .paths = self.items.items[index].paths, .kind = "CONFLICT (contents)", .message = try std.fmt.allocPrint(a, "CONFLICT (semantic context): {s} {s}.\n", .{ path, if (self.inputPaths(path) == null) "has an unknown historical file relationship" else "needs a collection decision" }) };
         self.items.items[index].conflict = c;
         self.result.conflicts = try std.mem.concat(a, strategy.Conflict, &.{ self.result.conflicts, &.{c} });
         // Keep Git's accepted presentation when the historical relationship is unknown.
@@ -438,7 +361,6 @@ pub const Candidate = struct {
         }
         try self.alternate.input(&.{ "update-index", "-z", "--index-info" }, records.items);
         self.result.tree = merge_git.trim(try self.alternate.output(&.{"write-tree"}));
-        try self.discoverAccepted(paths);
         try self.retire(paths);
     }
 };
@@ -493,11 +415,11 @@ fn marker(writer: *std.Io.Writer, byte: u8, size: u31, label: []const u8, bytes:
     if (bytes.len != 0 and bytes[bytes.len - 1] != '\n') try writer.writeByte('\n');
 }
 
-fn collectionNode(value: *const core.model.Node) bool {
+fn containsSequence(value: *const core.model.Node) bool {
     return switch (value.*) {
         .seq => true,
         .map => |entries| for (entries) |entry| {
-            if (std.mem.eql(u8, entry.key, "m_Script") or collectionNode(entry.value)) break true;
+            if (std.mem.eql(u8, entry.key, "m_Script") or containsSequence(entry.value)) break true;
         } else false,
         .scalar, .ref => false,
     };

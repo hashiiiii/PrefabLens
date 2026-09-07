@@ -47,8 +47,5 @@ MonoBehaviour:
   items: []
   names: []
   numbers: 0000000001000000ffffffff00000080ffffff7fi
-  counts:
-  - key: A
-    value: 1
   left: 1
   right: 1

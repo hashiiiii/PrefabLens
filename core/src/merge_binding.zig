@@ -4,18 +4,12 @@ const mm = @import("merge_model.zig");
 const value = @import("merge_value.zig");
 const yaml = @import("merge_yaml.zig");
 const source = @import("source.zig");
-pub const Binding = struct { variant: ?@import("merge_variant.zig").Link = null, plan: value.Plan, source_nodes: value.Nodes, origins: []const value.Origin = &.{}, original: ?*const model.Node, identity: mm.SemanticId, operation_ids: []const mm.OperationId };
+pub const Binding = struct { plan: value.Plan, source_nodes: value.Nodes, original: ?*const model.Node, identity: mm.SemanticId, operation_ids: []const mm.OperationId };
 pub const State = struct { bindings: std.ArrayList(Binding) = .empty, context: @import("merge_context.zig").Context = .{} };
 pub fn collect(arena: std.mem.Allocator, state: *State, operations: *std.ArrayList(mm.Operation), atomics: *std.ArrayList(mm.AtomicOperation), document: mm.DocumentId, path: []const u8, hierarchy: []const u8, nodes: value.Nodes, files: [3]source.ParsedFile) mm.Error!void {
     const original = nodes.ours;
     const evidence = schema(state.context, document, path, files);
-    var normalized: value.Normalized = .{ .nodes = nodes, .origins = &.{} };
-    if (evidence.field) |descriptor| {
-        if (descriptor.kind == .string_dictionary or descriptor.kind == .int32_dictionary) {
-            normalized = try value.normalizeDictionaryStrings(arena, nodes, descriptor, try blankStringNodes(arena, nodes, files));
-        }
-    }
-    var plan = value.build(arena, .{ .nodes = normalized.nodes, .schema = evidence.field, .context_conflict = evidence.conflict }) catch |err| switch (err) {
+    var plan = value.build(arena, .{ .nodes = nodes, .schema = evidence.field, .context_conflict = evidence.conflict }) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         else => return error.InvalidResolution,
     };
@@ -26,7 +20,7 @@ pub fn collect(arena: std.mem.Allocator, state: *State, operations: *std.ArrayLi
         else => null,
     };
     if (probe) |result| {
-        _ = preserveItems(arena, try originalItems(arena, result, normalized.origins), nodes, files) catch |err| switch (err) {
+        _ = preserveItems(arena, result, nodes, files) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             else => {
                 plan = value.conflicted(arena, plan.input, .source_bytes) catch |failure| switch (failure) {
@@ -46,7 +40,7 @@ pub fn collect(arena: std.mem.Allocator, state: *State, operations: *std.ArrayLi
         try atomics.append(arena, .{ .id = atomic_id, .kind = .field, .operation_ids = members });
         try ids.append(arena, id);
     }
-    try state.bindings.append(arena, .{ .plan = plan, .source_nodes = nodes, .origins = normalized.origins, .original = original, .identity = .{ .document = document, .property_path = path }, .operation_ids = try ids.toOwnedSlice(arena) });
+    try state.bindings.append(arena, .{ .plan = plan, .source_nodes = nodes, .original = original, .identity = .{ .document = document, .property_path = path }, .operation_ids = try ids.toOwnedSlice(arena) });
 }
 fn side(arena: std.mem.Allocator, n: ?*const model.Node) mm.Error!?mm.SideValue {
     const v = n orelse return null;
@@ -72,7 +66,6 @@ pub fn choices(arena: std.mem.Allocator, plan: *const mm.MergePlan, binding: Bin
     return result;
 }
 pub fn replacement(arena: std.mem.Allocator, plan: *const mm.MergePlan, binding: Binding, require_all: bool) mm.Error!?yaml.Replacement {
-    if (binding.variant) |link| return @import("merge_variant.zig").replacement(arena, plan, link, require_all);
     const selected = try choices(arena, plan, binding);
     const result = value.materialize(arena, binding.plan, selected) catch |err| switch (err) {
         error.UnresolvedConflict => {
@@ -96,7 +89,6 @@ pub fn replacement(arena: std.mem.Allocator, plan: *const mm.MergePlan, binding:
             }
         }
     };
-    final = try originalItems(arena, final, binding.origins);
     const explicit_source = for (binding.plan.conflicts) |conflict| {
         if (conflict.reason == .source_bytes) break true;
     } else false;
@@ -133,14 +125,11 @@ pub fn schema(context: ctx.Context, document: mm.DocumentId, path: []const u8, f
     if (b == null and o == null and t == null) return .{};
     if (b == null or o == null or t == null) return .{ .conflict = true };
     if (!b.?.sameType(o.?) or !b.?.sameType(t.?)) return .{ .conflict = true };
-    if (b.?.kind == .string_dictionary or b.?.kind == .int32_dictionary) {
-        if (b.?.dictionary_equality != .default or o.?.dictionary_equality != .default or t.?.dictionary_equality != .default) return .{ .conflict = true };
-    }
     // Output evidence can reject a schema selected by an independently merged script.
     const output_field = field(context.output, files[1], document, path);
     if (output_field == null and (context.output.revision.len > 0 or context.output.scripts.len > 0)) return .{ .conflict = true };
     if (output_field) |output| {
-        if (!b.?.sameType(output) or ((output.kind == .string_dictionary or output.kind == .int32_dictionary) and output.dictionary_equality != .default)) return .{ .conflict = true };
+        if (!b.?.sameType(output)) return .{ .conflict = true };
     }
     return .{ .field = b };
 }
@@ -251,40 +240,6 @@ pub fn patchOrder(plan: *const mm.MergePlan, binding: Binding) usize {
     const template = binding.source_nodes.theirs orelse binding.source_nodes.base orelse return 0;
     const file = if (binding.source_nodes.theirs != null) plan.theirs else plan.base;
     return if (file.entry_spans.get(template)) |entry| entry.whole.start else 0;
-}
-
-fn blankStringNodes(arena: std.mem.Allocator, n: value.Nodes, files: [3]source.ParsedFile) std.mem.Allocator.Error![]const *const model.Node {
-    var blanks: std.ArrayList(*const model.Node) = .empty;
-    for ([_]?*const model.Node{ n.base, n.ours, n.theirs }, files) |optional, file| {
-        const sequence = optional orelse continue;
-        if (sequence.* != .seq) continue;
-        for (sequence.seq) |item| {
-            if (item.* != .map) continue;
-            for (item.map) |entry| {
-                if (entry.value.* != .map or entry.value.map.len != 0) continue;
-                const span = file.entry_spans.get(entry.value) orelse continue;
-                if (std.mem.trim(u8, span.value.bytes(file.bytes), " \t\r\n").len == 0) try blanks.append(arena, entry.value);
-            }
-        }
-    }
-    return blanks.toOwnedSlice(arena);
-}
-fn originalItems(arena: std.mem.Allocator, result: *const model.Node, origins: []const value.Origin) std.mem.Allocator.Error!*const model.Node {
-    if (result.* == .scalar or result.* == .ref) return result;
-    for (origins) |origin| {
-        if (result == origin.normalized) return origin.original;
-    }
-    if (result.* != .seq) return result;
-    const items = try arena.dupe(*model.Node, result.seq);
-    var changed = false;
-    for (items) |*item| {
-        const original = try originalItems(arena, item.*, origins);
-        if (original != item.*) {
-            item.* = @constCast(original);
-            changed = true;
-        }
-    }
-    return if (changed) try value.node(arena, .{ .seq = items }) else result;
 }
 
 fn headerBytes(arena: std.mem.Allocator, file: source.ParsedFile, n: *const model.Node) std.mem.Allocator.Error!?[]const u8 {

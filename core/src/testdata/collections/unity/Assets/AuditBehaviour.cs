@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Generic;
 using UnityEngine;
 
 public class AuditBehaviour : MonoBehaviour
@@ -15,7 +14,6 @@ public class AuditBehaviour : MonoBehaviour
     public Item[] items = Array.Empty<Item>();
     public string[] names = Array.Empty<string>();
     public int[] numbers = Array.Empty<int>();
-    [SerializeField] public Dictionary<string, int> counts = new Dictionary<string, int>();
     public int left = 1;
     public int right = 1;
 }

@@ -129,7 +129,7 @@ fn resolveSession(git: Git, candidate: *candidate_module.Candidate, env: *std.pr
         candidate.items.items[index].attempted = true;
         const item = candidate.items.items[index];
         var captured = try session_context.readIndex(&candidate.store);
-        captured.snapshot = try session_context.maskUnresolved(git.arena, captured.snapshot, try candidate.pendingPaths());
+        captured.snapshot = session_context.maskUnresolved(captured.snapshot, try candidate.pendingPaths());
         if (item.conflict != null and isStructural(item.conflict.?.kind)) {
             switch (try file_conflict.resolveWithContext(git, candidate.result, item.conflict.?, env, captured)) {
                 .unresolved => {},

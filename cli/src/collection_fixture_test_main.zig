@@ -4,7 +4,7 @@ const revision = @import("merge_revision.zig");
 const merge_git = @import("merge_git.zig");
 const support = @import("git_merge_test_main.zig");
 
-const Case = struct { name: []const u8, conflict: bool, choice: ?[]const u8 = null, sourceContext: bool = false };
+const Case = struct { name: []const u8, conflict: bool, choice: ?[]const u8 = null };
 const Manifest = struct { cases: []const Case };
 
 pub fn main(init: std.process.Init) !u8 {
@@ -32,7 +32,7 @@ fn verify(io: std.Io, arena: std.mem.Allocator, env: *std.process.Environ.Map, f
     try support.configureHermeticRepository(io, arena, repo);
     try git.ok(&.{ "config", "user.name", "Fixture" });
     try git.ok(&.{ "config", "user.email", "fixture@example.invalid" });
-    const path = if (std.mem.startsWith(u8, case.name, "replay-")) "Assets/ReplayVariant.prefab" else if (std.mem.startsWith(u8, case.name, "variant-dictionary-")) "Assets/DictionaryVariant.prefab" else if (std.mem.startsWith(u8, case.name, "variant-")) "Assets/Variant.prefab" else "Assets/Plain.prefab";
+    const path = "Assets/Plain.prefab";
     const case_root = try std.fs.path.join(arena, &.{ fixture_root, "cases", case.name });
     var refs: [3][]const u8 = undefined;
     var inputs: [3][]const u8 = undefined;
@@ -40,10 +40,6 @@ fn verify(io: std.Io, arena: std.mem.Allocator, env: *std.process.Environ.Map, f
         if (index == 2) try git.ok(&.{ "checkout", "-q", "--detach", refs[0] });
         inputs[index] = try read(io, arena, case_root, filename);
         try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try git.path(path), .data = inputs[index] });
-        if (case.sourceContext) {
-            const source_file = try std.fmt.allocPrint(arena, "{s}-source.prefab", .{filename[0 .. filename.len - ".prefab".len]});
-            try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try git.path("Assets/Source.prefab"), .data = try read(io, arena, case_root, source_file) });
-        }
         try git.ok(&.{ "add", "--all" });
         try git.ok(&.{ "commit", "--allow-empty", "-qm", "collection fixture" });
         refs[index] = merge_git.trim(try git.output(&.{ "rev-parse", "HEAD" }));
@@ -52,14 +48,7 @@ fn verify(io: std.Io, arena: std.mem.Allocator, env: *std.process.Environ.Map, f
     defer store.deinit();
     var snapshots: [3]core.merge_context.Snapshot = undefined;
     for (refs, 0..) |ref, index| snapshots[index] = try store.snapshot(ref);
-    var output_snapshot = snapshots[2];
-    if (case.sourceContext) {
-        // The selected source can differ from all historical inputs.
-        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try git.path("Assets/Source.prefab"), .data = try read(io, arena, case_root, "output-source.prefab") });
-        try git.ok(&.{ "add", "--all" });
-        output_snapshot = try store.snapshot(merge_git.trim(try git.output(&.{"write-tree"})));
-    }
-    var built = core.merge.buildWithContext(arena, inputs[0], inputs[1], inputs[2], .{ .base = snapshots[0], .ours = snapshots[1], .theirs = snapshots[2], .output = output_snapshot }) catch |err| {
+    var built = core.merge.buildWithContext(arena, inputs[0], inputs[1], inputs[2], .{ .base = snapshots[0], .ours = snapshots[1], .theirs = snapshots[2], .output = snapshots[2] }) catch |err| {
         std.debug.print("collection fixture {s}: {s}\n", .{ case.name, @errorName(err) });
         return err;
     };
@@ -72,12 +61,9 @@ fn verify(io: std.Io, arena: std.mem.Allocator, env: *std.process.Environ.Map, f
         if (operation.resolution != .unresolved) continue;
         const choice = case.choice orelse return error.MissingCollectionChoice;
         // A local fixture choice must preserve the independent accepted intervals.
-        if (std.mem.eql(u8, choice, "ours_first")) {
-            const combined = try core.merge.combinedCollectionValue(arena, &built.plan, operation.id, .ours_first);
-            try core.merge.resolve(arena, &built.plan, operation.id, .{ .custom = combined });
-        } else if (std.mem.eql(u8, choice, "theirs")) {
-            try core.merge.resolve(arena, &built.plan, operation.id, .{ .take = .theirs });
-        } else return error.InvalidCollectionChoice;
+        if (!std.mem.eql(u8, choice, "ours_first")) return error.InvalidCollectionChoice;
+        const combined = try core.merge.combinedCollectionValue(arena, &built.plan, operation.id, .ours_first);
+        try core.merge.resolve(arena, &built.plan, operation.id, .{ .custom = combined });
     }
     const output = try core.merge.finish(arena, &built.plan);
     if (export_root) |root| {

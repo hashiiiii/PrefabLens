@@ -211,15 +211,6 @@ pub const State = struct {
         return self.plan.unresolvedCount();
     }
 
-    fn needsVariantReview(self: *const State, operation_item: *const core.merge.Operation) bool {
-        if (core.merge.isVariantPromotion(self.plan, operation_item.id)) return true;
-        for (self.plan.operations) |candidate| {
-            if (core.merge.isVariantPromotion(self.plan, candidate.id) and
-                std.mem.indexOfScalar(u32, candidate.dependencies, operation_item.atomic_id) != null) return true;
-        }
-        return false;
-    }
-
     pub fn handle(self: *State, action: Action) !void {
         if (action == .abort) {
             for (self.plan.operations, self.initial_resolutions) |*operation_item, initial| {
@@ -241,11 +232,9 @@ pub const State = struct {
             },
             .select_conflict => |index| self.selectConflict(index),
             .choose_ours => if (self.operation()) |operation_item| {
-                if (operation_item.resolution != .unresolved and self.needsVariantReview(operation_item)) try self.handle(.reopen_result);
                 self.pending = resolutionForSide(operation_item, .ours);
             },
             .choose_theirs => if (self.operation()) |operation_item| {
-                if (operation_item.resolution != .unresolved and self.needsVariantReview(operation_item)) try self.handle(.reopen_result);
                 self.pending = resolutionForSide(operation_item, .theirs);
             },
             .combine_ours_first, .combine_theirs_first => if (self.operation()) |operation_item| {
@@ -265,8 +254,7 @@ pub const State = struct {
                 self.pending = .{ .custom = value };
                 self.status = "";
             },
-            .edit_result => |value| if (self.operation()) |operation_item| {
-                if (operation_item.resolution != .unresolved and self.needsVariantReview(operation_item)) try self.handle(.reopen_result);
+            .edit_result => |value| if (self.operation() != null) {
                 self.pending = .{ .custom = try self.allocator.dupe(u8, value) };
             },
             .apply_result => {
@@ -306,11 +294,6 @@ pub const State = struct {
                 for (self.plan.atomic_operations[atomic_index].operation_ids) |operation_id| {
                     const member = self.operationById(operation_id) orelse continue;
                     member.resolution = .unresolved;
-                }
-                // A new local result can create different inheritance effects.
-                for (self.plan.operations) |*candidate| {
-                    if (core.merge.isVariantPromotion(self.plan, candidate.id) and
-                        std.mem.indexOfScalar(u32, candidate.dependencies, operation_item.atomic_id) != null) candidate.resolution = .unresolved;
                 }
                 self.pending = null;
                 self.status = "";

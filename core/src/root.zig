@@ -5,7 +5,6 @@ pub const json = @import("json.zig");
 pub const merge = @import("merge.zig");
 pub const merge_value = @import("merge_value.zig");
 pub const merge_context = @import("merge_context.zig");
-pub const merge_variant_source = @import("merge_variant_source.zig");
 
 const assets_tlv = @import("assets_tlv.zig");
 const classid = @import("classid.zig");
@@ -91,6 +90,5 @@ test {
     _ = @import("merge_apply.zig");
     _ = @import("merge_validate.zig");
     _ = @import("merge_fixture_test.zig");
-    _ = @import("merge_variant_test.zig");
     _ = @import("fixture_test.zig");
 }

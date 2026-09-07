@@ -31,8 +31,8 @@ pub fn choose(git: Git, env: *std.process.Environ.Map, path: []const u8, ours: [
         .quit => return null,
         else => return error.InvalidResolution,
     };
-    // Explicit whole sides need syntax/structure validation, without borrowing
-    // source graph proof from any one of the competing historical ancestors.
+    // Explicit whole sides still need syntax and structure validation. No
+    // individual ancestor can establish schema evidence when history is unknown.
     _ = try core.merge.build(git.arena, bytes, bytes, bytes);
     return bytes;
 }

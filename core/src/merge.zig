@@ -15,21 +15,6 @@ pub const OperationId = merge_model.OperationId;
 pub const Resolution = merge_model.Resolution;
 pub const Side = merge_model.Side;
 pub const SideValue = merge_model.SideValue;
-pub const VariantEffectKind = @import("merge_variant.zig").VariantEffectKind;
-pub const VariantEffect = @import("merge_variant.zig").VariantEffect;
-pub const VariantProvenance = @import("merge_variant.zig").VariantProvenance;
-
-pub fn isVariantPromotion(plan: *const MergePlan, operation_id: OperationId) bool {
-    return @import("merge_variant.zig").isPromotion(plan, operation_id);
-}
-
-pub fn variantProvenance(arena: std.mem.Allocator, plan: *const MergePlan) Error!VariantProvenance {
-    return @import("merge_variant.zig").provenance(arena, plan);
-}
-
-pub fn variantPromotionValue(arena: std.mem.Allocator, plan: *const MergePlan, operation_id: OperationId, side: Side) Error!SideValue {
-    return @import("merge_variant.zig").promotionValue(arena, plan, operation_id, side);
-}
 
 pub const BuildResult = struct {
     plan: MergePlan,
@@ -72,38 +57,11 @@ fn verifyTheirsCoverage(
     var replay = try merge_planner.buildSemanticWithContext(arena, base, base, theirs, .{ .base = context.base, .ours = context.base, .theirs = context.theirs, .output = context.theirs });
     // Coverage checks reachability of Theirs bytes, including explicit context choices.
     for (replay.operations) |*operation| {
-        if ((operation.collection != null or std.mem.eql(u8, operation.property_path, "m_SourcePrefab")) and operation.resolution == .unresolved) operation.resolution = .{ .take = .theirs };
+        if (operation.collection != null and operation.resolution == .unresolved) operation.resolution = .{ .take = .theirs };
     }
-    // Invalid source dictionaries still need raw byte coverage before the real
-    // plan exposes repair. Only this throwaway copy skips key and shape checks.
-    const replay_collections = try arena.dupe(@import("merge_binding.zig").Binding, replay.collections);
-    for (replay_collections) |*collection| {
-        const conflicts = try arena.dupe(@import("merge_value.zig").Conflict, collection.plan.conflicts);
-        for (conflicts) |*conflict| {
-            if (conflict.reason == .invalid_dictionary) {
-                collection.plan.input.schema = null;
-                conflict.sequence = false;
-            }
-        }
-        collection.plan.conflicts = conflicts;
-    }
-    replay.collections = replay_collections;
     if (replay.unresolvedCount() != 0) return error.UnsupportedStructure;
     const replayed = try merge_apply.applyResolved(arena, &replay, false);
-    const has_variant = for (replay.collections) |collection| {
-        if (collection.variant != null) break true;
-    } else false;
-    if (has_variant) {
-        // Index rebasing and inactive-row removal intentionally change authored
-        // group bytes. Compare both sides through the same proven compositor;
-        // all bytes outside those boundaries still have to match exactly.
-        var expected = try merge_planner.buildSemanticWithContext(arena, theirs, theirs, theirs, .{ .base = context.theirs, .ours = context.theirs, .theirs = context.theirs, .output = context.theirs });
-        for (expected.operations) |*operation| {
-            if ((operation.collection != null or std.mem.eql(u8, operation.property_path, "m_SourcePrefab")) and operation.resolution == .unresolved) operation.resolution = .{ .take = .theirs };
-        }
-        const canonical = try merge_apply.applyResolved(arena, &expected, false);
-        if (!std.mem.eql(u8, replayed, canonical)) return error.UnsupportedStructure;
-    } else if (!std.mem.eql(u8, replayed, theirs.bytes)) return error.UnsupportedStructure;
+    if (!std.mem.eql(u8, replayed, theirs.bytes)) return error.UnsupportedStructure;
 }
 
 fn verifyOursDocumentCoverage(plan: *const MergePlan) Error!void {
@@ -143,7 +101,6 @@ pub fn resolve(
         .take => |side| if (side == .base or valueForSide(operation, side) == null)
             return error.InvalidResolution,
         .custom => |value| {
-            if (isVariantPromotion(plan, operation_id)) return error.InvalidResolution;
             if (operation.collection) |binding_ref| {
                 const parsed = @import("merge_yaml.zig").parseValue(arena, value) catch |err| switch (err) {
                     error.OutOfMemory => return error.OutOfMemory,
@@ -160,7 +117,7 @@ pub fn resolve(
             }
             stored_resolution = .{ .custom = try arena.dupe(u8, value) };
         },
-        .remove => if (isVariantPromotion(plan, operation_id)) return error.InvalidResolution,
+        .remove => {},
     }
     const previous = try arena.alloc(merge_model.Resolution, atomic.operation_ids.len);
     for (atomic.operation_ids) |id| {
@@ -180,7 +137,6 @@ pub fn resolve(
     }
     if (operation.collection) |reference| {
         try @import("merge_binding.zig").validateSelection(arena, plan, reference);
-        try @import("merge_variant.zig").validateSelection(arena, plan, reference);
     }
     const candidate = try merge_apply.applyResolved(arena, plan, false);
     merge_validate.validate(arena, candidate) catch |validation_error| switch (validation_error) {
@@ -210,7 +166,6 @@ pub fn combinedCollectionValue(arena: std.mem.Allocator, plan: *const MergePlan,
 }
 pub fn supportsCustomResolution(plan: *const MergePlan, operation_id: OperationId) bool {
     const operation = merge_model.operationByIdConst(plan, operation_id) orelse return false;
-    if (isVariantPromotion(plan, operation_id)) return false;
     if (operation.collection != null) return true;
     return (operation.kind == .field or (operation.kind == .prefab_override and operation.item_path != null)) and supportsCustomValue(operation) and wasConflict(operation);
 }
@@ -544,7 +499,7 @@ test "collection public item field conflict retains independent changes" {
 fn collectionTestContext(field: @import("merge_context.zig").Field, arena: std.mem.Allocator) !@import("merge_context.zig").Context {
     const ctx = @import("merge_context.zig");
     const fields = try arena.dupe(ctx.Field, &.{field});
-    const scripts = try arena.dupe(ctx.Script, &.{.{ .guid = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", .class_name = "Example", .source_hash = "hash", .fields = fields }});
+    const scripts = try arena.dupe(ctx.Script, &.{.{ .guid = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", .fields = fields }});
     const snapshot: ctx.Snapshot = .{ .scripts = scripts };
     return .{ .base = snapshot, .ours = snapshot, .theirs = snapshot, .output = snapshot };
 }
@@ -561,7 +516,7 @@ test "collection public declared packed arrays merge signed values and empty enc
     try testing.expectEqualStrings(prefix ++ "01000000\n", try finish(arena, &empty.plan));
 }
 
-test "collection public dictionary context distinguishes declared key value arrays" {
+test "collection public key value arrays require declared ordered types" {
     var memory = std.heap.ArenaAllocator.init(testing.allocator);
     defer memory.deinit();
     const arena = memory.allocator();
@@ -572,45 +527,9 @@ test "collection public dictionary context distinguishes declared key value arra
     var unknown = try build(arena, base, ours, theirs);
     try testing.expectEqualStrings(ours, unknown.partial);
     try testing.expectEqual(@import("merge_value.zig").Reason.context_required, collectionConflict(&unknown.plan, unknown.plan.operations[0].id).?.reason);
-    const context = try collectionTestContext(.{ .path = "values", .kind = .string_dictionary, .dictionary_value = .int32, .dictionary_equality = .default }, arena);
-    var typed = try buildWithContext(arena, base, ours, theirs, context);
-    try testing.expectEqualStrings(prefix ++ "[{key: a, value: 1}, {key: b, value: 2}]\n", try finish(arena, &typed.plan));
     const ordered_context = try collectionTestContext(.{ .path = "values", .kind = .ordered }, arena);
     var ordered = try buildWithContext(arena, base, ours, theirs, ordered_context);
     try testing.expect(collectionConflict(&ordered.plan, ordered.plan.operations[0].id).?.both_orders);
-}
-
-test "collection public dictionary conflicts validate keys and preserve other edits" {
-    var memory = std.heap.ArenaAllocator.init(testing.allocator);
-    defer memory.deinit();
-    const arena = memory.allocator();
-    const context = try collectionTestContext(.{ .path = "values", .kind = .string_dictionary, .dictionary_value = .int32, .dictionary_equality = .default }, arena);
-    const prefix = "--- !u!114 &1\nMonoBehaviour:\n  m_Script: {fileID: 11500000, guid: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, type: 3}\n  values: ";
-    var built = try buildWithContext(arena, prefix ++ "[{key: a, value: 1}, {key: b, value: 1}]\n", prefix ++ "[{key: b, value: 1}]\n", prefix ++ "[{key: a, value: 2}, {key: b, value: 3}]\n", context);
-    const id = built.plan.operations[0].id;
-    try testing.expectError(error.InvalidResolution, resolve(arena, &built.plan, id, .{ .custom = "{key: b, value: 8}" }));
-    try testing.expect(built.plan.operations[0].resolution == .unresolved);
-    try resolve(arena, &built.plan, id, .{ .take = .theirs });
-    try testing.expectEqualStrings(prefix ++ "[{key: a, value: 2}, {key: b, value: 3}]\n", try finish(arena, &built.plan));
-    var duplicate = try buildWithContext(arena, prefix ++ "[]\n", prefix ++ "[{key: a, value: 1}, {key: a, value: 2}]\n", prefix ++ "[{key: b, value: 3}]\n", context);
-    try testing.expectEqual(@as(usize, 1), duplicate.plan.unresolvedCount());
-    try testing.expectError(error.InvalidResolution, resolve(arena, &duplicate.plan, duplicate.plan.operations[0].id, .{ .take = .ours }));
-    try resolve(arena, &duplicate.plan, duplicate.plan.operations[0].id, .{ .custom = "[{key: a, value: 9}, {key: b, value: 3}]" });
-    try testing.expectEqualStrings(prefix ++ "[{key: a, value: 9}, {key: b, value: 3}]\n", try finish(arena, &duplicate.plan));
-}
-
-test "collection public dictionary reordered choice retains value edits and new keys" {
-    var memory = std.heap.ArenaAllocator.init(testing.allocator);
-    defer memory.deinit();
-    const arena = memory.allocator();
-    const context = try collectionTestContext(.{ .path = "values", .kind = .int32_dictionary, .dictionary_value = .string, .dictionary_equality = .default }, arena);
-    const prefix = "--- !u!114 &1\nMonoBehaviour:\n  m_Script: {fileID: 11500000, guid: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, type: 3}\n  values: ";
-    var built = try buildWithContext(arena, prefix ++ "[{key: 1, value: a}, {key: 2, value: b}, {key: 3, value: c}]\n", prefix ++ "[{key: 2, value: b}, {key: 1, value: a}, {key: 3, value: c}]\n", prefix ++ "[{key: 1, value: z}, {key: 3, value: c}, {key: 2, value: b}, {key: 4, value: d}]\n", context);
-    try testing.expectEqual(@as(usize, 1), built.plan.unresolvedCount());
-    const id = built.plan.operations[0].id;
-    try testing.expectEqual(@import("merge_value.zig").Reason.dictionary_order, collectionConflict(&built.plan, id).?.reason);
-    try resolve(arena, &built.plan, id, .{ .take = .ours });
-    try testing.expectEqualStrings(prefix ++ "[{key: 2, value: b}, {key: 1, value: z}, {key: 3, value: c}, {key: 4, value: d}]\n", try finish(arena, &built.plan));
 }
 
 test "collection public packed selection retains changed encoding layout" {
@@ -621,18 +540,6 @@ test "collection public packed selection retains changed encoding layout" {
     const prefix = "--- !u!114 &1\nMonoBehaviour:\n  m_Script: {fileID: 11500000, guid: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, type: 3}\n  values: ";
     var built = try buildWithContext(arena, prefix ++ "01000000\n", prefix ++ "01000000\n", prefix ++ "0100000002000000i\n", context);
     try testing.expectEqualStrings(prefix ++ "0100000002000000i\n", try finish(arena, &built.plan));
-}
-
-test "collection public dictionary invalid theirs remains editable" {
-    var memory = std.heap.ArenaAllocator.init(testing.allocator);
-    defer memory.deinit();
-    const arena = memory.allocator();
-    const context = try collectionTestContext(.{ .path = "values", .kind = .int32_dictionary, .dictionary_value = .string, .dictionary_equality = .default }, arena);
-    const prefix = "--- !u!114 &1\nMonoBehaviour:\n  m_Script: {fileID: 11500000, guid: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, type: 3}\n  values: ";
-    var built = try buildWithContext(arena, prefix ++ "[]\n", prefix ++ "[{key: 2, value: b}]\n", prefix ++ "[{key: 1, value: a}, {key: 01, value: c}]\n", context);
-    try testing.expectEqual(@as(usize, 1), built.plan.unresolvedCount());
-    try resolve(arena, &built.plan, built.plan.operations[0].id, .{ .custom = "[{key: 1, value: c}, {key: 2, value: b}]" });
-    try testing.expectEqualStrings(prefix ++ "[{key: 1, value: c}, {key: 2, value: b}]\n", try finish(arena, &built.plan));
 }
 
 test "collection public preserves CRLF comments and unchanged item spans" {
@@ -659,26 +566,13 @@ test "collection public duplicate occurrences and move choices preserve independ
     try testing.expectEqualStrings(prefix ++ "[B, c, a]\n", try finish(arena, &moved.plan));
 }
 
-test "collection public nested unknown dictionary shape needs context" {
+test "collection public nested key value sequences need type evidence" {
     var memory = std.heap.ArenaAllocator.init(testing.allocator);
     defer memory.deinit();
     const arena = memory.allocator();
     const prefix = "--- !u!114 &1\nMonoBehaviour:\n  values: ";
     var built = try build(arena, prefix ++ "[{entries: []}]\n", prefix ++ "[{entries: [{key: a, value: 1}]}]\n", prefix ++ "[{entries: [{key: a, value: 2}]}]\n");
     try testing.expectEqual(@import("merge_value.zig").Reason.context_required, collectionConflict(&built.plan, built.plan.operations[0].id).?.reason);
-}
-
-test "collection public rejects local dictionary collision while another conflict is unresolved" {
-    var memory = std.heap.ArenaAllocator.init(testing.allocator);
-    defer memory.deinit();
-    const arena = memory.allocator();
-    const context = try collectionTestContext(.{ .path = "values", .kind = .string_dictionary, .dictionary_value = .int32, .dictionary_equality = .default }, arena);
-    const prefix = "--- !u!114 &1\nMonoBehaviour:\n  m_Script: {fileID: 11500000, guid: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, type: 3}\n  values: ";
-    var built = try buildWithContext(arena, prefix ++ "[{key: a, value: 1}, {key: b, value: 1}, {key: c, value: 1}]\n", prefix ++ "[{key: a, value: 2}, {key: c, value: 1}]\n", prefix ++ "[{key: a, value: 3}, {key: b, value: 2}, {key: c, value: 4}]\n", context);
-    try testing.expectEqual(@as(usize, 2), built.plan.unresolvedCount());
-    const id = built.plan.operations[1].id;
-    try testing.expectError(error.InvalidResolution, resolve(arena, &built.plan, id, .{ .custom = "{key: c, value: 9}" }));
-    try testing.expectEqual(@as(usize, 2), built.plan.unresolvedCount());
 }
 
 test "collection public preserves ours formatting edit during concurrent semantic changes" {
@@ -697,22 +591,25 @@ test "collection public preserves ours formatting edit during concurrent semanti
     }
 }
 
-test "collection public context mismatch and unknown equality stay editable" {
+test "collection public missing array type evidence stays editable" {
     var memory = std.heap.ArenaAllocator.init(testing.allocator);
     defer memory.deinit();
     const arena = memory.allocator();
     const ctx = @import("merge_context.zig");
     const prefix = "--- !u!114 &1\nMonoBehaviour:\n  m_Script: {fileID: 11500000, guid: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, type: 3}\n  values: ";
-    const known = try collectionTestContext(.{ .path = "values", .kind = .string_dictionary, .dictionary_value = .int32, .dictionary_equality = .default }, arena);
-    const unknown_equality = try collectionTestContext(.{ .path = "values", .kind = .string_dictionary, .dictionary_value = .int32 }, arena);
-    const different_type = try collectionTestContext(.{ .path = "values", .kind = .ordered }, arena);
-    const cases = [_]ctx.Context{ unknown_equality, .{ .base = known.base, .ours = known.ours, .theirs = .{} }, .{ .base = known.base, .ours = known.ours, .theirs = different_type.theirs }, .{ .base = known.base, .ours = known.ours, .theirs = known.theirs, .output = .{ .revision = "known-output", .scripts = &.{} } } };
+    const known = try collectionTestContext(.{ .path = "values", .kind = .ordered }, arena);
+    // Missing revision evidence must keep a manual choice available instead of
+    // applying a type inferred from only the remaining scripts.
+    const cases = [_]ctx.Context{
+        .{ .base = known.base, .ours = known.ours, .theirs = .{} },
+        .{ .base = known.base, .ours = known.ours, .theirs = known.theirs, .output = .{ .revision = "known-output", .scripts = &.{} } },
+    };
     for (cases) |context| {
-        var built = try buildWithContext(arena, prefix ++ "[]\n", prefix ++ "[{key: a, value: 1}]\n", prefix ++ "[{key: b, value: 2}]\n", context);
+        var built = try buildWithContext(arena, prefix ++ "[]\n", prefix ++ "[a]\n", prefix ++ "[b]\n", context);
         try testing.expectEqual(@as(usize, 1), built.plan.unresolvedCount());
         try testing.expectEqual(@import("merge_value.zig").Reason.context_required, collectionConflict(&built.plan, built.plan.operations[0].id).?.reason);
-        try resolve(arena, &built.plan, built.plan.operations[0].id, .{ .custom = "[{key: a, value: 1}, {key: b, value: 2}]" });
-        _ = try finish(arena, &built.plan);
+        try resolve(arena, &built.plan, built.plan.operations[0].id, .{ .custom = "[a, b]" });
+        try testing.expectEqualStrings(prefix ++ "[a, b]\n", try finish(arena, &built.plan));
     }
 }
 
@@ -727,19 +624,6 @@ test "collection public malformed packed encoding needs valid typed repair" {
     try testing.expectError(error.InvalidResolution, resolve(arena, &built.plan, id, .{ .custom = "broken" }));
     try resolve(arena, &built.plan, id, .{ .custom = "[1, -1]" });
     try testing.expectEqualStrings(prefix ++ "01000000ffffffff\n", try finish(arena, &built.plan));
-}
-
-test "collection public dictionary both add and key rename remain independent" {
-    var memory = std.heap.ArenaAllocator.init(testing.allocator);
-    defer memory.deinit();
-    const arena = memory.allocator();
-    const context = try collectionTestContext(.{ .path = "values", .kind = .string_dictionary, .dictionary_value = .int32, .dictionary_equality = .default }, arena);
-    const prefix = "--- !u!114 &1\nMonoBehaviour:\n  m_Script: {fileID: 11500000, guid: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, type: 3}\n  values: ";
-    var built = try buildWithContext(arena, prefix ++ "[{key: old, value: 1}]\n", prefix ++ "[{key: renamed, value: 1}, {key: added, value: 2}]\n", prefix ++ "[{key: old, value: 3}, {key: added, value: 4}]\n", context);
-    try testing.expectEqual(@as(usize, 2), built.plan.unresolvedCount());
-    try resolve(arena, &built.plan, built.plan.operations[0].id, .remove);
-    try resolve(arena, &built.plan, built.plan.operations[1].id, .{ .take = .theirs });
-    try testing.expectEqualStrings(prefix ++ "[{key: renamed, value: 1}, {key: added, value: 4}]\n", try finish(arena, &built.plan));
 }
 
 test "collection public keeps theirs comment edit with independent ours insertion" {
@@ -851,19 +735,6 @@ test "collection public compositor respects unresolved atomic dependencies" {
     try testing.expectEqualStrings(prefix ++ "  scalar: 2\n  values: [x, a, z]\n", try finish(arena, &built.plan));
 }
 
-test "collection public typed Unity dictionary keeps null-like literal string keys" {
-    var memory = std.heap.ArenaAllocator.init(testing.allocator);
-    defer memory.deinit();
-    const arena = memory.allocator();
-    const context = try collectionTestContext(.{ .path = "values", .kind = .string_dictionary, .dictionary_value = .int32, .dictionary_equality = .default }, arena);
-    const prefix = "--- !u!114 &1\nMonoBehaviour:\n  m_Script: {fileID: 11500000, guid: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, type: 3}\n  values:\n";
-    const base = prefix ++ "  - key: null\n    value: 1\n  - key: ~\n    value: 2\n";
-    const ours = prefix ++ "  - key: null\n    value: 3\n  - key: ~\n    value: 2\n";
-    const theirs = prefix ++ "  - key: null\n    value: 1\n  - key: ~\n    value: 4\n  - key: NULL\n    value: 5\n";
-    var built = try buildWithContext(arena, base, ours, theirs, context);
-    try testing.expectEqualStrings(prefix ++ "  - key: null\n    value: 3\n  - key: ~\n    value: 4\n  - key: NULL\n    value: 5\n", try finish(arena, &built.plan));
-}
-
 test "collection public schema change permits an explicit selected scalar side" {
     var memory = std.heap.ArenaAllocator.init(testing.allocator);
     defer memory.deinit();
@@ -877,23 +748,6 @@ test "collection public schema change permits an explicit selected scalar side" 
     try testing.expectEqual(@import("merge_value.zig").Reason.context_required, collectionConflict(&built.plan, id).?.reason);
     try resolve(arena, &built.plan, id, .{ .take = .theirs });
     try testing.expectEqualStrings(theirs, try finish(arena, &built.plan));
-}
-
-test "collection public typed blank string key preserves source and rejects explicit map custom key" {
-    var memory = std.heap.ArenaAllocator.init(testing.allocator);
-    defer memory.deinit();
-    const arena = memory.allocator();
-    const context = try collectionTestContext(.{ .path = "values", .kind = .string_dictionary, .dictionary_value = .int32, .dictionary_equality = .default }, arena);
-    const prefix = "--- !u!114 &1\nMonoBehaviour:\n  m_Script: {fileID: 11500000, guid: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, type: 3}\n";
-    const ours = prefix ++ "  values:\n  - key: \n    value: 1\n";
-    var built = try buildWithContext(arena, prefix ++ "  values: []\n", ours, prefix ++ "  values:\n  - key: \n    value: 2\n", context);
-    try testing.expectEqualStrings(ours, built.partial);
-    const id = built.plan.operations[0].id;
-    try testing.expectError(error.InvalidResolution, resolve(arena, &built.plan, id, .{ .custom = "{key: {}, value: 9}" }));
-    try resolve(arena, &built.plan, id, .{ .custom = "{key: \"\", value: 9}" });
-    try testing.expectEqualStrings(prefix ++ "  values:\n  - {key: \"\", value: 9}\n", try finish(arena, &built.plan));
-    var automatic = try buildWithContext(arena, ours, ours, prefix ++ "  values:\n  - key: \n    value: 2\n  - key: other\n    value: 3\n", context);
-    try testing.expectEqualStrings(prefix ++ "  values:\n  - key: \n    value: 2\n  - key: other\n    value: 3\n", try finish(arena, &automatic.plan));
 }
 
 test "collection public concurrent header comment change is preserved or explicit" {
@@ -937,25 +791,6 @@ test "collection public review packed suffix-only change preserves the changed s
     var built = try buildWithContext(arena, prefix ++ "01000000\n", prefix ++ "01000000\n", theirs, context);
     try testing.expectEqual(@as(usize, 0), built.plan.unresolvedCount());
     try testing.expectEqualStrings(theirs, try finish(arena, &built.plan));
-}
-
-test "collection public review invalid dictionary shape remains repairable and validated" {
-    var memory = std.heap.ArenaAllocator.init(testing.allocator);
-    defer memory.deinit();
-    const arena = memory.allocator();
-    const context = try collectionTestContext(.{ .path = "values", .kind = .string_dictionary, .dictionary_value = .int32, .dictionary_equality = .default }, arena);
-    const prefix = "--- !u!114 &1\nMonoBehaviour:\n  m_Script: {fileID: 11500000, guid: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, type: 3}\n  values: ";
-    const ours = prefix ++ "[{key: a, value: 1}]\n";
-    var built = try buildWithContext(arena, prefix ++ "[]\n", ours, prefix ++ "{}\n", context);
-    try testing.expectEqual(@as(usize, 1), built.plan.unresolvedCount());
-    try testing.expectEqualStrings(ours, built.partial);
-    const id = built.plan.operations[0].id;
-    try testing.expectEqual(@import("merge_value.zig").Reason.invalid_dictionary, collectionConflict(&built.plan, id).?.reason);
-    try testing.expectError(error.InvalidResolution, resolve(arena, &built.plan, id, .{ .take = .theirs }));
-    try testing.expectError(error.InvalidResolution, resolve(arena, &built.plan, id, .{ .custom = "{}" }));
-    try testing.expectEqual(@as(usize, 1), built.plan.unresolvedCount());
-    try resolve(arena, &built.plan, id, .{ .custom = "[]" });
-    try testing.expectEqualStrings(prefix ++ "[]\n", try finish(arena, &built.plan));
 }
 
 test "collection public review packed layout edit composes with independent values" {

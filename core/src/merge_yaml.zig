@@ -51,7 +51,7 @@ fn validateFlowNode(arena: std.mem.Allocator, parsed: source.ParsedFile, node: *
         .seq => |items| for (items) |item| try validateFlowNode(arena, parsed, item),
         .map => |entries| for (entries) |entry| {
             try validatePlain(entry.key, true);
-            if (entry.key[0] == '"' or entry.key[0] == '\'') _ = try stringValue(arena, entry.key);
+            if (entry.key[0] == '"' or entry.key[0] == '\'') _ = try decodeScalar(arena, entry.key);
             try validateFlowNode(arena, parsed, entry.value);
         },
     }
@@ -90,7 +90,7 @@ fn appendFlow(arena: std.mem.Allocator, output: *std.ArrayList(u8), node: *const
                 if (i != 0) try output.appendSlice(arena, ", ");
                 // Entry keys retain their encoded source token, unlike scalar values.
                 try validatePlain(entry.key, true);
-                if (entry.key[0] == '"' or entry.key[0] == '\'') _ = try stringValue(arena, entry.key);
+                if (entry.key[0] == '"' or entry.key[0] == '\'') _ = try decodeScalar(arena, entry.key);
                 try output.appendSlice(arena, entry.key);
                 try output.appendSlice(arena, ": ");
                 try appendFlow(arena, output, entry.value, depth + 1);
@@ -221,7 +221,7 @@ fn appendIndented(arena: std.mem.Allocator, output: *std.ArrayList(u8), raw: []c
     }
 }
 
-pub const stringValue = @import("yaml_scalar.zig").decode;
+const decodeScalar = @import("yaml_scalar.zig").decode;
 
 test "collection YAML flow keeps quoted punctuation and object references" {
     var memory = std.heap.ArenaAllocator.init(testing.allocator);
@@ -261,18 +261,18 @@ test "collection YAML switches an empty block to a sequence without touching its
     try testing.expectEqualStrings("  names: [A, B] # keep\n", patch.bytes);
 }
 
-test "dictionary string identity decodes YAML quotes and Unicode" {
+test "collection YAML decodes scalar quotes and Unicode" {
     var memory = std.heap.ArenaAllocator.init(testing.allocator);
     defer memory.deinit();
     const arena = memory.allocator();
-    try testing.expectEqualStrings("plain", try stringValue(arena, "plain"));
-    try testing.expectEqualStrings("it's", try stringValue(arena, "'it''s'"));
-    try testing.expectEqualStrings("A\nB", try stringValue(arena, "\"A\\nB\""));
-    try testing.expectEqualStrings("日本語", try stringValue(arena, "\"\\u65e5\\u672c\\u8a9e\""));
-    try testing.expectEqualStrings("\xf0\x9d\x84\x9e", try stringValue(arena, "\"\\U0001d11e\""));
-    try testing.expectError(error.InvalidValue, stringValue(arena, "\"\\x0g\""));
-    try testing.expectError(error.InvalidValue, stringValue(arena, "\"\\u0_41\""));
-    try testing.expectError(error.InvalidValue, stringValue(arena, "\"unterminated"));
+    try testing.expectEqualStrings("plain", try decodeScalar(arena, "plain"));
+    try testing.expectEqualStrings("it's", try decodeScalar(arena, "'it''s'"));
+    try testing.expectEqualStrings("A\nB", try decodeScalar(arena, "\"A\\nB\""));
+    try testing.expectEqualStrings("日本語", try decodeScalar(arena, "\"\\u65e5\\u672c\\u8a9e\""));
+    try testing.expectEqualStrings("\xf0\x9d\x84\x9e", try decodeScalar(arena, "\"\\U0001d11e\""));
+    try testing.expectError(error.InvalidValue, decodeScalar(arena, "\"\\x0g\""));
+    try testing.expectError(error.InvalidValue, decodeScalar(arena, "\"\\u0_41\""));
+    try testing.expectError(error.InvalidValue, decodeScalar(arena, "\"unterminated"));
 }
 
 test "collection YAML keeps empty sequences and literal scalar text distinct" {
@@ -382,7 +382,7 @@ test "regression scalar truncated escapes and nesting bounds" {
     defer a.deinit();
     const al = a.allocator();
     for ([_][]const u8{ "\"\\x\"", "\"\\x0\"", "\"\\u\"", "\"\\u123\"", "\"\\U0000000\"", "\"\\uD800\"", "\"\\uD800\\uDC0\"", "\"\\U00110000\"", "\"\\uDC00\"" }) |input| {
-        try std.testing.expectError(error.InvalidValue, stringValue(al, input));
+        try std.testing.expectError(error.InvalidValue, decodeScalar(al, input));
     }
     var node = model.Node{ .scalar = "leaf" };
     var ptr: *model.Node = &node;

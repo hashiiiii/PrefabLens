@@ -1,14 +1,9 @@
 # Collection merge fixtures
 
-Unity `6000.7.0a2` generated the 14 three-way cases and their fixed source GUIDs.
-Three additional replay cases use Unity row templates with an omitted serialized member.
-Two source-context cases use these templates to change the source independently of the Variant.
-One dictionary case uses the same row templates with an empty string key.
-`expected-runtime.json` records the required runtime values and the conflict choice for all 20 cases.
+Unity `6000.7.0a2` generated and verified the three array cases.
+Their existing serialized values and script GUID remain in the fixture files.
+`expected-runtime.json` records the runtime values and conflict choice for each case.
 These fixtures do not establish exact Unity `6000.6` runtime coverage.
-
-The `nested` files contain a separate source and two levels of Prefab Variants from the same Editor.
-The source lookup tests use their actual target file IDs.
 
 Copy this directory to a temporary directory before opening its Unity project.
 Keep `cases`, `expected-runtime.json`, and `unity` together.
@@ -30,8 +25,8 @@ The verifier loads every result with `PrefabUtility.LoadPrefabContents` and chec
 It fails for missing results, conflict markers, missing components, or unexpected values.
 Each successful case records the exact Editor version in `unity-result.txt`.
 
-To regenerate inputs in a disposable copy, run `EdgeAudit.Generate`, then `EdgeAudit.GenerateDictionaryVariants`.
-Generation can change file IDs. Copy the generated source prefabs and metadata with the cases.
+To regenerate inputs in a disposable copy, run `EdgeAudit.Generate`.
+Generation can change file IDs. Copy the generated Prefab and metadata with the cases.
 
 The `packed` directory contains signed and empty `int[]` files from Unity `6000.5.2f1` and `6000.7.0a2`.
-The `replay` directory records the sparse row templates and their source context.
+The recorded `unity-result.txt` files preserve the Editor versions used for those fixtures.

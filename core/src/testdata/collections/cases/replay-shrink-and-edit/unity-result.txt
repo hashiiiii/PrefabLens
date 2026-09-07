@@ -1,2 +1,0 @@
-version=6000.7.0a2
-verified=replay-shrink-and-edit

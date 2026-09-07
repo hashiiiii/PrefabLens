@@ -72,35 +72,19 @@ pub fn readIndex(store: *revision.Store) !Index {
     if (records.items.len != 0) try alternate.input(&.{ "update-index", "-z", "--index-info" }, records.items);
     const tree = merge_git.trim(try alternate.output(&.{"write-tree"}));
     if (!validOid(tree)) return error.InvalidTree;
-    const output: Index = .{ .snapshot = try maskUnresolved(git.arena, try store.snapshot(tree), unresolved_paths.items), .path = path, .before = before };
+    const output: Index = .{ .snapshot = maskUnresolved(try store.snapshot(tree), unresolved_paths.items), .path = path, .before = before };
     try output.unchanged(git);
     return output;
 }
 
-pub fn maskUnresolved(arena: std.mem.Allocator, snapshot: core.merge_context.Snapshot, paths: []const []const u8) std.mem.Allocator.Error!core.merge_context.Snapshot {
+pub fn maskUnresolved(snapshot: core.merge_context.Snapshot, paths: []const []const u8) core.merge_context.Snapshot {
     var output = snapshot;
-    var unknown_identity = false;
     for (paths) |path| {
         // An omitted competing declaration can shadow an otherwise proven type.
         for ([_][]const u8{ ".cs", ".asmdef", ".asmref", ".dll", ".rsp", ".meta" }) |suffix| {
             if (std.ascii.endsWithIgnoreCase(path, suffix)) output.scripts = &.{};
         }
-        // Unresolved metadata can conceal a duplicate GUID anywhere in the tree.
-        if (std.ascii.endsWithIgnoreCase(path, ".meta")) unknown_identity = true;
     }
-    if (unknown_identity) {
-        output.assets = &.{};
-        return output;
-    }
-    var assets: std.ArrayList(core.merge_context.Asset) = .empty;
-    for (snapshot.assets) |asset| {
-        const excluded = for (paths) |path| {
-            if (std.mem.eql(u8, path, asset.path) or
-                (std.mem.startsWith(u8, asset.path, path) and asset.path.len > path.len and asset.path[path.len] == '/')) break true;
-        } else false;
-        if (!excluded) try assets.append(arena, asset);
-    }
-    output.assets = try assets.toOwnedSlice(arena);
     return output;
 }
 
@@ -187,7 +171,6 @@ fn matches(git: Git, tree: []const u8, path: []const u8, bytes: []const u8) !boo
 
 const testing = std.testing;
 const script_guid = "11111111111111111111111111111111";
-const asset_guid = "22222222222222222222222222222222";
 const asset_path = "Assets/Thing.prefab";
 const base_bytes = "--- !u!114 &1\nMonoBehaviour:\n  m_Script: {fileID: 11500000, guid: " ++ script_guid ++ ", type: 3}\n  values: 01000000i\n";
 const ours_bytes = "--- !u!114 &1\nMonoBehaviour:\n  m_Script: {fileID: 11500000, guid: " ++ script_guid ++ ", type: 3}\n  values: 0100000002000000i\n";
@@ -203,7 +186,6 @@ fn fixtureGit(tmp: *testing.TmpDir, arena: std.mem.Allocator, env: *std.process.
     try tmp.dir.createDir(testing.io, "Assets", .default_dir);
     try tmp.dir.writeFile(testing.io, .{ .sub_path = "Assets/Example.cs", .data = "using UnityEngine; class Example : MonoBehaviour { public int[] values; }" });
     try tmp.dir.writeFile(testing.io, .{ .sub_path = "Assets/Example.cs.meta", .data = "guid: " ++ script_guid ++ "\n" });
-    try tmp.dir.writeFile(testing.io, .{ .sub_path = asset_path ++ ".meta", .data = "guid: " ++ asset_guid ++ "\n" });
     return git;
 }
 fn fixtureCommit(git: Git, bytes: []const u8) ![]const u8 {
@@ -235,8 +217,8 @@ test "session context binds exact historical inputs and ignores dirty declaratio
     const revisions: Revisions = .{ .base = base, .ours = ours, .theirs = theirs, .output = output };
     const context = (try bind(&store, revisions, paths, inputs)) orelse return error.TestUnexpectedResult;
     try testing.expectEqual(core.merge_context.Kind.int32_array, context.base.kind(script_guid, "values").?);
-    try testing.expectEqualStrings(ours_bytes, context.ours.asset(asset_guid).?.bytes);
-    try testing.expectEqualStrings(theirs_bytes, context.theirs.asset(asset_guid).?.bytes);
+    try testing.expectEqual(@as(usize, 1), context.ours.scripts.len);
+    try testing.expectEqual(@as(usize, 1), context.theirs.scripts.len);
     try testing.expectEqualStrings(output, context.output.revision);
     // A manually edited temporary input cannot borrow a matching path's old type proof.
     try testing.expectEqual(null, try bind(&store, revisions, paths, .{ .base = base_bytes, .ours = "edited input", .theirs = theirs_bytes }));
@@ -277,7 +259,7 @@ test "session context discovers only complete strategy revisions or a single mer
     try testing.expectEqual(null, try discover(git));
 }
 
-test "session context omits unresolved output sources and detects index changes" {
+test "session context preserves schema evidence and detects index changes" {
     var memory = std.heap.ArenaAllocator.init(testing.allocator);
     defer memory.deinit();
     const arena = memory.allocator();
@@ -285,9 +267,6 @@ test "session context omits unresolved output sources and detects index changes"
     defer tmp.cleanup();
     var env = std.process.Environ.Map.init(arena);
     const git = try fixtureGit(&tmp, arena, &env);
-    const clean_guid = "33333333333333333333333333333333";
-    try tmp.dir.writeFile(testing.io, .{ .sub_path = "Assets/Clean.prefab", .data = base_bytes });
-    try tmp.dir.writeFile(testing.io, .{ .sub_path = "Assets/Clean.prefab.meta", .data = "guid: " ++ clean_guid ++ "\n" });
     const base = try fixtureCommit(git, base_bytes);
     const ours = try fixtureCommit(git, ours_bytes);
     try git.ok(&.{ "checkout", "-q", "--detach", base });
@@ -299,10 +278,9 @@ test "session context omits unresolved output sources and detects index changes"
     try testing.expect(unmerged_before.len != 0);
     var store = revision.Store.init(git);
     defer store.deinit();
-    // A marker-bearing source is not a selected source result for any dependent Variant.
+    // A marker-bearing source is not a selected source result for schema evidence.
     const output = try readIndex(&store);
-    try testing.expectEqual(null, output.snapshot.asset(asset_guid));
-    try testing.expectEqualStrings(base_bytes, output.snapshot.asset(clean_guid).?.bytes);
+    try testing.expectEqual(core.merge_context.Kind.int32_array, output.snapshot.kind(script_guid, "values").?);
     try testing.expectEqualStrings(unmerged_before, try git.output(&.{ "ls-files", "--unmerged", "-z" }));
     try output.unchanged(git);
     // A later source decision invalidates plans that still use the old output snapshot.
@@ -310,7 +288,7 @@ test "session context omits unresolved output sources and detects index changes"
     try git.ok(&.{ "add", "--", asset_path });
     try testing.expectError(error.SourceChanged, output.unchanged(git));
     const refreshed = try readIndex(&store);
-    try testing.expectEqualStrings(ours_bytes, refreshed.snapshot.asset(asset_guid).?.bytes);
+    try testing.expectEqual(core.merge_context.Kind.int32_array, refreshed.snapshot.kind(script_guid, "values").?);
 }
 
 test "session context cannot prove types after omitting unresolved declarations" {
@@ -335,12 +313,9 @@ test "session context cannot prove types after omitting unresolved declarations"
     // Missing a competing declaration is not evidence that BCL type names are unshadowed.
     const output = try readIndex(&store);
     try testing.expectEqual(null, output.snapshot.kind(script_guid, "values"));
-    try testing.expectEqualStrings(base_bytes, output.snapshot.asset(asset_guid).?.bytes);
     const known = try store.snapshot(base);
-    const metadata_conflict = try maskUnresolved(arena, known, &.{"Assets/Unknown.meta"});
+    const metadata_conflict = maskUnresolved(known, &.{"Assets/Unknown.meta"});
     try testing.expectEqual(@as(usize, 0), metadata_conflict.scripts.len);
-    try testing.expectEqual(@as(usize, 0), metadata_conflict.assets.len);
-    const asset_conflict = try maskUnresolved(arena, known, &.{asset_path});
-    try testing.expectEqual(null, asset_conflict.asset(asset_guid));
+    const asset_conflict = maskUnresolved(known, &.{asset_path});
     try testing.expectEqual(core.merge_context.Kind.int32_array, asset_conflict.kind(script_guid, "values").?);
 }

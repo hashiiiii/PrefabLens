@@ -523,28 +523,6 @@ fn testConflictStyles(
         try expectCode(merged, 1, "merge with conflict style");
         const expected = try std.fmt.allocPrint(arena, "--- !u!114 &1\nMonoBehaviour:\n<<<<<<<<<<< ours\n  m_Value: 2\n{s}===========\n  m_Value: 3\n>>>>>>>>>>> theirs\n", .{if (std.mem.eql(u8, style, "merge")) "" else "||||||||||| base\n  m_Value: 1\n"});
         try expectFile(io, arena, repo, file.path, expected);
-
-        // Unknown dictionary equality still needs a choice when native text merging is clean.
-        const dictionary_base = "--- !u!114 &1\nMonoBehaviour:\n  m_Unknown:\n  - key: A\n    value: 1\n";
-        const dictionary_ours = "--- !u!114 &1\nMonoBehaviour:\n  m_Unknown:\n  - key: A\n    value: 2\n";
-        try writeFile(io, arena, repo, ".git/fallback-base", dictionary_base);
-        try writeFile(io, arena, repo, ".git/fallback-ours", dictionary_ours);
-        try writeFile(io, arena, repo, ".git/fallback-theirs", dictionary_base);
-        const text_merge = try gitRun(io, arena, repo, &.{
-            "merge-file", "-p", ".git/fallback-ours", ".git/fallback-base", ".git/fallback-theirs",
-        });
-        try expectCode(text_merge, 0, "native text merge for unclassified dictionary");
-        const fallback = try std.process.run(arena, io, .{
-            .argv = &.{ prefablens, "merge-driver", ".git/fallback-base", ".git/fallback-ours", ".git/fallback-theirs", file.path, "11" },
-            .cwd = .{ .path = repo },
-            .stdout_limit = .limited(1024 * 1024),
-            .stderr_limit = .limited(1024 * 1024),
-            .timeout = .{ .duration = .{ .clock = .awake, .raw = .fromSeconds(30) } },
-        });
-        try expectCode(fallback, 1, "whole-file semantic fallback");
-        const base_block = if (std.mem.eql(u8, style, "merge")) "" else "||||||||||| base\n" ++ dictionary_base;
-        const whole_expected = try std.fmt.allocPrint(arena, "<<<<<<<<<<< ours\n" ++ dictionary_ours ++ "{s}===========\n" ++ dictionary_base ++ ">>>>>>>>>>> theirs\n", .{base_block});
-        try expectFile(io, arena, repo, ".git/fallback-ours", whole_expected);
     }
 }
 

@@ -4,7 +4,6 @@ const vaxis = @import("vaxis");
 
 const merge_tree = @import("merge_tree.zig");
 const merge_ui_state = @import("merge_ui_state.zig");
-const variant_preview = @import("merge_variant_preview.zig");
 const testing = std.testing;
 const vxfw = vaxis.vxfw;
 
@@ -221,8 +220,6 @@ pub const View = struct {
     editor_reopened: bool = false,
     horizontal_offset: usize = 0,
     vertical_offset: usize = 0,
-    details_offset: usize = 0,
-    details_count: usize = 0,
     focus_area: FocusArea = .hierarchy,
     selected_value: ValueColumn = .ours,
     combine_mode: bool = false,
@@ -351,11 +348,7 @@ pub const View = struct {
         size: vxfw.Size,
     ) !void {
         switch (action) {
-            .move_up, .move_down, .select_conflict => {
-                self.horizontal_offset = 0;
-                self.details_offset = 0;
-            },
-            .choose_ours, .choose_theirs, .combine_ours_first, .combine_theirs_first, .reopen_result => self.details_offset = 0,
+            .move_up, .move_down, .select_conflict => self.horizontal_offset = 0,
             else => {},
         }
         const previous_conflict = self.state.selected_conflict;
@@ -373,10 +366,6 @@ pub const View = struct {
         initial: []const u8,
         replace_on_input: bool,
     ) !void {
-        if (self.isVariantPromotion()) {
-            self.state.status = "Choose Variant or Source for inheritance.";
-            return ctx.consumeAndRedraw();
-        }
         self.editor.clearRetainingCapacity();
         try self.editor.insertSliceAtCursor(initial);
         const previous_val = try self.editor.buf.allocator.dupe(u8, initial);
@@ -442,7 +431,6 @@ pub const View = struct {
             self.state.plan.operations[operation_index].resolution != .unresolved;
         if (applied) {
             self.combine_mode = false;
-            self.details_offset = 0;
             self.editor.clearRetainingCapacity();
             self.editing = false;
             self.replace_on_input = false;
@@ -721,11 +709,6 @@ pub const View = struct {
         return &self.state.plan.operations[operation_index];
     }
 
-    fn isVariantPromotion(self: *const View) bool {
-        const operation = self.selectedOperation() orelse return false;
-        return core.merge.isVariantPromotion(self.state.plan, operation.id);
-    }
-
     fn columnText(self: *const View, arena: std.mem.Allocator, operation: *const core.merge.Operation, column: ValueColumn) std.mem.Allocator.Error![]const u8 {
         const pending = self.state.pending orelse operation.resolution;
         if (self.combinedChoices() and (column == .ours or column == .theirs)) {
@@ -733,22 +716,6 @@ pub const View = struct {
                 error.OutOfMemory => return error.OutOfMemory,
                 else => "<unavailable>",
             };
-        }
-        if (self.isVariantPromotion() and column != .base) {
-            const side: core.merge.Side = switch (column) {
-                .ours => .ours,
-                .theirs => .theirs,
-                .result => switch (pending) {
-                    .take => |selected| selected,
-                    else => return "",
-                },
-                .base => unreachable,
-            };
-            const value = core.merge.variantPromotionValue(arena, self.state.plan, operation.id, side) catch |err| switch (err) {
-                error.OutOfMemory => return error.OutOfMemory,
-                else => return "<pending choices>",
-            };
-            return sideText(value);
         }
         return switch (column) {
             .base => sideText(operation.values.base),
@@ -877,7 +844,6 @@ pub const View = struct {
 
     fn activateResult(self: *View, ctx: *vxfw.EventContext, size: vxfw.Size) !void {
         const operation = self.selectedOperation() orelse return;
-        if (self.isVariantPromotion()) return self.applyPendingResult(ctx, size);
         const confirmed_empty = switch (operation.resolution) {
             .custom => |value| value.len == 0,
             else => false,
@@ -944,10 +910,6 @@ pub const View = struct {
         if (self.handleHierarchyWheel(ctx, mouse, size)) return;
         if (mouse.type != .press) return;
         const geometry = self.valueGeometry(size.width);
-        if (mouse.col >= 0 and inRange(@intCast(mouse.col), geometry.inspector) and self.details_count != 0) {
-            if (mouse.button == .wheel_up) return self.scrollDetails(ctx, false, size);
-            if (mouse.button == .wheel_down) return self.scrollDetails(ctx, true, size);
-        }
         if (mouse.button == .wheel_left) return self.scrollLeft(ctx);
         if (mouse.button == .wheel_right) return self.scrollRight(ctx, size);
         if (mouse.button != .left or mouse.col < 0 or mouse.row < 0) return;
@@ -1000,14 +962,6 @@ pub const View = struct {
             return;
         }
         if (inRange(col, geometry.inspector)) return self.focusInspector(ctx);
-    }
-
-    fn scrollDetails(self: *View, ctx: *vxfw.EventContext, down: bool, size: vxfw.Size) void {
-        const body = BodyGeometry.init(size.height);
-        const visible: usize = body.inspector_rows.end -| (body.inspector_rows.start + 2);
-        const step = @max(@as(usize, 1), visible);
-        self.details_offset = if (down) @min(self.details_offset +| step, self.details_count -| visible) else self.details_offset -| step;
-        ctx.consumeAndRedraw();
     }
 };
 
@@ -1200,12 +1154,7 @@ fn draw(
         .{ geometry.theirs, "Theirs", ValueColumn.theirs },
         .{ geometry.result, "Result", ValueColumn.result },
     }) |column| {
-        const label = if (self.isVariantPromotion()) switch (column[2]) {
-            .base => "Inherited",
-            .ours => "Variant",
-            .theirs => "Source",
-            .result => "Result",
-        } else if (self.combinedChoices()) switch (column[2]) {
+        const label = if (self.combinedChoices()) switch (column[2]) {
             .ours => ours_combined_label,
             .theirs => theirs_combined_label,
             .base, .result => column[1],
@@ -1319,8 +1268,6 @@ fn draw(
             });
         }
     }
-
-    try drawVariantDetails(self, ctx.arena, surface, geometry, body);
 
     if (self.state.outcome == .ready) {
         writeClipped(
@@ -1522,56 +1469,6 @@ fn styleRange(surface: vxfw.Surface, row: u16, range: Range, style: vaxis.Style)
     }
 }
 
-fn drawVariantDetails(self: *View, arena: std.mem.Allocator, surface: vxfw.Surface, geometry: Geometry, body: BodyGeometry) std.mem.Allocator.Error!void {
-    self.details_count = 0;
-    const operation_id = if (self.selectedOperation()) |operation| operation.id else null;
-    const preview = variant_preview.inspect(arena, self.state.plan, operation_id, self.state.pending, self.state.outcome == .ready) catch |err| switch (err) {
-        error.OutOfMemory => return error.OutOfMemory,
-        else => {
-            writeClipped(surface, geometry.inspector.start, body.inspector_rows.start + 1, geometry.inspector.end - geometry.inspector.start, "Resolve collection choices before this preview.");
-            return;
-        },
-    };
-    if (preview.effects.len == 0 and !self.isVariantPromotion()) return;
-    const width = geometry.inspector.end - geometry.inspector.start;
-    const title = if (self.state.outcome == .ready)
-        try std.fmt.allocPrint(arena, "{d} new overrides | PgUp/PgDn", .{preview.effects.len})
-    else
-        try std.fmt.allocPrint(arena, "{s} preview: {d} new overrides | PgUp/PgDn", .{ if (preview.side == .theirs) @as([]const u8, "Source") else "Variant", preview.effects.len });
-    writeClipped(surface, geometry.inspector.start, body.inspector_rows.start + 1, width, title);
-    styleRange(surface, body.inspector_rows.start + 1, geometry.inspector, .{ .fg = Palette.conflict });
-    var lines: std.ArrayList([]const u8) = .empty;
-    if (preview.effects.len == 0) try lines.append(arena, "No new inherited overrides.");
-    for (preview.effects) |effect| try wrapDetails(arena, &lines, try variant_preview.effectText(arena, effect), width);
-    self.details_count = lines.items.len;
-    const start = body.inspector_rows.start + 2;
-    const visible = body.inspector_rows.end -| start;
-    self.details_offset = @min(self.details_offset, lines.items.len -| visible);
-    for (lines.items[self.details_offset..], 0..) |line, index| {
-        if (index >= visible) break;
-        writeClipped(surface, geometry.inspector.start, @intCast(start + index), width, line);
-    }
-}
-
-fn wrapDetails(arena: std.mem.Allocator, lines: *std.ArrayList([]const u8), text: []const u8, width: u16) std.mem.Allocator.Error!void {
-    var paragraphs = std.mem.splitScalar(u8, text, '\n');
-    while (paragraphs.next()) |paragraph| {
-        var start: usize = 0;
-        var columns: usize = 0;
-        var graphemes = vaxis.unicode.graphemeIterator(paragraph);
-        while (graphemes.next()) |grapheme| {
-            const length = vaxis.gwidth.gwidth(grapheme.bytes(paragraph), .unicode);
-            if (columns + length > width and grapheme.start > start) {
-                try lines.append(arena, paragraph[start..grapheme.start]);
-                start = grapheme.start;
-                columns = 0;
-            }
-            columns += length;
-        }
-        try lines.append(arena, paragraph[start..]);
-    }
-}
-
 fn inRange(col: u16, range: Range) bool {
     return col >= range.start and col < range.end;
 }
@@ -1666,8 +1563,6 @@ fn handleEvent(
             if (self.focus_area == .inspector and self.selected_value != .result and
                 self.canCombine() and key.matches('t', .{ .shift = true }))
                 return self.toggleCombine(ctx);
-            if (self.details_count != 0 and key.matches(vaxis.Key.page_up, .{})) return self.scrollDetails(ctx, false, size);
-            if (self.details_count != 0 and key.matches(vaxis.Key.page_down, .{})) return self.scrollDetails(ctx, true, size);
             if (self.focus_area == .inspector and self.selected_value == .result and
                 key.matches(vaxis.Key.backspace, .{}))
             {
@@ -1833,126 +1728,6 @@ fn deleteEditPlan(arena: std.mem.Allocator) !core.merge.BuildResult {
         "--- !u!114 &1\nMonoBehaviour:\n  m_After: keep\n",
         "--- !u!114 &1\nMonoBehaviour:\n  m_Value: 2\n  m_After: keep\n",
     );
-}
-
-fn variantPromotionPlan(arena: std.mem.Allocator, local_conflict: bool) !core.merge.BuildResult {
-    const guid = "00000000000000000000000000000001";
-    const script = "00000000000000000000000000000002";
-    const source = "--- !u!114 &40\nMonoBehaviour:\n  m_Script: {fileID: 11500000, guid: " ++ script ++ ", type: 3}\n  items:\n  - name: A\n    speed: 1\n    power: 1\n  - name: B\n    speed: 2\n    power: 2\n";
-    const reordered = "--- !u!114 &40\nMonoBehaviour:\n  m_Script: {fileID: 11500000, guid: " ++ script ++ ", type: 3}\n  items:\n  - name: B\n    speed: 2\n    power: 2\n  - name: A\n    speed: 1\n    power: 1\n";
-    const base = "--- !u!1001 &100\nPrefabInstance:\n  m_Modification:\n    m_Modifications:\n    - target: {fileID: 40, guid: " ++ guid ++ ", type: 3}\n      propertyPath: items.Array.size\n      value: 2\n      objectReference: {fileID: 0}\n  m_SourcePrefab: {fileID: 100100000, guid: " ++ guid ++ ", type: 3}\n";
-    const row = "    - target: {fileID: 40, guid: " ++ guid ++ ", type: 3}\n      propertyPath: items.Array.data[0].speed\n      value: 99\n      objectReference: {fileID: 0}\n";
-    const base_input = if (local_conflict)
-        try std.mem.replaceOwned(u8, arena, base, "  m_SourcePrefab:", row ++ "  m_SourcePrefab:")
-    else
-        base;
-    // A reset of an authored size creates the local Variant decision. Source-only
-    // structural changes beside a leaf override correctly need no repeated choice.
-    const ours = if (local_conflict)
-        try std.mem.replaceOwned(u8, arena, base, "propertyPath: items.Array.size\n      value: 2", "propertyPath: items.Array.data[0].speed\n      value: 99")
-    else
-        try std.mem.replaceOwned(u8, arena, base, "  m_SourcePrefab:", row ++ "  m_SourcePrefab:");
-    const ours_source = if (local_conflict) try std.mem.replaceOwned(u8, arena, source, "  - name: B\n    speed: 2\n    power: 2\n", "") else reordered;
-    const theirs_source = if (local_conflict) try std.mem.replaceOwned(u8, arena, source, "name: B\n    speed: 2\n    power: 2", "name: C\n    speed: 3\n    power: 3") else source;
-    var snapshots: [4]core.merge_context.Snapshot = undefined;
-    for ([_][]const u8{ source, ours_source, theirs_source, source }, 0..) |bytes, index| {
-        const assets = try arena.alloc(core.merge_context.Asset, 1);
-        assets[0] = .{ .guid = guid, .path = "Source.prefab", .bytes = bytes };
-        snapshots[index] = .{ .assets = assets, .scripts = &.{.{ .guid = script, .class_name = "Example", .source_hash = "same", .fields = &.{.{ .path = "items", .kind = .ordered }} }} };
-    }
-    return core.merge.buildWithContext(arena, base_input, ours, base_input, .{ .base = snapshots[0], .ours = snapshots[1], .theirs = snapshots[2], .output = snapshots[3] });
-}
-
-test "merge TUI: Variant inheritance choices show effects before acceptance" {
-    var memory = std.heap.ArenaAllocator.init(testing.allocator);
-    defer memory.deinit();
-    const arena = memory.allocator();
-    var built = try variantPromotionPlan(arena, false);
-    var state = try merge_ui_state.State.init(arena, &built.plan);
-    var view = try viewForTest(arena, &state, "Variant.prefab", built.partial);
-    defer view.deinit();
-    const surface = try drawForTest(arena, view.widget(), 120, 24);
-    const labels = try rowText(arena, surface, BodyGeometry.init(24).inspector_labels_row);
-    try testing.expect(std.mem.indexOf(u8, labels, "Variant") != null);
-    try testing.expect(std.mem.indexOf(u8, labels, "Source") != null);
-    const preview = try surfaceText(arena, surface);
-    try testing.expect(std.mem.indexOf(u8, preview, "inherited 1 -> override 2") != null);
-    try testing.expect(std.mem.indexOf(u8, preview, "items[0].power") != null);
-    try testing.expect(std.mem.indexOf(u8, preview, "Target 40") != null);
-    try testing.expect(std.mem.indexOf(u8, preview, "[Complete]") == null);
-    try testing.expectEqual(@as(usize, 1), state.unresolvedCount());
-    try state.handle(.choose_ours);
-    try state.handle(.apply_result);
-    const completed = try surfaceText(arena, try drawForTest(arena, view.widget(), 120, 24));
-    try testing.expect(std.mem.indexOf(u8, completed, "[Complete]") != null);
-    try testing.expect(std.mem.indexOf(u8, completed, "new overrides") != null);
-    try state.handle(.abort);
-    try testing.expectEqual(@as(usize, 1), built.plan.unresolvedCount());
-    try testing.expectEqual(@as(usize, 0), (try core.merge.variantProvenance(arena, &built.plan)).effects.len);
-}
-
-test "merge TUI: Variant source previews reopen acceptance and retain authored values" {
-    var memory = std.heap.ArenaAllocator.init(testing.allocator);
-    defer memory.deinit();
-    const arena = memory.allocator();
-    var built = try variantPromotionPlan(arena, false);
-    var state = try merge_ui_state.State.init(arena, &built.plan);
-    var view = try viewForTest(arena, &state, "Variant.prefab", built.partial);
-    defer view.deinit();
-    try state.handle(.choose_ours);
-    try state.handle(.apply_result);
-    try state.handle(.choose_theirs);
-    try testing.expectEqual(merge_ui_state.Outcome.active, state.outcome);
-    try testing.expectEqual(@as(usize, 1), state.unresolvedCount());
-    const operation = view.selectedOperation().?;
-    const source_preview = try view.columnText(arena, operation, .result);
-    try testing.expect(std.mem.indexOf(u8, source_preview, "99") != null);
-    try testing.expect(!std.mem.eql(u8, source_preview, operation.values.theirs.?.bytes));
-    const screen = try surfaceText(arena, try drawForTest(arena, view.widget(), 120, 24));
-    try testing.expect(std.mem.indexOf(u8, screen, "[Complete]") == null);
-    try testing.expect(std.mem.indexOf(u8, screen, "Source preview: 0") != null);
-    try state.handle(.apply_result);
-    _ = try core.merge.finish(arena, &built.plan);
-}
-
-test "merge TUI: Variant inheritance review reopens after a local choice changes" {
-    var memory = std.heap.ArenaAllocator.init(testing.allocator);
-    defer memory.deinit();
-    const arena = memory.allocator();
-    var built = try variantPromotionPlan(arena, true);
-    var state = try merge_ui_state.State.init(arena, &built.plan);
-    try testing.expectEqual(@as(usize, 2), state.unresolvedCount());
-    try state.handle(.choose_theirs);
-    try state.handle(.apply_result);
-    try state.handle(.choose_ours);
-    try state.handle(.apply_result);
-    try testing.expectEqual(merge_ui_state.Outcome.ready, state.outcome);
-    try state.handle(.{ .select_conflict = 0 });
-    try state.handle(.reopen_result);
-    try testing.expectEqual(@as(usize, 2), state.unresolvedCount());
-}
-
-test "merge TUI: Variant effects scroll at the minimum terminal size" {
-    var memory = std.heap.ArenaAllocator.init(testing.allocator);
-    defer memory.deinit();
-    const arena = memory.allocator();
-    var built = try variantPromotionPlan(arena, false);
-    var state = try merge_ui_state.State.init(arena, &built.plan);
-    var view = try viewForTest(arena, &state, "Variant.prefab", built.partial);
-    defer view.deinit();
-    const first = try surfaceText(arena, try drawForTest(arena, view.widget(), 80, 10));
-    var ctx = eventContext(arena);
-    try pressKeyForTest(&view, &ctx, vaxis.Key.page_down);
-    const next = try surfaceText(arena, try drawForTest(arena, view.widget(), 80, 10));
-    try testing.expect(!std.mem.eql(u8, first, next));
-    try pressKeyForTest(&view, &ctx, vaxis.Key.page_up);
-    try testing.expectEqualStrings(first, try surfaceText(arena, try drawForTest(arena, view.widget(), 80, 10)));
-    try testing.expectEqual(@as(usize, 1), state.unresolvedCount());
-    view.focus_area = .inspector;
-    view.selected_value = .result;
-    try pressKeyForTest(&view, &ctx, vaxis.Key.backspace);
-    try testing.expect(!view.editing);
-    try testing.expect(std.mem.indexOf(u8, state.status, "Choose Variant or Source") != null);
 }
 
 fn hierarchyPlan(arena: std.mem.Allocator) !core.merge.BuildResult {

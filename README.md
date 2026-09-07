@@ -169,7 +169,7 @@ Resolve the values. Then select **Complete**.
 For array insertion conflicts, focus **Ours** or **Theirs**.
 Press **Shift + T** to switch between **One side** and **Both sides**.
 Use the arrow keys to choose **Ours + Theirs** or **Theirs + Ours**, then press **Enter** to apply that order.
-See [collection merges](docs/collection-merge.md) for dictionaries, Prefab Variants, and type requirements.
+See [collection merges](docs/collection-merge.md) for supported array behavior and unsupported collection shapes.
 
 ## Development
 

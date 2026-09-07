@@ -64,14 +64,5 @@ MonoBehaviour:
   - C
   - D
   numbers: 01000000020000000300000004000000i
-  counts:
-  - key: A
-    value: 1
-  - key: B
-    value: 2
-  - key: C
-    value: 3
-  - key: D
-    value: 4
   left: 1
   right: 1

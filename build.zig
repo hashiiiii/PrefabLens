@@ -131,6 +131,22 @@ pub fn build(b: *std.Build) void {
     const strategy_test_step = b.step("test-merge-strategy", "Run the native Git strategy integration tests");
     strategy_test_step.dependOn(&run_strategy_tests.step);
 
+    const setup_tests = b.addExecutable(.{
+        .name = "merge-setup-tests",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("cli/src/merge_setup_test_main.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    const run_setup_tests = b.addRunArtifact(setup_tests);
+    run_setup_tests.addArtifactArg(exe);
+    run_setup_tests.addArg(installed_strategy_script);
+    run_setup_tests.step.dependOn(&strategy_script.step);
+    test_step.dependOn(&run_setup_tests.step);
+    const setup_test_step = b.step("test-merge-setup", "Run merge setup scope integration tests");
+    setup_test_step.dependOn(&run_setup_tests.step);
+
     // Real alternate-release commands expose mixed installations without a runtime version override.
     const alternate_opts = b.addOptions();
     alternate_opts.addOption([]const u8, "version", zon.version ++ "-installation-test");

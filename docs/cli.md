@@ -62,8 +62,6 @@ Dependencies point from `cli/` to `core/`.
 
 ### Git merge integration
 
-`prefablens setup-merge` configures the current clone.
-With `--team`, this command writes shared `.gitattributes` instead of `.git/info/attributes`.
 One native executable and the packaged `git-merge-prefablens` script must be on `PATH`.
 The script contains only this command:
 
@@ -84,6 +82,51 @@ The script must be a custom Git command on `PATH`, outside this directory.
 The setup keeps existing attribute lines and unrelated configuration.
 The configuration uses command names without absolute paths.
 You do not need to run setup again after a complete upgrade.
+
+#### Setup scopes
+
+```text
+prefablens setup-merge [--project|--local|--user]
+```
+
+| Scope | Attributes | Git configuration |
+| --- | --- | --- |
+| `--project` | `.gitattributes` at the repository root | Local |
+| `--local` or no flag | Git's `info/attributes` file, usually `.git/info/attributes` | Local |
+| `--user` | User attributes file | Global |
+
+Choose at most one scope.
+The former `--team` flag has been replaced by `--project` and is no longer accepted.
+Existing merge configuration remains valid.
+
+Local and project setup require a Git working tree and also work from its subdirectories.
+Local setup resolves the attributes path through Git, including in linked worktrees.
+Outside a working tree, these scopes exit with status 2 and explain where to run setup.
+The message also suggests `prefablens setup-merge --user` for user configuration.
+This failure does not write setup files.
+
+With `--project`, commit `.gitattributes` to share the attribute rules.
+The merge driver, mergetool, and strategy settings remain local to the clone.
+Each clone needs setup unless those settings are already available from user configuration.
+
+User setup also works outside repositories and writes merge settings with `git config --global`.
+It uses the global `core.attributesFile` value, including values from included configuration files.
+Git expands `~` in that path.
+An empty or relative value is rejected because it cannot identify one shared attributes file across repositories.
+Set an absolute path or a path starting with `~/` before running user setup.
+
+When `core.attributesFile` is unset, user setup uses `$XDG_CONFIG_HOME/git/attributes`.
+If `XDG_CONFIG_HOME` is unset or empty, it uses `~/.config/git/attributes`.
+Setup registers this default path in global configuration so that a system `core.attributesFile` setting cannot redirect Git to another file.
+Existing attribute lines are preserved, and repeated setup does not duplicate the rules.
+If the user attributes file is a symlink, setup updates its target and preserves the link.
+
+User setup sets `pull.twohead=prefablens` globally, selecting PrefabLens for ordinary merges across all repositories, including repositories without Unity files.
+Repository configuration takes precedence over global configuration.
+For attributes, Git gives `info/attributes` precedence over `.gitattributes`, which takes precedence over user attributes.
+See [Git attributes](https://git-scm.com/docs/gitattributes) for the full precedence rules.
+
+#### Merge behavior
 
 Before the strategy writes merge objects, the index, or working files, it checks the installed CLI version.
 

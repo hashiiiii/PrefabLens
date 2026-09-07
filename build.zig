@@ -47,6 +47,7 @@ pub fn build(b: *std.Build) void {
     run_step.dependOn(&run_cmd.step);
 
     const core_tests = b.addTest(.{
+        .name = "core-test",
         .root_module = core_mod,
     });
     const cli_test_mod = b.createModule(.{
@@ -58,6 +59,7 @@ pub fn build(b: *std.Build) void {
     // Test fixtures stay explicit so the external-cwd gate cannot read ambient paths.
     cli_test_mod.addImport("test_options", test_options_mod);
     const cli_tests = b.addTest(.{
+        .name = "cli-test",
         .root_module = cli_test_mod,
     });
     const run_cli_tests = b.addRunArtifact(cli_tests);
@@ -78,7 +80,7 @@ pub fn build(b: *std.Build) void {
     run_merge_driver_cwd_tests.setEnvironmentVariable("GIT_CONFIG_KEY_0", "merge.conflictStyle");
     run_merge_driver_cwd_tests.setEnvironmentVariable("GIT_CONFIG_VALUE_0", "merge");
 
-    const test_step = b.step("test", "Run all unit tests");
+    const test_step = b.step("test", "Run native unit and integration tests");
     test_step.dependOn(&b.addRunArtifact(core_tests).step);
     test_step.dependOn(&run_cli_tests.step);
     test_step.dependOn(&run_merge_driver_cwd_tests.step);
@@ -217,6 +219,21 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_pty_smoke.step);
     const pty_test_step = b.step("test-merge-pty", "Run merge interaction tests in a real terminal");
     pty_test_step.dependOn(&run_pty_smoke.step);
+
+    for ([_]*std.Build.Step.Run{
+        run_git_merge_tests,
+        run_collection_fixture_tests,
+        run_strategy_tests,
+        run_setup_tests,
+        run_installation_tests,
+        run_structural_tests,
+        run_pty_smoke,
+    }) |run| {
+        // Independent scratch directories let these checks share the build without inherited stdio.
+        run.expectExitCode(0);
+        // Git and terminal checks must execute even when compilation inputs are cached.
+        run.has_side_effects = true;
+    }
 
     const merge_driver_test_step = b.step("test-merge-driver", "Run merge-driver fixture tests outside the checkout");
     merge_driver_test_step.dependOn(&run_merge_driver_cwd_tests.step);

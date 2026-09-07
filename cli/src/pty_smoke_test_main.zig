@@ -643,7 +643,7 @@ fn runPty(
         // Reply once per Kitty query so capability logs cannot disturb later UI frames.
         // DA1 must follow keyboard support because it ends capability discovery.
         // libvaxis needs a DSR reply to stop its input thread.
-        // Keep the minimum delays used by fixtures that mutate state while a UI is open.
+        // Wait for the active UI and any fixture mutation before sending user input.
         \\(
         \\capture_file=$4
         \\keyboard_replies=0
@@ -675,13 +675,6 @@ fn runPty(
         \\    sleep 0.1
         \\  done
         \\}}
-        \\i=0
-        \\while [ "$i" -lt 10 ]; do
-        \\  reply_terminal || exit 0
-        \\  sleep 0.1
-        \\  i=$((i + 1))
-        \\done
-        \\sleep 1
         \\wait_frame 1 0
         \\first_session=$observed_session
         // Action output must not become terminal input. Keep failures visible after the UI exits.
@@ -690,13 +683,6 @@ fn runPty(
         \\fi
         \\printf '%s' "$1"
         \\if [ -n "$2" ]; then
-        \\  i=0
-        \\  while [ "$i" -lt 10 ]; do
-        \\    reply_terminal || exit 0
-        \\    sleep 0.1
-        \\    i=$((i + 1))
-        \\  done
-        \\  sleep 1
         \\  if [ -n "$1" ]; then
         \\    wait_frame "$((first_session + 1))" 0
         \\  else
@@ -707,7 +693,6 @@ fn runPty(
         \\  printf '%s' "$2"
         \\fi
         \\if [ -n "$3" ]; then
-        \\  sleep 2
         \\  wait_frame "$second_session" "$second_frame"
         \\  printf '%s' "$3"
         \\fi

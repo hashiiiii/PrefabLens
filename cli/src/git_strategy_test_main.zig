@@ -280,10 +280,21 @@ fn concurrentContent(ctx: Context) !void {
             .index => try std.fmt.allocPrint(git.arena, "git update-index --cacheinfo 100644,{s},Assets/A.prefab", .{oid}),
             .source => try std.fmt.allocPrint(git.arena, "git update-index --add --cacheinfo 100644,{s},Assets/Source.cs", .{oid}),
         };
-        // Hold the first UI open while another process changes the index or a later file.
-        const inner = try std.fmt.allocPrint(git.arena, "(sleep 3; {s}) & exec git merge --no-edit remote", .{edit});
-        const command = try std.fmt.allocPrint(git.arena, "env PATH={s} sh -c {s}", .{ try t.shellQuote(git.arena, git.env.get("PATH").?), try t.shellQuote(git.arena, inner) });
-        const result = try pty.runCommandInPtyBatches(git.io, git.arena, git.cwd, command, "", "\x1b[C\r\r", 30);
+        const command = try std.fmt.allocPrint(
+            git.arena,
+            "env PATH={s} git merge --no-edit remote",
+            .{try t.shellQuote(git.arena, git.env.get("PATH").?)},
+        );
+        const result = try pty.runCommandInPtyWithUiAction(
+            git.io,
+            git.arena,
+            git.cwd,
+            command,
+            edit,
+            "\x1b[C\r\r",
+            "",
+            30,
+        );
         try t.expectCode(result, 1, "preserve changes made while merge UI waits");
         if (later_file) {
             try expectFile(git, "Assets/A.prefab", ours);

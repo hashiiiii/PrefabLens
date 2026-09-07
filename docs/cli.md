@@ -27,7 +27,7 @@ The schema remains stable unless a release documents a breaking change.
 | CLI entry | `cli/src/main.zig` → binary `prefablens` |
 | Version source | `build.zig.zon` (injected via `build_options`) |
 | Build | `zig build` installs to `zig-out/bin/` |
-| Unit tests | `zig build test` (core + CLI) |
+| Native tests | `zig build test` (core and CLI unit tests, Git integration, and supported terminal tests) |
 | Lint | `zig build lint` |
 | Performance checks | `zig build perf` (includes the GUID scan budget) |
 

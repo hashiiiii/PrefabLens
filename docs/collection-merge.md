@@ -16,13 +16,26 @@ It preserves repeated elements and does not use a field name as an element ident
 | `[1, 2, 3]` | `[2, 3]` | `[1, 20, 3]` | `[20, 3]` |
 | `[1, 2, 3]` | `[1]` | `[1, 2, 30]` | Choose whether to retain `30`. The result keeps `2` removed. |
 
-When both sides insert into the same gap, the UI offers two orders:
+When both sides insert into the same gap, the field heading offers **One side** and **Both sides** modes.
+Focus **Ours** or **Theirs**, then press **Shift + T** (shown as `⇧T`) to switch modes.
+You can also click the current mode.
+**One side** shows the original choices. **Both sides** offers:
 
-- **F1 Ours + Theirs** puts the Ours block first.
-- **F2 Theirs + Ours** puts the Theirs block first.
+- **Ours** becomes **Ours + Theirs**, with the Ours block first.
+- **Theirs** becomes **Theirs + Ours**, with the Theirs block first.
 
-Each action previews the combined result.
-Apply the result.
+Release **Shift**, choose an order with the arrow keys, and press **Enter** to apply it.
+**Result** shows both blocks in that order, such as `[Ours, Theirs]`.
+Press **Shift + T** again to restore the original side choices.
+Toggling changes the choices without changing **Result**.
+Applying a result or moving to another conflict returns to **One side**.
+
+The mode control appears only when the conflict supports both insertion orders.
+Scalar fields and array delete/edit conflicts do not show the control.
+Letters enter text when **Result** has focus.
+
+To preview a choice before applying it, click its value.
+Then focus **Result** to inspect, edit, or apply the preview.
 When all conflicts have a resolution, select **Complete**.
 A local choice retains independent accepted changes elsewhere in the collection.
 

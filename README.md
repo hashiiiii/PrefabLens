@@ -166,7 +166,9 @@ If a UnityYAML conflict remains and a terminal is available, the merge UI opens.
 
 Resolve the values. Then select **Complete**.
 
-Array conflicts offer both insertion orders with **F1 Ours + Theirs** and **F2 Theirs + Ours**.
+For array insertion conflicts, focus **Ours** or **Theirs**.
+Press **Shift + T** to switch between **One side** and **Both sides**.
+Use the arrow keys to choose **Ours + Theirs** or **Theirs + Ours**, then press **Enter** to apply that order.
 See [collection merges](docs/collection-merge.md) for dictionaries, Prefab Variants, and type requirements.
 
 ## Development

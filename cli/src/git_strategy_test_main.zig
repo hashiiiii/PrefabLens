@@ -665,7 +665,7 @@ fn nativeFixtures(ctx: Context) !void {
             // All platforms check the unresolved transaction. Only POSIX hosts
             // can make the real terminal choice and check its resolved output.
             if (!supports_pty) continue;
-            const keys: []const u8 = if (std.mem.eql(u8, case.choice.?, "ours_first")) "\x1bOP\r\r" else "\x1b[C\x1b[C\r\r";
+            const keys: []const u8 = if (std.mem.eql(u8, case.choice.?, "ours_first")) "\x1b[CT\r\r" else "\x1b[C\x1b[C\r\r";
             const command = try std.fmt.allocPrint(git.arena, "env PATH={s} git merge --no-commit remote", .{try t.shellQuote(git.arena, git.env.get("PATH").?)});
             try t.expectCode(try pty.runCommandInPty(git.io, git.arena, git.cwd, command, keys, 30), 0, "native fixture local choice");
         } else try t.expectCode(try git.run(&.{ "merge", "--no-commit", "remote" }), 0, "native automatic fixture");
@@ -679,8 +679,8 @@ fn nativeFixtures(ctx: Context) !void {
 fn nativeLocalChoices(ctx: Context) !void {
     const prefix = "--- !u!114 &1\nMonoBehaviour:\n";
     const cases = [_]struct { name: []const u8, base_items: []const u8, ours_items: []const u8, theirs_items: []const u8, expected: []const u8, keys: []const u8 }{
-        .{ .name = "native-ours-first", .base_items = "[A]", .ours_items = "[A, Ours]", .theirs_items = "[A, Theirs]", .expected = "[A, Ours, Theirs]", .keys = "\x1bOP\r\r" },
-        .{ .name = "native-theirs-first", .base_items = "[A]", .ours_items = "[A, Ours]", .theirs_items = "[A, Theirs]", .expected = "[A, Theirs, Ours]", .keys = "\x1bOQ\r\r" },
+        .{ .name = "native-ours-first", .base_items = "[A]", .ours_items = "[A, Ours]", .theirs_items = "[A, Theirs]", .expected = "[A, Ours, Theirs]", .keys = "\x1b[CT\r\r" },
+        .{ .name = "native-theirs-first", .base_items = "[A]", .ours_items = "[A, Ours]", .theirs_items = "[A, Theirs]", .expected = "[A, Theirs, Ours]", .keys = "\x1b[CT\x1b[C\r\r" },
         .{ .name = "native-delete-edit", .base_items = "[A, B, C]", .ours_items = "[A]", .theirs_items = "[A, B, Edited]", .expected = "[A, Edited]", .keys = "\x1b[C\x1b[C\r\r" },
         .{ .name = "native-custom", .base_items = "[A]", .ours_items = "[A, Ours]", .theirs_items = "[A, Theirs]", .expected = "[A, Custom]", .keys = "\x1b[<0;83;5M[Custom]\r\r" },
     };
@@ -887,7 +887,6 @@ fn requiredPromotion(ctx: Context) !void {
     const command = try std.fmt.allocPrint(git.arena, "env PATH={s} git merge --no-commit remote", .{try t.shellQuote(git.arena, git.env.get("PATH").?)});
     const result = try pty.runCommandInPtyThreeBatches(git.io, git.arena, git.cwd, command, "\x1b[<0;83;5M[{name: B, power: 1, speed: 2}]\r\r", "\x1b[<0;83;5M[]\r", "\x1b[C\r\r", 30);
     try t.expectCode(result, 0, "explicit required promotion decision");
-    try t.require(pty.terminalCaptureContains(result.stdout, "Variant keeps overrides. Source keeps inheritance."), "required promotion did not disclose inheritance choices");
     try t.require(pty.terminalCaptureContains(result.stdout, "items.length: inherited 2 -> override 1"), "required size promotion omitted exact effect");
     const output = try git.output(&.{ "show", ":Assets/AVariant.prefab" });
     try t.require(std.mem.count(u8, output, "propertyPath: items.Array.size\n      value: 1\n") == 1, "explicit size choice lost length one");

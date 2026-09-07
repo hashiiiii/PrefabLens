@@ -95,15 +95,17 @@ fn testCollectionChoices(
         theirs: []const u8,
         keys: []const u8,
         expected: []const u8,
-        order_buttons: bool = false,
+        toggle_keys: ?[]const u8 = null,
     }{
         // Both insertion orders must retain each block and the unrelated scalar edits.
-        .{ .name = "collection-ours-first", .base = "[A]", .ours = "[A, Ours]", .theirs = "[A, Theirs]", .keys = "\x1bOP\r\r", .expected = "[A, Ours, Theirs]", .order_buttons = true },
-        .{ .name = "collection-theirs-first", .base = "[A]", .ours = "[A, Ours]", .theirs = "[A, Theirs]", .keys = "\x1bOQ\r\r", .expected = "[A, Theirs, Ours]", .order_buttons = true },
+        .{ .name = "collection-ours-first", .base = "[A]", .ours = "[A, O1, O2]", .theirs = "[A, T1, T2]", .toggle_keys = "\x1b[CT", .keys = "\r\r", .expected = "[A, O1, O2, T1, T2]" },
+        .{ .name = "collection-theirs-first", .base = "[A]", .ours = "[A, O1, O2]", .theirs = "[A, T1, T2]", .toggle_keys = "\x1b[C\x1b[116;2u", .keys = "\x1b[C\r\r", .expected = "[A, T1, T2, O1, O2]" },
+        // A second toggle restores the original side before Enter resolves it.
+        .{ .name = "collection-toggle-off", .base = "[A]", .ours = "[A, Ours]", .theirs = "[A, Theirs]", .toggle_keys = "\x1b[CT", .keys = "T\r\r", .expected = "[A, Ours]" },
         // Retaining the edited C must not restore the independently removed B.
         .{ .name = "collection-delete-edit", .base = "[A, B, C]", .ours = "[A]", .theirs = "[A, B, Edited]", .keys = "\x1b[C\x1b[C\r\r", .expected = "[A, Edited]" },
         // A custom interval replaces only the unresolved append gap.
-        .{ .name = "collection-custom", .base = "[A]", .ours = "[A, Ours]", .theirs = "[A, Theirs]", .keys = "\x1b[<0;83;5M[Custom]\r\r", .expected = "[A, Custom]", .order_buttons = true },
+        .{ .name = "collection-custom", .base = "[A]", .ours = "[A, Ours]", .theirs = "[A, Theirs]", .keys = "\x1b[<0;83;5M[Custom]\r\r", .expected = "[A, Custom]" },
     };
     for (cases) |case| {
         const repo = try prepareMergetoolRepositoryWithSides(io, arena, scratch, prefablens, case.name, .{
@@ -115,11 +117,14 @@ fn testCollectionChoices(
         const merged = try integration.gitRun(io, arena, repo, &.{ "merge", "--no-edit", "remote" });
         try integration.expectNonzero(merged, "prepare collection conflict");
         _ = try integration.expectMarkers(io, arena, repo, "Assets/Conflict.prefab");
-        const result = try runMergetoolInPty(io, arena, repo, case.keys, 30);
+        const result = if (case.toggle_keys) |toggle_keys|
+            try runCommandInPtyThreeBatches(io, arena, repo, "git mergetool --no-prompt --tool=prefablens -- Assets/Conflict.prefab", "", toggle_keys, case.keys, 30)
+        else
+            try runMergetoolInPty(io, arena, repo, case.keys, 30);
         try integration.expectCode(result, 0, "resolve collection in PTY");
-        if (case.order_buttons) {
-            inline for (.{ "F1 Ours + Theirs", "F2 Theirs + Ours" }) |label| {
-                try integration.require(terminalCaptureContains(result.stdout, label), "PTY omitted collection order action");
+        if (case.toggle_keys != null) {
+            inline for (.{ "Both sides", "Ours + Theirs", "Theirs + Ours" }) |label| {
+                try integration.require(terminalCaptureContains(result.stdout, label), "PTY omitted the combined collection mode");
             }
         }
         try integration.expectFile(io, arena, repo, "Assets/Conflict.prefab", try collectionFile(arena, case.expected, 2, 3));
@@ -145,7 +150,7 @@ fn testDeletionChoices(
         theirs: []const u8,
         keys: []const u8,
     }{
-        // The side choice represents deletion, and the second Enter confirms Complete.
+        // Enter applies the focused deletion choice, then confirms Complete.
         .{ .name = "delete-ours", .ours = map_deleted, .theirs = map_edited, .keys = "\x1b[C\r\r" },
         .{ .name = "delete-theirs", .ours = map_edited, .theirs = map_deleted, .keys = "\x1b[C\x1b[C\r\r" },
     };
@@ -347,7 +352,8 @@ fn testDelayedTerminals(io: std.Io, arena: std.mem.Allocator, scratch: []const u
     var session_count: usize = 0;
     while (session_start) |start| {
         const next = std.mem.indexOfPos(u8, result.stdout, start + alternate_start.len, alternate_start);
-        try integration.require(terminalCaptureContains(result.stdout[start .. next orelse result.stdout.len], "Assets/Conflict.prefab"), "delayed terminal omitted its file header");
+        const output = result.stdout[start .. next orelse result.stdout.len];
+        try integration.require(terminalCaptureContains(output, "Assets/Conflict.prefab"), "delayed terminal omitted its file header");
         session_count += 1;
         session_start = next;
     }
@@ -593,8 +599,10 @@ pub fn runCommandInPtyThreeBatches(
     io.random(&random);
     const capture = try std.fmt.allocPrint(arena, "/tmp/prefablens-pty-{x}.log", .{random});
     defer std.Io.Dir.cwd().deleteFile(io, capture) catch {};
+    const completed = try std.fmt.allocPrint(arena, "{s}.done", .{capture});
+    defer std.Io.Dir.cwd().deleteFile(io, completed) catch {};
     const capture_argument = try integration.shellQuote(arena, capture);
-    const terminal_command = try integration.shellQuote(arena, try std.fmt.allocPrint(arena, "stty cols 100 rows 24; exec {s}", .{git_command}));
+    const terminal_command = try integration.shellQuote(arena, try std.fmt.allocPrint(arena, "stty cols 100 rows 24; {s}; terminal_status=$?; : > {s}; exit \"$terminal_status\"", .{ git_command, try integration.shellQuote(arena, completed) }));
     const shell_command = switch (builtin.os.tag) {
         .linux => try std.fmt.allocPrint(arena, "script -qfec {s} {s}", .{ terminal_command, capture_argument }),
         .macos => try std.fmt.allocPrint(arena, "script -qF {s} sh -c {s}", .{ capture_argument, terminal_command }),
@@ -602,29 +610,44 @@ pub fn runCommandInPtyThreeBatches(
     };
     const command = try std.fmt.allocPrint(
         arena,
-        // DA1 replies complete capability discovery. A completed synchronized frame in
-        // the active alternate screen, rather than elapsed time, makes action keys safe.
+        // Reply once per Kitty query so capability logs cannot disturb later UI frames.
+        // DA1 must follow keyboard support because it ends capability discovery.
+        // libvaxis needs a DSR reply to stop its input thread.
         // Keep the minimum delays used by fixtures that mutate state while a UI is open.
         \\(
         \\capture_file=$4
+        \\keyboard_replies=0
+        \\status_replies=0
+        \\reply_terminal() {{
+        \\  [ ! -e "$capture_file.done" ] || return 1
+        \\  state=$(LC_ALL=C awk {s} "$capture_file" 2>/dev/null)
+        \\  set -- $state
+        \\  if [ "$#" -eq 6 ] && [ "$5" -gt "$keyboard_replies" ]; then
+        \\    printf '\033[?0u\033[?1;2c' || return 1
+        \\    keyboard_replies=$5
+        \\  fi
+        \\  if [ "$#" -eq 6 ] && [ "$6" -gt "$status_replies" ]; then
+        \\    printf '\033[0n' || return 1
+        \\    status_replies=$6
+        \\  fi
+        \\}}
         \\wait_frame() {{
         \\  min_session=$1
         \\  min_frame=$2
         \\  while :; do
-        \\    state=$(LC_ALL=C awk {s} "$capture_file" 2>/dev/null)
+        \\    reply_terminal || exit 0
         \\    set -- $state
-        \\    if [ "$#" -eq 4 ] && [ "$4" -eq 1 ] && [ "$3" -eq "$1" ] && [ "$1" -ge "$min_session" ] && [ "$2" -gt "$min_frame" ]; then
+        \\    if [ "$#" -eq 6 ] && [ "$4" -eq 1 ] && [ "$3" -eq "$1" ] && [ "$1" -ge "$min_session" ] && [ "$2" -gt "$min_frame" ]; then
         \\      observed_session=$1
         \\      observed_frame=$2
         \\      return
         \\    fi
-        \\    printf '\033[?1;2c' || exit 0
         \\    sleep 0.1
         \\  done
         \\}}
         \\i=0
         \\while [ "$i" -lt 10 ]; do
-        \\  printf '\033[?1;2c'
+        \\  reply_terminal || exit 0
         \\  sleep 0.1
         \\  i=$((i + 1))
         \\done
@@ -635,7 +658,7 @@ pub fn runCommandInPtyThreeBatches(
         \\if [ -n "$2" ]; then
         \\  i=0
         \\  while [ "$i" -lt 10 ]; do
-        \\    printf '\033[?1;2c'
+        \\    reply_terminal || exit 0
         \\    sleep 0.1
         \\    i=$((i + 1))
         \\  done
@@ -657,12 +680,12 @@ pub fn runCommandInPtyThreeBatches(
         \\i=0
         \\while [ "$i" -lt 100 ]; do
         \\  sleep 0.1
-        \\  printf '\033[?1;2c' || exit 0
+        \\  reply_terminal || exit 0
         \\  i=$((i + 1))
         \\done
         \\) | TERM=xterm-256color {s} &
         \\pty_pid=$!
-        \\trap 'kill "$pty_pid" 2>/dev/null; wait "$pty_pid" 2>/dev/null; exit 124' HUP INT TERM
+        \\trap ': > "$4.done"; kill "$pty_pid" 2>/dev/null; wait "$pty_pid" 2>/dev/null; exit 124' HUP INT TERM
         \\wait "$pty_pid"
         \\status=$?
         \\trap - HUP INT TERM
@@ -693,5 +716,7 @@ const frame_probe =
     \\/^\[\?1049l/ { active=0; pending=0 }
     \\/^\[\?2026h/ { if (active) pending=1 }
     \\/^\[\?2026l/ { if (active && pending) { frames++; complete=session }; pending=0 }
-    \\END { print session+0, frames+0, complete+0, active+0 }
+    \\/^\[\?u/ { keyboards++ }
+    \\/^\[5n/ { reports++ }
+    \\END { print session+0, frames+0, complete+0, active+0, keyboards+0, reports+0 }
 ;

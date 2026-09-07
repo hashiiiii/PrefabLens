@@ -38,17 +38,22 @@ The schema remains stable unless a release documents a breaking change.
 | Path | Role |
 |---|---|
 | `core/src/` | Parse, diff, tree, JSON (`prefablens.diff.v2`), WASM export |
-| `cli/src/main.zig` | Argument parse and orchestration |
+| `cli/src/main.zig`, `command.zig` | Process setup and command dispatch |
+| `cli/src/diff.zig` | Diff input collection, GUID resolution, and output selection |
+| `cli/src/diff_options.zig` | Diff options and operand parsing |
 | `cli/src/input.zig` | Git subprocess I/O and file reads |
 | `cli/src/resolve.zig` | `.meta` GUID index scan |
 | `cli/src/unity_path.zig` | UnityYAML extension detection |
 | `cli/src/builtin_refs.zig` | Built-in Unity resource names |
 | `cli/src/render_tree.zig`, `render_html.zig`, `display.zig` | Tree, HTML, and ANSI output |
+| `cli/src/merge_tui.zig`, `merge_ui_state.zig` | Merge interaction, rendering, and resolution state |
+| `cli/src/testing/` | Diff integration tests and shared Git and terminal test helpers |
 | `cli/bin/git-merge-prefablens` | Script that runs `prefablens merge-strategy` for Git |
 | `cli/pkg/` | Templates and scripts for Homebrew and Scoop |
 
 Dependencies point from `cli/` to `core/`.
 `core/` does not import `cli/`.
+Test executables share helpers from `testing/` without importing one another.
 
 ### Constraints
 

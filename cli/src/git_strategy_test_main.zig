@@ -1,7 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
-const t = @import("git_merge_test_main.zig");
-const pty = @import("pty_smoke_test_main.zig");
+const t = @import("testing/git.zig");
+const pty = @import("testing/pty.zig");
 const merge_git = @import("merge_git.zig");
 const version = @import("build_options").version;
 const supports_pty = builtin.os.tag == .linux or builtin.os.tag == .macos;

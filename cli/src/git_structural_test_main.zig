@@ -1,7 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
-const t = @import("git_merge_test_main.zig");
-const pty = @import("pty_smoke_test_main.zig");
+const t = @import("testing/git.zig");
+const pty = @import("testing/pty.zig");
 const merge_git = @import("merge_git.zig");
 
 const base = "--- !u!114 &1\nMonoBehaviour:\n  m_Name: Structural fixture\n  m_Enabled: 1\n  m_EditorClassIdentifier: \n  m_Left: 1\n  m_Right: 1\n";

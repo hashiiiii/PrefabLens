@@ -2,7 +2,7 @@ const std = @import("std");
 const core = @import("core");
 const revision = @import("merge_revision.zig");
 const merge_git = @import("merge_git.zig");
-const support = @import("git_merge_test_main.zig");
+const support = @import("testing/git.zig");
 
 const Case = struct { name: []const u8, conflict: bool, choice: ?[]const u8 = null };
 const Manifest = struct { cases: []const Case };

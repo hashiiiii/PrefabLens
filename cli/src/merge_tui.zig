@@ -79,36 +79,33 @@ const combine_toggle_off = "One side";
 const combine_toggle_on = "Both sides";
 const combine_toggle_shortcut = "⇧T";
 
-const QuitDialogGeometry = struct {
-    top: u16,
-    bottom: u16,
-    left: u16,
-    right: u16,
-    prompt_row: u16,
-    detail_row: u16,
-    buttons_row: u16,
-    cancel: Range,
-    quit: Range,
+const Dialog = enum {
+    quit,
+    empty,
 
-    fn init(width: u16, height: u16) QuitDialogGeometry {
-        const dialog_width: u16 = 44;
-        const left = (width - dialog_width) / 2;
-        const top = (height - 7) / 2;
-        return .{
-            .top = top,
-            .bottom = top + 7,
-            .left = left,
-            .right = left + dialog_width,
-            .prompt_row = top + 1,
-            .detail_row = top + 2,
-            .buttons_row = top + 5,
-            .cancel = .{ .start = left + 13, .end = left + 21 },
-            .quit = .{ .start = left + 25, .end = left + 31 },
+    fn prompt(self: Dialog) []const u8 {
+        return switch (self) {
+            .quit => "Quit before completion?",
+            .empty => "Use an empty value?",
+        };
+    }
+
+    fn detail(self: Dialog) []const u8 {
+        return switch (self) {
+            .quit => "PrefabLens will not write this result.",
+            .empty => "This field will contain an empty YAML value.",
+        };
+    }
+
+    fn confirmLabel(self: Dialog) []const u8 {
+        return switch (self) {
+            .quit => "[Quit]",
+            .empty => "[Use Empty]",
         };
     }
 };
 
-const EmptyDialogGeometry = struct {
+const DialogGeometry = struct {
     top: u16,
     bottom: u16,
     left: u16,
@@ -117,10 +114,10 @@ const EmptyDialogGeometry = struct {
     detail_row: u16,
     buttons_row: u16,
     cancel: Range,
-    use_empty: Range,
+    confirm: Range,
 
-    fn init(width: u16, height: u16) EmptyDialogGeometry {
-        const dialog_width: u16 = 50;
+    fn init(width: u16, height: u16, kind: Dialog) DialogGeometry {
+        const dialog_width: u16 = if (kind == .quit) 44 else 50;
         const left = (width - dialog_width) / 2;
         const top = (height - 7) / 2;
         return .{
@@ -132,7 +129,7 @@ const EmptyDialogGeometry = struct {
             .detail_row = top + 2,
             .buttons_row = top + 5,
             .cancel = .{ .start = left + 13, .end = left + 21 },
-            .use_empty = .{ .start = left + 25, .end = left + 36 },
+            .confirm = .{ .start = left + 25, .end = left + 25 + @as(u16, @intCast(kind.confirmLabel().len)) },
         };
     }
 };
@@ -165,8 +162,7 @@ const BodyGeometry = struct {
 
 const ValueColumn = enum { base, ours, theirs, result };
 const FocusArea = enum { hierarchy, inspector, complete };
-const QuitChoice = enum { cancel, quit };
-const EmptyChoice = enum { cancel, use_empty };
+const DialogChoice = enum { cancel, confirm };
 
 fn valueRange(geometry: Geometry, column: ValueColumn) Range {
     return switch (column) {
@@ -223,10 +219,8 @@ pub const View = struct {
     focus_area: FocusArea = .hierarchy,
     selected_value: ValueColumn = .ours,
     combine_mode: bool = false,
-    quit_dialog: bool = false,
-    quit_choice: QuitChoice = .cancel,
-    empty_dialog: bool = false,
-    empty_choice: EmptyChoice = .cancel,
+    dialog: ?Dialog = null,
+    dialog_choice: DialogChoice = .cancel,
     last_size: vxfw.Size = .{},
     live_screen: ?*const vaxis.Screen = null,
 
@@ -431,12 +425,7 @@ pub const View = struct {
             self.state.plan.operations[operation_index].resolution != .unresolved;
         if (applied) {
             self.combine_mode = false;
-            self.editor.clearRetainingCapacity();
-            self.editing = false;
-            self.replace_on_input = false;
-            self.editor_start_resolution = null;
-            self.editor_changed = false;
-            self.editor_reopened = false;
+            self.resetEditor();
             if (self.state.outcome == .ready) {
                 self.focus_area = .complete;
             } else {
@@ -482,15 +471,19 @@ pub const View = struct {
         try self.handleMouse(ctx, mouse, size);
     }
 
-    fn leaveEditorWithoutApply(self: *View, ctx: *vxfw.EventContext) !void {
+    fn resetEditor(self: *View) void {
         self.editor.clearRetainingCapacity();
-        self.state.pending = if (self.editor_reopened) null else self.editor_start_resolution;
-        self.state.status = "";
         self.editing = false;
         self.replace_on_input = false;
         self.editor_start_resolution = null;
         self.editor_changed = false;
         self.editor_reopened = false;
+    }
+
+    fn leaveEditorWithoutApply(self: *View, ctx: *vxfw.EventContext) !void {
+        self.state.pending = if (self.editor_reopened) null else self.editor_start_resolution;
+        self.state.status = "";
+        self.resetEditor();
         self.focus_area = .inspector;
         self.selected_value = .result;
         try ctx.requestFocus(self.widget());
@@ -499,12 +492,7 @@ pub const View = struct {
 
     fn reopenResult(self: *View, ctx: *vxfw.EventContext, size: vxfw.Size) !void {
         try self.state.handle(.reopen_result);
-        self.editor.clearRetainingCapacity();
-        self.editing = false;
-        self.replace_on_input = false;
-        self.editor_start_resolution = null;
-        self.editor_changed = false;
-        self.editor_reopened = false;
+        self.resetEditor();
         try self.focusHierarchy(ctx);
         self.ensureSelectionVisible(size);
         try ctx.requestFocus(self.widget());
@@ -557,68 +545,65 @@ pub const View = struct {
         ctx.consumeAndRedraw();
     }
 
-    fn openQuitDialog(self: *View, ctx: *vxfw.EventContext) void {
-        self.quit_dialog = true;
-        self.quit_choice = .cancel;
+    fn openDialog(self: *View, ctx: *vxfw.EventContext, kind: Dialog) !void {
+        self.dialog = kind;
+        self.dialog_choice = .cancel;
+        // Empty-value confirmation temporarily takes focus from the Result editor.
+        if (kind == .empty) try ctx.requestFocus(self.widget());
         ctx.consumeAndRedraw();
     }
 
-    fn closeQuitDialog(self: *View, ctx: *vxfw.EventContext) void {
-        self.quit_dialog = false;
-        self.quit_choice = .cancel;
+    fn closeDialog(self: *View, ctx: *vxfw.EventContext) !void {
+        const kind = self.dialog orelse return;
+        self.dialog = null;
+        self.dialog_choice = .cancel;
+        if (kind == .empty) try ctx.requestFocus(self.editor.widget());
         ctx.consumeAndRedraw();
     }
 
-    fn openEmptyDialog(self: *View, ctx: *vxfw.EventContext) !void {
-        self.empty_dialog = true;
-        self.empty_choice = .cancel;
-        try ctx.requestFocus(self.widget());
-        ctx.consumeAndRedraw();
+    fn confirmDialog(self: *View, ctx: *vxfw.EventContext, size: vxfw.Size) !void {
+        const kind = self.dialog orelse return;
+        self.dialog = null;
+        self.dialog_choice = .cancel;
+        switch (kind) {
+            .quit => try self.dispatch(ctx, .abort, size),
+            .empty => {
+                try self.state.handle(.{ .edit_result = "" });
+                try self.applyPendingResult(ctx, size);
+                if (self.editing) try ctx.requestFocus(self.editor.widget());
+            },
+        }
     }
 
-    fn closeEmptyDialog(self: *View, ctx: *vxfw.EventContext) !void {
-        self.empty_dialog = false;
-        self.empty_choice = .cancel;
-        try ctx.requestFocus(self.editor.widget());
-        ctx.consumeAndRedraw();
-    }
-
-    fn confirmEmpty(self: *View, ctx: *vxfw.EventContext, size: vxfw.Size) !void {
-        self.empty_dialog = false;
-        self.empty_choice = .cancel;
-        try self.state.handle(.{ .edit_result = "" });
-        try self.applyPendingResult(ctx, size);
-        if (self.editing) try ctx.requestFocus(self.editor.widget());
-    }
-
-    fn handleEmptyDialog(
+    fn handleDialog(
         self: *View,
         ctx: *vxfw.EventContext,
         event: vxfw.Event,
         size: vxfw.Size,
     ) !void {
+        const kind = self.dialog orelse return;
         switch (event) {
             .key_press => |key| {
                 if (key.codepoint == 'y' or key.codepoint == 'Y') {
-                    return self.confirmEmpty(ctx, size);
+                    return self.confirmDialog(ctx, size);
                 }
                 if (key.codepoint == 'n' or key.codepoint == 'N' or
                     key.matches(vaxis.Key.escape, .{}))
                 {
-                    return self.closeEmptyDialog(ctx);
+                    return self.closeDialog(ctx);
                 }
                 if (key.matches(vaxis.Key.left, .{})) {
-                    self.empty_choice = .cancel;
+                    self.dialog_choice = .cancel;
                     return ctx.consumeAndRedraw();
                 }
                 if (key.matches(vaxis.Key.right, .{})) {
-                    self.empty_choice = .use_empty;
+                    self.dialog_choice = .confirm;
                     return ctx.consumeAndRedraw();
                 }
                 if (key.matches(vaxis.Key.enter, .{})) {
-                    return switch (self.empty_choice) {
-                        .cancel => self.closeEmptyDialog(ctx),
-                        .use_empty => self.confirmEmpty(ctx, size),
+                    return switch (self.dialog_choice) {
+                        .cancel => self.closeDialog(ctx),
+                        .confirm => self.confirmDialog(ctx, size),
                     };
                 }
                 ctx.consumeEvent();
@@ -629,73 +614,14 @@ pub const View = struct {
                 {
                     return ctx.consumeEvent();
                 }
-                const dialog = EmptyDialogGeometry.init(size.width, size.height);
+                const dialog = DialogGeometry.init(size.width, size.height, kind);
                 const col: u16 = @intCast(mouse.col);
                 const row: u16 = @intCast(mouse.row);
                 if (row == dialog.buttons_row and inRange(col, dialog.cancel)) {
-                    return self.closeEmptyDialog(ctx);
+                    return self.closeDialog(ctx);
                 }
-                if (row == dialog.buttons_row and inRange(col, dialog.use_empty)) {
-                    return self.confirmEmpty(ctx, size);
-                }
-                ctx.consumeEvent();
-            },
-            else => ctx.consumeEvent(),
-        }
-    }
-
-    fn confirmQuit(self: *View, ctx: *vxfw.EventContext, size: vxfw.Size) !void {
-        self.quit_dialog = false;
-        try self.dispatch(ctx, .abort, size);
-    }
-
-    fn handleQuitDialog(
-        self: *View,
-        ctx: *vxfw.EventContext,
-        event: vxfw.Event,
-        size: vxfw.Size,
-    ) !void {
-        switch (event) {
-            .key_press => |key| {
-                if (key.codepoint == 'y' or key.codepoint == 'Y') {
-                    return self.confirmQuit(ctx, size);
-                }
-                if (key.codepoint == 'n' or key.codepoint == 'N') {
-                    return self.closeQuitDialog(ctx);
-                }
-                if (key.matches(vaxis.Key.escape, .{})) {
-                    return self.closeQuitDialog(ctx);
-                }
-                if (key.matches(vaxis.Key.left, .{})) {
-                    self.quit_choice = .cancel;
-                    return ctx.consumeAndRedraw();
-                }
-                if (key.matches(vaxis.Key.right, .{})) {
-                    self.quit_choice = .quit;
-                    return ctx.consumeAndRedraw();
-                }
-                if (key.matches(vaxis.Key.enter, .{})) {
-                    return switch (self.quit_choice) {
-                        .cancel => self.closeQuitDialog(ctx),
-                        .quit => self.confirmQuit(ctx, size),
-                    };
-                }
-                ctx.consumeEvent();
-            },
-            .mouse => |mouse| {
-                if (mouse.type != .press or mouse.button != .left or
-                    mouse.col < 0 or mouse.row < 0)
-                {
-                    return ctx.consumeEvent();
-                }
-                const geometry = QuitDialogGeometry.init(size.width, size.height);
-                const col: u16 = @intCast(mouse.col);
-                const row: u16 = @intCast(mouse.row);
-                if (row == geometry.buttons_row and inRange(col, geometry.cancel)) {
-                    return self.closeQuitDialog(ctx);
-                }
-                if (row == geometry.buttons_row and inRange(col, geometry.quit)) {
-                    return self.confirmQuit(ctx, size);
+                if (row == dialog.buttons_row and inRange(col, dialog.confirm)) {
+                    return self.confirmDialog(ctx, size);
                 }
                 ctx.consumeEvent();
             },
@@ -851,7 +777,7 @@ pub const View = struct {
         const input = self.selectedResultInput();
         if (input.len == 0 and !confirmed_empty) {
             try self.beginResultEdit(ctx, input, true);
-            return self.openEmptyDialog(ctx);
+            return self.openDialog(ctx, .empty);
         }
         try self.applyPendingResult(ctx, size);
     }
@@ -1297,8 +1223,8 @@ fn draw(
         );
     }
 
-    if (self.quit_dialog) {
-        const dialog = QuitDialogGeometry.init(size.width, size.height);
+    if (self.dialog) |kind| {
+        const dialog = DialogGeometry.init(size.width, size.height, kind);
         for (dialog.top..dialog.bottom) |row| {
             styleRange(
                 surface,
@@ -1312,70 +1238,31 @@ fn draw(
             dialog.left + 3,
             dialog.prompt_row,
             dialog.right - dialog.left - 6,
-            "Quit before completion?",
+            kind.prompt(),
         );
         writeClipped(
             surface,
             dialog.left + 3,
             dialog.detail_row,
             dialog.right - dialog.left - 6,
-            "PrefabLens will not write this result.",
+            kind.detail(),
         );
         writeClipped(surface, dialog.cancel.start, dialog.buttons_row, 8, "[Cancel]");
-        writeClipped(surface, dialog.quit.start, dialog.buttons_row, 6, "[Quit]");
+        writeClipped(surface, dialog.confirm.start, dialog.buttons_row, @intCast(kind.confirmLabel().len), kind.confirmLabel());
         var cancel_style: vaxis.Style = .{ .fg = Palette.muted, .bg = Palette.focus_bg };
-        var quit_style: vaxis.Style = .{ .fg = Palette.muted, .bg = Palette.focus_bg };
-        if (self.quit_choice == .cancel) {
+        var confirm_style: vaxis.Style = .{ .fg = Palette.muted, .bg = Palette.focus_bg };
+        if (self.dialog_choice == .cancel) {
             cancel_style.fg = Palette.accent;
             cancel_style.reverse = true;
         } else {
-            quit_style.fg = Palette.accent;
-            quit_style.reverse = true;
+            confirm_style.fg = Palette.accent;
+            confirm_style.reverse = true;
         }
         styleRange(surface, dialog.buttons_row, dialog.cancel, cancel_style);
-        styleRange(surface, dialog.buttons_row, dialog.quit, quit_style);
+        styleRange(surface, dialog.buttons_row, dialog.confirm, confirm_style);
     }
 
-    if (self.empty_dialog) {
-        const dialog = EmptyDialogGeometry.init(size.width, size.height);
-        for (dialog.top..dialog.bottom) |row| {
-            styleRange(
-                surface,
-                @intCast(row),
-                .{ .start = dialog.left, .end = dialog.right },
-                .{ .bg = Palette.focus_bg },
-            );
-        }
-        writeClipped(
-            surface,
-            dialog.left + 3,
-            dialog.prompt_row,
-            dialog.right - dialog.left - 6,
-            "Use an empty value?",
-        );
-        writeClipped(
-            surface,
-            dialog.left + 3,
-            dialog.detail_row,
-            dialog.right - dialog.left - 6,
-            "This field will contain an empty YAML value.",
-        );
-        writeClipped(surface, dialog.cancel.start, dialog.buttons_row, 8, "[Cancel]");
-        writeClipped(surface, dialog.use_empty.start, dialog.buttons_row, 11, "[Use Empty]");
-        var cancel_style: vaxis.Style = .{ .fg = Palette.muted, .bg = Palette.focus_bg };
-        var empty_style: vaxis.Style = .{ .fg = Palette.muted, .bg = Palette.focus_bg };
-        if (self.empty_choice == .cancel) {
-            cancel_style.fg = Palette.accent;
-            cancel_style.reverse = true;
-        } else {
-            empty_style.fg = Palette.accent;
-            empty_style.reverse = true;
-        }
-        styleRange(surface, dialog.buttons_row, dialog.cancel, cancel_style);
-        styleRange(surface, dialog.buttons_row, dialog.use_empty, empty_style);
-    }
-
-    if (self.editing and self.focus_area == .inspector and !self.empty_dialog) {
+    if (self.editing and self.focus_area == .inspector and self.dialog != .empty) {
         const editor_row = body.inspector_rows.start;
         if (editor_row < body.inspector_rows.end) {
             self.editor.style = .{ .bg = Palette.focus_bg };
@@ -1411,7 +1298,7 @@ fn submitCustom(
         .custom => |start_value| start_value.len == 0,
         else => false,
     } else false;
-    if (value.len == 0 and !started_empty) return self.openEmptyDialog(ctx);
+    if (value.len == 0 and !started_empty) return self.openDialog(ctx, .empty);
     if (self.editor_changed or value.len == 0) {
         try self.state.handle(.{ .edit_result = value });
     } else {
@@ -1484,8 +1371,8 @@ fn captureEvent(
         else => {},
     };
     if (ctx.consume_event) return;
-    if (self.empty_dialog) switch (event) {
-        .key_press, .mouse => return self.handleEmptyDialog(ctx, event, self.eventSize()),
+    if (self.dialog == .empty) switch (event) {
+        .key_press, .mouse => return self.handleDialog(ctx, event, self.eventSize()),
         else => {},
     };
     switch (event) {
@@ -1525,8 +1412,7 @@ fn handleEvent(
         },
         else => {},
     }
-    if (self.empty_dialog) return self.handleEmptyDialog(ctx, event, size);
-    if (self.quit_dialog) return self.handleQuitDialog(ctx, event, size);
+    if (self.dialog != null) return self.handleDialog(ctx, event, size);
     if (self.editing) {
         switch (event) {
             .key_press => |key| {
@@ -1547,7 +1433,7 @@ fn handleEvent(
         .key_press => |key| {
             if (key.matches(vaxis.Key.escape, .{})) {
                 return switch (self.focus_area) {
-                    .hierarchy => self.openQuitDialog(ctx),
+                    .hierarchy => try self.openDialog(ctx, .quit),
                     .inspector, .complete => self.focusHierarchy(ctx),
                 };
             }
@@ -1986,7 +1872,7 @@ test "merge TUI: Escape opens a non-writing quit dialog" {
 
     var ctx = eventContext(arena);
     try pressKeyForTest(&view, &ctx, vaxis.Key.escape);
-    try testing.expect(view.quit_dialog);
+    try testing.expect(view.dialog == .quit);
     const screen = try surfaceText(arena, try drawForTest(arena, view.widget(), 100, 20));
     try testing.expect(std.mem.indexOf(u8, screen, "Quit before completion?") != null);
     try testing.expect(std.mem.indexOf(u8, screen, "PrefabLens will not write this result.") != null);
@@ -2014,7 +1900,7 @@ test "merge TUI: y confirms and n cancels the quit dialog" {
 
     try pressKeyForTest(&cancel_view, &cancel_ctx, vaxis.Key.escape);
     try pressKeyForTest(&cancel_view, &cancel_ctx, 'n');
-    try testing.expect(!cancel_view.quit_dialog);
+    try testing.expect(cancel_view.dialog != .quit);
     try testing.expectEqual(merge_ui_state.Outcome.active, cancel_state.outcome);
     try testing.expect(!cancel_ctx.quit);
 
@@ -2043,9 +1929,9 @@ test "merge TUI: a mouse click confirms Quit" {
     var ctx = eventContext(arena);
 
     try pressKeyForTest(&view, &ctx, vaxis.Key.escape);
-    const dialog = QuitDialogGeometry.init(100, 20);
+    const dialog = DialogGeometry.init(100, 20, .quit);
     try view.widget().handleEvent(&ctx, .{ .mouse = .{
-        .col = @intCast(dialog.quit.start),
+        .col = @intCast(dialog.confirm.start),
         .row = @intCast(dialog.buttons_row),
         .button = .left,
         .mods = .{},
@@ -4220,8 +4106,8 @@ test "merge TUI: the empty value dialog handles captured keys" {
     );
 
     // The modal must handle capture before Result navigation handles the key.
-    try testing.expect(view.empty_choice == .use_empty);
-    try testing.expect(view.empty_dialog);
+    try testing.expect(view.dialog_choice == .confirm);
+    try testing.expect(view.dialog == .empty);
     try testing.expect(view.editing);
 }
 
@@ -4250,7 +4136,7 @@ test "merge TUI: the empty value dialog redraws after a resize" {
 
     // Resize must reach the root draw path while the modal is open.
     try testing.expect(ctx.redraw);
-    try testing.expect(view.empty_dialog);
+    try testing.expect(view.dialog == .empty);
 }
 
 test "merge TUI: Enter cancels the empty value dialog by default" {
@@ -4435,9 +4321,9 @@ test "merge TUI: a mouse click applies an empty Result" {
 
     try beginEditingForTest(&view, &ctx);
     try pressKeyForTest(&view, &ctx, vaxis.Key.enter);
-    const dialog = EmptyDialogGeometry.init(100, 20);
+    const dialog = DialogGeometry.init(100, 20, .empty);
     try view.widget().handleEvent(&ctx, .{ .mouse = .{
-        .col = @intCast(dialog.use_empty.start),
+        .col = @intCast(dialog.confirm.start),
         .row = @intCast(dialog.buttons_row),
         .button = .left,
         .mods = .{},
@@ -4466,7 +4352,7 @@ test "merge TUI: a mouse click cancels the empty value dialog" {
 
     try beginEditingForTest(&view, &ctx);
     try pressKeyForTest(&view, &ctx, vaxis.Key.enter);
-    const dialog = EmptyDialogGeometry.init(100, 20);
+    const dialog = DialogGeometry.init(100, 20, .empty);
     try view.widget().handleEvent(&ctx, .{ .mouse = .{
         .col = @intCast(dialog.cancel.start),
         .row = @intCast(dialog.buttons_row),

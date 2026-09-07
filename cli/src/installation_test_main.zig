@@ -1,6 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
-const t = @import("git_merge_test_main.zig");
+const t = @import("testing/git.zig");
 const merge_git = @import("merge_git.zig");
 const Git = merge_git.Git;
 

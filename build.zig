@@ -126,6 +126,7 @@ pub fn build(b: *std.Build) void {
     run_strategy_tests.addArtifactArg(exe);
     run_strategy_tests.addArg(installed_strategy_script);
     run_strategy_tests.addArg(b.pathFromRoot("core/src/testdata/collections"));
+    if (b.args) |args| run_strategy_tests.addArgs(args);
     run_strategy_tests.step.dependOn(&strategy_script.step);
     test_step.dependOn(&run_strategy_tests.step);
     const strategy_test_step = b.step("test-merge-strategy", "Run the native Git strategy integration tests");

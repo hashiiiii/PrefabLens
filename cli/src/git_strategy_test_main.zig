@@ -30,6 +30,10 @@ pub fn main(init: std.process.Init) !u8 {
     var env = try init.environ_map.clone(a);
     try env.put("PATH", try std.fmt.allocPrint(a, "{s}{c}{s}{c}{s}", .{ std.fs.path.dirname(prefablens).?, std.fs.path.delimiter, std.fs.path.dirname(strategy_path).?, std.fs.path.delimiter, env.get("PATH") orelse "" }));
     const ctx: Context = .{ .git = .{ .io = init.io, .arena = a, .env = &env }, .scratch = scratch, .prefablens = prefablens, .fixture_root = args[3] };
+    if (args.len == 5 and std.mem.eql(u8, args[4], "private-permissions")) {
+        if (supports_pty) try privatePermissions(ctx);
+        return 0;
+    }
     if (args.len == 5 and std.mem.eql(u8, args[4], "independent-additions")) {
         try independentAdditions(ctx);
         return 0;
@@ -306,10 +310,14 @@ fn privatePermissions(ctx: Context) !void {
         .{ .path = "Assets/A.prefab", .base = base, .ours = ours, .theirs = conflict_theirs },
         .{ .path = "Assets/B.prefab", .base = base, .ours = ours, .theirs = conflict_theirs },
     });
-    // The second file has private permissions before its UI begins. A content choice must keep them.
-    const inner = "(sleep 1.5; chmod 0600 Assets/B.prefab) & exec git merge --no-edit remote";
-    const command = try std.fmt.allocPrint(git.arena, "env PATH={s} sh -c {s}", .{ try t.shellQuote(git.arena, git.env.get("PATH").?), try t.shellQuote(git.arena, inner) });
-    const result = try pty.runCommandInPtyBatches(git.io, git.arena, git.cwd, command, "\x1b[C\r\r", "\x1b[C\r\r", 30);
+    // Delay the real driver so a fixed timer races with checkout even on a fast runner.
+    const driver = merge_git.trim(try git.output(&.{ "config", "merge.prefablens.driver" }));
+    try git.ok(&.{ "config", "merge.prefablens.driver", try std.fmt.allocPrint(git.arena, "sleep 3; {s}", .{driver}) });
+    try git.ok(&.{ "config", "core.trustctime", "true" });
+    // Changing the later file while the first UI is open avoids racing with Git's checkout.
+    // The second UI's content choice must preserve those private permissions.
+    const command = try std.fmt.allocPrint(git.arena, "env PATH={s} git merge --no-edit remote", .{try t.shellQuote(git.arena, git.env.get("PATH").?)});
+    const result = try pty.runCommandInPtyWithUiAction(git.io, git.arena, git.cwd, command, "chmod 0600 Assets/B.prefab", "\x1b[C\r\r", "\x1b[C\r\r", 30);
     try t.expectCode(result, 0, "retain private permissions during content resolution");
     try expectFile(git, "Assets/B.prefab", ours);
     const stat = try std.Io.Dir.cwd().statFile(git.io, try git.path("Assets/B.prefab"), .{});

@@ -1,7 +1,7 @@
 const std = @import("std");
 const testing = std.testing;
 
-/// Shared input-size ceiling for both file reads (main.zig) and `git show`
+/// Shared input-size ceiling for both file reads (diff.zig) and `git show`
 /// output (here), so the two acquisition paths reject oversized input the
 /// same way instead of diverging on an arbitrary limit.
 pub const max_input_bytes: usize = 64 * 1024 * 1024; // 64 MiB guard
@@ -307,7 +307,7 @@ test "changedPaths surfaces a file-named operand as GitDiffFailed" {
     try git(testing.io, arena, dir, &.{ "add", "." });
     try git(testing.io, arena, dir, &.{ "commit", "-q", "-m", "first" });
 
-    // Note.txt fails the CLI's Unity extension gate (main.zig's parseArgs), so it gets
+    // Note.txt fails the CLI's Unity extension gate (diff_options.zig's parseArgs), so it gets
     // classified as a second ref operand rather than a path. Without a trailing "--",
     // git would fail to resolve "Note.txt" as a revision and silently fall back to
     // binding it as a pathspec instead, succeeding at exit 0 (diff restricted to that

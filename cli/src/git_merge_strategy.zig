@@ -287,7 +287,7 @@ test "Git strategy: a staged source change rejects candidate installation" {
     try env.put("PATH", "/usr/bin:/bin");
     const git: Git = .{ .io = testing.io, .arena = arena, .env = &env, .cwd = try tmp.dir.realPathFileAlloc(testing.io, ".", arena) };
     try git.ok(&.{ "init", "-q" });
-    try @import("git_merge_test_main.zig").configureHermeticRepository(testing.io, arena, git.cwd);
+    try @import("testing/git.zig").configureHermeticRepository(testing.io, arena, git.cwd);
     try git.ok(&.{ "config", "user.name", "Fixture" });
     try git.ok(&.{ "config", "user.email", "fixture@example.invalid" });
     try tmp.dir.createDir(testing.io, "Assets", .default_dir);

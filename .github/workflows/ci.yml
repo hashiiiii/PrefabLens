@@ -31,15 +31,10 @@ jobs:
         # Windows Zig caching was measured as not worth it (see PR #36 context)
         if: matrix.os == 'ubuntu-latest'
         uses: ./.github/actions/setup-zig-cache
-      - name: Packaging render test
-        if: matrix.os != 'windows-latest'
-        run: |
-          zig build -Doptimize=ReleaseSafe --prefix .zig-cache/release-check/native
-          cli/pkg/render_test.sh .zig-cache/release-check/native/bin
       - name: Lint
         run: zig build lint
       - name: Test
-        run: zig build test
+        run: zig build test --summary all
       - name: Performance budget
         # Windows runners are too noisy; the measurements swing too much, so skip them here
         if: matrix.os == 'ubuntu-latest'
@@ -130,6 +125,9 @@ jobs:
             ${{ runner.os }}-nuget-
       - name: Build real CLI test bundles
         run: zig build test-installation-binaries -Doptimize=ReleaseSafe
+      - name: Packaging render test
+        if: matrix.os != 'windows-latest'
+        run: cli/pkg/render_test.sh zig-out/bin
       - name: Lint
         working-directory: editor
         run: |

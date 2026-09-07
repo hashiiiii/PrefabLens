@@ -161,18 +161,27 @@ h3 {
   padding: 0;
 }
 
-.hero-frame {
+.hero-frame,
+.report-frame {
   display: block;
   width: 100%;
-  height: 420px;
   border: none;
   background: #ffffff;
 }
 
 @media (prefers-color-scheme: dark) {
-  .hero-frame {
+  .hero-frame,
+  .report-frame {
     background: #0d1117;
   }
+}
+
+.hero-frame {
+  height: 420px;
+}
+
+.report-frame {
+  height: 720px;
 }
 
 /* --- Framed windows ------------------------------------------------------ */
@@ -393,16 +402,13 @@ h3 {
   background: #000000;
 }
 
-.terminal .prompt {
+.terminal .prompt,
+.terminal .dim {
   color: #656a76;
 }
 
 .terminal .b {
   font-weight: 600;
-}
-
-.terminal .dim {
-  color: #656a76;
 }
 
 .terminal .red {
@@ -415,18 +421,4 @@ h3 {
 
 .terminal .yellow {
   color: #ffcf25;
-}
-
-.report-frame {
-  display: block;
-  width: 100%;
-  height: 720px;
-  border: none;
-  background: #ffffff;
-}
-
-@media (prefers-color-scheme: dark) {
-  .report-frame {
-    background: #0d1117;
-  }
 }

@@ -38,17 +38,9 @@ namespace PrefabLens
                 return new Decision { Step = Step.Wait };
             }
             OverrideError = loc.OverrideError;
-            string warn = null;
-            if (loc.OverrideError != null && loc.OverrideError != warnedOverride)
-            {
-                warnedOverride = loc.OverrideError;
-                warn = loc.OverrideError;
-            }
-            else if (loc.OverrideError == null)
-            {
-                // The override is unset or valid again. A later error can produce a new warning.
-                warnedOverride = null;
-            }
+            var warn = loc.OverrideError != warnedOverride ? loc.OverrideError : null;
+            // Clearing the error allows a later occurrence to produce a new warning.
+            warnedOverride = loc.OverrideError;
             if (loc.Path == null)
                 return new Decision
                 {

@@ -21,68 +21,41 @@ namespace PrefabLens
 
         const int VersionTimeoutMs = 5_000;
 
-        readonly struct CliValidation
-        {
-            public readonly bool IsValid;
-            public readonly string Version;
-            public readonly string Error;
-
-            public CliValidation(bool isValid, string version, string error)
-            {
-                IsValid = isValid;
-                Version = version;
-                Error = error;
-            }
-        }
-
-        static CliValidation ValidateCli(string cliPath, string requiredVersion)
+        /// A validation error, or null when the binary reports a compatible version.
+        static string ValidateCli(string cliPath, string requiredVersion)
         {
             if (!File.Exists(cliPath))
-                return Invalid($"{BinaryName} was not found at '{cliPath}'.");
+                return $"{BinaryName} was not found at '{cliPath}'.";
 
-            var cli = ReadVersion(cliPath, "prefablens");
-            if (!cli.IsValid)
-                return cli;
-            if (requiredVersion != null && cli.Version != requiredVersion)
-                return Invalid($"The CLI version is {cli.Version}, but PrefabLens requires {requiredVersion}.");
-            return cli;
-        }
-
-        static CliValidation ReadVersion(string path, string command)
-        {
             Result result;
             try
             {
-                result = RunProcess(
-                    Path.GetFullPath(path),
-                    "--version",
-                    Path.GetDirectoryName(Path.GetFullPath(path)),
-                    VersionTimeoutMs
-                );
+                var fullPath = Path.GetFullPath(cliPath);
+                result = RunProcess(fullPath, "--version", Path.GetDirectoryName(fullPath), VersionTimeoutMs);
             }
             catch (Exception e)
             {
-                return Invalid($"{command} at '{path}' did not start: {e.Message}");
+                return $"prefablens at '{cliPath}' did not start: {e.Message}";
             }
             if (result.ExitCode != 0)
             {
                 var detail = string.IsNullOrWhiteSpace(result.Stderr)
                     ? $"exit {result.ExitCode}"
                     : result.Stderr.Trim();
-                return Invalid($"{command} at '{path}' failed for --version: {detail}");
+                return $"prefablens at '{cliPath}' failed for --version: {detail}";
             }
 
             var output = result.Stdout.Trim();
-            var prefix = command + " ";
+            const string prefix = "prefablens ";
             if (!output.StartsWith(prefix, StringComparison.Ordinal))
-                return Invalid($"{command} at '{path}' returned an invalid --version value: '{output}'.");
+                return $"prefablens at '{cliPath}' returned an invalid --version value: '{output}'.";
             var version = output.Substring(prefix.Length);
             if (version.Length == 0 || version.IndexOfAny(new[] { ' ', '\t', '\r', '\n' }) >= 0)
-                return Invalid($"{command} at '{path}' returned an invalid --version value: '{output}'.");
-            return new CliValidation(true, version, null);
+                return $"prefablens at '{cliPath}' returned an invalid --version value: '{output}'.";
+            if (requiredVersion != null && version != requiredVersion)
+                return $"The CLI version is {version}, but PrefabLens requires {requiredVersion}.";
+            return null;
         }
-
-        static CliValidation Invalid(string error) => new CliValidation(false, null, error);
 
         /// Result of the CLI lookup. OverrideError is non-null when the EditorPrefs override is invalid.
         public readonly struct Location
@@ -102,17 +75,14 @@ namespace PrefabLens
         /// A valid manual CLI takes precedence. An invalid override is reported.
         public static Location Locate(string manual, string defaultPath)
         {
+            string overrideError = null;
             if (!string.IsNullOrEmpty(manual))
             {
-                var manualValidation = ValidateCli(manual, requiredVersion: null);
-                if (manualValidation.IsValid)
+                overrideError = ValidateCli(manual, requiredVersion: null);
+                if (overrideError == null)
                     return new Location(manual, null);
-                return new Location(
-                    ValidateCli(defaultPath, Version).IsValid ? defaultPath : null,
-                    manualValidation.Error
-                );
             }
-            return new Location(ValidateCli(defaultPath, Version).IsValid ? defaultPath : null, null);
+            return new Location(ValidateCli(defaultPath, Version) == null ? defaultPath : null, overrideError);
         }
 
         /// The manual CLI path override, EditorPrefs-backed. Empty = unset. The single

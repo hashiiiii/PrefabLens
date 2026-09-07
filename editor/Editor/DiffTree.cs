@@ -67,9 +67,7 @@ namespace PrefabLens
         }
     }
 
-    /// Maps a DiffModel to the row tree the window renders (same notation as the Chrome
-    /// renderer). Pure with respect to UIElements — DiffTreeView owns the TreeView
-    /// wiring — so `dotnet test` covers it via the DotNetTests~ stubs.
+    /// Maps a DiffModel to rows. Spans contain visible text; DiffTreeView renders status badges separately.
     public static class DiffTree
     {
         /// A row and its children; the window converts this to TreeViewItemData.
@@ -87,30 +85,21 @@ namespace PrefabLens
             foreach (var n in model.Roots)
                 items.Add(NodeItem(n, model));
             if (model.Loose.Count > 0)
-            {
-                var group = new Item(
-                    Badge(DiffStatus.Unchanged, RowKind.Group).Add($"Components ({model.Loose.Count})", Palette.Muted)
-                );
-                foreach (var c in model.Loose)
-                    group.Children.Add(ComponentItem(c, model));
-                items.Add(group);
-            }
+                items.Add(ComponentsGroup(model.Loose.ConvertAll(c => ComponentItem(c, model))));
             return items;
         }
 
-        public static Row Badge(DiffStatus s, RowKind kind = RowKind.Summary) =>
-            s switch
-            {
-                DiffStatus.Added => new Row(s, kind).Add("+ ", Palette.Added),
-                DiffStatus.Removed => new Row(s, kind).Add("− ", Palette.Removed),
-                DiffStatus.Modified => new Row(s, kind).Add("~ ", Palette.Modified),
-                _ => new Row(kind: kind).Add("  "),
-            };
+        static Item ComponentsGroup(List<Item> cards)
+        {
+            var group = new Item(new Row(kind: RowKind.Group).Add($"Components ({cards.Count})", Palette.Muted));
+            group.Children.AddRange(cards);
+            return group;
+        }
 
         static Item NodeItem(NodeDiff n, DiffModel m)
         {
             var pi = n as PrefabInstanceDiff;
-            var row = Badge(n.Status).WithIcon(FindIcon(pi != null ? "Prefab Icon" : "GameObject Icon")).Add(n.Name);
+            var row = new Row(n.Status).WithIcon(FindIcon(pi != null ? "Prefab Icon" : "GameObject Icon")).Add(n.Name);
             if (pi?.SourceGuid != null)
                 row.Add(
                     " ‹Prefab: " + (m.Resolved.TryGetValue(pi.SourceGuid, out var src) ? src : pi.SourceGuid) + "›",
@@ -131,11 +120,7 @@ namespace PrefabLens
             if (cards.Count > 0)
             {
                 // Override cards and components share one group because Unity displays both in the Inspector.
-                var group = new Item(
-                    Badge(DiffStatus.Unchanged, RowKind.Group).Add($"Components ({cards.Count})", Palette.Muted)
-                );
-                group.Children.AddRange(cards);
-                item.Children.Add(group);
+                item.Children.Add(ComponentsGroup(cards));
             }
             foreach (var ch in n.Children)
                 item.Children.Add(NodeItem(ch, m));
@@ -144,7 +129,7 @@ namespace PrefabLens
 
         static Item ComponentItem(ComponentDiff c, DiffModel m)
         {
-            var row = Badge(c.Status).WithIcon(ComponentIcon(c));
+            var row = new Row(c.Status).WithIcon(ComponentIcon(c));
             if (c.ScriptGuid != null && m.Resolved.TryGetValue(c.ScriptGuid, out var p))
                 row.Add(Stem(p)).Add(" ‹Script: " + p + "›", Palette.Muted);
             else if (!string.IsNullOrEmpty(c.ClassName))
@@ -167,7 +152,7 @@ namespace PrefabLens
                     break;
                 }
             var name = string.IsNullOrEmpty(overrides[start].Group) ? "Overrides" : overrides[start].Group;
-            var item = new Item(Badge(status).WithIcon(FindIcon(name + " Icon")).Add(name));
+            var item = new Item(new Row(status).WithIcon(FindIcon(name + " Icon")).Add(name));
             for (var i = start; i < end; i++)
             {
                 var ov = overrides[i];
@@ -179,9 +164,9 @@ namespace PrefabLens
         static Row FieldRow(string label, DiffStatus status, Value before, Value after, DiffModel m)
         {
             if ((before == null || before.IsNull) && (after == null || after.IsNull))
-                return Badge(status).Add(label, Palette.Muted);
+                return new Row(status).Add(label, Palette.Muted);
 
-            var row = Badge(status, RowKind.Field).Add(label + " ", Palette.Muted);
+            var row = new Row(status, RowKind.Field).Add(label + " ", Palette.Muted);
             var b = ValueFormat.Format(before, m);
             var a = ValueFormat.Format(after, m);
             if (status == DiffStatus.Modified)

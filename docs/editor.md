@@ -51,6 +51,12 @@ Important types under `Editor/`:
 - `RefreshGate.cs`: one in-flight CLI run, with a queue for later Base edits
 - `PrefabLensSettings.cs`: Preferences UI for the CLI path override
 - `BuiltinRefs.cs`, `ValueFormat.cs`: built-in names and field text
+- `MiniJson.cs`: bundled JSON reader for CLI output
+
+Rows store visible text spans and a separate status.
+`DiffTreeView` derives status badges from that status.
+The CLI tests follow the source split: `CliTests.cs`, `CliTests.Download.cs`, and `CliTests.Run.cs`.
+They share one fixture and helpers for the real native CLI.
 
 ### CLI run contract
 

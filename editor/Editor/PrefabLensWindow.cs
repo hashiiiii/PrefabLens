@@ -164,7 +164,7 @@ namespace PrefabLens
 
             if (bulk.Entries.Count == 0)
                 return;
-            var idx = IndexOfPath(selectedPath);
+            var idx = bulk.Entries.FindIndex(entry => entry.Path == selectedPath);
             if (idx < 0)
                 idx = 0;
             list.SetSelection(idx);
@@ -182,16 +182,6 @@ namespace PrefabLens
         {
             var r = runRef?.Trim();
             return string.IsNullOrEmpty(r) ? "HEAD" : r;
-        }
-
-        int IndexOfPath(string path)
-        {
-            if (path == null)
-                return -1;
-            for (var i = 0; i < bulk.Entries.Count; i++)
-                if (bulk.Entries[i].Path == path)
-                    return i;
-            return -1;
         }
 
         void OnSelectionChanged(IEnumerable<object> items)

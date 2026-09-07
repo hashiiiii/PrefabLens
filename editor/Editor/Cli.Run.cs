@@ -108,19 +108,7 @@ namespace PrefabLens
             using var p = Process.Start(psi);
             // Cancellation kills the child like the timeout path does; WaitForExit then
             // returns promptly and the ct check below reports the run as canceled.
-            using var reg = ct.Register(() =>
-            {
-                try
-                {
-                    p.Kill();
-                }
-                catch (InvalidOperationException)
-                { /* race between cancel and exit */
-                }
-                catch (System.ComponentModel.Win32Exception)
-                { /* already terminating */
-                }
-            });
+            using var reg = ct.Register(() => KillProcess(p));
             // Avoid a two-way ReadToEnd deadlock: read one side asynchronously
             var stdout = p.StandardOutput.ReadToEndAsync();
             var stderr = p.StandardError.ReadToEndAsync();
@@ -128,16 +116,7 @@ namespace PrefabLens
             {
                 // Protect the Unity main thread from a hung CLI. If a grandchild process that holds stdio
                 // survives the Kill, the Read tasks never complete, so don't wait for the remaining output.
-                try
-                {
-                    p.Kill();
-                }
-                catch (InvalidOperationException)
-                { /* race between timeout and exit */
-                }
-                catch (System.ComponentModel.Win32Exception)
-                { /* already terminating */
-                }
+                KillProcess(p);
                 return new Result
                 {
                     ExitCode = -1,
@@ -163,6 +142,17 @@ namespace PrefabLens
                 Stdout = stdout.Result,
                 Stderr = stderr.Result,
             };
+        }
+
+        static void KillProcess(Process process)
+        {
+            // Timeout and cancellation can race with normal process exit.
+            try
+            {
+                process.Kill();
+            }
+            catch (InvalidOperationException) { }
+            catch (System.ComponentModel.Win32Exception) { }
         }
     }
 }

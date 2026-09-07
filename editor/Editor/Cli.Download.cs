@@ -204,9 +204,9 @@ namespace PrefabLens
                 ExtractTo(zipBytes, stagingDirectory);
                 var stagedCliPath = Path.Combine(stagingDirectory, BinaryName);
                 MarkExecutable(stagedCliPath);
-                var validation = ValidateCli(stagedCliPath, requiredVersion);
-                if (!validation.IsValid)
-                    throw new InvalidOperationException(validation.Error);
+                var error = ValidateCli(stagedCliPath, requiredVersion);
+                if (error != null)
+                    throw new InvalidOperationException(error);
 
                 ReplaceDirectory(stagingDirectory, fullFinalDirectory, backupDirectory);
                 return Path.Combine(finalDirectory, BinaryName);
@@ -247,21 +247,15 @@ namespace PrefabLens
             catch (UnauthorizedAccessException) { }
         }
 
-        /// Make the extracted CLI executable. This operation does nothing on Windows.
+        /// A failed chmod must stop installation before the first CLI run.
         public static void MarkExecutable(string cliPath)
         {
             if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
                 return;
-            MarkExecutableFile(cliPath);
-        }
-
-        /// A failed chmod must stop installation before the first CLI run.
-        static void MarkExecutableFile(string path)
-        {
-            var res = RunProcess("chmod", "+x \"" + path + "\"", ".", RunTimeoutMs);
+            var res = RunProcess("chmod", "+x \"" + cliPath + "\"", ".", RunTimeoutMs);
             if (res.ExitCode != 0)
                 throw new InvalidOperationException(
-                    $"chmod +x failed for {path}: "
+                    $"chmod +x failed for {cliPath}: "
                         + (string.IsNullOrEmpty(res.Stderr) ? $"exit {res.ExitCode}" : res.Stderr.Trim())
                 );
         }
@@ -275,14 +269,8 @@ namespace PrefabLens
                 return;
             foreach (var dir in Directory.GetDirectories(root))
             {
-                if (Path.GetFileName(dir) == keep)
-                    continue;
-                try
-                {
-                    Directory.Delete(dir, recursive: true);
-                }
-                catch (IOException) { }
-                catch (UnauthorizedAccessException) { }
+                if (Path.GetFileName(dir) != keep)
+                    DeleteDirectoryBestEffort(dir);
             }
         }
     }

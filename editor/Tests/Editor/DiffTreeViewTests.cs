@@ -12,11 +12,54 @@ namespace PrefabLens.Tests
     {
         sealed class TreeHostWindow : EditorWindow { }
 
+        [TestCase(DiffStatus.Added, "+")]
+        [TestCase(DiffStatus.Removed, "−")]
+        [TestCase(DiffStatus.Modified, "~")]
+        [TestCase(DiffStatus.Unchanged, null)]
+        public void SummaryRowsShowTheNameAndOneStatusBadge(DiffStatus status, string badge)
+        {
+            // The visible row must keep its name when status moves between data and rendering.
+            var model = new DiffModel();
+            model.Roots.Add(new GameObjectDiff { Name = "Robot", Status = status });
+            var element = new VisualElement();
+
+            DiffTreeView.BindRow(element, DiffTree.Build(model)[0].Row);
+
+            var labels = element.Query<Label>().ToList().ConvertAll(label => label.text);
+            CollectionAssert.AreEqual(badge == null ? new[] { "Robot" } : new[] { "Robot", badge }, labels);
+        }
+
+        [Test]
+        public void FieldRowsShowTheChangeWithoutASummaryBadge()
+        {
+            // A field already expresses its change through the before and after values.
+            var model = new DiffModel();
+            var component = new ComponentDiff { TypeName = "Transform", Status = DiffStatus.Modified };
+            component.Fields.Add(
+                new FieldDiff
+                {
+                    Path = "Position.x",
+                    Status = DiffStatus.Modified,
+                    Before = new Value { Scalar = "0" },
+                    After = new Value { Scalar = "1" },
+                }
+            );
+            model.Loose.Add(component);
+            var element = new VisualElement();
+
+            DiffTreeView.BindRow(element, DiffTree.Build(model)[0].Children[0].Children[0].Row);
+
+            CollectionAssert.AreEqual(
+                new[] { "Position.x ", "0", " → ", "1" },
+                element.Query<Label>().ToList().ConvertAll(label => label.text)
+            );
+        }
+
         [Test]
         public void GroupLabelUsesRegularFontWeight()
         {
             var element = new VisualElement();
-            var row = new Row(kind: RowKind.Group).Add("  ").Add("Components (1)", Palette.Muted);
+            var row = new Row(kind: RowKind.Group).Add("Components (1)", Palette.Muted);
 
             DiffTreeView.BindRow(element, row);
 

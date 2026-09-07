@@ -129,7 +129,7 @@ namespace PrefabLens
             NodeDiff n = Str(o, "kind") switch
             {
                 "gameObject" => new GameObjectDiff(),
-                "prefabInstance" => ParsePrefabInstance(o),
+                "prefabInstance" => new PrefabInstanceDiff { SourceGuid = Str(o, "sourceGuid") },
                 _ => null, // skip unknown kinds
             };
             if (n == null)
@@ -148,9 +148,6 @@ namespace PrefabLens
                     n.Children.Add(child);
             return n;
         }
-
-        static PrefabInstanceDiff ParsePrefabInstance(Dictionary<string, object> o) =>
-            new() { SourceGuid = Str(o, "sourceGuid") };
 
         static OverrideDiff ParseOverride(Dictionary<string, object> ovo) =>
             new()

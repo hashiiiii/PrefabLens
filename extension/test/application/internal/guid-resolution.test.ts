@@ -18,11 +18,11 @@ class MemoryGuidRepository implements GuidRepository {
 
 function searchRoutes(respond: (request: URL) => Response | Promise<Response>) {
   const requests: URL[] = [];
-  const fetchRoute = (async (input: RequestInfo | URL) => {
+  const fetchRoute: typeof fetch = async (input: RequestInfo | URL) => {
     const request = new URL(String(input));
     requests.push(request);
     return respond(request);
-  }) as typeof fetch;
+  };
   return { requests, client: createGithubGateway("https://api.github.test", "token", fetchRoute) };
 }
 

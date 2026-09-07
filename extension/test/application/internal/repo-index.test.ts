@@ -90,6 +90,7 @@ describe("getRepoIndex", () => {
         });
       }
       if (request.pathname === "/graphql") {
+        // The body comes from the GitHub client's JSON.stringify({ query }) call.
         const body = JSON.parse(String(init?.body)) as { query: string };
         graphqlQueries.push(body.query);
         return Response.json({ data: { repository: { b0: { text: "guid: gB\n" } } } });
@@ -119,6 +120,7 @@ describe("getRepoIndex", () => {
         return Response.json({ truncated: false, tree: metas });
       }
       if (request.pathname === "/graphql") {
+        // The body comes from the GitHub client's JSON.stringify({ query }) call.
         const body = JSON.parse(String(init?.body)) as { query: string };
         graphqlBatchSizes.push(body.query.match(/object\(oid:/g)?.length ?? 0);
         return Response.json({ data: { repository: {} } });

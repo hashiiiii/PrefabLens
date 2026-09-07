@@ -1,4 +1,12 @@
-import type { ComponentDiff, DiffV2, FieldValue, NodeDiff, OverrideDiff, Status } from "../../domain/diff/types";
+import {
+  type ComponentDiff,
+  type DiffV2,
+  type FieldValue,
+  isRefValue,
+  type NodeDiff,
+  type OverrideDiff,
+  type Status,
+} from "../../domain/diff/types";
 import { builtinName } from "./builtin-refs";
 import { ALERT, CHECK, CHEVRON, CUBE, GEAR } from "./icons";
 import { STYLES } from "./styles";
@@ -15,7 +23,7 @@ export function detectTheme(doc: Document): "light" | "dark" {
 
 // data-prefablens-view marks semantic hosts. detect.ts skips them when it hides
 // raw children. The content script and the demo must agree on the attribute.
-export function createViewHost(): { host: HTMLDivElement; root: ShadowRoot } {
+export function createViewHost() {
   const host = document.createElement("div");
   host.setAttribute("data-prefablens-view", "");
   return { host, root: host.attachShadow({ mode: "open" }) };
@@ -330,7 +338,7 @@ function valueSpan(className: string, value: FieldValue, diff: DiffV2): HTMLElem
 
 function formatValue(value: FieldValue, diff: DiffV2): string {
   if (value === null) return "—";
-  if (typeof value === "string") return value;
+  if (!isRefValue(value)) return value;
   const { fileId, guid } = value.ref;
   if (guid === null) return fileId === "0" ? "None" : `#${fileId}`; // {fileID: 0} is Unity's null reference
   const path = diff.resolved?.[guid];

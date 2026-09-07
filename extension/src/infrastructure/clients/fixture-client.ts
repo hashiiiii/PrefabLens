@@ -11,7 +11,7 @@ export function createFixturesGateway(): FixturesGateway {
     fetchBytes,
     // A missing source fixture degrades to the unmerged diff, like the extension does.
     fetchSource: (side, path) => fetchBytes(`fixtures/${side}/${path}`).catch(() => new Uint8Array()),
-    // build.mjs generates this guid → asset path map from the fixture .meta files.
+    // site/build.mjs generates this GUID → asset path map from the fixture .meta files.
     async loadGuidIndex() {
       const body = (await (await fetch("fixtures/guids.json")).json()) as Record<string, string>;
       return new Map(Object.entries(body));

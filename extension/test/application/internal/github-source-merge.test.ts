@@ -38,11 +38,11 @@ class MemoryGuidRepository implements GuidRepository {
 
 function githubRoutes(respond: (request: URL) => Response) {
   const requests: URL[] = [];
-  const fetchRoute = (async (input: RequestInfo | URL) => {
+  const fetchRoute: typeof fetch = async (input: RequestInfo | URL) => {
     const request = new URL(String(input));
     requests.push(request);
     return respond(request);
-  }) as typeof fetch;
+  };
   return { requests, client: createGithubGateway(API_BASE, "token", fetchRoute) };
 }
 
@@ -155,13 +155,13 @@ describe("mergeGithubSources", () => {
   });
 
   it("stops after three source rounds", async () => {
-    const sources: Record<string, Uint8Array> = {
-      "/repos/o/r/contents/Assets/S0.prefab": nestedSource(100, "src1"),
-      "/repos/o/r/contents/Assets/S1.prefab": nestedSource(200, "src2"),
-      "/repos/o/r/contents/Assets/S2.prefab": nestedSource(300, "src3"),
-    };
+    const sources = new Map([
+      ["/repos/o/r/contents/Assets/S0.prefab", nestedSource(100, "src1")],
+      ["/repos/o/r/contents/Assets/S1.prefab", nestedSource(200, "src2")],
+      ["/repos/o/r/contents/Assets/S2.prefab", nestedSource(300, "src3")],
+    ]);
     const { client, requests } = githubRoutes((request) => {
-      const source = sources[request.pathname];
+      const source = sources.get(request.pathname);
       return source ? raw(source) : new Response(null, { status: 404 });
     });
     const first = firstDiff(differ, new Uint8Array(), VARIANT_PREFAB, { src0: "Assets/S0.prefab" });

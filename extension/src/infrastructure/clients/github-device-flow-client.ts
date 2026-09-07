@@ -25,6 +25,7 @@ async function requestDeviceCode(fetchFn: typeof fetch): Promise<Result<DeviceCo
     credentials: "omit",
   });
   if (!res.ok) return failed(`device code request failed (HTTP ${res.status})`);
+  // GitHub's device-code endpoint returns the requested code fields or its documented OAuth error response.
   const body = (await res.json()) as DeviceCodeResponse;
   if ("error" in body) return failed(body.error_description ?? body.error);
   return ok({
@@ -55,6 +56,7 @@ async function pollForToken(
       credentials: "omit",
     });
     if (!res.ok) return { status: "failed" };
+    // GitHub's token endpoint returns an access token or a documented polling error.
     const body = (await res.json()) as TokenResponse;
     if ("access_token" in body) return { status: "ok", token: body.access_token };
     switch (body.error) {

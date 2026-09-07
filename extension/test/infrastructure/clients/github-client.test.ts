@@ -1,12 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { isRateLimited } from "../../../src/application/gateway/github";
 import { err, ok } from "../../../src/domain/result";
-import { createGithubGateway } from "../../../src/infrastructure/clients/github-client";
+import { createGithubGateway, createQueuedGithubGateway } from "../../../src/infrastructure/clients/github-client";
+import type { JsonValue } from "../../../src/internal/json";
 import { must } from "../../../src/internal/must";
 
 const API = "https://api.github.test";
 
-const json = (body: unknown, status = 200, headers?: HeadersInit) =>
+const json = (body: JsonValue, status = 200, headers?: HeadersInit) =>
   new Response(JSON.stringify(body), {
     status,
     headers: { "content-type": "application/json", ...Object.fromEntries(new Headers(headers)) },
@@ -30,7 +31,7 @@ class VirtualClock {
 
 describe("createGithubGateway", () => {
   it("returns the merge base", async () => {
-    const fetchFn = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const fetchFn: typeof fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
       switch (requestKey(input, init)) {
         case `GET ${API}/repos/o/r/pulls/7`:
           return json({ base: { sha: "base-tip" }, head: { sha: "head-sha" } });
@@ -39,7 +40,7 @@ describe("createGithubGateway", () => {
         default:
           return unexpectedRequest(input, init);
       }
-    }) as typeof fetch;
+    };
 
     const result = await createGithubGateway(API, "tok", fetchFn).getPrRefs("o", "r", 7);
 
@@ -47,7 +48,7 @@ describe("createGithubGateway", () => {
   });
 
   it("sends the required REST headers", async () => {
-    const fetchFn = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const fetchFn: typeof fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
       if (requestKey(input, init) !== `GET ${API}/repos/o/r/pulls/1/files?per_page=100&page=1`) {
         return unexpectedRequest(input, init);
       }
@@ -56,7 +57,7 @@ describe("createGithubGateway", () => {
       expect(headers.get("accept")).toBe("application/vnd.github+json");
       expect(headers.get("x-github-api-version")).toBe("2022-11-28");
       return json([]);
-    }) as typeof fetch;
+    };
 
     const result = await createGithubGateway(API, "tok", fetchFn).listPrFiles("o", "r", 1);
 
@@ -68,7 +69,7 @@ describe("createGithubGateway", () => {
       filename: `f${index}.cs`,
       status: "modified",
     }));
-    const fetchFn = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const fetchFn: typeof fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
       switch (requestKey(input, init)) {
         case `GET ${API}/repos/o/r/pulls/1/files?per_page=100&page=1`:
           return json(firstPage);
@@ -84,7 +85,7 @@ describe("createGithubGateway", () => {
         default:
           return unexpectedRequest(input, init);
       }
-    }) as typeof fetch;
+    };
 
     const result = await createGithubGateway(API, "tok", fetchFn).listPrFiles("o", "r", 1);
 
@@ -100,7 +101,7 @@ describe("createGithubGateway", () => {
   });
 
   it("returns the first commit parent and maps its files", async () => {
-    const fetchFn = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const fetchFn: typeof fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
       if (requestKey(input, init) === `GET ${API}/repos/o/r/commits/abc1234?per_page=300&page=1`) {
         return json({
           sha: "abc1234full",
@@ -109,7 +110,7 @@ describe("createGithubGateway", () => {
         });
       }
       return unexpectedRequest(input, init);
-    }) as typeof fetch;
+    };
 
     const result = await createGithubGateway(API, "tok", fetchFn).getCommit("o", "r", "abc1234");
 
@@ -128,7 +129,7 @@ describe("createGithubGateway", () => {
         requestKey(`${API}/repos/o/r/commits/root?per_page=300&page=${index + 1}`),
       ),
     );
-    const fetchFn = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const fetchFn: typeof fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
       if (!accepted.has(requestKey(input, init))) return unexpectedRequest(input, init);
       const page = new URL(String(input)).searchParams.get("page");
       return json({
@@ -139,7 +140,7 @@ describe("createGithubGateway", () => {
           status: "added",
         })),
       });
-    }) as typeof fetch;
+    };
 
     const result = await createGithubGateway(API, "tok", fetchFn).getCommit("o", "r", "root");
 
@@ -151,7 +152,7 @@ describe("createGithubGateway", () => {
   });
 
   it("encodes compare refs and maps removed files", async () => {
-    const fetchFn = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const fetchFn: typeof fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
       if (requestKey(input, init) === `GET ${API}/repos/o/r/compare/feat%2Fx...main`) {
         return json({
           merge_base_commit: { sha: "merge-base" },
@@ -159,7 +160,7 @@ describe("createGithubGateway", () => {
         });
       }
       return unexpectedRequest(input, init);
-    }) as typeof fetch;
+    };
 
     const result = await createGithubGateway(API, "tok", fetchFn).compareRefs("o", "r", "feat/x", "main");
 
@@ -172,13 +173,13 @@ describe("createGithubGateway", () => {
   });
 
   it("requests the SHA media type and trims the response", async () => {
-    const fetchFn = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const fetchFn: typeof fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
       if (requestKey(input, init) !== `GET ${API}/repos/o/r/commits/feat%2Fx`) {
         return unexpectedRequest(input, init);
       }
       expect(new Headers(init?.headers).get("accept")).toBe("application/vnd.github.sha");
       return new Response("full-head-sha\n");
-    }) as typeof fetch;
+    };
 
     const result = await createGithubGateway(API, "tok", fetchFn).resolveRefSha("o", "r", "feat/x");
 
@@ -186,13 +187,13 @@ describe("createGithubGateway", () => {
   });
 
   it("requests raw file content with encoded path segments", async () => {
-    const fetchFn = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const fetchFn: typeof fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
       if (requestKey(input, init) !== `GET ${API}/repos/o/r/contents/Assets/My%20Prefab%231.prefab?ref=sha1`) {
         return unexpectedRequest(input, init);
       }
       expect(new Headers(init?.headers).get("accept")).toBe("application/vnd.github.raw+json");
       return new Response(new Uint8Array([1, 2, 3]));
-    }) as typeof fetch;
+    };
 
     const result = await createGithubGateway(API, "tok", fetchFn).getFileAtRef(
       "o",
@@ -207,12 +208,12 @@ describe("createGithubGateway", () => {
   });
 
   it("returns null when file content is absent", async () => {
-    const fetchFn = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const fetchFn: typeof fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
       if (requestKey(input, init) !== `GET ${API}/repos/o/r/contents/gone.prefab?ref=sha1`) {
         return unexpectedRequest(input, init);
       }
       return new Response("not found", { status: 404 });
-    }) as typeof fetch;
+    };
 
     const result = await createGithubGateway(API, "tok", fetchFn).getFileAtRef("o", "r", "gone.prefab", "sha1");
 
@@ -220,13 +221,13 @@ describe("createGithubGateway", () => {
   });
 
   it("requests raw bytes by blob SHA", async () => {
-    const fetchFn = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const fetchFn: typeof fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
       if (requestKey(input, init) !== `GET ${API}/repos/o/r/git/blobs/blob1`) {
         return unexpectedRequest(input, init);
       }
       expect(new Headers(init?.headers).get("accept")).toBe("application/vnd.github.raw+json");
       return new Response(new Uint8Array([1, 2, 3]));
-    }) as typeof fetch;
+    };
 
     const result = await createGithubGateway(API, "tok", fetchFn).getBlobRaw("o", "r", "blob1");
 
@@ -237,10 +238,10 @@ describe("createGithubGateway", () => {
 
   it("returns the asset path from metadata search", async () => {
     const url = `${API}/search/code?q=${encodeURIComponent('"abc123" repo:o/r extension:meta')}&per_page=1`;
-    const fetchFn = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const fetchFn: typeof fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
       if (requestKey(input, init) !== `GET ${url}`) return unexpectedRequest(input, init);
       return json({ items: [{ path: "Assets/Scripts/Player.cs.meta" }] });
-    }) as typeof fetch;
+    };
 
     const result = await createGithubGateway(API, "tok", fetchFn).searchMetaByGuid("o", "r", "abc123");
 
@@ -250,7 +251,7 @@ describe("createGithubGateway", () => {
   it("returns null for empty and non-metadata search results", async () => {
     const emptyUrl = `${API}/search/code?q=${encodeURIComponent('"empty" repo:o/r extension:meta')}&per_page=1`;
     const nonMetaUrl = `${API}/search/code?q=${encodeURIComponent('"odd" repo:o/r extension:meta')}&per_page=1`;
-    const fetchFn = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const fetchFn: typeof fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
       switch (requestKey(input, init)) {
         case `GET ${emptyUrl}`:
           return json({ items: [] });
@@ -259,7 +260,7 @@ describe("createGithubGateway", () => {
         default:
           return unexpectedRequest(input, init);
       }
-    }) as typeof fetch;
+    };
     const client = createGithubGateway(API, "tok", fetchFn);
 
     expect(await client.searchMetaByGuid("o", "r", "empty")).toEqual(ok(null));
@@ -269,7 +270,7 @@ describe("createGithubGateway", () => {
   it("keeps the residual metadata search fallback", async () => {
     const unindexedUrl = `${API}/search/code?q=${encodeURIComponent('"unindexed" repo:o/r extension:meta')}&per_page=1`;
     const failedUrl = `${API}/search/code?q=${encodeURIComponent('"failed" repo:o/r extension:meta')}&per_page=1`;
-    const fetchFn = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const fetchFn: typeof fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
       switch (requestKey(input, init)) {
         case `GET ${unindexedUrl}`:
           return json({ message: "Validation Failed" }, 422);
@@ -278,7 +279,7 @@ describe("createGithubGateway", () => {
         default:
           return unexpectedRequest(input, init);
       }
-    }) as typeof fetch;
+    };
     const client = createGithubGateway(API, "tok", fetchFn);
 
     expect(await client.searchMetaByGuid("o", "r", "unindexed")).toEqual(ok(null));
@@ -286,7 +287,7 @@ describe("createGithubGateway", () => {
   });
 
   it("returns metadata blobs with the truncation state", async () => {
-    const fetchFn = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const fetchFn: typeof fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
       if (requestKey(input, init) !== `GET ${API}/repos/o/r/git/trees/H?recursive=1`) {
         return unexpectedRequest(input, init);
       }
@@ -299,7 +300,7 @@ describe("createGithubGateway", () => {
           { path: "Assets", type: "tree", sha: "sha4" },
         ],
       });
-    }) as typeof fetch;
+    };
 
     const result = await createGithubGateway(API, "tok", fetchFn).listMetaTree("o", "r", "H");
 
@@ -315,7 +316,7 @@ describe("createGithubGateway", () => {
   });
 
   it("maps every blob path with the truncation state", async () => {
-    const fetchFn = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const fetchFn: typeof fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
       if (requestKey(input, init) !== `GET ${API}/repos/o/r/git/trees/merge-base?recursive=1`) {
         return unexpectedRequest(input, init);
       }
@@ -327,7 +328,7 @@ describe("createGithubGateway", () => {
           { path: "Assets", type: "tree", sha: "sha3" },
         ],
       });
-    }) as typeof fetch;
+    };
 
     const result = await createGithubGateway(API, "tok", fetchFn).listBlobShas("o", "r", "merge-base");
 
@@ -341,17 +342,18 @@ describe("createGithubGateway", () => {
   });
 
   it("posts a GraphQL query and maps blob text", async () => {
-    const fetchFn = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const fetchFn: typeof fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
       if (requestKey(input, init) !== `POST ${API}/graphql`) return unexpectedRequest(input, init);
       const headers = new Headers(init?.headers);
       expect(headers.get("authorization")).toBe("Bearer tok");
       expect(headers.get("accept")).toBe("application/json");
       expect(headers.get("content-type")).toBe("application/json");
+      // The body comes from the GitHub client's JSON.stringify({ query }) call.
       const body = JSON.parse(String(init?.body)) as { query: string };
       expect(body.query).toContain('b0: object(oid: "sha1")');
       expect(body.query).toContain('b1: object(oid: "sha2")');
       return json({ data: { repository: { b0: { text: "guid: g1\n" }, b1: null } } });
-    }) as typeof fetch;
+    };
 
     const result = await createGithubGateway(API, "tok", fetchFn).batchBlobTexts("o", "r", ["sha1", "sha2"]);
 
@@ -359,10 +361,10 @@ describe("createGithubGateway", () => {
   });
 
   it("classifies an HTTP 429 response as rate-limited", async () => {
-    const fetchFn = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const fetchFn: typeof fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
       if (requestKey(input, init) !== `GET ${API}/repos/o/r/pulls/1`) return unexpectedRequest(input, init);
       return new Response("", { status: 429 });
-    }) as typeof fetch;
+    };
 
     const result = await createGithubGateway(API, "tok", fetchFn).getPrRefs("o", "r", 1);
 
@@ -372,10 +374,10 @@ describe("createGithubGateway", () => {
   });
 
   it("classifies Retry-After on HTTP 403 as rate-limited", async () => {
-    const fetchFn = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const fetchFn: typeof fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
       if (requestKey(input, init) !== `GET ${API}/repos/o/r/pulls/1`) return unexpectedRequest(input, init);
       return new Response("", { status: 403, headers: { "retry-after": "60" } });
-    }) as typeof fetch;
+    };
 
     const result = await createGithubGateway(API, "tok", fetchFn).getPrRefs("o", "r", 1);
 
@@ -385,10 +387,10 @@ describe("createGithubGateway", () => {
   });
 
   it("classifies an exhausted REST quota as rate-limited", async () => {
-    const fetchFn = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const fetchFn: typeof fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
       if (requestKey(input, init) !== `GET ${API}/repos/o/r/pulls/1`) return unexpectedRequest(input, init);
       return new Response("", { status: 403, headers: { "x-ratelimit-remaining": "0" } });
-    }) as typeof fetch;
+    };
 
     const result = await createGithubGateway(API, "tok", fetchFn).getPrRefs("o", "r", 1);
 
@@ -398,13 +400,13 @@ describe("createGithubGateway", () => {
   });
 
   it("classifies a secondary rate-limit message as rate-limited", async () => {
-    const fetchFn = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const fetchFn: typeof fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
       if (requestKey(input, init) !== `GET ${API}/repos/o/r/pulls/1`) return unexpectedRequest(input, init);
       return new Response('{"message":"Secondary rate limit"}', {
         status: 403,
         headers: { "x-ratelimit-remaining": "4999" },
       });
-    }) as typeof fetch;
+    };
 
     const result = await createGithubGateway(API, "tok", fetchFn).getPrRefs("o", "r", 1);
 
@@ -414,13 +416,13 @@ describe("createGithubGateway", () => {
   });
 
   it("maps a permission response to auth-failed", async () => {
-    const fetchFn = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const fetchFn: typeof fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
       if (requestKey(input, init) !== `GET ${API}/repos/o/r/pulls/1`) return unexpectedRequest(input, init);
       return new Response('{"message":"Resource not accessible by personal access token"}', {
         status: 403,
         headers: { "x-ratelimit-remaining": "4999" },
       });
-    }) as typeof fetch;
+    };
 
     const result = await createGithubGateway(API, "tok", fetchFn).getPrRefs("o", "r", 1);
 
@@ -428,10 +430,10 @@ describe("createGithubGateway", () => {
   });
 
   it("maps a non-success response to fetch-failed", async () => {
-    const fetchFn = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const fetchFn: typeof fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
       if (requestKey(input, init) !== `GET ${API}/repos/o/r/pulls/1`) return unexpectedRequest(input, init);
       return new Response("server error", { status: 500 });
-    }) as typeof fetch;
+    };
 
     const result = await createGithubGateway(API, "tok", fetchFn).getPrRefs("o", "r", 1);
 
@@ -440,13 +442,13 @@ describe("createGithubGateway", () => {
 
   it("uses Retry-After before the reset time", async () => {
     const reset = Math.floor(Date.now() / 1000) + 30;
-    const fetchFn = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const fetchFn: typeof fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
       if (requestKey(input, init) !== `GET ${API}/repos/o/r/pulls/7`) return unexpectedRequest(input, init);
       return new Response("slow down", {
         status: 403,
         headers: { "retry-after": "12", "x-ratelimit-remaining": "0", "x-ratelimit-reset": String(reset) },
       });
-    }) as typeof fetch;
+    };
 
     const result = await createGithubGateway(API, "tok", fetchFn).getPrRefs("o", "r", 7);
 
@@ -455,13 +457,13 @@ describe("createGithubGateway", () => {
 
   it("converts the reset time to a relative wait", async () => {
     const reset = Math.floor(Date.now() / 1000) + 30;
-    const fetchFn = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const fetchFn: typeof fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
       if (requestKey(input, init) !== `GET ${API}/repos/o/r/pulls/7`) return unexpectedRequest(input, init);
       return new Response("", {
         status: 403,
         headers: { "x-ratelimit-remaining": "0", "x-ratelimit-reset": String(reset) },
       });
-    }) as typeof fetch;
+    };
 
     const result = await createGithubGateway(API, "tok", fetchFn).getPrRefs("o", "r", 7);
 
@@ -472,10 +474,10 @@ describe("createGithubGateway", () => {
   });
 
   it("omits advice when a rate-limit response has no advice header", async () => {
-    const fetchFn = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const fetchFn: typeof fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
       if (requestKey(input, init) !== `GET ${API}/repos/o/r/pulls/7`) return unexpectedRequest(input, init);
       return new Response('{"message":"Secondary rate limit"}', { status: 403 });
-    }) as typeof fetch;
+    };
 
     const result = await createGithubGateway(API, "tok", fetchFn).getPrRefs("o", "r", 7);
 
@@ -483,10 +485,10 @@ describe("createGithubGateway", () => {
   });
 
   it("maps GraphQL RATE_LIMITED and keeps header advice", async () => {
-    const fetchFn = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const fetchFn: typeof fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
       if (requestKey(input, init) !== `POST ${API}/graphql`) return unexpectedRequest(input, init);
       return json({ errors: [{ type: "RATE_LIMITED" }] }, 200, { "retry-after": "4" });
-    }) as typeof fetch;
+    };
 
     const result = await createGithubGateway(API, "tok", fetchFn).batchBlobTexts("o", "r", ["sha1"]);
 
@@ -494,17 +496,17 @@ describe("createGithubGateway", () => {
   });
 });
 
-describe("createGithubGateway", () => {
+describe("createQueuedGithubGateway", () => {
   it("returns rate-limited after two queue backoffs", async () => {
     const clock = new VirtualClock();
-    const fetchFn = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const fetchFn: typeof fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
       if (requestKey(input, init) !== `GET ${API}/repos/o/r/pulls/1`) return unexpectedRequest(input, init);
       if (![0, 30_000, 60_000].includes(clock.now)) {
         throw new Error(`Unexpected clock state: ${clock.now}`);
       }
       return new Response("limited", { status: 429 });
-    }) as typeof fetch;
-    const client = createGithubGateway(1, fetchFn, clock.sleep)(API, "tok", "user");
+    };
+    const client = createQueuedGithubGateway(1, fetchFn, clock.sleep)(API, "tok", "user");
 
     const result = await client.getPrRefs("o", "r", 1);
 
@@ -514,12 +516,12 @@ describe("createGithubGateway", () => {
 
   it("does not retry an authentication response", async () => {
     const clock = new VirtualClock();
-    const fetchFn = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const fetchFn: typeof fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
       if (requestKey(input, init) !== `GET ${API}/repos/o/r/pulls/1`) return unexpectedRequest(input, init);
       if (clock.now !== 0) throw new Error(`Unexpected clock state: ${clock.now}`);
       return new Response("unauthorized", { status: 401 });
-    }) as typeof fetch;
-    const client = createGithubGateway(1, fetchFn, clock.sleep)(API, "tok", "user");
+    };
+    const client = createQueuedGithubGateway(1, fetchFn, clock.sleep)(API, "tok", "user");
 
     const result = await client.getPrRefs("o", "r", 1);
 
@@ -530,7 +532,7 @@ describe("createGithubGateway", () => {
   it("shares one queue and runs the user lane first", async () => {
     const activeResponse = Promise.withResolvers<Response>();
     const order: string[] = [];
-    const fetchFn = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const fetchFn: typeof fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
       switch (requestKey(input, init)) {
         case `GET ${API}/repos/o/r/commits/active`:
           order.push("active");
@@ -544,8 +546,8 @@ describe("createGithubGateway", () => {
         default:
           return unexpectedRequest(input, init);
       }
-    }) as typeof fetch;
-    const makeGithubGateway = createGithubGateway(1, fetchFn, async () => {});
+    };
+    const makeGithubGateway = createQueuedGithubGateway(1, fetchFn, async () => {});
     const prefetch = makeGithubGateway(API, "tok", "prefetch");
     const user = makeGithubGateway(API, "tok", "user");
     const active = prefetch.resolveRefSha("o", "r", "active");

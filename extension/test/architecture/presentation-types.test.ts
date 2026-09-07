@@ -139,7 +139,7 @@ function presentationSources(): Array<{ file: string; source: string }> {
   });
 }
 
-function collect(source: string): { types: ExportedType[]; fns: ExportedFn[] } {
+function collect(source: string) {
   source = source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
   const types: ExportedType[] = [];
   const fns: ExportedFn[] = [];

@@ -1,3 +1,5 @@
+import type { JsonValue } from "../../src/internal/json";
+import type { ViewMode } from "../../src/presentation/internal/view-mode";
 /// <reference types="node" />
 // This suite runs detection, background work, WASM, and rendering through the loaded extension.
 // The local server replaces GitHub. The E2E build uses its fixed port for both origins.
@@ -89,7 +91,7 @@ function startServer(): Promise<Server> {
       res.writeHead(200, { "content-type": type });
       res.end(body);
     };
-    const json = (body: unknown): void => send(JSON.stringify(body), "application/json");
+    const json = (body: JsonValue): void => send(JSON.stringify(body), "application/json");
     // Empty trees make each ref pair use the contents API.
     if (url.pathname.startsWith("/repos/o/r/git/trees/")) return json({ truncated: false, tree: [] });
     switch (url.pathname) {
@@ -246,7 +248,7 @@ function startServer(): Promise<Server> {
 let context: BrowserContext;
 let server: Server;
 
-async function setLocalStorage(values: Record<string, unknown>): Promise<void> {
+async function setLocalStorage(values: { accessToken?: string; viewMode?: ViewMode }): Promise<void> {
   const worker = context.serviceWorkers()[0] ?? (await context.waitForEvent("serviceworker"));
   await worker.evaluate((next) => chrome.storage.local.set(next), values);
 }
@@ -362,6 +364,31 @@ test("renders a real WASM diff with Code Search GUID resolution", async () => {
   await expect(view).toContainText("0.8");
   await expect.poll(() => state.requests.join("\n")).toContain("GET /repos/o/r/contents/Assets/Foo.prefab?ref=MB");
   await expect.poll(() => state.requests.join("\n")).toContain("GET /repos/o/r/contents/Assets/Foo.prefab?ref=H");
+  await page.close();
+});
+
+test("uses the operating-system dark theme in automatic mode", async () => {
+  const page = await context.newPage();
+  await page.emulateMedia({ colorScheme: "dark" });
+  await page.goto(`http://127.0.0.1:${PORT}/o/r/pull/1/files`);
+  await page.evaluate(() => document.documentElement.setAttribute("data-color-mode", "auto"));
+
+  // Real matchMedia behavior must reach the rendered view through the loaded content script.
+  const header = page.locator('.file-header[data-path="Assets/Foo.prefab"]');
+  await header.getByRole("button", { name: "Semantic" }).click();
+  await expect(page.locator("[data-prefablens-view] .pl-root")).toHaveCSS("color", "rgb(240, 246, 252)");
+  await page.close();
+});
+
+test("uses the operating-system light theme in automatic mode", async () => {
+  const page = await context.newPage();
+  await page.emulateMedia({ colorScheme: "light" });
+  await page.goto(`http://127.0.0.1:${PORT}/o/r/pull/1/files`);
+  await page.evaluate(() => document.documentElement.setAttribute("data-color-mode", "auto"));
+
+  const header = page.locator('.file-header[data-path="Assets/Foo.prefab"]');
+  await header.getByRole("button", { name: "Semantic" }).click();
+  await expect(page.locator("[data-prefablens-view] .pl-root")).toHaveCSS("color", "rgb(31, 35, 40)");
   await page.close();
 });
 
@@ -656,6 +683,7 @@ test("restores a fully remounted React file before the next paint", async () => 
       new Promise<{ rawDisplay: string; semanticView: boolean }>((resolve) => {
         const entry = document.querySelector("#diff-aaa111")?.parentElement;
         if (!entry) throw new Error("diff region missing");
+        // cloneNode preserves the HTML element type of entry.
         const clone = entry.cloneNode(true) as HTMLElement;
         // GitHub rebuilds this node from React state. The new node has no PrefabLens attributes or styles.
         clone.querySelector("[data-prefablens-view]")?.remove();
@@ -786,6 +814,7 @@ test("reattaches a fully remounted file with the semantic default", async () => 
   await page.evaluate(() => {
     const entry = document.querySelector("#diff-aaa111")?.parentElement;
     if (!entry) throw new Error("diff region missing");
+    // cloneNode preserves the HTML element type of entry.
     const clone = entry.cloneNode(true) as HTMLElement;
     clone.querySelector("[data-prefablens-view]")?.remove();
     clone.querySelector("[data-prefablens-toggle]")?.remove();

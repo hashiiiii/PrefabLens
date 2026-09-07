@@ -2,11 +2,8 @@ import { isRateLimited } from "../../application/gateway/github";
 import { must } from "../../internal/must";
 
 type Job = {
-  run: () => Promise<unknown>;
-  resolve: (v: unknown) => void;
-  reject: (e: unknown) => void;
+  run(): void;
   front: boolean;
-  retries: number;
 };
 
 export type Queue = <T>(task: () => Promise<T>, opts?: { front?: boolean }) => Promise<T>;
@@ -43,39 +40,40 @@ export function createQueue(
     while (!paused && active < limit && pending.length) {
       const job = must(pending.shift());
       active++;
-      // Normalize sync throws into rejections: a leak here jams the queue forever
-      Promise.resolve()
-        .then(job.run)
-        .then(
-          (v) => {
-            active--;
-            job.resolve(v);
-            pump();
-          },
-          (e: unknown) => {
-            active--;
-            if (isRateLimited(e) && job.retries < MAX_RATE_LIMIT_RETRIES) {
-              job.retries++;
-              enqueue(job);
-              pauseFor(Math.min(e.retryAfterMs ?? BACKOFF_FALLBACK_MS, BACKOFF_CAP_MS));
-            } else {
-              job.reject(e);
-            }
-            pump();
-          },
-        );
+      job.run();
     }
   };
 
   return <T>(task: () => Promise<T>, opts?: { front?: boolean }) =>
     new Promise<T>((resolve, reject) => {
-      enqueue({
-        run: task,
-        resolve: resolve as (v: unknown) => void,
-        reject,
+      let retries = 0;
+      const job: Job = {
         front: opts?.front === true,
-        retries: 0,
-      });
+        run() {
+          // The closure preserves T. Normalize sync throws so a task cannot leak an active slot.
+          void Promise.resolve()
+            .then(task)
+            .then(
+              (value) => {
+                active--;
+                resolve(value);
+                pump();
+              },
+              (cause: unknown) => {
+                active--;
+                if (isRateLimited(cause) && retries < MAX_RATE_LIMIT_RETRIES) {
+                  retries++;
+                  enqueue(job);
+                  pauseFor(Math.min(cause.retryAfterMs ?? BACKOFF_FALLBACK_MS, BACKOFF_CAP_MS));
+                } else {
+                  reject(cause);
+                }
+                pump();
+              },
+            );
+        },
+      };
+      enqueue(job);
       pump();
     });
 }

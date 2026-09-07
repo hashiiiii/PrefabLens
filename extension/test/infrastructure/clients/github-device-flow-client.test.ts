@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { err, ok } from "../../../src/domain/result";
 import { createGithubDeviceFlowGateway } from "../../../src/infrastructure/clients/github-device-flow-client";
+import type { JsonValue } from "../../../src/internal/json";
 
-const json = (body: unknown, status = 200) =>
+const json = (body: JsonValue, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 
 class VirtualClock {
@@ -15,7 +16,7 @@ class VirtualClock {
 
 describe("createGithubDeviceFlowGateway", () => {
   it("maps a successful device-code response", async () => {
-    const route = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const route: typeof fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url !== "https://github.com/login/device/code") {
         throw new Error(`Unexpected request: ${init?.method ?? "GET"} ${url}`);
@@ -33,7 +34,7 @@ describe("createGithubDeviceFlowGateway", () => {
         interval: 5,
         expires_in: 900,
       });
-    }) as typeof fetch;
+    };
 
     const auth = createGithubDeviceFlowGateway(route);
 
@@ -49,13 +50,13 @@ describe("createGithubDeviceFlowGateway", () => {
   });
 
   it("returns a failure for a device-code HTTP error", async () => {
-    const route = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const route: typeof fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url !== "https://github.com/login/device/code") {
         throw new Error(`Unexpected request: ${init?.method ?? "GET"} ${url}`);
       }
       return json({}, 500);
-    }) as typeof fetch;
+    };
 
     await expect(createGithubDeviceFlowGateway(route).requestDeviceCode()).resolves.toEqual(
       err({ kind: "device-flow-failed", message: "device code request failed (HTTP 500)" }),
@@ -63,13 +64,13 @@ describe("createGithubDeviceFlowGateway", () => {
   });
 
   it("returns the device-code error description", async () => {
-    const route = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const route: typeof fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url !== "https://github.com/login/device/code") {
         throw new Error(`Unexpected request: ${init?.method ?? "GET"} ${url}`);
       }
       return json({ error: "invalid_client", error_description: "bad client id" });
-    }) as typeof fetch;
+    };
 
     await expect(createGithubDeviceFlowGateway(route).requestDeviceCode()).resolves.toEqual(
       err({ kind: "device-flow-failed", message: "bad client id" }),
@@ -78,7 +79,7 @@ describe("createGithubDeviceFlowGateway", () => {
 
   it("returns the token from the first poll", async () => {
     const clock = new VirtualClock();
-    const route = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const route: typeof fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url !== "https://github.com/login/oauth/access_token") {
         throw new Error(`Unexpected request: ${init?.method ?? "GET"} ${url}`);
@@ -92,7 +93,7 @@ describe("createGithubDeviceFlowGateway", () => {
       expect(form.get("device_code")).toBe("dc1");
       expect(form.get("grant_type")).toBe("urn:ietf:params:oauth:grant-type:device_code");
       return json({ access_token: "tok123" });
-    }) as typeof fetch;
+    };
 
     const result = await createGithubDeviceFlowGateway(route, clock.sleep).pollForToken({
       deviceCode: "dc1",
@@ -108,7 +109,7 @@ describe("createGithubDeviceFlowGateway", () => {
 
   it("repeats with the same interval after authorization_pending", async () => {
     const clock = new VirtualClock();
-    const route = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const route: typeof fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url !== "https://github.com/login/oauth/access_token") {
         throw new Error(`Unexpected request: ${init?.method ?? "GET"} ${url}`);
@@ -116,7 +117,7 @@ describe("createGithubDeviceFlowGateway", () => {
       if (clock.now === 5_000 || clock.now === 10_000) return json({ error: "authorization_pending" });
       if (clock.now === 15_000) return json({ access_token: "tok123" });
       throw new Error(`Unexpected poll time: ${clock.now}`);
-    }) as typeof fetch;
+    };
 
     const result = await createGithubDeviceFlowGateway(route, clock.sleep).pollForToken({
       deviceCode: "dc1",
@@ -132,7 +133,7 @@ describe("createGithubDeviceFlowGateway", () => {
 
   it("uses the response interval after slow_down", async () => {
     const clock = new VirtualClock();
-    const route = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const route: typeof fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url !== "https://github.com/login/oauth/access_token") {
         throw new Error(`Unexpected request: ${init?.method ?? "GET"} ${url}`);
@@ -140,7 +141,7 @@ describe("createGithubDeviceFlowGateway", () => {
       if (clock.now === 5_000) return json({ error: "slow_down", interval: 8 });
       if (clock.now === 13_000) return json({ access_token: "tok123" });
       throw new Error(`Unexpected poll time: ${clock.now}`);
-    }) as typeof fetch;
+    };
 
     await expect(
       createGithubDeviceFlowGateway(route, clock.sleep).pollForToken({
@@ -156,7 +157,7 @@ describe("createGithubDeviceFlowGateway", () => {
 
   it("adds five seconds when slow_down has no interval", async () => {
     const clock = new VirtualClock();
-    const route = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const route: typeof fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url !== "https://github.com/login/oauth/access_token") {
         throw new Error(`Unexpected request: ${init?.method ?? "GET"} ${url}`);
@@ -164,7 +165,7 @@ describe("createGithubDeviceFlowGateway", () => {
       if (clock.now === 5_000) return json({ error: "slow_down" });
       if (clock.now === 15_000) return json({ access_token: "tok123" });
       throw new Error(`Unexpected poll time: ${clock.now}`);
-    }) as typeof fetch;
+    };
 
     await expect(
       createGithubDeviceFlowGateway(route, clock.sleep).pollForToken({
@@ -180,14 +181,14 @@ describe("createGithubDeviceFlowGateway", () => {
 
   it("maps expired_token to expired", async () => {
     const clock = new VirtualClock();
-    const route = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const route: typeof fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url !== "https://github.com/login/oauth/access_token") {
         throw new Error(`Unexpected request: ${init?.method ?? "GET"} ${url}`);
       }
       expect(clock.now).toBe(5_000);
       return json({ error: "expired_token" });
-    }) as typeof fetch;
+    };
 
     await expect(
       createGithubDeviceFlowGateway(route, clock.sleep).pollForToken({
@@ -202,14 +203,14 @@ describe("createGithubDeviceFlowGateway", () => {
 
   it("maps access_denied to denied", async () => {
     const clock = new VirtualClock();
-    const route = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const route: typeof fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url !== "https://github.com/login/oauth/access_token") {
         throw new Error(`Unexpected request: ${init?.method ?? "GET"} ${url}`);
       }
       expect(clock.now).toBe(5_000);
       return json({ error: "access_denied" });
-    }) as typeof fetch;
+    };
 
     await expect(
       createGithubDeviceFlowGateway(route, clock.sleep).pollForToken({
@@ -224,14 +225,14 @@ describe("createGithubDeviceFlowGateway", () => {
 
   it("maps incorrect_client_credentials to failed", async () => {
     const clock = new VirtualClock();
-    const route = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const route: typeof fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url !== "https://github.com/login/oauth/access_token") {
         throw new Error(`Unexpected request: ${init?.method ?? "GET"} ${url}`);
       }
       expect(clock.now).toBe(5_000);
       return json({ error: "incorrect_client_credentials" });
-    }) as typeof fetch;
+    };
 
     await expect(
       createGithubDeviceFlowGateway(route, clock.sleep).pollForToken({
@@ -246,14 +247,14 @@ describe("createGithubDeviceFlowGateway", () => {
 
   it("maps a token HTTP error to failed", async () => {
     const clock = new VirtualClock();
-    const route = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const route: typeof fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url !== "https://github.com/login/oauth/access_token") {
         throw new Error(`Unexpected request: ${init?.method ?? "GET"} ${url}`);
       }
       expect(clock.now).toBe(5_000);
       return json({}, 500);
-    }) as typeof fetch;
+    };
 
     await expect(
       createGithubDeviceFlowGateway(route, clock.sleep).pollForToken({

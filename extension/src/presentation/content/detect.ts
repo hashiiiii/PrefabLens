@@ -160,7 +160,7 @@ function scanReact(root: ParentNode): FileEntry[] {
         const block = headerBlock();
         for (const child of region.children) {
           if (child === block || child.hasAttribute("data-prefablens-view")) continue;
-          (child as HTMLElement).style.display = hidden ? "none" : "";
+          if (child instanceof HTMLElement) child.style.display = hidden ? "none" : "";
         }
       },
       // Chevron octicon swap + DiffFileHeader-module__collapsed class

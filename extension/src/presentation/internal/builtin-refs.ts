@@ -12,11 +12,12 @@ export const BUILTIN_EXTRA_GUID = "0000000000000000f000000000000000";
 // when the guid is not one of the two built-in files or the fileID is unknown.
 // fileId is the decimal string the diff JSON carries (int64-safe).
 export function builtinName(guid: string, fileId: string): string | null {
-  return BUILTIN_REFS[guid]?.[fileId] ?? null;
+  if (guid !== DEFAULT_RESOURCES_GUID && guid !== BUILTIN_EXTRA_GUID) return null;
+  return BUILTIN_REFS[guid][fileId] ?? null;
 }
 
 // Exported for the parity test against cli/src/builtin_refs.zig.
-export const BUILTIN_REFS: Record<string, Record<string, string>> = {
+export const BUILTIN_REFS: Record<typeof DEFAULT_RESOURCES_GUID | typeof BUILTIN_EXTRA_GUID, Record<string, string>> = {
   "0000000000000000e000000000000000": {
     "17": "Hidden/InternalErrorShader",
     "68": "Hidden/InternalClear",

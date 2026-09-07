@@ -1,36 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { type DiffV2, emptyDiff } from "../../../src/domain/diff/types";
 import { createChromeDiffRepository } from "../../../src/infrastructure/clients/chrome-diff-client";
-import type { StorageAreaWithRemove } from "../../../src/infrastructure/internal/storage-area";
+import { MemoryStorageArea } from "../../support/memory-storage-area";
 
 const DIFF: DiffV2 = emptyDiff();
-
-class MemoryStorageArea implements StorageAreaWithRemove {
-  private values: Record<string, unknown>;
-
-  constructor(
-    initial: Record<string, unknown> = {},
-    private readonly capacity = Number.POSITIVE_INFINITY,
-  ) {
-    this.values = { ...initial };
-  }
-
-  async get(keys: string | string[] | null): Promise<Record<string, unknown>> {
-    const selected = keys === null ? Object.keys(this.values) : Array.isArray(keys) ? keys : [keys];
-    return Object.fromEntries(selected.filter((key) => key in this.values).map((key) => [key, this.values[key]]));
-  }
-
-  async set(items: Record<string, unknown>): Promise<void> {
-    const next = { ...this.values, ...items };
-    if (JSON.stringify(next).length > this.capacity) throw new Error("quota exceeded");
-    this.values = next;
-  }
-
-  async remove(keys: string | string[]): Promise<void> {
-    const removed = new Set(Array.isArray(keys) ? keys : [keys]);
-    this.values = Object.fromEntries(Object.entries(this.values).filter(([key]) => !removed.has(key)));
-  }
-}
 
 describe("createChromeDiffRepository", () => {
   it("returns no diff for a missing key", async () => {

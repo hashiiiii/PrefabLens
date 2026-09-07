@@ -4,6 +4,10 @@ export type Status = "added" | "removed" | "modified" | "unchanged";
 export type RefValue = { ref: { fileId: string; guid: string | null; type: number | null } };
 export type FieldValue = string | RefValue | null;
 
+export function isRefValue(value: FieldValue): value is RefValue {
+  return value !== null && typeof value === "object";
+}
+
 export type FieldDiff = { path: string; status: Status; before: FieldValue; after: FieldValue };
 
 export type OverrideDiff = {

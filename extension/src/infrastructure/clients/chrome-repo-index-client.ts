@@ -11,6 +11,7 @@ export function createChromeRepoIndexRepository(area: StorageArea): RepoIndexRep
     saveGuids: (repo, entries) => metaGuids.save(repo, entries).catch(() => {}),
     async loadIndex(repo) {
       const stored = await area.get([indexKey(repo)]);
+      // saveIndex owns guidIndex: keys and writes RepoGuidIndex values.
       return stored[indexKey(repo)] as RepoGuidIndex | undefined;
     },
     async saveIndex(repo, index) {

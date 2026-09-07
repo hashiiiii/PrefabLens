@@ -1,6 +1,7 @@
 import { type SignInFailure, signIn } from "../../application/auth/sign-in";
 import type { AuthError, GuidResolvedPush } from "../../application/gateway/messenger";
 import { createAuthRepository, createGithubAuthGateway, createMessengerGateway } from "../../container";
+import { isAccessToken } from "../../domain/auth/token";
 import { targetKey } from "../../domain/diff/fn/target-key";
 import { renderSignIn, renderSignInPending } from "../internal/render";
 import { mountGlobalBar, type Toggle } from "../internal/toggle";
@@ -144,7 +145,7 @@ async function init(): Promise<void> {
     if (area !== "local") return;
     const next = changes.viewMode?.newValue;
     if (next === "raw" || next === "semantic") viewState.setPage(next);
-    if (typeof changes.accessToken?.newValue === "string") {
+    if (isAccessToken(changes.accessToken?.newValue)) {
       for (const file of updateFiles().values()) {
         if (file.status === "auth-blocked" && viewState.getFile(file.path) === "semantic") {
           void file.loadDiff();

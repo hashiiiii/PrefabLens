@@ -144,6 +144,11 @@ infrastructure/
   (for example `fetch-queue.ts`, `merge-store.ts`, `storage-area.ts`).
 - Only infrastructure files can import `internal/` (the internal rule in Overview).
 
+`createGithubGateway(base, token, fetchFn)` creates one GitHub client.
+`createQueuedGithubGateway(concurrency, fetchFn, sleep)` creates a factory whose clients share one queue.
+`createDifferGateway(wasmBytes)` instantiates WASM, while `createDifferLoader(wasmUrl, fetchBytes)` loads one instance lazily.
+Each function has one input contract; callers do not select behavior by changing an argument's type.
+
 #### Presentation (`src/presentation/`)
 
 ```
@@ -189,6 +194,7 @@ presentation/
 - Put layer rules under `test/architecture/`.
 - Put browser tests and their HTML files under `test/e2e/`.
 - `test/fixtures/` contains shared static test data.
+- `test/support/` contains shared test implementations, such as storage with a configurable capacity.
 - Keep test-only helpers in test files when one file uses them.
 - Do not put test-only helpers in `src/`.
 - An in-memory storage implementation derives failures from its complete state and capacity.

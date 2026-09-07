@@ -13,9 +13,9 @@ import { createChromeGuidRepository } from "./infrastructure/clients/chrome-guid
 import { createChromeMessengerGateway } from "./infrastructure/clients/chrome-messenger-client";
 import { createChromeRepoIndexRepository } from "./infrastructure/clients/chrome-repo-index-client";
 import { createFixturesGateway as createHttpFixturesGateway } from "./infrastructure/clients/fixture-client";
-import { createGithubGateway as createQueuedGithubGateway } from "./infrastructure/clients/github-client";
+import { createQueuedGithubGateway } from "./infrastructure/clients/github-client";
 import { createGithubDeviceFlowGateway } from "./infrastructure/clients/github-device-flow-client";
-import { createDifferGateway as createWasmDifferGateway } from "./infrastructure/clients/wasm-differ-client";
+import { createDifferLoader } from "./infrastructure/clients/wasm-differ-client";
 
 export function createAuthRepository(): AuthRepository {
   return createChromeAuthRepository(chrome.storage.local);
@@ -46,11 +46,11 @@ export function createGithubGateway(concurrency: number): MakeGithubGateway {
 }
 
 export function createDifferGateway(): () => Promise<DifferGateway> {
-  return createWasmDifferGateway(chrome.runtime.getURL("prefablens.wasm"));
+  return createDifferLoader(chrome.runtime.getURL("prefablens.wasm"));
 }
 
 export function createDemoDifferGateway(fetchBytes: FixturesGateway["fetchBytes"]): () => Promise<DifferGateway> {
-  return createWasmDifferGateway("prefablens.wasm", fetchBytes);
+  return createDifferLoader("prefablens.wasm", fetchBytes);
 }
 
 export function createFixturesGateway(): FixturesGateway {

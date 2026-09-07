@@ -595,12 +595,42 @@ pub fn runCommandInPtyThreeBatches(
     third_keys: []const u8,
     timeout_seconds: i64,
 ) !std.process.RunResult {
+    return runPty(io, arena, repository, git_command, input_keys, second_keys, third_keys, "", timeout_seconds);
+}
+
+// Concurrent changes must happen after checkout finishes and before the first UI accepts input.
+pub fn runCommandInPtyWithUiAction(
+    io: std.Io,
+    arena: std.mem.Allocator,
+    repository: []const u8,
+    git_command: []const u8,
+    ui_action: []const u8,
+    input_keys: []const u8,
+    second_keys: []const u8,
+    timeout_seconds: i64,
+) !std.process.RunResult {
+    return runPty(io, arena, repository, git_command, input_keys, second_keys, "", ui_action, timeout_seconds);
+}
+
+fn runPty(
+    io: std.Io,
+    arena: std.mem.Allocator,
+    repository: []const u8,
+    git_command: []const u8,
+    input_keys: []const u8,
+    second_keys: []const u8,
+    third_keys: []const u8,
+    ui_action: []const u8,
+    timeout_seconds: i64,
+) !std.process.RunResult {
     var random: [16]u8 = undefined;
     io.random(&random);
     const capture = try std.fmt.allocPrint(arena, "/tmp/prefablens-pty-{x}.log", .{random});
     defer std.Io.Dir.cwd().deleteFile(io, capture) catch {};
     const completed = try std.fmt.allocPrint(arena, "{s}.done", .{capture});
     defer std.Io.Dir.cwd().deleteFile(io, completed) catch {};
+    const action_failed = try std.fmt.allocPrint(arena, "{s}.action-failed", .{capture});
+    defer std.Io.Dir.cwd().deleteFile(io, action_failed) catch {};
     const capture_argument = try integration.shellQuote(arena, capture);
     const terminal_command = try integration.shellQuote(arena, try std.fmt.allocPrint(arena, "stty cols 100 rows 24; {s}; terminal_status=$?; : > {s}; exit \"$terminal_status\"", .{ git_command, try integration.shellQuote(arena, completed) }));
     const shell_command = switch (builtin.os.tag) {
@@ -654,6 +684,10 @@ pub fn runCommandInPtyThreeBatches(
         \\sleep 1
         \\wait_frame 1 0
         \\first_session=$observed_session
+        // Action output must not become terminal input. Keep failures visible after the UI exits.
+        \\if [ -n "$5" ]; then
+        \\  sh -c "$5" >&2 || : > "$capture_file.action-failed"
+        \\fi
         \\printf '%s' "$1"
         \\if [ -n "$2" ]; then
         \\  i=0
@@ -689,12 +723,13 @@ pub fn runCommandInPtyThreeBatches(
         \\wait "$pty_pid"
         \\status=$?
         \\trap - HUP INT TERM
+        \\if [ -e "$4.action-failed" ]; then status=125; fi
         \\exit "$status"
     ,
         .{ try integration.shellQuote(arena, frame_probe), shell_command },
     );
     return std.process.run(arena, io, .{
-        .argv = &.{ "sh", "-c", command, "prefablens-keys", input_keys, second_keys, third_keys, capture },
+        .argv = &.{ "sh", "-c", command, "prefablens-keys", input_keys, second_keys, third_keys, capture, ui_action },
         .cwd = .{ .path = repository },
         .stdout_limit = .limited(1024 * 1024),
         .stderr_limit = .limited(1024 * 1024),

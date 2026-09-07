@@ -1,15 +1,13 @@
-// Step 1 of 2:
-// - Demo content comes from the real CLI, git, and extension demo bundle
-// - Prereqs: `zig build && zig build wasm`, `pnpm run demo` (in extension/)
-// - Writes: generated/raw-html/ ({% rawHtml %}), generated/pull-request.json (Liquid), generated/assets/ (passthrough)
-// - public/ stays committed static files only (css, favicon, images)
+// Demo content comes from the real CLI, Git, and extension demo bundle.
+// Build inputs first: `zig build && zig build wasm`, then `pnpm run demo` in extension/.
+import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join } from "node:path";
+import { convertAnsiToHtml, createDiffTable } from "./lib/html.mjs";
 
-const SITE = dirname(fileURLToPath(import.meta.url));
+const SITE = import.meta.dirname;
 const ROOT = join(SITE, "..");
 const BIN = join(ROOT, "zig-out", "bin", process.platform === "win32" ? "prefablens.exe" : "prefablens");
 const WASM = join(ROOT, "zig-out", "bin", "prefablens.wasm");
@@ -18,18 +16,13 @@ const FIXTURES = join(SITE, "fixtures");
 const GENERATED = join(SITE, "generated");
 const ASSETS = join(GENERATED, "assets");
 const RAW_HTML = join(GENERATED, "raw-html");
-const DIST = join(SITE, "dist");
 
 const DEMO_FILES = [
-  "Assets/Prefabs/Robot.prefab", // Landing page (raw vs semantic)
+  "Assets/Prefabs/Robot.prefab", // Both landing-page views use the first fixture.
   "Assets/Prefabs/RobotVariant.prefab",
   "Assets/Scenes/Playground.unity",
   "Assets/Settings/Fixture.asset",
 ];
-
-// ANSI SGR code -> site.css class
-// see: https://ansi.tools/lookup
-const ANSI_CLASSES = { 1: "b", 2: "dim", 31: "red", 32: "green", 33: "yellow" };
 
 function assertBuilt(path, hint) {
   if (!existsSync(path)) throw new Error(`${path} not found. Run \`${hint}\`.`);
@@ -42,207 +35,74 @@ function runGit(cwd, ...args) {
   });
 }
 
-function createDemoRepo() {
-  const repo = mkdtempSync(join(tmpdir(), "prefablens-site-"));
+function prepareDemoRepo(repo) {
   runGit(repo, "init", "-q", "-b", "main");
   cpSync(join(FIXTURES, "before"), repo, { recursive: true });
   runGit(repo, "add", ...DEMO_FILES);
   runGit(repo, "commit", "-q", "-m", "before");
   cpSync(join(FIXTURES, "after"), repo, { recursive: true });
-  return repo;
+
+  // The demo links both sides of every file, so each fixture must remain a modification.
+  const changes = runGit(repo, "diff", "--name-status", "-M", "main").trimEnd().split("\n").sort();
+  assert.deepEqual(changes, DEMO_FILES.map((path) => `M\t${path}`).sort(), "demo files drifted from DEMO_FILES");
 }
 
-function listChangedFiles(repo) {
-  const files = [];
-  for (const line of runGit(repo, "diff", "--name-status", "-M", "main").trimEnd().split("\n")) {
-    const [st, a, b] = line.split("\t");
-    // $ git diff --name-status -M main
-    // M       Assets/Fixtures/Fixture.shadervariants
-    // R090    Assets/Fixtures/Fixture.terrainlayer    Assets/Fixtures/Ground.terrainlayer
-    // R100    Assets/Fixtures/Fixture.terrainlayer.meta       Assets/Fixtures/Ground.terrainlayer.meta
-    // A       Assets/Fixtures/Added.anim
-    // D       Assets/Fixtures/Doomed.mat
-    if (st.startsWith("R")) files.push({ before: a, after: b });
-    else if (st === "A") files.push({ before: null, after: a });
-    else if (st === "D") files.push({ before: a, after: null });
-    else files.push({ before: a, after: a });
-  }
-  const rank = (f) => DEMO_FILES.indexOf(f.after ?? f.before);
-  return files.sort((x, y) => rank(x) - rank(y));
-}
-
-function escapeHtml(text) {
-  return text.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
-}
-
-function convertAnsiToHtml(text) {
-  let out = "";
-  const activeAnsiClasses = new Set();
-  // "\x1b[32m+\x1b[0m Cylinder" -> ["", "\x1b[32m", "+", "\x1b[0m", " Cylinder"]
-  for (const part of text.split(/(\x1b\[[0-9]*m)/)) {
-    // ""          -> null
-    // "\x1b[32m"  -> ["\x1b[32m", "32"]
-    // "+"         -> null
-    // "\x1b[0m"   -> ["\x1b[0m", "0"]
-    // " Cylinder" -> null
-    const sgr = /^\x1b\[([0-9]*)m$/.exec(part);
-    if (!sgr) {
-      // skip "" parts
-      if (!part) continue;
-      const escaped = escapeHtml(part);
-      out += activeAnsiClasses.size
-        ? `<span class="${[...activeAnsiClasses].join(" ")}">${escaped}</span>`
-        : escaped;
-      continue;
-    }
-    // Bare \x1b[m means reset, same as \x1b[0m
-    // That leaves sgr[1] as "", so fall back to "0"
-    const code = sgr[1] === "" ? "0" : sgr[1];
-    if (code === "0") activeAnsiClasses.clear();
-    else if (code in ANSI_CLASSES) activeAnsiClasses.add(ANSI_CLASSES[code]);
-    else throw new Error(`unsupported SGR code: ${code}`);
-  }
-  return out;
-}
-
-function createDiffTable(unified) {
-  const rows = [];
-  let added = 0;
-  let removed = 0;
-  let oldN = 0;
-  let newN = 0;
-  let inHunk = false;
-  for (const line of unified.split("\n")) {
-    // @@ -10,4 +12,5 @@
-    // ->
-    // [
-    //   "@@ -10,4 +12,5 @@",
-    //   "10",
-    //   "12",
-    //   index: 0,
-    //   input: "@@ -10,4 +12,5 @@",
-    //   groups: undefined
-    // ]
-    const hunk = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(line);
-    if (hunk) {
-      inHunk = true;
-      oldN = Number(hunk[1]);
-      newN = Number(hunk[2]);
-      rows.push(`<tr class="hunk"><td colspan="2"></td><td class="code">${escapeHtml(line)}</td></tr>`);
-      continue;
-    }
-    // skip
-    if (!inHunk || !line || line === "\\ No newline at end of file") continue;
-    if (line.startsWith("+")) {
-      added += 1;
-      rows.push(`<tr class="add"><td class="num"></td><td class="num">${newN++}</td><td class="code">+${escapeHtml(line.slice(1))}</td></tr>`);
-    } else if (line.startsWith("-")) {
-      removed += 1;
-      rows.push(`<tr class="del"><td class="num">${oldN++}</td><td class="num"></td><td class="code">-${escapeHtml(line.slice(1))}</td></tr>`);
-    // unchanged lines
-    } else if (line.startsWith(" ")) {
-      rows.push(`<tr><td class="num">${oldN++}</td><td class="num">${newN++}</td><td class="code"> ${escapeHtml(line.slice(1))}</td></tr>`);
-    }
-  }
-  const body = rows.length
-    ? `<table class="diff-table">${rows.join("")}</table>`
-    : '<p class="hint file-empty">File renamed without changes.</p>'; // rename line when 0
-  return { table: body, added, removed };
-}
-
-function createFileEntry(repo, { before, after }, index) {
-  const path = after ?? before;
-  const renamed = before !== null && after !== null && before !== after;
-  const paths = renamed ? [before, after] : [path];
-  const { table, added, removed } = createDiffTable(runGit(repo, "diff", "-M", "main", "--", ...paths));
-  const tableRawHtml = `diffs/${index}.html`;
-  writeFileSync(join(RAW_HTML, tableRawHtml), table);
-  const href = (side, p) => (p ? `fixtures/${side}/${p}` : "");
+function createFileEntry(repo, path, index) {
+  const { table, added, removed } = createDiffTable(runGit(repo, "diff", "-M", "main", "--", path));
+  const fragment = `diffs/${index}.html`;
+  writeFileSync(join(RAW_HTML, fragment), table);
   return {
     path,
-    before: href("before", before),
-    after: href("after", after),
-    label: renamed ? `${before} → ${after}` : path,
+    before: `fixtures/before/${path}`,
+    after: `fixtures/after/${path}`,
     added,
     removed,
-    table: tableRawHtml,
+    table: fragment,
   };
 }
 
-// path = "Assets/Scripts/FixtureBehaviour.cs.meta"
-// GUID field = "guid: abc123..."
-// index["abc123..."] = "Assets/Scripts/FixtureBehaviour.cs"
-function createGuidIndex(side) {
-  const root = join(FIXTURES, side);
+function createGuidIndex() {
+  const root = join(FIXTURES, "after");
   const index = {};
-  for (const entry of readdirSync(root, { recursive: true })) {
-    const path = String(entry);
+  for (const path of readdirSync(root, { recursive: true })) {
     if (!path.endsWith(".meta")) continue;
     const meta = readFileSync(join(root, path), "utf8");
-    const guid = meta.split("\n").map((l) => l.trim()).find((l) => l.startsWith("guid:"));
+    const guid = meta.split("\n").map((line) => line.trim()).find((line) => line.startsWith("guid:"));
     if (guid) index[guid.slice("guid:".length).trim()] = path.slice(0, -".meta".length).replaceAll("\\", "/");
   }
   return index;
 }
 
-function deleteOutputs() {
-  rmSync(GENERATED, { recursive: true, force: true });
-  mkdirSync(ASSETS, { recursive: true });
-  mkdirSync(join(RAW_HTML, "diffs"), { recursive: true });
-  rmSync(DIST, { recursive: true, force: true });
-}
-
-function createFragments(repo) {
+function writeDemo(repo) {
   const report = execFileSync(BIN, ["--html", "main"], { cwd: repo, encoding: "utf8" });
-  // execFileSync captures stdout via a pipe (not a TTY), so force ANSI for convertAnsiToHtml
-  const tree = execFileSync(BIN, ["--color", "main"], { cwd: repo, encoding: "utf8" });
   const heroReport = execFileSync(BIN, ["--html", "main", DEMO_FILES[0]], { cwd: repo, encoding: "utf8" });
-  const files = listChangedFiles(repo);
-  const heroDiff = createDiffTable(runGit(repo, "diff", "main", "--", DEMO_FILES[0]));
+  // Captured stdout is not a TTY, so the terminal preview needs explicit ANSI colors.
+  const tree = execFileSync(BIN, ["--color", "main"], { cwd: repo, encoding: "utf8" });
+  const terminal = convertAnsiToHtml(tree.trimEnd());
 
-  // smoke assert
-  if (!report.includes("pl-")) throw new Error("CLI report lost its pl- classes");
-  if (!heroReport.includes("Rigidbody")) throw new Error("hero report is missing the Robot diff");
-  if (!heroReport.includes("Head") || !heroReport.includes("Sensor")) {
-    throw new Error("hero report is missing the Head → Sensor rename");
-  }
-  if (!heroReport.includes("Assets/Scripts/FixtureBehaviour.cs")) throw new Error("hero report lost GUID resolution");
-  if (tree.includes("unresolved")) throw new Error("tree output has unresolved GUID references");
-  if (!report.includes("(built-in)")) throw new Error("report lost built-in ref names");
-  if (report.includes("guid:0000000000000000")) throw new Error("report shows raw built-in GUIDs");
-  if (!convertAnsiToHtml(tree).includes("<span")) throw new Error("tree output lost its ANSI colors");
-  const paths = files.map((f) => f.after ?? f.before);
-  if (paths.join("\n") !== DEMO_FILES.join("\n")) {
-    throw new Error(`demo files drifted from DEMO_FILES:\n${paths.join("\n")}`);
-  }
+  assert(report.includes("pl-"), "CLI report lost its pl- classes");
+  assert(heroReport.includes("Rigidbody"), "hero report is missing the Robot diff");
+  assert(heroReport.includes("Head") && heroReport.includes("Sensor"), "hero report is missing the Head → Sensor rename");
+  assert(heroReport.includes("Assets/Scripts/FixtureBehaviour.cs"), "hero report lost GUID resolution");
+  assert(!tree.includes("unresolved"), "tree output has unresolved GUID references");
+  assert(report.includes("(built-in)"), "report lost built-in ref names");
+  assert(!report.includes("guid:0000000000000000"), "report shows raw built-in GUIDs");
+  assert(terminal.includes("<span"), "tree output lost its ANSI colors");
 
-  writeFileSync(join(RAW_HTML, "hero-diff.html"), heroDiff.table);
+  const files = DEMO_FILES.map((path, index) => createFileEntry(repo, path, index));
+  // Reusing the first file keeps the landing and extension Raw diffs identical.
+  cpSync(join(RAW_HTML, files[0].table), join(RAW_HTML, "hero-diff.html"));
   writeFileSync(
     join(GENERATED, "pull-request.json"),
-    JSON.stringify(
-      {
-        base: "main",
-        head: "feat/robot-rebalance",
-        files: files.map((f, i) => createFileEntry(repo, f, i)),
-      },
-      null,
-      2,
-    ),
+    JSON.stringify({ base: "main", head: "feat/robot-rebalance", files }, null, 2),
   );
-  writeFileSync(
-    join(RAW_HTML, "terminal.html"),
-    `<span class="prompt">$</span> prefablens main\n${convertAnsiToHtml(tree.trimEnd())}`,
-  );
-
-  return { report, heroReport };
-}
-
-function writeAssets(report, heroReport) {
+  writeFileSync(join(RAW_HTML, "terminal.html"), `<span class="prompt">$</span> prefablens main\n${terminal}`);
   writeFileSync(join(ASSETS, "hero-report.html"), heroReport);
   writeFileSync(join(ASSETS, "cli-report.html"), report);
-  cpSync(join(FIXTURES, "before"), join(ASSETS, "fixtures", "before"), { recursive: true });
-  cpSync(join(FIXTURES, "after"), join(ASSETS, "fixtures", "after"), { recursive: true });
-  writeFileSync(join(ASSETS, "fixtures", "guids.json"), JSON.stringify(createGuidIndex("after"), null, 2));
+  for (const side of ["before", "after"]) {
+    cpSync(join(FIXTURES, side), join(ASSETS, "fixtures", side), { recursive: true });
+  }
+  writeFileSync(join(ASSETS, "fixtures", "guids.json"), JSON.stringify(createGuidIndex(), null, 2));
   cpSync(WASM, join(ASSETS, "prefablens.wasm"));
   cpSync(DEMO, join(ASSETS, "demo.js"));
   console.log(`raw-html in ${RAW_HTML}, assets in ${ASSETS}`);
@@ -253,18 +113,18 @@ function main() {
   assertBuilt(WASM, "zig build wasm");
   assertBuilt(DEMO, "pnpm run demo (in extension/)");
 
-  deleteOutputs();
+  rmSync(GENERATED, { recursive: true, force: true });
+  rmSync(join(SITE, "dist"), { recursive: true, force: true });
+  mkdirSync(ASSETS, { recursive: true });
+  mkdirSync(join(RAW_HTML, "diffs"), { recursive: true });
 
-  const repo = createDemoRepo();
-  let report;
-  let heroReport;
+  const repo = mkdtempSync(join(tmpdir(), "prefablens-site-"));
   try {
-    ({ report, heroReport } = createFragments(repo));
+    prepareDemoRepo(repo);
+    writeDemo(repo);
   } finally {
     rmSync(repo, { recursive: true, force: true });
   }
-
-  writeAssets(report, heroReport);
 }
 
 main();

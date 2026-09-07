@@ -1208,24 +1208,25 @@ const KV = struct { key: []const u8, value: []const u8, has_colon: bool };
 // Don't split inside a flow value (the value starts after the first colon).
 fn splitKeyValue(raw: []const u8) KV {
     const line = std.mem.trimStart(u8, raw, " ");
-    // A colon inside quotes belongs to the scalar; a colon after the closing quote can separate a key.
-    var quote: ?u8 = null;
     var i: usize = 0;
-    while (i < line.len) : (i += 1) {
-        if (quote) |delimiter| {
+    // Only a leading quote can hide separators. Keep quote handling out of the scan for plain keys.
+    if (line.len > 0 and (line[0] == '\'' or line[0] == '"')) {
+        const delimiter = line[0];
+        i = 1;
+        while (i < line.len) : (i += 1) {
             if (delimiter == '"' and line[i] == '\\') {
                 i += 1;
             } else if (line[i] == delimiter) {
                 if (delimiter == '\'' and i + 1 < line.len and line[i + 1] == '\'') {
                     i += 1;
-                } else quote = null;
+                } else {
+                    i += 1;
+                    break;
+                }
             }
-            continue;
         }
-        if (i == 0 and (line[i] == '\'' or line[i] == '"')) {
-            quote = line[i];
-            continue;
-        }
+    }
+    while (i < line.len) : (i += 1) {
         if (line[i] == ':' and (i + 1 == line.len or line[i + 1] == ' ')) {
             const key = std.mem.trim(u8, line[0..i], " ");
             const value = std.mem.trim(u8, line[i + 1 ..], " ");

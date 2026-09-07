@@ -789,9 +789,10 @@ pub const ArgError = error{ MissingOperands, UnknownFlag, TooManyArguments, Conf
 
 const usage_line = "usage: prefablens [--json|--html] [--open] [--project DIR|--no-project] [--color|--no-color] [<ref>] [<ref>] [<path>] | <before> <after>\n";
 
-const help_text = usage_line ++
-    \\
-    \\Git merge setup: prefablens setup-merge [--team]
+const help_text = usage_line ++ "\nGit merge setup: " ++ merge_setup.usage ++ "\n" ++
+    \\  --project              Share .gitattributes; configure the current clone
+    \\  --local                Configure the current clone (default)
+    \\  --user                 Configure all your repositories with global settings
     \\
     \\Operands ending in a Unity YAML extension (.prefab, .unity, .asset, ...)
     \\are paths; anything else is a git ref.
@@ -1345,7 +1346,9 @@ pub fn main(init: std.process.Init) !u8 {
             merge_setup.run(init.io, arena, setup_args, init.environ_map, stdout) catch |err| {
                 if (!try installation.writeError(stderr, err)) switch (err) {
                     error.Git239Required => try stderr.writeAll("prefablens: Automatic merge needs Git 2.39 or later.\n"),
-                    error.InvalidSetupArguments => try stderr.writeAll("usage: prefablens setup-merge [--team]\n"),
+                    error.InvalidSetupArguments => try stderr.writeAll("usage: " ++ merge_setup.usage ++ "\n"),
+                    error.SetupRequiresRepository => try stderr.writeAll("prefablens: Merge setup requires a Git working tree.\nRun this command inside a repository, or use: prefablens setup-merge --user\n"),
+                    error.InvalidUserAttributesPath => try stderr.writeAll("prefablens: Global core.attributesFile must name an absolute path or start with ~/.\nSet it with git config --global core.attributesFile <path>, then run setup again.\n"),
                     else => try stderr.print("prefablens: Merge setup failed: {s}.\n", .{@errorName(err)}),
                 };
                 break :blk @as(u8, 2);

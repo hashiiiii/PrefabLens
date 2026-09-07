@@ -156,9 +156,9 @@ fn read(git: Git, path: []const u8) ![]const u8 {
     return std.Io.Dir.cwd().readFileAlloc(git.io, try git.path(path), git.arena, .limited(1024 * 1024));
 }
 
-fn setup(ctx: Context, git: Git, team: bool) !std.process.RunResult {
+fn setup(ctx: Context, git: Git, project: bool) !std.process.RunResult {
     return std.process.run(git.arena, git.io, .{
-        .argv = if (team) &.{ ctx.artifacts[0], "setup-merge", "--team" } else &.{ ctx.artifacts[0], "setup-merge" },
+        .argv = if (project) &.{ ctx.artifacts[0], "setup-merge", "--project" } else &.{ ctx.artifacts[0], "setup-merge" },
         .cwd = .{ .path = git.cwd },
         .environ_map = git.env,
         .timeout = .{ .duration = .{ .clock = .awake, .raw = .fromSeconds(30) } },
@@ -171,14 +171,14 @@ fn setupCase(ctx: Context, case: SetupCase) !void {
     const strategy = if (case.split) try ctx.layout(try std.fmt.allocPrint(a, "{s}-strategy", .{case.name}), .missing, case.strategy, false) else primary;
     const exec_path = try ctx.layout(try std.fmt.allocPrint(a, "{s}-exec", .{case.name}), case.exec_primary, case.exec_strategy, false);
     var env = try ctx.environment(&.{ primary, strategy }, exec_path);
-    for ([_]bool{ false, true }) |team| {
-        var git = try ctx.repo(try std.fmt.allocPrint(a, "{s}-{s}", .{ case.name, if (team) "team" else "local" }));
+    for ([_]bool{ false, true }) |project| {
+        var git = try ctx.repo(try std.fmt.allocPrint(a, "{s}-{s}", .{ case.name, if (project) "project" else "local" }));
         git.env = &env;
-        const attributes_path = if (team) ".gitattributes" else ".git/info/attributes";
+        const attributes_path = if (project) ".gitattributes" else ".git/info/attributes";
         const attributes = "# Keep the project rules.\n*.txt text\n";
         try std.Io.Dir.cwd().writeFile(git.io, .{ .sub_path = try git.path(attributes_path), .data = attributes });
         const config = try read(git, ".git/config");
-        const result = try setup(ctx, git, team);
+        const result = try setup(ctx, git, project);
         try t.expectCode(result, if (case.valid) 0 else 2, case.name);
         if (!case.valid) {
             try t.expectFile(git.io, a, git.cwd, attributes_path, attributes);
@@ -188,7 +188,7 @@ fn setupCase(ctx: Context, case: SetupCase) !void {
             continue;
         }
         try t.require(std.mem.eql(u8, merge_git.trim(try git.output(&.{ "config", "merge.prefablens.driver" })), driver), "setup pinned the driver to an installation path");
-        if (team) {
+        if (project) {
             try git.ok(&.{ "add", ".gitattributes" });
             try git.ok(&.{ "commit", "-qm", "Share merge rules" });
         }

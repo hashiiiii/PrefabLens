@@ -66,7 +66,6 @@ pub fn main(init: std.process.Init) !u8 {
         try candidateEncoding(ctx);
         return 0;
     }
-    try setup(ctx);
     try automatic(ctx);
     try nonInteractive(ctx);
     try guards(ctx);
@@ -195,33 +194,6 @@ fn contentPty(ctx: Context) !void {
     try git.ok(&.{ "add", "Assets/A.prefab" });
     try git.ok(&.{ "commit", "--no-edit" });
 }
-fn setup(ctx: Context) !void {
-    for ([_]bool{ false, true }) |team| {
-        const git = try ctx.repo(if (team) "setup-team" else "setup-local", &.{.{ .path = "Assets/A.prefab", .base = base, .ours = ours, .theirs = theirs }});
-        const path = if (team) ".gitattributes" else ".git/info/attributes";
-        try write(git, path, "# Existing project rule.\n*.txt text\n");
-        try git.ok(&.{ "config", "prefablens.test.setting", "keep" });
-        for (0..2) |_| {
-            const result = try std.process.run(git.arena, git.io, .{
-                .argv = if (team) &.{ ctx.prefablens, "setup-merge", "--team" } else &.{ ctx.prefablens, "setup-merge" },
-                .cwd = .{ .path = git.cwd },
-                .environ_map = git.env,
-            });
-            try t.expectCode(result, 0, "repository merge setup");
-        }
-        const attributes = try std.Io.Dir.cwd().readFileAlloc(git.io, try git.path(path), git.arena, .limited(1024 * 1024));
-        try t.require(std.mem.startsWith(u8, attributes, "# Existing project rule.\n*.txt text\n"), "setup removed existing attributes");
-        try t.require(std.mem.count(u8, attributes, "*.prefab merge=prefablens") == 1, "repeated setup duplicated attributes");
-        try t.require(std.mem.eql(u8, merge_git.trim(try git.output(&.{ "config", "prefablens.test.setting" })), "keep"), "setup changed unrelated config");
-        if (team) {
-            try git.ok(&.{ "add", ".gitattributes" });
-            try git.ok(&.{ "commit", "-qm", "Share merge attributes" });
-        }
-        try t.expectCode(try git.run(&.{ "merge", "--no-edit", "remote" }), 0, "merge after automatic setup");
-        try expectFile(git, "Assets/A.prefab", merged);
-    }
-}
-
 fn directoryConflict(ctx: Context) !void {
     const git = try ctx.repo("directory-conflict", &.{
         .{ .path = "Assets/A.prefab", .base = base, .ours = ours, .theirs = theirs },

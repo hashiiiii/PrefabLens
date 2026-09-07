@@ -135,24 +135,28 @@ PrefabLens uses Git **2.39** or later to resolve UnityYAML conflicts during `git
 Install `prefablens` and the packaged `git-merge-prefablens` script on `PATH`.
 The script runs `prefablens merge-strategy`.
 
-For a single clone, run:
+Choose a setup scope:
 
-```bash
-prefablens setup-merge
-```
+| Command | Attributes | Git configuration |
+| --- | --- | --- |
+| `prefablens setup-merge --project` | Shared `.gitattributes` | Current clone |
+| `prefablens setup-merge --local` | `.git/info/attributes` | Current clone |
+| `prefablens setup-merge --user` | User attributes file | Global |
 
-This command adds local Git configuration for the repository.
-It also adds UnityYAML attributes to `.git/info/attributes`.
+Without a flag, `prefablens setup-merge` uses `--local`.
+Run local and project setup inside a Git working tree.
+Outside a working tree, the command explains this requirement and suggests `--user`.
 
-For a team, use shared attributes:
+With `--project`, commit the generated `.gitattributes` to share the rules.
+Each clone needs setup unless the user has already configured merge integration with `--user`.
+Git does not share merge driver configuration through `.gitattributes`.
 
-```bash
-prefablens setup-merge --team
-```
+User setup works outside repositories.
+It uses the global `core.attributesFile` setting or Git's default user attributes file, usually `~/.config/git/attributes`.
+It selects PrefabLens as the default merge strategy in all your repositories, including repositories without Unity files.
+Existing repository settings can override these user defaults.
+See [setup scopes](docs/cli.md#setup-scopes) for attribute paths and precedence.
 
-Commit the generated `.gitattributes`.
-
-Each clone requires this setup command once.
 This setup keeps existing attributes and unrelated Git configuration.
 
 Use the normal merge command:

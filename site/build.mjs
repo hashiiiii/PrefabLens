@@ -48,7 +48,8 @@ function prepareDemoRepo(repo) {
 }
 
 function createFileEntry(repo, path, index) {
-  const { table, added, removed } = createDiffTable(runGit(repo, "diff", "-M", "main", "--", path));
+  const { table, added, removed } = createDiffTable(runGit(repo, "diff", "--no-color", "-M", "main", "--", path));
+  assert(added + removed > 0, `${path} has no Raw diff changes`);
   const fragment = `diffs/${index}.html`;
   writeFileSync(join(RAW_HTML, fragment), table);
   return {

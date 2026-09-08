@@ -160,4 +160,5 @@ jobs:
         working-directory: site
         run: |
           pnpm install --frozen-lockfile
+          pnpm test
           pnpm run build

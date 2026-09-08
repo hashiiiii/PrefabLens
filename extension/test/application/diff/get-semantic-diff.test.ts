@@ -123,8 +123,7 @@ describe("getSemanticDiff", () => {
       },
     );
 
-    expect(typeof (stream as unknown as AsyncIterable<unknown>)[Symbol.asyncIterator]).toBe("function");
-    expect(await collect(stream as unknown as AsyncIterable<unknown>)).toEqual([
+    expect(await collect(stream)).toEqual([
       { type: "response", response: { ok: false, error: "access-token-missing" } },
     ]);
     expect(requests).toHaveLength(0);

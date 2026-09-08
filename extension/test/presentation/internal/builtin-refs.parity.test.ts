@@ -11,7 +11,7 @@ import {
 // All three tables are generated from the same Unity dump (issue #104). This
 // test fails when someone regenerates or edits one side without the others.
 
-function zigEntries(section: string): Record<string, string> {
+function zigEntries(section: string) {
   const out: Record<string, string> = {};
   for (const m of section.matchAll(/\.\{ \.file_id = (\d+), \.name = "([^"]*)" \}/g)) {
     out[must(m[1])] = must(m[2]);
@@ -36,7 +36,7 @@ it("GUID constants match between the Zig and TS tables", () => {
   expect(zig).toContain(`pub const builtin_extra_guid = "${BUILTIN_EXTRA_GUID}";`);
 });
 
-function csEntries(section: string): Record<string, string> {
+function csEntries(section: string) {
   const out: Record<string, string> = {};
   for (const m of section.matchAll(/\{ "(\d+)", "([^"]*)" \},/g)) {
     out[must(m[1])] = must(m[2]);

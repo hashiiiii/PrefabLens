@@ -11,6 +11,7 @@ export function createChromeDiffRepository(area: StorageAreaWithRemove): DiffRep
   return {
     async load(key) {
       const stored = await area.get(PREFIX + key);
+      // This repository owns diff: keys and writes DiffV2 values to session storage.
       return stored[PREFIX + key] as DiffV2 | undefined;
     },
     async save(key, json) {

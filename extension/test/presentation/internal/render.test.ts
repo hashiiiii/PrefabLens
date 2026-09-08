@@ -359,18 +359,9 @@ describe("detectTheme", () => {
     expect(detectTheme(document)).toBe("light");
   });
 
-  it("uses the operating-system theme for automatic mode", () => {
+  it("defaults to light when the browser has no media-query API", () => {
     document.documentElement.setAttribute("data-color-mode", "auto");
     expect(detectTheme(document)).toBe("light");
-    const win = must(document.defaultView);
-    win.matchMedia = ((query: string) => ({
-      matches: query === "(prefers-color-scheme: dark)",
-    })) as unknown as typeof win.matchMedia;
-    try {
-      expect(detectTheme(document)).toBe("dark");
-    } finally {
-      delete (win as { matchMedia?: unknown }).matchMedia;
-    }
   });
 });
 

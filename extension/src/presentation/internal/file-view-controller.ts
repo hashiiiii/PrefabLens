@@ -17,26 +17,22 @@ export function createFileViewController(
   attachHost: (host: HTMLDivElement) => void,
   semanticVisible: () => boolean,
 ): FileViewController {
-  let host: HTMLDivElement | undefined;
-  let root: ShadowRoot | undefined;
+  let viewHost: ReturnType<typeof createViewHost> | undefined;
   let started = false;
   const selectionListeners = new Set<(view: ViewMode) => void>();
   const semanticListeners = new Set<(root: ShadowRoot) => void>();
 
-  const ensureHost = (): { host: HTMLDivElement; root: ShadowRoot } => {
-    if (!host || !root) {
-      const created = createViewHost();
-      host = created.host;
-      root = created.root;
-    }
-    if (!host.isConnected) attachHost(host);
-    return { host, root };
+  const ensureHost = () => {
+    viewHost ??= createViewHost();
+    if (!viewHost.host.isConnected) attachHost(viewHost.host);
+    return viewHost;
   };
 
   const update = (view: ViewMode): void => {
     if (view === "raw") {
       setRawHidden(false);
-      if (host) {
+      if (viewHost) {
+        const { host } = viewHost;
         if (!host.isConnected) attachHost(host);
         host.style.display = "none";
       }

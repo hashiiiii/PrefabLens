@@ -6,7 +6,7 @@ export type GithubFailure =
   | { kind: "fetch-failed" };
 
 export function isRateLimited(e: unknown): e is Extract<GithubFailure, { kind: "rate-limited" }> {
-  return typeof e === "object" && e !== null && (e as { kind?: string }).kind === "rate-limited";
+  return typeof e === "object" && e !== null && "kind" in e && e.kind === "rate-limited";
 }
 
 // The pipeline branches only on added/removed. The gateway folds the other

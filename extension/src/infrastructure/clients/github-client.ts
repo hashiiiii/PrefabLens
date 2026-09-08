@@ -113,6 +113,7 @@ class GithubClient implements GithubGateway {
     const res = await this.request(path, "application/vnd.github+json");
     if (!res.ok) return res;
     if (!res.value.ok) return FETCH_FAILED;
+    // Each caller specifies the GitHub response contract for its fixed REST endpoint.
     return readOr(() => res.value.json() as Promise<T>);
   }
 
@@ -214,6 +215,7 @@ class GithubClient implements GithubGateway {
     if (!res.ok) return res;
     if (!res.value.ok) return ok(null);
     return readOr(async () => {
+      // GitHub's code search endpoint returns file paths in items[].
       const body = (await res.value.json()) as { items?: Array<{ path?: string }> };
       const path = body.items?.[0]?.path;
       return path?.endsWith(".meta") ? assetPathFromMeta(path) : null;
@@ -297,6 +299,7 @@ class GithubClient implements GithubGateway {
       data?: { repository?: Record<string, { text?: string | null } | null> } | null;
       errors?: Array<{ type?: string }>;
     };
+    // The query requests repository blob text; GitHub may return nullable data and GraphQL errors.
     const parsed = await readOr(() => res.value.json() as Promise<GraphqlBody>);
     if (!parsed.ok) return parsed;
     const body = parsed.value;
@@ -312,32 +315,16 @@ class GithubClient implements GithubGateway {
 const defaultFetch: typeof fetch = (input, init) => fetch(input, init);
 const defaultSleep = (milliseconds: number) => new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
 
-function githubGateway(base: string, token: string, fetchFn: typeof fetch): GithubGateway {
+export function createGithubGateway(base: string, token: string, fetchFn: typeof fetch = defaultFetch): GithubGateway {
   return new GithubClient(base, token, fetchFn);
 }
 
-export function createGithubGateway(base: string, token: string, fetchFn?: typeof fetch): GithubGateway;
-export function createGithubGateway(
+export function createQueuedGithubGateway(
   concurrency: number,
-  fetchFn?: typeof fetch,
-  sleep?: (milliseconds: number) => Promise<void>,
-): MakeGithubGateway;
-export function createGithubGateway(
-  baseOrConcurrency: string | number,
-  tokenOrFetch?: string | typeof fetch,
-  fetchOrSleep?: typeof fetch | ((milliseconds: number) => Promise<void>),
-): GithubGateway | MakeGithubGateway {
-  if (typeof baseOrConcurrency === "number") {
-    const fetchFn = typeof tokenOrFetch === "function" ? tokenOrFetch : defaultFetch;
-    const sleep =
-      typeof fetchOrSleep === "function" ? (fetchOrSleep as (milliseconds: number) => Promise<void>) : defaultSleep;
-    // One shared queue: the user lane has priority over the prefetch traffic.
-    const queue = createQueue(baseOrConcurrency, sleep);
-    return (base, token, lane) => githubGateway(base, token, createQueuedFetch(queue, fetchFn, lane === "user"));
-  }
-  return githubGateway(
-    baseOrConcurrency,
-    tokenOrFetch as string,
-    typeof fetchOrSleep === "function" ? (fetchOrSleep as typeof fetch) : defaultFetch,
-  );
+  fetchFn: typeof fetch = defaultFetch,
+  sleep: (milliseconds: number) => Promise<void> = defaultSleep,
+): MakeGithubGateway {
+  // One shared queue keeps user requests ahead of prefetch traffic across clients.
+  const queue = createQueue(concurrency, sleep);
+  return (base, token, lane) => createGithubGateway(base, token, createQueuedFetch(queue, fetchFn, lane === "user"));
 }

@@ -10,6 +10,7 @@ import type { RepoGuidIndex } from "../../../src/domain/guid/repo-guid-index";
 import type { RepoIndexRepository } from "../../../src/domain/guid/repo-index-repository";
 import { createGithubGateway } from "../../../src/infrastructure/clients/github-client";
 import { createDifferGateway } from "../../../src/infrastructure/clients/wasm-differ-client";
+import type { JsonValue } from "../../../src/internal/json";
 import { SOURCE_PREFAB, VARIANT_PREFAB } from "../../fixtures/unity";
 
 const API_BASE = "https://api.github.test";
@@ -60,15 +61,15 @@ type RoutedRequest = { url: URL; init?: RequestInit };
 
 function githubRoutes(respond: (request: RoutedRequest) => Response | Promise<Response>) {
   const requests: RoutedRequest[] = [];
-  const fetchRoute = (async (input: RequestInfo | URL, init?: RequestInit) => {
+  const fetchRoute: typeof fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
     const request = { url: new URL(String(input)), init };
     requests.push(request);
     return respond(request);
-  }) as typeof fetch;
+  };
   return { requests, client: createGithubGateway(API_BASE, "token", fetchRoute) };
 }
 
-function json(value: unknown, status = 200): Response {
+function json(value: JsonValue, status = 200): Response {
   return new Response(JSON.stringify(value), {
     status,
     headers: { "content-type": "application/json" },
@@ -138,7 +139,6 @@ describe("resolveSemanticDiff", () => {
       },
     );
 
-    expect(typeof (operation as unknown as AsyncIterable<unknown>)[Symbol.asyncIterator]).toBe("function");
     const messages = await collect(operation);
 
     expect(messages).toHaveLength(2);

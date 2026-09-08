@@ -2,7 +2,7 @@ import type { DifferGateway, DiffFailure } from "../../application/gateway/diffe
 import type { DiffErrorV1, DiffV2 } from "../../domain/diff/types";
 import { err, ok, type Result } from "../../domain/result";
 
-type Exports = {
+type Exports = WebAssembly.Exports & {
   memory: WebAssembly.Memory;
   alloc(len: number): number;
   free(ptr: number, len: number): void;
@@ -40,26 +40,22 @@ function encodeAssets(assets: Map<string, Uint8Array>): Uint8Array {
 
 const defaultFetchBytes: FetchBytes = async (url) => (await fetch(url)).arrayBuffer();
 
-export function createDifferGateway(wasmUrl: string, fetchBytes?: FetchBytes): () => Promise<DifferGateway>;
-export function createDifferGateway(wasmBytes: BufferSource): Promise<DifferGateway>;
-export function createDifferGateway(
-  wasmUrlOrBytes: string | BufferSource,
+export function createDifferLoader(
+  wasmUrl: string,
   fetchBytes: FetchBytes = defaultFetchBytes,
-): (() => Promise<DifferGateway>) | Promise<DifferGateway> {
-  if (typeof wasmUrlOrBytes === "string") {
-    let differ: Promise<DifferGateway> | undefined;
-    return () => {
-      // A lazy singleton. An SW restart causes a re-fetch.
-      differ ??= fetchBytes(wasmUrlOrBytes).then(instantiateDifferGateway);
-      return differ;
-    };
-  }
-  return instantiateDifferGateway(wasmUrlOrBytes);
+): () => Promise<DifferGateway> {
+  let differ: Promise<DifferGateway> | undefined;
+  return () => {
+    // Each JS context shares one WASM instance, including concurrent first requests.
+    differ ??= fetchBytes(wasmUrl).then(createDifferGateway);
+    return differ;
+  };
 }
 
-async function instantiateDifferGateway(wasmBytes: BufferSource): Promise<DifferGateway> {
+export async function createDifferGateway(wasmBytes: BufferSource): Promise<DifferGateway> {
   const { instance } = await WebAssembly.instantiate(wasmBytes);
-  const exp = instance.exports as unknown as Exports;
+  // The bundled core/src/wasm.zig exports this ABI; gateway tests instantiate the same compiled artifact.
+  const exp = instance.exports as Exports;
 
   function call(before: Uint8Array, after: Uint8Array, assets?: Uint8Array): Result<DiffV2, DiffFailure> {
     const alloc = (b: Uint8Array): number => (b.length ? exp.alloc(b.length) : 0);
@@ -82,9 +78,10 @@ async function instantiateDifferGateway(wasmBytes: BufferSource): Promise<Differ
       const len = new DataView(exp.memory.buffer).getUint32(rp, true);
       const text = utf8.decode(new Uint8Array(exp.memory.buffer, rp + 4, len));
       exp.free(rp, 4 + len);
+      // core/src/wasm.zig emits only these two schemas through core/src/json.zig.
       const parsed = JSON.parse(text) as DiffV2 | DiffErrorV1;
       if (parsed.schema !== "prefablens.diff.v2") {
-        return err({ kind: "diff-failed", message: (parsed as DiffErrorV1).error });
+        return err({ kind: "diff-failed", message: parsed.error });
       }
       return ok(parsed);
     } finally {

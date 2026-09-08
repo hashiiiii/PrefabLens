@@ -2,7 +2,7 @@
 import { readFileSync } from "node:fs";
 import { beforeAll, describe, expect, it } from "vitest";
 import type { DifferGateway } from "../../../src/application/gateway/differ";
-import { createDifferGateway } from "../../../src/infrastructure/clients/wasm-differ-client";
+import { createDifferGateway, createDifferLoader } from "../../../src/infrastructure/clients/wasm-differ-client";
 import { must } from "../../../src/internal/must";
 
 const enc = new TextEncoder();
@@ -21,14 +21,14 @@ beforeAll(async () => {
   differ = await createDifferGateway(bytes);
 });
 
-describe("createDifferGateway", () => {
+describe("createDifferLoader", () => {
   it("returns one real differ for repeated loads", async () => {
     const wasmBytes = readFileSync(new URL("../../../../zig-out/bin/prefablens.wasm", import.meta.url));
     const fetchBytes = async (url: string): Promise<BufferSource> => {
       if (url !== "prefablens.wasm") throw new Error(`Unexpected URL: ${url}`);
       return wasmBytes;
     };
-    const loadDiffer = createDifferGateway("prefablens.wasm", fetchBytes);
+    const loadDiffer = createDifferLoader("prefablens.wasm", fetchBytes);
 
     const first = await loadDiffer();
     const second = await loadDiffer();

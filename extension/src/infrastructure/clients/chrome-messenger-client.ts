@@ -11,12 +11,12 @@ import type {
 export function createChromeMessengerGateway(): MessengerGateway {
   return {
     semanticDiff: (req: SemanticDiffRequest) =>
-      (chrome.runtime.sendMessage(req) as Promise<SemanticDiffResponse>).catch(() => ({
+      chrome.runtime.sendMessage<SemanticDiffRequest, SemanticDiffResponse>(req).catch(() => ({
         ok: false as const,
         error: "fetch-failed" as const,
       })),
     prefetch: (req: PrefetchRequest) =>
-      (chrome.runtime.sendMessage(req) as Promise<unknown>).then(
+      chrome.runtime.sendMessage(req).then(
         () => undefined,
         () => undefined,
       ),

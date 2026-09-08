@@ -3,7 +3,7 @@ import { isRateLimited } from "../../../src/application/gateway/github";
 import { createQueue } from "../../../src/infrastructure/internal/fetch-queue";
 
 // Manual deferreds expose the task order and concurrency.
-function deferred(): { promise: Promise<void>; resolve: () => void } {
+function deferred() {
   let resolve!: () => void;
   const promise = new Promise<void>((r) => {
     resolve = r;
@@ -71,9 +71,9 @@ describe("createQueue", () => {
     // A synchronous throw can occur before task() returns a Promise.
     // The next task runs only when the active slot returns to the queue.
     const queue = createQueue(1);
-    const syncThrow = (() => {
+    const syncThrow = () => {
       throw new Error("sync boom");
-    }) as () => Promise<never>;
+    };
     await expect(queue(syncThrow)).rejects.toThrow("sync boom");
     await expect(queue(async () => "next")).resolves.toBe("next");
   });
@@ -86,9 +86,9 @@ describe("createQueue", () => {
     const first = queue(async () => {
       await gate.promise;
     });
-    const syncThrow = (() => {
+    const syncThrow = () => {
       throw new Error("boom");
-    }) as () => Promise<never>;
+    };
     const bad = queue(syncThrow);
     const good = queue(async () => "ok");
     gate.resolve();

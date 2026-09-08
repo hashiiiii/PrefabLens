@@ -1,27 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createChromeAuthRepository } from "../../../src/infrastructure/clients/chrome-auth-client";
-import type { StorageAreaWithRemove } from "../../../src/infrastructure/internal/storage-area";
-
-class MemoryStorageArea implements StorageAreaWithRemove {
-  private readonly values: Record<string, unknown>;
-
-  constructor(initial: Record<string, unknown> = {}) {
-    this.values = { ...initial };
-  }
-
-  async get(keys: string | string[] | null): Promise<Record<string, unknown>> {
-    const selected = keys === null ? Object.keys(this.values) : Array.isArray(keys) ? keys : [keys];
-    return Object.fromEntries(selected.filter((key) => key in this.values).map((key) => [key, this.values[key]]));
-  }
-
-  async set(items: Record<string, unknown>): Promise<void> {
-    Object.assign(this.values, items);
-  }
-
-  async remove(keys: string | string[]): Promise<void> {
-    for (const key of Array.isArray(keys) ? keys : [keys]) delete this.values[key];
-  }
-}
+import { MemoryStorageArea } from "../../support/memory-storage-area";
 
 describe("createChromeAuthRepository", () => {
   it("round-trips the access token", async () => {

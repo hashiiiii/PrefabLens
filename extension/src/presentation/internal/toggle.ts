@@ -85,7 +85,7 @@ export function mountToggle(initial: ViewMode = "raw"): Toggle {
 // The bar DOM matches the [data-prefablens-global] page styles that this module
 // owns. The content script and the demo must build the bar in the same way.
 // Callers position the element.
-export function mountGlobalBar(initial: ViewMode): { element: HTMLElement; toggle: Toggle } {
+export function mountGlobalBar(initial: ViewMode) {
   const bar = document.createElement("div");
   bar.setAttribute("data-prefablens-global", "");
   const label = document.createElement("span");

@@ -9,16 +9,16 @@ export type MergeStore = {
 // Failures propagate. Each call site decides if a lost write is fatal or if the code continues past it.
 export function createMergeStore(area: StorageArea, prefix: string): MergeStore {
   const keyOf = (id: string): string => `${prefix}:${id}`;
+  const load = async (id: string): Promise<Record<string, string>> => {
+    const key = keyOf(id);
+    const stored = await area.get([key]);
+    // This store owns its prefixed keys and saves only GUID or metadata maps with string values.
+    return (stored[key] as Record<string, string> | undefined) ?? {};
+  };
   return {
-    async load(id) {
-      const key = keyOf(id);
-      const stored = await area.get([key]);
-      return (stored[key] as Record<string, string> | undefined) ?? {};
-    },
+    load,
     async save(id, entries) {
-      const key = keyOf(id);
-      const stored = await area.get([key]);
-      await area.set({ [key]: { ...(stored[key] as Record<string, string> | undefined), ...entries } });
+      await area.set({ [keyOf(id)]: { ...(await load(id)), ...entries } });
     },
   };
 }

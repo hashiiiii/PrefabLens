@@ -43,6 +43,12 @@ pub fn timeDiff(io: std.Io, arena: std.mem.Allocator, n: usize) !u64 {
     return @intCast(start.durationTo(end).raw.toNanoseconds());
 }
 
+pub fn medianSample(samples: [5]u64) u64 {
+    var sorted = samples;
+    std.mem.sort(u64, &sorted, {}, std.sort.asc(u64));
+    return sorted[sorted.len / 2];
+}
+
 test "perf: small scene diff completes well under budget" {
     var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena_state.deinit();
@@ -50,4 +56,14 @@ test "perf: small scene diff completes well under budget" {
     const ns = try timeDiff(std.testing.io, arena, 200); // 200 objects ≈ a smallish prefab
     // A loose ceiling for the debug-build test (the real budget is enforced by `zig build perf`).
     try std.testing.expect(ns < 500 * std.time.ns_per_ms);
+}
+
+test "perf: budget median tolerates isolated slow samples" {
+    // These CI timings cross the ceiling despite unchanged diff code.
+    try std.testing.expectEqual(@as(u64, 585), medianSample(.{ 648, 552, 843, 545, 585 }));
+}
+
+test "perf: budget median retains sustained slowdowns" {
+    // A fast outlier must not hide a majority of samples above the budget.
+    try std.testing.expectEqual(@as(u64, 648), medianSample(.{ 552, 843, 648, 614, 700 }));
 }

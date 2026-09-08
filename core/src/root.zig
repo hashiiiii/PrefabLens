@@ -22,6 +22,7 @@ const prefab = @import("prefab.zig");
 pub const Assets = prefab.Assets;
 pub const displayPropertyPath = inspector.displayPath;
 pub const isUnityYaml = parser.isUnityYaml;
+pub const parseDiagnostics = parser.diagnostics;
 pub const DiffError = parser.Error;
 pub const JsonError = DiffError || std.Io.Writer.Error;
 const no_assets: Assets = .empty;

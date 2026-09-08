@@ -10,6 +10,7 @@ const render_html = @import("render_html.zig");
 const unity_path = @import("unity_path.zig");
 const builtin_refs = @import("builtin_refs.zig");
 const merge_setup = @import("merge_setup.zig");
+const diff_setup = @import("diff_setup.zig");
 const version = @import("build_options").version;
 const Format = options.Format;
 const Target = options.Target;
@@ -23,7 +24,11 @@ test {
 
 const usage_line = "usage: prefablens [--json|--html] [--open] [--project DIR|--no-project] [--color|--no-color] [<ref>] [<ref>] [<path>] | <before> <after>\n";
 
-const help_text = usage_line ++ "\nGit merge setup: " ++ merge_setup.usage ++ "\n" ++
+const help_text = usage_line ++ "\nGit diff setup: " ++ diff_setup.usage ++ "\n" ++
+    \\  --local                Configure the current repository (default)
+    \\  --user                 Configure your global Git settings
+    \\
+++ "Git merge setup: " ++ merge_setup.usage ++ "\n" ++
     \\  --project              Share .gitattributes; configure the current clone
     \\  --local                Configure the current clone (default)
     \\  --user                 Configure all your repositories with global settings

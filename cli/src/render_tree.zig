@@ -426,6 +426,22 @@ pub fn render(
     resolved: ?*const core.json.Resolver,
     color: bool,
 ) !void {
+    return renderWithOptions(arena, w, res, resolved, .{ .color = color });
+}
+
+pub const RenderOptions = struct {
+    color: bool,
+    project_hint: bool = true,
+};
+
+pub fn renderWithOptions(
+    arena: std.mem.Allocator,
+    w: *std.Io.Writer,
+    res: model.DiffResult,
+    resolved: ?*const core.json.Resolver,
+    options: RenderOptions,
+) !void {
+    const color = options.color;
     var prefix: std.ArrayList(u8) = .empty;
     for (res.roots) |o| try renderObject(arena, w, o, resolved, color, &prefix, "");
     if (res.loose.len != 0) {
@@ -440,7 +456,12 @@ pub fn render(
         // Built-ins display by name (no .meta exists for them), so counting
         // them here would advertise a --project run that cannot help.
         const n = display.unresolvedCount(res);
-        if (n != 0) try w.print("\n({d} unresolved guid reference(s); pass --project DIR to resolve)\n", .{n});
+        if (n != 0) {
+            if (options.project_hint)
+                try w.print("\n({d} unresolved guid reference(s); pass --project DIR to resolve)\n", .{n})
+            else
+                try w.print("\n({d} unresolved guid reference(s))\n", .{n});
+        }
     }
 }
 

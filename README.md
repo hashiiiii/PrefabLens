@@ -128,6 +128,50 @@ prefablens --open main                  # write the report to a temp file and op
 Operands with a UnityYAML extension (`.prefab`, `.unity`, `.asset`, and more) are paths.
 All other operands are Git references (refs).
 
+### Git diff
+
+PrefabLens can provide semantic views inside the [PrefabLens diffnav fork](https://github.com/hashiiiii/diffnav).
+Git, `diffnav`, `delta`, and `prefablens` must be on `PATH` when the difftool runs.
+Build the fork from its checkout before setup:
+
+```bash
+go build -o ./diffnav .
+```
+
+Place the resulting `diffnav` executable on `PATH`.
+The required direct comparison and external renderer options are specific to this fork.
+
+Register the integration for the current repository:
+
+```bash
+prefablens setup-diff
+```
+
+Use `prefablens setup-diff --user` to register it in your global Git configuration.
+Setup only registers the Git configuration. It does not install or verify the required executables.
+
+Open all changed files in one directory comparison:
+
+```bash
+git difftool --dir-diff --no-symlinks
+git difftool --dir-diff --no-symlinks --cached
+git difftool --dir-diff --no-symlinks HEAD~1 HEAD
+```
+
+Directory mode asks Git to prepare temporary before and after directories.
+`--no-symlinks` asks Git to copy working tree files into them.
+See the [Git difftool documentation](https://git-scm.com/docs/git-difftool) for its revision and directory options.
+
+Open one session for a specific file:
+
+```bash
+git difftool --no-prompt --tool=prefablens -- Assets/Player.prefab
+```
+
+Press **v** in `diffnav` to switch between semantic and raw views.
+Unsupported files and renderer errors stay available as raw diffs.
+For malformed UnityYAML, the raw view also shows the renderer diagnostic.
+
 ### Git merge
 
 PrefabLens uses Git **2.39** or later to resolve UnityYAML conflicts during `git merge`.

@@ -32,11 +32,14 @@ function createPromiseCache<V>(options: PromiseCacheOptions<V>, now: () => numbe
         return hit.promise;
       }
       const promise = compute();
+      // Expiration or eviction may replace this request before it settles.
       promise.then(
         (value) => {
-          if (retain && !retain(value)) entries.delete(key);
+          if (retain && !retain(value) && entries.get(key)?.promise === promise) entries.delete(key);
         },
-        () => entries.delete(key), // never cache failures
+        () => {
+          if (entries.get(key)?.promise === promise) entries.delete(key);
+        },
       );
       entries.set(key, { at: now(), promise });
       if (max !== undefined && entries.size > max) {

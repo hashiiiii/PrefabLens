@@ -19,6 +19,33 @@ describe("createChromeRepoIndexRepository", () => {
     expect(await repoIndex.loadGuids("api/o/r")).toEqual({ sha1: "g1", sha2: "g2" });
   });
 
+  it("keeps all metadata GUIDs from concurrent saves", async () => {
+    const area = new MemoryStorageArea({ "metaGuids:api/o/r": { sha0: "g0" } });
+    const repoIndex = createChromeRepoIndexRepository(area);
+
+    // Concurrent diffs can discover different metadata entries for the same repository.
+    await Promise.all([
+      repoIndex.saveGuids("api/o/r", { sha1: "g1" }),
+      repoIndex.saveGuids("api/o/r", { sha2: "g2" }),
+      createChromeRepoIndexRepository(area).saveGuids("api/o/r", { sha3: "g3" }),
+    ]);
+
+    expect(await repoIndex.loadGuids("api/o/r")).toEqual({ sha0: "g0", sha1: "g1", sha2: "g2", sha3: "g3" });
+  });
+
+  it("saves queued metadata GUIDs after an ignored capacity failure", async () => {
+    const repoIndex = createChromeRepoIndexRepository(new MemoryStorageArea({}, 100));
+
+    // Metadata caching stays best effort, but a failed write must not discard later additions.
+    await expect(
+      Promise.all([
+        repoIndex.saveGuids("api/o/r", { oversized: "x".repeat(100) }),
+        repoIndex.saveGuids("api/o/r", { sha1: "g1" }),
+      ]),
+    ).resolves.toEqual([undefined, undefined]);
+    expect(await repoIndex.loadGuids("api/o/r")).toEqual({ sha1: "g1" });
+  });
+
   it("stores index data separately from metadata GUIDs", async () => {
     const repoIndex = createChromeRepoIndexRepository(new MemoryStorageArea());
 

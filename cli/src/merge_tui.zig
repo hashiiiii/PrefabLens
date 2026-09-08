@@ -466,7 +466,7 @@ pub const View = struct {
         const body = BodyGeometry.init(size.height);
         if (self.canCombine() and row == body.inspector_heading_row and inRange(col, self.combineToggleRange(size.width)))
             return ctx.consumeEvent();
-        if (row == body.inspector_rows.start and inRange(col, geometry.result)) return;
+        if (row >= body.inspector_rows.start and row < body.inspector_rows.end and inRange(col, geometry.result)) return;
         if (!try self.finishEditorForNavigation(ctx)) return;
         try self.handleMouse(ctx, mouse, size);
     }
@@ -644,10 +644,10 @@ pub const View = struct {
             };
         }
         return switch (column) {
-            .base => sideText(operation.values.base),
-            .ours => sideText(operation.values.ours),
-            .theirs => sideText(operation.values.theirs),
-            .result => resolutionText(operation, pending),
+            .base => displaySide(self.state.plan, operation, .base, operation.values.base),
+            .ours => displaySide(self.state.plan, operation, .ours, operation.values.ours),
+            .theirs => displaySide(self.state.plan, operation, .theirs, operation.values.theirs),
+            .result => displayResolution(self.state.plan, operation, pending),
         };
     }
 
@@ -864,7 +864,7 @@ pub const View = struct {
             try self.state.handle(.pane_left);
             return self.dispatch(ctx, .{ .select_conflict = conflict_index }, size);
         }
-        if (row != body.inspector_rows.start or self.selectedOperation() == null) return;
+        if (row < body.inspector_rows.start or row >= body.inspector_rows.end or self.selectedOperation() == null) return;
         if (inRange(col, geometry.ours)) {
             self.focus_area = .inspector;
             self.selected_value = .ours;
@@ -900,20 +900,44 @@ fn sideText(value: ?core.merge.SideValue) []const u8 {
     return if (text.len == 0) "<empty>" else text;
 }
 
-fn resolutionText(
+fn displaySide(
+    plan: *const core.merge.MergePlan,
+    operation: *const core.merge.Operation,
+    side: core.merge.Side,
+    value: ?core.merge.SideValue,
+) []const u8 {
+    if (documentPreview(plan, operation, side)) |bytes| return bytes;
+    return sideText(value);
+}
+
+fn displayResolution(
+    plan: *const core.merge.MergePlan,
     operation: *const core.merge.Operation,
     resolution: core.merge.Resolution,
 ) []const u8 {
     return switch (resolution) {
         .unresolved => "",
-        .take => |side| switch (side) {
-            .base => sideText(operation.values.base),
-            .ours => sideText(operation.values.ours),
-            .theirs => sideText(operation.values.theirs),
-        },
+        .take => |side| displaySide(plan, operation, side, operation.values.get(side)),
         .remove => "<removed>",
         .custom => |value| if (value.len == 0) "<empty>" else value,
     };
+}
+
+fn documentPreview(
+    plan: *const core.merge.MergePlan,
+    operation: *const core.merge.Operation,
+    side: core.merge.Side,
+) ?[]const u8 {
+    const file_id = switch (operation.kind) {
+        .sequence_membership => (operation.identity.item_ref orelse return null).file_id,
+        .component, .document => operation.identity.document.file_id,
+        else => return null,
+    };
+    const file = plan.file(side);
+    for (file.documents, file.document_spans) |document, span| {
+        if (document.file_id == file_id) return span.whole.bytes(file.bytes);
+    }
+    return null;
 }
 
 fn connectorText(connector: merge_tree.Connector) []const u8 {
@@ -1157,41 +1181,43 @@ fn draw(
     }
 
     if (self.selectedOperation()) |operation| {
-        const row = body.inspector_rows.start;
         const columns = .{
             .{ geometry.base, try self.columnText(ctx.arena, operation, .base), ValueColumn.base },
             .{ geometry.ours, try self.columnText(ctx.arena, operation, .ours), ValueColumn.ours },
             .{ geometry.theirs, try self.columnText(ctx.arena, operation, .theirs), ValueColumn.theirs },
             .{ geometry.result, try self.columnText(ctx.arena, operation, .result), ValueColumn.result },
         };
-        inline for (columns) |column| {
+        const indent = commonIndent(&.{ columns[0][1], columns[1][1], columns[2][1], columns[3][1] });
+        var painted_end = [_]u16{body.inspector_rows.start} ** 4;
+        inline for (columns, 0..) |column, index| {
             const text = if (column[2] == self.selected_value)
                 skipGraphemes(column[1], self.horizontal_offset)
             else
                 column[1];
-            writeClipped(
+            painted_end[index] = paintColumnValue(
                 surface,
-                column[0].start + 2,
-                @intCast(row),
-                column[0].end - column[0].start -| 2,
+                column[0],
+                body.inspector_rows.start,
+                body.inspector_rows.end,
                 text,
+                indent,
+                valueStyle(column[2]),
             );
-            styleRange(surface, @intCast(row), column[0], valueStyle(column[2]));
         }
         if (self.focus_area == .inspector) {
+            const selected_range = valueRange(geometry, self.selected_value);
+            const selected_index: usize = @intFromEnum(self.selected_value);
+            const focus_end = @max(painted_end[selected_index], body.inspector_rows.start + 1);
             var selected_style = valueStyle(self.selected_value);
             selected_style.bg = Palette.focus_bg;
-            styleRange(
-                surface,
-                @intCast(row),
-                valueRange(geometry, self.selected_value),
-                selected_style,
-            );
-            const selected_range = valueRange(geometry, self.selected_value);
-            surface.writeCell(selected_range.start, @intCast(row), .{
-                .char = .{ .grapheme = "▌", .width = 1 },
-                .style = .{ .fg = Palette.accent, .bg = Palette.focus_bg },
-            });
+            var row: u16 = body.inspector_rows.start;
+            while (row < focus_end) : (row += 1) {
+                styleRange(surface, row, selected_range, selected_style);
+                surface.writeCell(selected_range.start, row, .{
+                    .char = .{ .grapheme = "▌", .width = 1 },
+                    .style = .{ .fg = Palette.accent, .bg = Palette.focus_bg },
+                });
+            }
         }
     }
 
@@ -1324,6 +1350,76 @@ fn markEditorChanged(
     }
 }
 
+fn isPlaceholderValue(text: []const u8) bool {
+    return std.mem.eql(u8, text, "<removed>") or std.mem.eql(u8, text, "<empty>");
+}
+
+fn lineIndent(line: []const u8) usize {
+    var count: usize = 0;
+    while (count < line.len and line[count] == ' ') count += 1;
+    return count;
+}
+
+fn skipLineIndent(line: []const u8, indent: usize) []const u8 {
+    var count: usize = 0;
+    while (count < indent and count < line.len and line[count] == ' ') count += 1;
+    return line[count..];
+}
+
+fn commonIndent(texts: []const []const u8) usize {
+    var min_indent: usize = std.math.maxInt(usize);
+    var found = false;
+    for (texts) |text| {
+        if (isPlaceholderValue(text) or text.len == 0) continue;
+        var lines = std.mem.splitScalar(u8, text, '\n');
+        while (lines.next()) |line| {
+            const content = std.mem.trimEnd(u8, line, "\r");
+            if (content.len == 0) continue;
+            min_indent = @min(min_indent, lineIndent(content));
+            found = true;
+        }
+    }
+    return if (found) min_indent else 0;
+}
+
+fn paintColumnValue(
+    surface: vxfw.Surface,
+    range: Range,
+    start_row: u16,
+    end_row: u16,
+    text: []const u8,
+    indent: usize,
+    style: vaxis.Style,
+) u16 {
+    const inner_start = range.start + 2;
+    const inner_width = range.end - range.start -| 2;
+    var row = start_row;
+    var lines = std.mem.splitScalar(u8, text, '\n');
+    var remaining_lines = std.mem.splitScalar(u8, text, '\n');
+    _ = remaining_lines.next();
+    while (lines.next()) |raw_line| {
+        const more = remaining_lines.next() != null;
+        const line = std.mem.trimEnd(u8, raw_line, "\r");
+        if (!more and line.len == 0) break;
+        const visible = if (isPlaceholderValue(text)) line else skipLineIndent(line, indent);
+        var rest = visible;
+        while (row < end_row) {
+            styleRange(surface, row, range, style);
+            if (rest.len == 0) {
+                row += 1;
+                break;
+            }
+            const consumed = writeClippedCount(surface, inner_start, row, inner_width, rest);
+            if (consumed == 0) break;
+            rest = rest[consumed..];
+            row += 1;
+            if (rest.len == 0) break;
+        }
+        if (row >= end_row) break;
+    }
+    return row;
+}
+
 fn writeClipped(
     surface: vxfw.Surface,
     start: u16,
@@ -1331,12 +1427,27 @@ fn writeClipped(
     width: u16,
     text: []const u8,
 ) void {
+    _ = writeClippedCount(surface, start, row, width, text);
+}
+
+fn writeClippedCount(
+    surface: vxfw.Surface,
+    start: u16,
+    row: u16,
+    width: u16,
+    text: []const u8,
+) usize {
     var col: usize = start;
     const end: usize = @as(usize, start) + width;
     var graphemes = vaxis.unicode.graphemeIterator(text);
+    var consumed: usize = 0;
     while (graphemes.next()) |grapheme| {
         const bytes = grapheme.bytes(text);
         const cell_width = vaxis.gwidth.gwidth(bytes, .unicode);
+        if (cell_width == 0) {
+            consumed = grapheme.start + grapheme.len;
+            continue;
+        }
         const next_col = col + cell_width;
         if (next_col > end) break;
         surface.writeCell(@intCast(col), row, .{ .char = .{
@@ -1344,7 +1455,9 @@ fn writeClipped(
             .width = @intCast(cell_width),
         } });
         col = next_col;
+        consumed = grapheme.start + grapheme.len;
     }
+    return consumed;
 }
 
 fn styleRange(surface: vxfw.Surface, row: u16, range: Range, style: vaxis.Style) void {
@@ -1616,6 +1729,24 @@ fn deleteEditPlan(arena: std.mem.Allocator) !core.merge.BuildResult {
     );
 }
 
+fn nestedMapPlan(arena: std.mem.Allocator) !core.merge.BuildResult {
+    return core.merge.build(
+        arena,
+        "--- !u!114 &1\nMonoBehaviour:\n  m_Config:\n    value: 1\n  m_After: keep\n",
+        "--- !u!114 &1\nMonoBehaviour:\n  m_After: keep\n",
+        "--- !u!114 &1\nMonoBehaviour:\n  m_Config:\n    value: 2\n  m_After: keep\n",
+    );
+}
+
+fn componentDeletePlan(arena: std.mem.Allocator) !core.merge.BuildResult {
+    return core.merge.build(
+        arena,
+        "--- !u!1 &1\nGameObject:\n  m_Component:\n  - component: {fileID: 4}\n  - component: {fileID: 54}\n  m_Name: Root\n--- !u!4 &4\nTransform:\n  m_GameObject: {fileID: 1}\n  m_Children: []\n  m_Father: {fileID: 0}\n--- !u!54 &54\nRigidbody:\n  m_GameObject: {fileID: 1}\n  m_Mass: 1\n",
+        "--- !u!1 &1\nGameObject:\n  m_Component:\n  - component: {fileID: 4}\n  m_Name: Root\n--- !u!4 &4\nTransform:\n  m_GameObject: {fileID: 1}\n  m_Children: []\n  m_Father: {fileID: 0}\n",
+        "--- !u!1 &1\nGameObject:\n  m_Component:\n  - component: {fileID: 4}\n  - component: {fileID: 54}\n  m_Name: Root\n--- !u!4 &4\nTransform:\n  m_GameObject: {fileID: 1}\n  m_Children: []\n  m_Father: {fileID: 0}\n--- !u!54 &54\nRigidbody:\n  m_GameObject: {fileID: 1}\n  m_Mass: 2\n",
+    );
+}
+
 fn hierarchyPlan(arena: std.mem.Allocator) !core.merge.BuildResult {
     const base =
         "--- !u!1 &1\n" ++
@@ -1719,6 +1850,22 @@ fn surfaceText(arena: std.mem.Allocator, surface: vxfw.Surface) ![]const u8 {
         try out.append(arena, '\n');
     }
     return out.toOwnedSlice(arena);
+}
+
+fn findColumnTextRow(
+    arena: std.mem.Allocator,
+    surface: vxfw.Surface,
+    start_row: u16,
+    end_row: u16,
+    range: Range,
+    needle: []const u8,
+) !?u16 {
+    var row: u16 = start_row;
+    while (row < end_row) : (row += 1) {
+        const text = try cellsText(arena, surface, row, range.start, range.end - range.start);
+        if (std.mem.indexOf(u8, text, needle) != null) return row;
+    }
+    return null;
 }
 
 fn focusedTreeLabel(surface: vxfw.Surface, geometry: Geometry) ?[]const u8 {
@@ -2348,6 +2495,147 @@ test "merge TUI: focus styling moves between the tree and values" {
     try view.widget().handleEvent(&ctx, .{ .key_press = .{ .codepoint = vaxis.Key.left } });
     surface = try drawForTest(arena, view.widget(), 80, 10);
     try testing.expectEqualStrings("▌", surface.readCell(geometry.hierarchy.start, body.hierarchy_rows.start + 2).char.grapheme);
+}
+
+test "merge TUI: nested map values omit newline cells" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var fixture = try nestedMapPlan(arena);
+    var state = try merge_ui_state.State.init(arena, &fixture.plan);
+    var view = try viewForTest(arena, &state, "Assets/Conflict.prefab", fixture.partial);
+    defer view.deinit();
+    const surface = try drawForTest(arena, view.widget(), 140, 20);
+    const body = BodyGeometry.init(20);
+    const geometry = Geometry.init(140);
+    for (body.inspector_rows.start..body.inspector_rows.end) |row| {
+        for (geometry.inspector.start..geometry.inspector.end) |col| {
+            try testing.expect(!std.mem.eql(u8, surface.readCell(col, @intCast(row)).char.grapheme, "\n"));
+        }
+    }
+}
+
+test "merge TUI: nested map values drop shared indent so the last digit fits" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var fixture = try nestedMapPlan(arena);
+    var state = try merge_ui_state.State.init(arena, &fixture.plan);
+    var view = try viewForTest(arena, &state, "Assets/Conflict.prefab", fixture.partial);
+    defer view.deinit();
+    const surface = try drawForTest(arena, view.widget(), 80, 10);
+    const body = BodyGeometry.init(10);
+    const geometry = Geometry.init(80);
+    try testing.expectEqualStrings(
+        "value: 2",
+        try cellsText(arena, surface, body.inspector_rows.start, geometry.theirs.start + 2, 8),
+    );
+}
+
+test "merge TUI: component YAML uses following inspector rows" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var fixture = try componentDeletePlan(arena);
+    var state = try merge_ui_state.State.init(arena, &fixture.plan);
+    var view = try viewForTest(arena, &state, "Assets/Conflict.prefab", fixture.partial);
+    defer view.deinit();
+    const surface = try drawForTest(arena, view.widget(), 140, 20);
+    const body = BodyGeometry.init(20);
+    const geometry = Geometry.init(140);
+    const header_row = try findColumnTextRow(
+        arena,
+        surface,
+        body.inspector_rows.start,
+        body.inspector_rows.end,
+        geometry.theirs,
+        "Rigidbody:",
+    );
+    const mass_row = try findColumnTextRow(
+        arena,
+        surface,
+        body.inspector_rows.start,
+        body.inspector_rows.end,
+        geometry.theirs,
+        "m_Mass: 2",
+    );
+    try testing.expect(header_row != null);
+    try testing.expect(mass_row != null);
+    try testing.expect(mass_row.? > header_row.?);
+}
+
+test "merge TUI: inspector focus covers every row of a wrapped value" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var fixture = try componentDeletePlan(arena);
+    var state = try merge_ui_state.State.init(arena, &fixture.plan);
+    var view = try viewForTest(arena, &state, "Assets/Conflict.prefab", fixture.partial);
+    defer view.deinit();
+    _ = try drawForTest(arena, view.widget(), 140, 20);
+    var ctx = eventContext(arena);
+    try pressKeyForTest(&view, &ctx, vaxis.Key.right);
+    try pressKeyForTest(&view, &ctx, vaxis.Key.right);
+    const surface = try drawForTest(arena, view.widget(), 140, 20);
+    const body = BodyGeometry.init(20);
+    const geometry = Geometry.init(140);
+    const header_row = try findColumnTextRow(
+        arena,
+        surface,
+        body.inspector_rows.start,
+        body.inspector_rows.end,
+        geometry.theirs,
+        "Rigidbody:",
+    );
+    const mass_row = try findColumnTextRow(
+        arena,
+        surface,
+        body.inspector_rows.start,
+        body.inspector_rows.end,
+        geometry.theirs,
+        "m_Mass: 2",
+    );
+    try testing.expect(header_row != null);
+    try testing.expect(mass_row != null);
+    try testing.expectEqualStrings("▌", surface.readCell(geometry.theirs.start, header_row.?).char.grapheme);
+    try testing.expectEqualStrings("▌", surface.readCell(geometry.theirs.start, mass_row.?).char.grapheme);
+    try testing.expect(vaxis.Color.eql(surface.readCell(geometry.theirs.start, header_row.?).style.bg, Palette.focus_bg));
+    try testing.expect(vaxis.Color.eql(surface.readCell(geometry.theirs.start, mass_row.?).style.bg, Palette.focus_bg));
+}
+
+test "merge TUI: a click on a wrapped value row still selects that side" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var fixture = try componentDeletePlan(arena);
+    var state = try merge_ui_state.State.init(arena, &fixture.plan);
+    var view = try viewForTest(arena, &state, "Assets/Conflict.prefab", fixture.partial);
+    defer view.deinit();
+    _ = try drawForTest(arena, view.widget(), 140, 20);
+    var ctx = eventContext(arena);
+    var surface = try drawForTest(arena, view.widget(), 140, 20);
+    const body = BodyGeometry.init(20);
+    const geometry = Geometry.init(140);
+    const mass_row = try findColumnTextRow(
+        arena,
+        surface,
+        body.inspector_rows.start,
+        body.inspector_rows.end,
+        geometry.theirs,
+        "m_Mass: 2",
+    );
+    try testing.expect(mass_row != null);
+    try view.widget().handleEvent(&ctx, .{ .mouse = .{
+        .col = @intCast(geometry.theirs.start),
+        .row = @intCast(mass_row.?),
+        .button = .left,
+        .mods = .{},
+        .type = .press,
+    } });
+    surface = try drawForTest(arena, view.widget(), 140, 20);
+    try testing.expectEqual(ValueColumn.theirs, view.selected_value);
+    try testing.expectEqual(FocusArea.inspector, view.focus_area);
+    try testing.expectEqualStrings("▌", surface.readCell(geometry.theirs.start, mass_row.?).char.grapheme);
 }
 
 test "merge TUI: selected row marker follows up and down navigation" {

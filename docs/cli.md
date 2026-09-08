@@ -40,6 +40,8 @@ The schema remains stable unless a release documents a breaking change.
 | `core/src/` | Parse, diff, tree, JSON (`prefablens.diff.v2`), WASM export |
 | `cli/src/main.zig`, `command.zig` | Process setup and command dispatch |
 | `cli/src/diff.zig` | Diff input collection, GUID resolution, and output selection |
+| `cli/src/diff_driver.zig` | Git external diff driver |
+| `cli/src/diff_setup.zig` | Git diff driver configuration |
 | `cli/src/diff_options.zig` | Diff options and operand parsing |
 | `cli/src/input.zig` | Git subprocess I/O and file reads |
 | `cli/src/resolve.zig` | `.meta` GUID index scan |
@@ -207,8 +209,34 @@ The mergetool requires both standard input and standard output to be TTYs.
 Without them, it returns 2 and keeps `$MERGED` unchanged. The automatic strategy instead leaves the merge unresolved.
 PrefabLens writes completed output with atomic file replacement and retains existing permissions.
 
-`diff-driver` and `difftool` remain reserved for Issue #227.
+`difftool` remains reserved for Issue #227.
 libvaxis is a CLI dependency. The core and WASM targets do not import it.
+
+#### Git diff driver
+
+```text
+prefablens setup-diff [--project|--local|--user]
+prefablens diff-driver <path> <old-file> <old-hex> <old-mode> <new-file> <new-hex> <new-mode> [<old-path> <xfrm-msg>]
+```
+
+Setup writes `diff=prefablens` for UnityYAML extensions and registers:
+
+```ini
+[diff "prefablens"]
+    command = prefablens diff-driver
+```
+
+`git diff` then renders UnityYAML semantically. Other paths keep Git's unified diff.
+Git invokes the driver with seven operands, or nine for a rename. `/dev/null` marks an added or deleted side.
+An unmerged path arrives as the repository path alone; the driver exits 0 without output so `git diff` can show `diff --cc`.
+A driver failure also exits 0. A non-zero status would abort the rest of `git diff`.
+
+The driver prints the repository path, then the semantic tree. It does not scan a Unity project.
+Color is on unless `NO_COLOR` is nonempty, because Git pipes driver output to the pager.
+
+`git log -p` and `git show` do not run external diff drivers unless you pass `--ext-diff`.
+
+The pager still sees one combined stream. A pager that expects unified diffs, such as `delta`, may mangle the tree.
 
 ### CLI contract
 

@@ -1,6 +1,8 @@
 const std = @import("std");
 const command = @import("command.zig");
 const diff = @import("diff.zig");
+const diff_driver = @import("diff_driver.zig");
+const diff_setup = @import("diff_setup.zig");
 const merge_driver = @import("merge_driver.zig");
 const mergetool = @import("mergetool.zig");
 const merge_strategy = @import("git_merge_strategy.zig");
@@ -12,6 +14,8 @@ test {
     std.testing.refAllDecls(@This());
     _ = command;
     _ = diff;
+    _ = diff_driver;
+    _ = diff_setup;
     _ = merge_driver;
     _ = mergetool;
     _ = merge_strategy;
@@ -77,6 +81,27 @@ pub fn main(init: std.process.Init) !u8 {
             };
             break :blk @as(u8, 0);
         },
+        .setup_diff => |setup_args| blk: {
+            diff_setup.run(init.io, arena, setup_args, init.environ_map, stdout) catch |err| switch (err) {
+                error.InvalidSetupArguments => {
+                    try stderr.writeAll("usage: " ++ diff_setup.usage ++ "\n");
+                    break :blk @as(u8, 2);
+                },
+                error.SetupRequiresRepository => {
+                    try stderr.writeAll("prefablens: Diff setup requires a Git working tree.\nRun this command inside a repository, or use: prefablens setup-diff --user\n");
+                    break :blk @as(u8, 2);
+                },
+                error.InvalidUserAttributesPath => {
+                    try stderr.writeAll("prefablens: Global core.attributesFile must name an absolute path or start with ~/.\nSet it with git config --global core.attributesFile <path>, then run setup again.\n");
+                    break :blk @as(u8, 2);
+                },
+                else => {
+                    try stderr.print("prefablens: Diff setup failed: {s}.\n", .{@errorName(err)});
+                    break :blk @as(u8, 2);
+                },
+            };
+            break :blk @as(u8, 0);
+        },
         .diff => |diff_args| try diff.run(
             init.io,
             arena,
@@ -84,6 +109,14 @@ pub fn main(init: std.process.Init) !u8 {
             stdout,
             stderr,
             color,
+            init.environ_map,
+        ),
+        .diff_driver => |driver_args| try diff_driver.run(
+            init.io,
+            arena,
+            driver_args,
+            stdout,
+            stderr,
             init.environ_map,
         ),
         .merge_driver => |driver_args| try merge_driver.runWithGit(

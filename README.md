@@ -128,6 +128,31 @@ prefablens --open main                  # write the report to a temp file and op
 Operands with a UnityYAML extension (`.prefab`, `.unity`, `.asset`, and more) are paths.
 All other operands are Git references (refs).
 
+### Git diff
+
+PrefabLens can render UnityYAML semantically during `git diff`.
+Other files keep Git's unified diff.
+
+```bash
+prefablens setup-diff
+```
+
+Use `prefablens setup-diff --user` to register the driver in your global Git configuration.
+Use `prefablens setup-diff --project` to write shared `.gitattributes`.
+Without a flag, setup uses `--local` for the current repository.
+
+Then run the normal diff command:
+
+```bash
+git diff
+git diff --cached
+git diff HEAD~1 HEAD
+```
+
+`git log -p` and `git show` need `--ext-diff` to use the driver.
+
+The driver prints PrefabLens's tree, not a unified diff. If your pager is `delta`, the tree and `.cs` diffs share one stream and `delta` may mangle the tree. Use `git --no-pager diff` or `git -c core.pager='less -R' diff` to inspect the raw driver output.
+
 ### Git merge
 
 PrefabLens uses Git **2.39** or later to resolve UnityYAML conflicts during `git merge`.

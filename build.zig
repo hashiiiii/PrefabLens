@@ -85,6 +85,21 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_cli_tests.step);
     test_step.dependOn(&run_merge_driver_cwd_tests.step);
 
+    const diff_driver_tests = b.addExecutable(.{
+        .name = "git-diff-driver-tests",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("cli/src/diff_driver_test_main.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    const run_diff_driver_tests = b.addRunArtifact(diff_driver_tests);
+    run_diff_driver_tests.addArtifactArg(exe);
+    run_diff_driver_tests.addArg(b.pathFromRoot("core/src/testdata"));
+    test_step.dependOn(&run_diff_driver_tests.step);
+    const diff_driver_test_step = b.step("test-diff-driver", "Run Git external diff driver integration tests");
+    diff_driver_test_step.dependOn(&run_diff_driver_tests.step);
+
     const git_merge_tests = b.addExecutable(.{
         .name = "git-merge-tests",
         .root_module = b.createModule(.{
@@ -228,6 +243,7 @@ pub fn build(b: *std.Build) void {
         run_installation_tests,
         run_structural_tests,
         run_pty_smoke,
+        run_diff_driver_tests,
     }) |run| {
         // Independent scratch directories let these checks share the build without inherited stdio.
         run.expectExitCode(0);

@@ -123,6 +123,7 @@ pub fn showAtRef(io: std.Io, arena: std.mem.Allocator, repo_dir: []const u8, ref
                 std.mem.indexOf(u8, res.stderr, "exists on disk, but not in") != null)
                 return &[_]u8{};
             // Anything else (bad revision, not a git repository, ...) is a real failure.
+            if (builtin.is_test) std.debug.print("git show failed: {s}\n", .{res.stderr});
             return error.GitShowFailed;
         },
         else => return error.GitShowFailed,

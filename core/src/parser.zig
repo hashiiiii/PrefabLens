@@ -836,19 +836,23 @@ fn tokenize(arena: std.mem.Allocator, source_bytes: []const u8, join_folded_line
 }
 
 fn shouldContinueLine(prev: Line, indent: usize) bool {
+    // Sibling and parent lines cannot continue the previous scalar.
+    if (indent <= prev.indent) return false;
     if (std.mem.startsWith(u8, prev.text, "- ")) {
         const text = std.mem.trimStart(u8, prev.text[1..], " ");
         const kv = splitKeyValue(text);
         const value = if (kv.has_colon) kv.value else text;
         if (value.len == 0) return false;
         if (looksLikeMapEntry(text)) return indent > prev.indent + 2;
-        return indent > prev.indent;
+        return true;
     }
     const kv = splitKeyValue(prev.text);
-    return kv.has_colon and kv.value.len > 0 and indent > prev.indent;
+    return kv.has_colon and kv.value.len > 0;
 }
 
 fn withoutComment(line: []const u8) []const u8 {
+    // Most Unity YAML lines have no comment marker and need no quote-state scan.
+    if (std.mem.indexOfScalar(u8, line, '#') == null) return line;
     var quote: ?u8 = null;
     var scalar_start = true;
     var flow_depth: usize = 0;

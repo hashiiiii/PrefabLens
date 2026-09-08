@@ -121,6 +121,7 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
             .imports = &.{
                 .{ .name = "build_options", .module = build_options_mod },
+                .{ .name = "vaxis", .module = vaxis_mod },
             },
         }),
     });
@@ -149,6 +150,36 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_setup_tests.step);
     const setup_test_step = b.step("test-merge-setup", "Run merge setup scope integration tests");
     setup_test_step.dependOn(&run_setup_tests.step);
+
+    const diff_integration_tests = b.addExecutable(.{
+        .name = "diff-integration-tests",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("cli/src/diff_integration_test_main.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    const run_diff_integration_tests = b.addRunArtifact(diff_integration_tests);
+    run_diff_integration_tests.addArtifactArg(exe);
+    test_step.dependOn(&run_diff_integration_tests.step);
+    const diff_test_step = b.step("test-diff", "Run Git difftool and renderer integration tests");
+    diff_test_step.dependOn(&run_diff_integration_tests.step);
+
+    const diffnav_tests = b.addExecutable(.{
+        .name = "diffnav-tests",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("cli/src/diffnav_test_main.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{.{ .name = "vaxis", .module = vaxis_mod }},
+        }),
+    });
+    const run_diffnav_tests = b.addRunArtifact(diffnav_tests);
+    run_diffnav_tests.addArtifactArg(exe);
+    run_diffnav_tests.addArg(b.option([]const u8, "diffnav", "Path to the diffnav fork executable") orelse "diffnav");
+    run_diffnav_tests.addArg(b.pathFromRoot("core/src/testdata"));
+    const diffnav_test_step = b.step("test-diffnav", "Run optional diffnav integration tests in a real terminal");
+    diffnav_test_step.dependOn(&run_diffnav_tests.step);
 
     // Real alternate-release commands expose mixed installations without a runtime version override.
     const alternate_opts = b.addOptions();
@@ -196,6 +227,7 @@ pub fn build(b: *std.Build) void {
             .root_source_file = b.path("cli/src/git_structural_test_main.zig"),
             .target = target,
             .optimize = optimize,
+            .imports = &.{.{ .name = "vaxis", .module = vaxis_mod }},
         }),
     });
     const run_structural_tests = b.addRunArtifact(structural_tests);
@@ -212,6 +244,7 @@ pub fn build(b: *std.Build) void {
             .root_source_file = b.path("cli/src/pty_smoke_test_main.zig"),
             .target = target,
             .optimize = optimize,
+            .imports = &.{.{ .name = "vaxis", .module = vaxis_mod }},
         }),
     });
     const run_pty_smoke = b.addRunArtifact(pty_smoke);
@@ -225,6 +258,8 @@ pub fn build(b: *std.Build) void {
         run_collection_fixture_tests,
         run_strategy_tests,
         run_setup_tests,
+        run_diff_integration_tests,
+        run_diffnav_tests,
         run_installation_tests,
         run_structural_tests,
         run_pty_smoke,

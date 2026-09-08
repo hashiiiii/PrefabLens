@@ -41,6 +41,8 @@ The schema remains stable unless a release documents a breaking change.
 | `cli/src/main.zig`, `command.zig` | Process setup and command dispatch |
 | `cli/src/diff.zig` | Diff input collection, GUID resolution, and output selection |
 | `cli/src/diff_options.zig` | Diff options and operand parsing |
+| `cli/src/render_diff.zig` | Independent semantic renderer for diffnav |
+| `cli/src/diff_setup.zig` | Git difftool configuration |
 | `cli/src/input.zig` | Git subprocess I/O and file reads |
 | `cli/src/resolve.zig` | `.meta` GUID index scan |
 | `cli/src/unity_path.zig` | UnityYAML extension detection |
@@ -64,6 +66,83 @@ Test executables share helpers from `testing/` without importing one another.
   Bulk Git mode skips binary candidates after a content sniff.
 - `.meta`, `.asmdef`, and other non-UnityYAML names are never path operands.
   The CLI treats them as Git refs intentionally.
+
+### Git diff integration
+
+The integration requires Git, the [PrefabLens diffnav fork](https://github.com/hashiiiii/diffnav), `delta`, and `prefablens` on `PATH` at run time.
+Build the fork from its checkout with `go build -o ./diffnav .`.
+Its `--compare`, `--renderer`, and repeatable `--renderer-arg` options are not part of an upstream diffnav release.
+PrefabLens setup registers configuration only. It does not install or verify these executables.
+
+```text
+prefablens setup-diff [--local|--user]
+```
+
+Without a flag, setup uses `--local` for the current repository.
+It also works from a repository subdirectory and from a linked worktree.
+Use `--user` to write the global Git configuration, including outside a repository.
+`--project`, multiple scopes, and other arguments exit with status 2 before changing configuration.
+Local setup outside a working tree exits with status 2 and suggests `prefablens setup-diff --user`.
+
+Setup preserves attributes and unrelated Git settings.
+Repeated setup replaces the two integration values without creating duplicate values:
+
+```ini
+[diff]
+    tool = prefablens
+[difftool "prefablens"]
+    cmd = diffnav --compare --renderer prefablens --renderer-arg=render-diff --renderer-arg=--color --renderer-arg=-- -- "$LOCAL" "$REMOTE" "$MERGED"
+```
+
+Run directory comparisons for working tree, staged, or revision changes:
+
+```sh
+git difftool --dir-diff --no-symlinks
+git difftool --dir-diff --no-symlinks --cached
+git difftool --dir-diff --no-symlinks HEAD~1 HEAD
+```
+
+Directory mode asks Git to prepare temporary before and after directories.
+`--no-symlinks` asks Git to copy working tree files instead of linking to them.
+See the [Git difftool documentation](https://git-scm.com/docs/git-difftool) for the complete Git interface.
+
+Run one comparison for a selected asset:
+
+```sh
+git difftool --no-prompt --tool=prefablens -- Assets/Player.prefab
+```
+
+`diffnav` starts `prefablens render-diff` directly and passes literal file paths.
+Press **v** to switch between the semantic and raw views when both are available.
+Unsupported inputs use the raw diff.
+Renderer errors also use the raw diff and show the diagnostic.
+
+#### Independent renderer
+
+```text
+prefablens render-diff [--color|--no-color] [--] BEFORE AFTER DISPLAY_PATH
+```
+
+The renderer reads `BEFORE` and `AFTER` as literal paths without invoking Git.
+An empty path or `/dev/null` means that side is absent.
+An existing empty file remains a real input and is rejected as unsupported.
+`DISPLAY_PATH` must have a recognized UnityYAML extension.
+Use `--` before operands that start with a dash.
+
+The renderer validates each present input before writing standard output.
+It does not scan a Unity project, so unresolved GUID references remain unresolved without a project hint.
+It does not generate a raw diff.
+`diffnav` owns the raw fallback.
+
+| Code | Renderer result |
+| --- | --- |
+| 0 | Semantic output, including `No semantic changes` for an empty semantic diff. |
+| 2 | Invalid arguments, unreadable input, or malformed UnityYAML. |
+| 3 | Unsupported display path, non-UnityYAML input, or no present input. |
+
+Color follows terminal detection or `--color`.
+`--no-color` takes precedence, and a nonempty `NO_COLOR` disables color.
+`-h` and `--help` alone print help and exit 0 without reading files or Git configuration.
 
 ### Git merge integration
 
@@ -207,7 +286,8 @@ The mergetool requires both standard input and standard output to be TTYs.
 Without them, it returns 2 and keeps `$MERGED` unchanged. The automatic strategy instead leaves the merge unresolved.
 PrefabLens writes completed output with atomic file replacement and retains existing permissions.
 
-`diff-driver` and `difftool` remain reserved for Issue #227.
+The `diff-driver` and `difftool` subcommand names remain reserved.
+The production adapters use `render-diff` and `setup-diff`.
 libvaxis is a CLI dependency. The core and WASM targets do not import it.
 
 ### CLI contract
@@ -349,6 +429,7 @@ Then run the core and CLI checks:
 
 ```bash
 zig build lint
+zig build test-diff
 zig build test
 zig build perf
 zig build run -- before.prefab after.prefab
@@ -358,6 +439,19 @@ The performance gate builds both benchmarks before running them sequentially.
 The diff benchmark warms up once, then reports five samples and checks their median against the 600 ms ceiling.
 Each sample diffs 50,000 objects with a fresh arena to keep memory usage bounded.
 The GUID scan retains its 50,000-file workload and 1,200 ms ceiling.
+
+Run the optional diffnav integration checks on macOS or Linux with the built fork and `delta` available:
+
+```sh
+zig build test-diffnav -Ddiffnav=/path/to/diffnav/diffnav
+```
+
+Without `-Ddiffnav`, the test finds `diffnav` on `PATH`.
+It uses Zig and the system `script` utility to exercise the real Git difftool in a PTY.
+Checks cover mixed files, semantic/raw switching, resizing, fallbacks, and working-tree, staged, and revision comparisons.
+The test verifies that input files, permissions, symlinks, index bytes, and Git configuration remain unchanged.
+Temporary repositories and terminal transcripts are removed after each run.
+This target runs separately from `zig build test`.
 
 Build the native CLI and Git strategy script before running the package test:
 

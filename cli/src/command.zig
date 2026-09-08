@@ -18,10 +18,12 @@ pub const MergetoolArgs = struct {
 
 pub const Command = union(enum) {
     diff: []const []const u8,
+    render_diff: []const []const u8,
     merge_strategy: []const []const u8,
     merge_driver: MergeDriverArgs,
     mergetool: MergetoolArgs,
     setup_merge: []const []const u8,
+    setup_diff: []const []const u8,
 };
 
 pub const Error = error{
@@ -31,6 +33,8 @@ pub const Error = error{
 
 pub fn parse(args: []const []const u8) Error!Command {
     if (args.len == 0) return .{ .diff = args };
+    if (std.mem.eql(u8, args[0], "render-diff")) return .{ .render_diff = args[1..] };
+    if (std.mem.eql(u8, args[0], "setup-diff")) return .{ .setup_diff = args[1..] };
     if (std.mem.eql(u8, args[0], "setup-merge")) return .{ .setup_merge = args[1..] };
     if (std.mem.eql(u8, args[0], "merge-strategy")) return .{ .merge_strategy = args[1..] };
     if (std.mem.eql(u8, args[0], "merge-driver")) {
@@ -60,6 +64,13 @@ pub fn parse(args: []const []const u8) Error!Command {
     if (std.mem.eql(u8, args[0], "diff-driver") or
         std.mem.eql(u8, args[0], "difftool")) return error.ReservedSubcommand;
     return .{ .diff = args };
+}
+
+test "command: routes diff integration commands with literal arguments" {
+    const rendered = try parse(&.{ "render-diff", "--", "--before", "after", "Assets/A.prefab" });
+    try testing.expectEqualStrings("--before", rendered.render_diff[1]);
+    const setup = try parse(&.{ "setup-diff", "--user" });
+    try testing.expectEqualStrings("--user", setup.setup_diff[0]);
 }
 
 test "command: parses both merge adapters without changing diff arguments" {

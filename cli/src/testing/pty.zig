@@ -1,11 +1,24 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const integration = @import("git.zig");
+const gwidth = @import("vaxis").gwidth;
 
 const capture_width = 100;
 const capture_height = 24;
 
 pub fn terminalCaptureContains(capture: []const u8, needle: []const u8) bool {
+    return captureCount(capture, needle, false) != 0;
+}
+
+pub fn terminalScreenContains(capture: []const u8, needle: []const u8) bool {
+    return terminalScreenLineCount(capture, needle) != 0;
+}
+
+pub fn terminalScreenLineCount(capture: []const u8, needle: []const u8) usize {
+    return captureCount(capture, needle, true);
+}
+
+fn captureCount(capture: []const u8, needle: []const u8, current_only: bool) usize {
     var cells: [capture_height][capture_width]u8 = undefined;
     for (&cells) |*screen_row| @memset(screen_row, ' ');
     var row: usize = 0;
@@ -19,21 +32,39 @@ pub fn terminalCaptureContains(capture: []const u8, needle: []const u8) bool {
             index = consumeEscape(capture, index, &row, &col, &cells, &alternate_active);
             continue;
         }
+        if (byte >= 0xc0) {
+            const length = std.unicode.utf8ByteSequenceLength(byte) catch 1;
+            if (index + length > capture.len) break;
+            const width = gwidth.gwidth(capture[index..][0..length], .wcwidth);
+            const end = @min(col + width, capture_width);
+            @memset(cells[row][col..end], ' ');
+            col = end;
+            index += length;
+            continue;
+        }
         index += 1;
         switch (byte) {
             '\r' => col = 0,
             '\n' => row = @min(row + 1, capture_height - 1),
+            '\x08' => col -|= 1,
+            '\t' => col = @min((col / 8 + 1) * 8, capture_width - 1),
             0x20...0x7e => {
                 if (col < capture_width) {
                     cells[row][col] = byte;
                     col += 1;
                 }
-                if (alternate_active and std.mem.indexOf(u8, &cells[row], needle) != null) return true;
+                if (!current_only and alternate_active and std.mem.indexOf(u8, &cells[row], needle) != null) return 1;
             },
             else => {},
         }
     }
-    return false;
+    var count: usize = 0;
+    if (current_only and alternate_active) {
+        for (cells) |screen_row| {
+            count = @max(count, std.mem.count(u8, &screen_row, needle));
+        }
+    }
+    return count;
 }
 
 fn consumeEscape(
@@ -119,8 +150,31 @@ fn applyCsi(
         'B' => row.* = @min(row.* + first, capture_height - 1),
         'C' => col.* = @min(col.* + first, capture_width - 1),
         'D' => col.* -|= first,
-        'J' => for (cells) |*screen_row| @memset(screen_row, ' '),
-        'K' => @memset(&cells[row.*], ' '),
+        'X' => @memset(cells[row.*][@min(col.*, capture_width)..@min(col.* + first, capture_width)], ' '),
+        'P' => {
+            const start = @min(col.*, capture_width);
+            const count = @min(first, capture_width - start);
+            std.mem.copyForwards(u8, cells[row.*][start .. capture_width - count], cells[row.*][start + count ..]);
+            @memset(cells[row.*][capture_width - count ..], ' ');
+        },
+        'J' => switch (params[0]) {
+            0 => {
+                @memset(cells[row.*][@min(col.*, capture_width)..], ' ');
+                for (cells[row.* + 1 ..]) |*screen_row| @memset(screen_row, ' ');
+            },
+            1 => {
+                for (cells[0..row.*]) |*screen_row| @memset(screen_row, ' ');
+                @memset(cells[row.*][0..@min(col.* + 1, capture_width)], ' ');
+            },
+            2, 3 => for (cells) |*screen_row| @memset(screen_row, ' '),
+            else => {},
+        },
+        'K' => switch (params[0]) {
+            0 => @memset(cells[row.*][@min(col.*, capture_width)..], ' '),
+            1 => @memset(cells[row.*][0..@min(col.* + 1, capture_width)], ' '),
+            2 => @memset(&cells[row.*], ' '),
+            else => {},
+        },
         'h' => if (private_mode and params[0] == 1049) {
             for (cells) |*screen_row| @memset(screen_row, ' ');
             row.* = 0;

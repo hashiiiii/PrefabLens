@@ -5,6 +5,8 @@ const merge_driver = @import("merge_driver.zig");
 const mergetool = @import("mergetool.zig");
 const merge_strategy = @import("git_merge_strategy.zig");
 const merge_setup = @import("merge_setup.zig");
+const diff_setup = @import("diff_setup.zig");
+const render_diff = @import("render_diff.zig");
 const installation = @import("installation.zig");
 const version = @import("build_options").version;
 
@@ -15,6 +17,8 @@ test {
     _ = merge_driver;
     _ = mergetool;
     _ = merge_strategy;
+    _ = diff_setup;
+    _ = render_diff;
     _ = @import("atomic_file.zig");
     _ = @import("merge_io.zig");
     _ = @import("merge_tree.zig");
@@ -77,10 +81,30 @@ pub fn main(init: std.process.Init) !u8 {
             };
             break :blk @as(u8, 0);
         },
+        .setup_diff => |setup_args| blk: {
+            diff_setup.run(init.io, arena, setup_args, init.environ_map, stdout) catch |err| {
+                switch (err) {
+                    error.InvalidSetupArguments => try stderr.writeAll("usage: " ++ diff_setup.usage ++ "\n"),
+                    error.SetupRequiresRepository => try stderr.writeAll("prefablens: Diff setup requires a Git working tree.\nRun this command inside a repository, or use: prefablens setup-diff --user\n"),
+                    else => try stderr.print("prefablens: Diff setup failed: {s}.\n", .{@errorName(err)}),
+                }
+                break :blk @as(u8, 2);
+            };
+            break :blk @as(u8, 0);
+        },
         .diff => |diff_args| try diff.run(
             init.io,
             arena,
             diff_args,
+            stdout,
+            stderr,
+            color,
+            init.environ_map,
+        ),
+        .render_diff => |render_args| try render_diff.run(
+            init.io,
+            arena,
+            render_args,
             stdout,
             stderr,
             color,

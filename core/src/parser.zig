@@ -88,6 +88,18 @@ test "parseSpanned: reports malformed syntax without changing parse" {
     try testing.expectEqual(@as(usize, 1), docs.len);
 }
 
+test "diagnostics: uses normal folded-line normalization" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const folded = @embedFile("testdata/folded_quoted_array_after.asset");
+    try testing.expectEqual(@as(usize, 0), (try diagnostics(arena, folded)).len);
+
+    const malformed = "--- !u!114 &1\nMonoBehaviour:\n  values: [1, 2\n";
+    try testing.expect((try diagnostics(arena, malformed)).len != 0);
+}
+
 test "parseSpanned: records container and nested entry spans" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
@@ -899,6 +911,19 @@ pub fn parse(arena: std.mem.Allocator, source_bytes: []const u8) Error![]Documen
         .track_source = false,
     };
     return parseDocuments(&p);
+}
+
+/// Reports syntax diagnostics with the same folded-line normalization as `parse`.
+/// `parseSpanned` keeps physical lines for merge editing and has different semantics.
+pub fn diagnostics(arena: std.mem.Allocator, source_bytes: []const u8) Error![]source_map.Diagnostic {
+    var p = Parser{
+        .arena = arena,
+        .source_bytes = source_bytes,
+        .lines = try tokenize(arena, source_bytes, true),
+        .track_source = false,
+    };
+    _ = try parseDocuments(&p);
+    return p.diagnostics.toOwnedSlice(arena);
 }
 
 pub fn parseSpanned(arena: std.mem.Allocator, source_bytes: []const u8) Error!source_map.ParsedFile {

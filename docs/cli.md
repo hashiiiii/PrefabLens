@@ -351,6 +351,11 @@ zig build perf
 zig build run -- before.prefab after.prefab
 ```
 
+The performance gate builds both benchmarks before running them sequentially.
+The diff benchmark warms up once, then reports five samples and checks their median against the 600 ms ceiling.
+Each sample diffs 50,000 objects with a fresh arena to keep memory usage bounded.
+The GUID scan retains its 50,000-file workload and 1,200 ms ceiling.
+
 Build the native CLI and Git strategy script before running the package test:
 
 ```bash

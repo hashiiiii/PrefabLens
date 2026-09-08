@@ -54,6 +54,7 @@ a:hover {
 code {
   font-family: var(--mono);
   font-size: 0.9em;
+  overflow-wrap: anywhere;
   background: var(--code-bg);
   padding: 1px 5px;
   border-radius: 4px;
@@ -68,6 +69,7 @@ pre {
 }
 
 pre code {
+  overflow-wrap: normal;
   background: none;
   padding: 0;
 }

@@ -5,7 +5,8 @@
   "packageManager": "pnpm@12.2.1",
   "scripts": {
     "dev": "node build.mjs && eleventy --serve",
-    "build": "node build.mjs && eleventy"
+    "build": "node build.mjs && eleventy",
+    "test": "node --test build.test.mjs"
   },
   "devDependencies": {
     "@11ty/eleventy": "^3.1.6",

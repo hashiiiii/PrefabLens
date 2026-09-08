@@ -1,5 +1,51 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const testing = std.testing;
+
+const timeout_test = struct {
+    const windows = std.os.windows;
+
+    extern "kernel32" fn CreateNamedPipeW(
+        lpName: windows.LPCWSTR,
+        dwOpenMode: windows.DWORD,
+        dwPipeMode: windows.DWORD,
+        nMaxInstances: windows.DWORD,
+        nOutBufferSize: windows.DWORD,
+        nInBufferSize: windows.DWORD,
+        nDefaultTimeOut: windows.DWORD,
+        lpSecurityAttributes: ?*windows.SECURITY_ATTRIBUTES,
+    ) callconv(.winapi) windows.HANDLE;
+
+    extern "kernel32" fn ConnectNamedPipe(
+        hNamedPipe: windows.HANDLE,
+        lpOverlapped: ?*anyopaque,
+    ) callconv(.winapi) windows.BOOL;
+
+    fn createPipe(arena: std.mem.Allocator, path: []const u8) !windows.HANDLE {
+        if (builtin.os.tag != .windows) unreachable;
+        const path_w = try std.unicode.utf8ToUtf16LeAllocZ(arena, path);
+        const handle = CreateNamedPipeW(
+            path_w.ptr,
+            0x00000002, // PIPE_ACCESS_OUTBOUND: the Git client reads this pipe.
+            0x00000001, // PIPE_NOWAIT: leave the server listening while Git starts.
+            1,
+            4096,
+            4096,
+            0,
+            null,
+        );
+        if (handle == windows.INVALID_HANDLE_VALUE) return error.CreateTimeoutPipeFailed;
+        const connected = ConnectNamedPipe(handle, null);
+        if (!connected.toBool()) switch (windows.GetLastError()) {
+            .PIPE_LISTENING, .PIPE_CONNECTED => {},
+            else => {
+                windows.CloseHandle(handle);
+                return error.ConnectTimeoutPipeFailed;
+            },
+        };
+        return handle;
+    }
+};
 
 /// Shared input-size ceiling for both file reads (diff.zig) and `git show`
 /// output (here), so the two acquisition paths reject oversized input the
@@ -202,10 +248,32 @@ test "showAtRef kills git and errors when the timeout passes" {
     try git(testing.io, arena, dir, &.{ "add", "Foo.prefab" });
     try git(testing.io, arena, dir, &.{ "commit", "-q", "-m", "first" });
 
-    // Even real git can't finish in 1µs (spawn alone takes ms). Confirm that the cutoff
-    // protecting a long-lived caller from a hung git returns as a clear error.
-    const tiny: std.Io.Timeout = .{ .duration = .{ .clock = .awake, .raw = .fromMicroseconds(1) } };
-    try testing.expectError(error.GitTimeout, showAtRef(testing.io, arena, dir, "HEAD", "Foo.prefab", tiny));
+    var random: [16]u8 = undefined;
+    testing.io.random(&random);
+    const include_path = if (builtin.os.tag == .windows)
+        try std.fmt.allocPrint(arena, "\\\\.\\pipe\\prefablens-show-timeout-{x}", .{random})
+    else
+        try std.fs.path.join(arena, &.{ dir, "prefablens-show-timeout" });
+
+    // Git reads included configuration before resolving the requested object. Keep
+    // this real Git read pending so timeout coverage does not depend on process startup.
+    if (builtin.os.tag != .windows) {
+        const result = try std.process.run(arena, testing.io, .{ .argv = &.{ "mkfifo", include_path } });
+        if (result.term != .exited or result.term.exited != 0) return error.MkfifoFailed;
+    }
+    try git(testing.io, arena, dir, &.{ "config", "--local", "include.path", include_path });
+
+    if (builtin.os.tag == .windows) {
+        const pipe = try timeout_test.createPipe(arena, include_path);
+        defer timeout_test.windows.CloseHandle(pipe);
+        const timeout: std.Io.Timeout = .{ .duration = .{ .clock = .awake, .raw = .fromSeconds(1) } };
+        try testing.expectError(error.GitTimeout, showAtRef(testing.io, arena, dir, "HEAD", "Foo.prefab", timeout));
+    } else {
+        const include_file = try std.Io.Dir.openFileAbsolute(testing.io, include_path, .{ .mode = .read_write });
+        defer include_file.close(testing.io);
+        const timeout: std.Io.Timeout = .{ .duration = .{ .clock = .awake, .raw = .fromSeconds(1) } };
+        try testing.expectError(error.GitTimeout, showAtRef(testing.io, arena, dir, "HEAD", "Foo.prefab", timeout));
+    }
 }
 
 test "showAtRef does not let a dash-prefixed ref be parsed as a git option" {

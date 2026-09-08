@@ -701,7 +701,9 @@ test "run: nested --project keeps GUID resolution and source loading relative to
     const parsed = try std.json.parseFromSlice(std.json.Value, arena, out.toArrayList().items, .{});
     const resolved = parsed.value.object.get("resolved").?.object;
     try testing.expect(resolved.contains("0123456789abcdef0123456789abcdef"));
-    try testing.expectEqualStrings("Assets/Cylinder.prefab", resolved.get("0123456789abcdef0123456789abcdef").?.string);
+    // The resolver preserves the native separators returned by the filesystem walker.
+    const expected_source = try std.fs.path.join(arena, &.{ "Assets", "Cylinder.prefab" });
+    try testing.expectEqualStrings(expected_source, resolved.get("0123456789abcdef0123456789abcdef").?.string);
     try testing.expect(parsed.value.object.get("neededSources") == null);
 
     // Combining the recorded y override with source x/z values requires loading the actual source file.

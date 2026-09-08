@@ -530,6 +530,55 @@ test "instantiate: outer overrides push down through nested instances" {
     try testing.expectEqualStrings("(9, 0, 0)", inst.components[0].fields[0].after.?.scalar);
 }
 
+test "instantiate: outer name wins after pushing into a nested instance" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const base =
+        \\--- !u!1 &10
+        \\GameObject:
+        \\  m_Name: Base
+    ;
+    const variant =
+        \\--- !u!1001 &100
+        \\PrefabInstance:
+        \\  m_Modification:
+        \\    m_Modifications:
+        \\    - target: {fileID: 10, guid: baseguid, type: 3}
+        \\      propertyPath: m_Name
+        \\      value: Inner
+        \\  m_SourcePrefab: {fileID: 100100000, guid: baseguid, type: 3}
+        \\--- !u!1 &20
+        \\GameObject:
+        \\  m_Name: Sibling
+    ;
+    const outer =
+        \\--- !u!1001 &1001
+        \\PrefabInstance:
+        \\  m_Modification:
+        \\    m_Modifications:
+        \\    - target: {fileID: 110, guid: varguid, type: 3}
+        \\      propertyPath: m_Name
+        \\      value: Outer
+        \\  m_SourcePrefab: {fileID: 100100000, guid: varguid, type: 3}
+    ;
+    var assets: Assets = .empty;
+    try assets.put(arena, "varguid", variant);
+    try assets.put(arena, "baseguid", base);
+
+    // 110 XOR nested instance 100 targets base object 10, appending Outer after Inner.
+    const res = try root.diffBytesWithAssets(arena, "", outer, &assets);
+    try testing.expectEqual(@as(usize, 1), res.roots.len);
+    try testing.expectEqualStrings("Outer", res.roots[0].name);
+    var saw_nested = false;
+    for (res.roots[0].children) |child| {
+        if (child.file_id != 100) continue;
+        saw_nested = true;
+        try testing.expectEqualStrings("Outer", child.name);
+    }
+    try testing.expect(saw_nested);
+}
+
 test "instantiate: pushed-down overrides win in the degraded view" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();

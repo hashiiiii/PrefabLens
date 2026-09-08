@@ -259,12 +259,15 @@ Recognized UnityYAML extensions:
 | `--json` | Emit `prefablens.diff.v2` JSON. Bulk mode emits a `[{path, diff}]` array. On exit 0, it always emits valid JSON and never prose. |
 | `--html` | Emit a self-contained HTML report on stdout. |
 | `--open` | Implies `--html`. Writes a temp report, prints its path, and opens a browser. Conflicts with `--json`. |
-| `--project DIR` | Unity project root for GUID resolution and the Git repository directory. An unreadable DIR is an error (exit 1). |
+| `--project DIR` | Unity project root for GUID resolution and source prefabs. Git uses the repository containing DIR. An unreadable DIR is an error (exit 1). |
 | `--no-project` | Skip the default GUID resolution scan. Conflicts with `--project`. |
 | `--color` | Force ANSI colors when stdout is not a TTY (for example a pipe). |
 | `--no-color` | Disable ANSI colors. Overrides TTY detection and `--color`. |
 | `--version` | Print `prefablens X.Y.Z` on stdout and exit 0. Ignores other work. |
 | `-h`, `--help` | Print usage on stdout and exit 0. Ignores other work. |
+
+In Git mode, paths are relative to the repository root, including when `--project` selects a nested Unity project.
+For example, use `prefablens --project Game Game/Assets/Foo.prefab` from the repository root.
 
 #### Output formats
 

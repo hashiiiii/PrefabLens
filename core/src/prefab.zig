@@ -154,13 +154,16 @@ pub fn sourceGuid(doc: *const model.Document) ?[]const u8 {
 }
 
 pub fn scalarModificationValue(doc: *const model.Document, property_path: []const u8) ?[]const u8 {
+    var target_file_id: ?i64 = null;
+    var result: ?[]const u8 = null;
     var iterator = modifications(doc);
     while (iterator.next()) |modification| {
         if (!std.mem.eql(u8, modification.property_path, property_path)) continue;
         const value = modification.value orelse continue;
-        return value.asScalar();
+        if (target_file_id == null) target_file_id = modification.targetFileId();
+        if (modification.targetFileId() == target_file_id.?) result = value.asScalar();
     }
-    return null;
+    return result;
 }
 
 test "prefab: modifications skip malformed entries in source order" {
@@ -232,6 +235,29 @@ test "prefab: source and scalar lookups keep serialized values" {
 
     try testing.expectEqualStrings("source-guid", sourceGuid(&docs[0]).?);
     try testing.expectEqualStrings("Cylinder", scalarModificationValue(&docs[0], "m_Name").?);
+}
+
+test "prefab: scalar lookup keeps the first target and its last duplicate" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const docs = try @import("parser.zig").parse(arena_state.allocator(),
+        \\--- !u!1001 &1001
+        \\PrefabInstance:
+        \\  m_Modification:
+        \\    m_Modifications:
+        \\    - target: {fileID: 8, guid: source-guid, type: 3}
+        \\      propertyPath: m_Name
+        \\      value: First
+        \\    - target: {fileID: 8, guid: source-guid, type: 3}
+        \\      propertyPath: m_Name
+        \\      value: Last
+        \\    - target: {fileID: 9, guid: source-guid, type: 3}
+        \\      propertyPath: m_Name
+        \\      value: Other target
+    );
+
+    // The first target identifies the instance. Only its later duplicate may replace the name.
+    try testing.expectEqualStrings("Last", scalarModificationValue(&docs[0], "m_Name").?);
 }
 
 test "prefab: override iterator keeps source order for all kinds" {

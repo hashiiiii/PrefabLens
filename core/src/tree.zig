@@ -498,6 +498,35 @@ test "tree: prefab instance with root transform parent becomes a root" {
     try testing.expectEqualStrings("Cylinder Variant", res.roots[0].name);
 }
 
+test "tree: duplicate prefab instance names use the effective override value" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const after =
+        \\--- !u!1001 &1001
+        \\PrefabInstance:
+        \\  m_Modification:
+        \\    m_Modifications:
+        \\    - target: {fileID: 1, guid: 0123456789abcdef0123456789abcdef, type: 3}
+        \\      propertyPath: m_Name
+        \\      value: First
+        \\      objectReference: {fileID: 0}
+        \\    - target: {fileID: 1, guid: 0123456789abcdef0123456789abcdef, type: 3}
+        \\      propertyPath: m_Name
+        \\      value: Last
+        \\      objectReference: {fileID: 0}
+        \\  m_SourcePrefab: {fileID: 100100000, guid: 0123456789abcdef0123456789abcdef, type: 3}
+    ;
+
+    const res = try root.diffBytes(arena, "", after);
+    try testing.expectEqual(@as(usize, 1), res.roots.len);
+    const instance = res.roots[0];
+    try testing.expectEqualStrings("Last", instance.name);
+    try testing.expectEqual(@as(usize, 1), instance.overrides.len);
+    try testing.expectEqualStrings("Name", instance.overrides[0].label);
+    try testing.expectEqualStrings("Last", instance.overrides[0].after.?.scalar);
+}
+
 test "tree: component whose m_GameObject resolves to a non-GameObject document becomes loose, not dropped" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();

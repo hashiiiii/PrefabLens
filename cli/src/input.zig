@@ -231,6 +231,7 @@ test "showAtRef kills git and errors when the timeout passes" {
         defer include_file.close(testing.io);
         var oplock: windows.IO_STATUS_BLOCK = undefined;
         const request_level_one: windows.CTL_CODE = @bitCast(@as(u32, 0x00090000));
+        std.debug.print("timeout fixture: requesting oplock\n", .{});
         try testing.expectEqual(windows.NTSTATUS.PENDING, windows.ntdll.NtFsControlFile(
             include_file.handle,
             null,
@@ -243,15 +244,20 @@ test "showAtRef kills git and errors when the timeout passes" {
             null,
             0,
         ));
+        std.debug.print("timeout fixture: oplock granted\n", .{});
         defer {
             // Even a spawn failure must finish the asynchronous request before
             // its status block goes out of scope.
             var cancelled: windows.IO_STATUS_BLOCK = undefined;
             const status = windows.ntdll.NtCancelIoFileEx(include_file.handle, &oplock, &cancelled);
+            std.debug.print("timeout fixture: cancellation {t}\n", .{status});
             std.debug.assert(status == .SUCCESS or status == .NOT_FOUND);
             std.debug.assert(windows.ntdll.NtWaitForSingleObject(include_file.handle, .FALSE, null) == .SUCCESS);
+            std.debug.print("timeout fixture: cleanup complete\n", .{});
         }
+        std.debug.print("timeout fixture: running Git\n", .{});
         try testing.expectError(error.GitTimeout, showAtRef(testing.io, arena, dir, "HEAD", "Foo.prefab", timeout));
+        std.debug.print("timeout fixture: Git timed out\n", .{});
     } else {
         const include_file = try std.Io.Dir.openFileAbsolute(testing.io, include_path, .{ .mode = .read_write });
         defer include_file.close(testing.io);

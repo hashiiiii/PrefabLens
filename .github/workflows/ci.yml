@@ -35,6 +35,7 @@ jobs:
         run: zig build lint
       - name: Diagnose Windows timeout fixture
         if: matrix.os == 'windows-latest'
+        timeout-minutes: 2
         run: zig test cli/src/input.zig --test-filter "showAtRef kills git"
       - name: Test
         run: zig build test --summary all

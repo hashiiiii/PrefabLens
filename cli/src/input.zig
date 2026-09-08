@@ -2,51 +2,6 @@ const std = @import("std");
 const builtin = @import("builtin");
 const testing = std.testing;
 
-const timeout_test = struct {
-    const windows = std.os.windows;
-
-    extern "kernel32" fn CreateNamedPipeW(
-        lpName: windows.LPCWSTR,
-        dwOpenMode: windows.DWORD,
-        dwPipeMode: windows.DWORD,
-        nMaxInstances: windows.DWORD,
-        nOutBufferSize: windows.DWORD,
-        nInBufferSize: windows.DWORD,
-        nDefaultTimeOut: windows.DWORD,
-        lpSecurityAttributes: ?*windows.SECURITY_ATTRIBUTES,
-    ) callconv(.winapi) windows.HANDLE;
-
-    extern "kernel32" fn ConnectNamedPipe(
-        hNamedPipe: windows.HANDLE,
-        lpOverlapped: ?*anyopaque,
-    ) callconv(.winapi) windows.BOOL;
-
-    fn createPipe(arena: std.mem.Allocator, path: []const u8) !windows.HANDLE {
-        if (builtin.os.tag != .windows) unreachable;
-        const path_w = try std.unicode.utf8ToUtf16LeAllocZ(arena, path);
-        const handle = CreateNamedPipeW(
-            path_w.ptr,
-            0x00000002, // PIPE_ACCESS_OUTBOUND: the Git client reads this pipe.
-            0x00000001, // PIPE_NOWAIT: leave the server listening while Git starts.
-            1,
-            4096,
-            4096,
-            0,
-            null,
-        );
-        if (handle == windows.INVALID_HANDLE_VALUE) return error.CreateTimeoutPipeFailed;
-        const connected = ConnectNamedPipe(handle, null);
-        if (!connected.toBool()) switch (windows.GetLastError()) {
-            .PIPE_LISTENING, .PIPE_CONNECTED => {},
-            else => {
-                windows.CloseHandle(handle);
-                return error.ConnectTimeoutPipeFailed;
-            },
-        };
-        return handle;
-    }
-};
-
 /// Shared input-size ceiling for both file reads (diff.zig) and `git show`
 /// output (here), so the two acquisition paths reject oversized input the
 /// same way instead of diverging on an arbitrary limit.
@@ -61,7 +16,7 @@ pub const default_git_timeout: std.Io.Timeout = .{ .duration = .{ .clock = .awak
 /// git reports changed paths relative to this root, so anchoring reads here
 /// keeps subdirectory invocations correct.
 pub fn repoRoot(io: std.Io, arena: std.mem.Allocator, dir: []const u8, timeout: std.Io.Timeout) ![]const u8 {
-    const res = std.process.run(arena, io, .{
+    const res = runGit(arena, io, .{
         .argv = &.{ "git", "rev-parse", "--show-toplevel" },
         .cwd = .{ .path = dir },
         .stdout_limit = .limited(64 * 1024),
@@ -104,14 +59,14 @@ pub fn showAtRef(io: std.Io, arena: std.mem.Allocator, repo_dir: []const u8, ref
     var env = std.process.Environ.Map.init(arena);
     try env.put("LC_ALL", "C");
     try env.put("LANG", "C");
-    const res = std.process.run(arena, io, .{
+    const res = runGit(arena, io, .{
         .argv = &.{ "git", "show", "--end-of-options", spec },
         .cwd = .{ .path = repo_dir },
         .stdout_limit = .limited(max_input_bytes),
         .environ_map = &env,
         .timeout = timeout,
     }) catch |err| switch (err) {
-        // std.process.run kills the child on deadline overrun and returns error.Timeout.
+        // runGit kills the child on deadline overrun and returns error.Timeout.
         error.Timeout => return error.GitTimeout,
         else => return err,
     };
@@ -163,7 +118,7 @@ pub fn changedPaths(
     // have git silently reinterpret it as a pathspec instead of failing. The explicit "--"
     // forces every operand before it to be resolved strictly as a revision.
     try argv.append(arena, "--");
-    const res = std.process.run(arena, io, .{
+    const res = runGit(arena, io, .{
         .argv = argv.items,
         .cwd = .{ .path = repo_dir },
         .stdout_limit = .limited(max_input_bytes),
@@ -180,6 +135,98 @@ pub fn changedPaths(
         if (entry.len != 0) try out.append(arena, entry);
     }
     return out.items;
+}
+
+const windows_job = struct {
+    const windows = std.os.windows;
+
+    extern "kernel32" fn CreateJobObjectW(?*windows.SECURITY_ATTRIBUTES, ?windows.LPCWSTR) callconv(.winapi) ?windows.HANDLE;
+    extern "kernel32" fn AssignProcessToJobObject(windows.HANDLE, windows.HANDLE) callconv(.winapi) windows.BOOL;
+    extern "kernel32" fn TerminateJobObject(windows.HANDLE, windows.UINT) callconv(.winapi) windows.BOOL;
+};
+
+// Zig 0.16 cancels the output readers before killing the child. On Windows,
+// reader cancellation can wait for output first, so a hung Git also hangs its
+// timeout cleanup. Keep the same collection behavior but reverse that order.
+fn runGit(gpa: std.mem.Allocator, io: std.Io, options: std.process.RunOptions) std.process.RunError!std.process.RunResult {
+    if (builtin.os.tag != .windows) return std.process.run(gpa, io, options);
+    const windows = std.os.windows;
+    const job = windows_job.CreateJobObjectW(null, null) orelse return windows.unexpectedError(windows.GetLastError());
+    defer windows.CloseHandle(job);
+    var child = try std.process.spawn(io, .{
+        .argv = options.argv,
+        .cwd = options.cwd,
+        .environ_map = options.environ_map,
+        .expand_arg0 = options.expand_arg0,
+        .progress_node = options.progress_node,
+        .create_no_window = options.create_no_window,
+        .disable_aslr = options.disable_aslr,
+        // Git for Windows launches the real Git as a child. Assign the launcher
+        // to a job before it runs so timeout cleanup includes its descendants.
+        .start_suspended = true,
+
+        .stdin = .ignore,
+        .stdout = .pipe,
+        .stderr = .pipe,
+    });
+    errdefer child.kill(io);
+    if (!windows_job.AssignProcessToJobObject(job, child.id.?).toBool())
+        return windows.unexpectedError(windows.GetLastError());
+
+    // Child.kill and Child.wait normally close these handles. The readers own
+    // them here so cancellation never operates on already-closed handles.
+    const stdout = child.stdout.?;
+    const stderr = child.stderr.?;
+    child.stdout = null;
+    child.stderr = null;
+    defer stdout.close(io);
+    defer stderr.close(io);
+
+    var multi_reader_buffer: std.Io.File.MultiReader.Buffer(2) = undefined;
+    var multi_reader: std.Io.File.MultiReader = undefined;
+    multi_reader.init(gpa, io, multi_reader_buffer.toStreams(), &.{ stdout, stderr });
+    defer multi_reader.deinit();
+    // A silent child must exit before Windows waits for pending pipe reads.
+    defer if (child.id != null) {
+        const terminated = windows_job.TerminateJobObject(job, 1);
+        std.debug.assert(terminated.toBool());
+        child.kill(io);
+    };
+    const resumed = windows.ntdll.NtResumeThread(child.thread_handle, null);
+    if (resumed != .SUCCESS) return windows.unexpectedStatus(resumed);
+
+    const stdout_reader = multi_reader.reader(0);
+    const stderr_reader = multi_reader.reader(1);
+
+    while (multi_reader.fill(options.reserve_amount, options.timeout)) |_| {
+        if (options.stdout_limit.toInt()) |limit| {
+            if (stdout_reader.buffered().len > limit)
+                return error.StreamTooLong;
+        }
+        if (options.stderr_limit.toInt()) |limit| {
+            if (stderr_reader.buffered().len > limit)
+                return error.StreamTooLong;
+        }
+    } else |err| switch (err) {
+        error.EndOfStream => {},
+        else => |e| return e,
+    }
+
+    try multi_reader.checkAnyError();
+
+    const term = try child.wait(io);
+
+    const stdout_slice = try multi_reader.toOwnedSlice(0);
+    errdefer gpa.free(stdout_slice);
+
+    const stderr_slice = try multi_reader.toOwnedSlice(1);
+    errdefer gpa.free(stderr_slice);
+
+    return .{
+        .stdout = stdout_slice,
+        .stderr = stderr_slice,
+        .term = term,
+    };
 }
 
 fn git(io: std.Io, arena: std.mem.Allocator, dir: []const u8, argv: []const []const u8) !void {
@@ -248,32 +295,66 @@ test "showAtRef kills git and errors when the timeout passes" {
     try git(testing.io, arena, dir, &.{ "add", "Foo.prefab" });
     try git(testing.io, arena, dir, &.{ "commit", "-q", "-m", "first" });
 
-    var random: [16]u8 = undefined;
-    testing.io.random(&random);
-    const include_path = if (builtin.os.tag == .windows)
-        try std.fmt.allocPrint(arena, "\\\\.\\pipe\\prefablens-show-timeout-{x}", .{random})
-    else
-        try std.fs.path.join(arena, &.{ dir, "prefablens-show-timeout" });
+    const include_name = "prefablens-show-timeout";
+    const include_path = try std.fs.path.join(arena, &.{ dir, include_name });
 
     // Git reads included configuration before resolving the requested object. Keep
     // this real Git read pending so timeout coverage does not depend on process startup.
-    if (builtin.os.tag != .windows) {
+    if (builtin.os.tag == .windows) {
+        try tmp.dir.writeFile(testing.io, .{ .sub_path = include_name, .data = "" });
+    } else {
         const result = try std.process.run(arena, testing.io, .{ .argv = &.{ "mkfifo", include_path } });
         if (result.term != .exited or result.term.exited != 0) return error.MkfifoFailed;
     }
     try git(testing.io, arena, dir, &.{ "config", "--local", "include.path", include_path });
 
+    const timeout: std.Io.Timeout = .{ .duration = .{ .clock = .awake, .raw = .fromSeconds(1) } };
     if (builtin.os.tag == .windows) {
-        const pipe = try timeout_test.createPipe(arena, include_path);
-        defer timeout_test.windows.CloseHandle(pipe);
-        const timeout: std.Io.Timeout = .{ .duration = .{ .clock = .awake, .raw = .fromSeconds(1) } };
+        const windows = std.os.windows;
+        // Git's access check rejects named pipes. An exclusive oplock on a regular
+        // file lets that check succeed, but blocks Git's open until we release it.
+        // Disabling symlink following gives this fixture an asynchronous handle,
+        // which Windows requires for an oplock request.
+        const include_file = try std.Io.Dir.openFileAbsolute(testing.io, include_path, .{
+            .mode = .read_write,
+            .follow_symlinks = false,
+        });
+        defer include_file.close(testing.io);
+        var oplock: windows.IO_STATUS_BLOCK = undefined;
+        const request_level_one: windows.CTL_CODE = @bitCast(@as(u32, 0x00090000));
+        try testing.expectEqual(windows.NTSTATUS.PENDING, windows.ntdll.NtFsControlFile(
+            include_file.handle,
+            null,
+            null,
+            null,
+            &oplock,
+            request_level_one,
+            null,
+            0,
+            null,
+            0,
+        ));
+        defer {
+            // Even a spawn failure must finish the asynchronous request before
+            // its status block goes out of scope.
+            var cancelled: windows.IO_STATUS_BLOCK = undefined;
+            const status = windows.ntdll.NtCancelIoFileEx(include_file.handle, &oplock, &cancelled);
+            std.debug.assert(status == .SUCCESS or status == .NOT_FOUND);
+            std.debug.assert(windows.ntdll.NtWaitForSingleObject(include_file.handle, .FALSE, null) == .SUCCESS);
+        }
         try testing.expectError(error.GitTimeout, showAtRef(testing.io, arena, dir, "HEAD", "Foo.prefab", timeout));
     } else {
         const include_file = try std.Io.Dir.openFileAbsolute(testing.io, include_path, .{ .mode = .read_write });
         defer include_file.close(testing.io);
-        const timeout: std.Io.Timeout = .{ .duration = .{ .clock = .awake, .raw = .fromSeconds(1) } };
         try testing.expectError(error.GitTimeout, showAtRef(testing.io, arena, dir, "HEAD", "Foo.prefab", timeout));
     }
+
+    // Releasing the blocked read must leave the same repository usable.
+    if (builtin.os.tag != .windows) {
+        try tmp.dir.deleteFile(testing.io, include_name);
+        try tmp.dir.writeFile(testing.io, .{ .sub_path = include_name, .data = "" });
+    }
+    try testing.expectEqualStrings("v1\n", try showAtRef(testing.io, arena, dir, "HEAD", "Foo.prefab", default_git_timeout));
 }
 
 test "showAtRef does not let a dash-prefixed ref be parsed as a git option" {

@@ -57,6 +57,20 @@
       "automerge": false
     },
     {
+      "description": "Group pnpm updates across mise and package.json",
+      "matchManagers": [
+        "mise",
+        "npm"
+      ],
+      "matchDatasources": [
+        "npm"
+      ],
+      "matchPackageNames": [
+        "pnpm"
+      ],
+      "groupName": "pnpm"
+    },
+    {
       "description": "Flag major dependency updates",
       "matchUpdateTypes": [
         "major"

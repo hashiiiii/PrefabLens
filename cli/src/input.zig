@@ -16,7 +16,7 @@ pub const default_git_timeout: std.Io.Timeout = .{ .duration = .{ .clock = .awak
 /// git reports changed paths relative to this root, so anchoring reads here
 /// keeps subdirectory invocations correct.
 pub fn repoRoot(io: std.Io, arena: std.mem.Allocator, dir: []const u8, timeout: std.Io.Timeout) ![]const u8 {
-    const res = std.process.run(arena, io, .{
+    const res = runGit(arena, io, .{
         .argv = &.{ "git", "rev-parse", "--show-toplevel" },
         .cwd = .{ .path = dir },
         .stdout_limit = .limited(64 * 1024),
@@ -59,7 +59,7 @@ pub fn showAtRef(io: std.Io, arena: std.mem.Allocator, repo_dir: []const u8, ref
     var env = std.process.Environ.Map.init(arena);
     try env.put("LC_ALL", "C");
     try env.put("LANG", "C");
-    const res = std.process.run(arena, io, .{
+    const res = runGit(arena, io, .{
         .argv = &.{ "git", "show", "--end-of-options", spec },
         .cwd = .{ .path = repo_dir },
         .stdout_limit = .limited(max_input_bytes),
@@ -119,7 +119,7 @@ pub fn changedPaths(
     // have git silently reinterpret it as a pathspec instead of failing. The explicit "--"
     // forces every operand before it to be resolved strictly as a revision.
     try argv.append(arena, "--");
-    const res = std.process.run(arena, io, .{
+    const res = runGit(arena, io, .{
         .argv = argv.items,
         .cwd = .{ .path = repo_dir },
         .stdout_limit = .limited(max_input_bytes),
@@ -136,6 +136,66 @@ pub fn changedPaths(
         if (entry.len != 0) try out.append(arena, entry);
     }
     return out.items;
+}
+
+// Zig 0.16 cancels the output readers before killing the child. On Windows,
+// reader cancellation can wait for output first, so a hung Git also hangs its
+// timeout cleanup. Keep the same collection behavior but reverse that order.
+fn runGit(gpa: std.mem.Allocator, io: std.Io, options: std.process.RunOptions) std.process.RunError!std.process.RunResult {
+    if (builtin.os.tag != .windows) return std.process.run(gpa, io, options);
+    var child = try std.process.spawn(io, .{
+        .argv = options.argv,
+        .cwd = options.cwd,
+        .environ_map = options.environ_map,
+        .expand_arg0 = options.expand_arg0,
+        .progress_node = options.progress_node,
+        .create_no_window = options.create_no_window,
+        .disable_aslr = options.disable_aslr,
+
+        .stdin = .ignore,
+        .stdout = .pipe,
+        .stderr = .pipe,
+    });
+
+    var multi_reader_buffer: std.Io.File.MultiReader.Buffer(2) = undefined;
+    var multi_reader: std.Io.File.MultiReader = undefined;
+    multi_reader.init(gpa, io, multi_reader_buffer.toStreams(), &.{ child.stdout.?, child.stderr.? });
+    defer multi_reader.deinit();
+    // A silent child must exit before Windows waits for pending pipe reads.
+    defer child.kill(io);
+
+    const stdout_reader = multi_reader.reader(0);
+    const stderr_reader = multi_reader.reader(1);
+
+    while (multi_reader.fill(options.reserve_amount, options.timeout)) |_| {
+        if (options.stdout_limit.toInt()) |limit| {
+            if (stdout_reader.buffered().len > limit)
+                return error.StreamTooLong;
+        }
+        if (options.stderr_limit.toInt()) |limit| {
+            if (stderr_reader.buffered().len > limit)
+                return error.StreamTooLong;
+        }
+    } else |err| switch (err) {
+        error.EndOfStream => {},
+        else => |e| return e,
+    }
+
+    try multi_reader.checkAnyError();
+
+    const term = try child.wait(io);
+
+    const stdout_slice = try multi_reader.toOwnedSlice(0);
+    errdefer gpa.free(stdout_slice);
+
+    const stderr_slice = try multi_reader.toOwnedSlice(1);
+    errdefer gpa.free(stderr_slice);
+
+    return .{
+        .stdout = stdout_slice,
+        .stderr = stderr_slice,
+        .term = term,
+    };
 }
 
 fn git(io: std.Io, arena: std.mem.Allocator, dir: []const u8, argv: []const []const u8) !void {

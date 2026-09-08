@@ -41,7 +41,7 @@ const help_text = usage_line ++ "\nGit merge setup: " ++ merge_setup.usage ++ "\
     \\  --json         prefablens.diff.v2 JSON ({path, diff} array in bulk mode)
     \\  --html         self-contained HTML report on stdout
     \\  --open         write the HTML report to a temp file and open it in a browser
-    \\  --project DIR  Unity project root for guid resolution (and git repo dir);
+    \\  --project DIR  Unity project root; git uses its containing repository;
     \\                 git mode resolves against the repository root by default
     \\  --no-project   skip the default guid-resolution scan
     \\  --color        force ANSI colors when stdout is not a TTY (e.g. piping)
@@ -161,7 +161,7 @@ fn collectFileDiffs(
     f: @FieldType(Target, "files"),
     resolver: ?*core.json.Resolver,
     assets: *core.Assets,
-    repo_dir: []const u8,
+    project_root: []const u8,
     stderr: *std.Io.Writer,
 ) !Collected {
     const before = readFile(io, arena, f.before) catch {
@@ -172,7 +172,7 @@ fn collectFileDiffs(
         try stderr.print("error: cannot read file '{s}'\n", .{f.after});
         return .{ .exit = 1 };
     };
-    const res = diffOne(io, arena, before, after, resolver, assets, repo_dir) catch |err| return .{ .exit = try diffError(stderr, err) };
+    const res = diffOne(io, arena, before, after, resolver, assets, project_root) catch |err| return .{ .exit = try diffError(stderr, err) };
     var diffs: std.ArrayList(NamedDiff) = .empty;
     try diffs.append(arena, .{ .path = null, .before = before, .after = after, .res = res });
     return .{ .diffs = diffs.items };
@@ -189,6 +189,7 @@ fn collectGitDiffs(
     resolver: ?*core.json.Resolver,
     assets: *core.Assets,
     repo_dir: []const u8,
+    project_root: []const u8,
     stdout: *std.Io.Writer,
     stderr: *std.Io.Writer,
 ) !Collected {
@@ -223,7 +224,7 @@ fn collectGitDiffs(
         // are binary regardless of Force Text and would render as an
         // empty diff. An explicit path operand is never second-guessed.
         if (g.path == null and !core.isUnityYaml(before) and !core.isUnityYaml(after)) continue;
-        const res = diffOne(io, arena, before, after, resolver, assets, repo_dir) catch |err| return .{ .exit = try diffError(stderr, err) };
+        const res = diffOne(io, arena, before, after, resolver, assets, project_root) catch |err| return .{ .exit = try diffError(stderr, err) };
         // Single explicit path keeps the headerless single-file output.
         try diffs.append(arena, .{ .path = if (g.path != null) null else p, .before = before, .after = after, .res = res });
     }
@@ -333,15 +334,14 @@ pub fn run(io: std.Io, arena: std.mem.Allocator, args: []const []const u8, stdou
         return 0;
     }
 
-    // --project doubles as the guid-resolution base and the git repo dir.
-    // Without it, git mode anchors at the repository root: git reports changed
-    // paths relative to that root, so reading them against a subdirectory cwd
-    // would silently misreport every file as deleted. Failure falls back to
-    // "." so the not-a-repository error surfaces through git itself below.
-    const repo_dir = opt.project_root orelse switch (opt.target) {
-        .git => input.repoRoot(io, arena, ".", input.default_git_timeout) catch ".",
-        .files => ".",
+    // Git paths are repository-relative even when --project selects a nested Unity project.
+    // Keep source loading relative to that project and preserve Git's errors if discovery fails.
+    const start_dir = opt.project_root orelse ".";
+    const repo_dir = switch (opt.target) {
+        .git => input.repoRoot(io, arena, start_dir, input.default_git_timeout) catch start_dir,
+        .files => start_dir,
     };
+    const project_root = opt.project_root orelse repo_dir;
     var resolver_ptr: ?*core.json.Resolver = null;
     var idx: core.json.Resolver = undefined;
     if (opt.project_root) |proj| {
@@ -355,8 +355,8 @@ pub fn run(io: std.Io, arena: std.mem.Allocator, args: []const []const u8, stdou
 
     // Collect (path, before, after) triples for every diff target.
     const collected = switch (opt.target) {
-        .files => |f| try collectFileDiffs(io, arena, f, resolver_ptr, &assets, repo_dir, stderr),
-        .git => |g| try collectGitDiffs(io, arena, g, opt.format, resolver_ptr, &assets, repo_dir, stdout, stderr),
+        .files => |f| try collectFileDiffs(io, arena, f, resolver_ptr, &assets, project_root, stderr),
+        .git => |g| try collectGitDiffs(io, arena, g, opt.format, resolver_ptr, &assets, repo_dir, project_root, stdout, stderr),
     };
     const diffs = switch (collected) {
         .diffs => |d| d,

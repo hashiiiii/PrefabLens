@@ -591,3 +591,124 @@ test "run: --project points git mode at a repo outside the cwd" {
     try testing.expectEqual(@as(u8, 0), code);
     try testing.expect(std.mem.indexOf(u8, output.items, "\"after\":\"2\"") != null);
 }
+
+test "run: nested --project reads modified and deleted files from the repository root" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(testing.io, "Game/Assets");
+    const dir = try tmp.dir.realPathFileAlloc(testing.io, ".", arena);
+    const project = try tmp.dir.realPathFileAlloc(testing.io, "Game", arena);
+
+    // Git reports repository-relative paths even when the selected Unity project is nested.
+    const before = "--- !u!114 &1\nMonoBehaviour:\n  hp: 1\n";
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "Game/Assets/Foo.prefab", .data = before });
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "Game/Assets/Gone.prefab", .data = before });
+    try gitInit(arena, dir);
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "Game/Assets/Foo.prefab", .data = "--- !u!114 &1\nMonoBehaviour:\n  hp: 2\n" });
+    try tmp.dir.deleteFile(testing.io, "Game/Assets/Gone.prefab");
+
+    const cases = .{
+        .{ "Game/Assets/Foo.prefab", "modified", @as(?[]const u8, "2") },
+        .{ "Game/Assets/Gone.prefab", "removed", @as(?[]const u8, null) },
+    };
+    for ([_][]const u8{ dir, project }) |selected| {
+        var out = std.Io.Writer.Allocating.init(arena);
+        var err = std.Io.Writer.Allocating.init(arena);
+        const code = try run(testing.io, arena, &.{ "--json", "--project", selected }, &out.writer, &err.writer, false, null);
+        try testing.expectEqual(@as(u8, 0), code);
+        try testing.expectEqualStrings("", err.toArrayList().items);
+        const bulk = try std.json.parseFromSlice(std.json.Value, arena, out.toArrayList().items, .{});
+        try testing.expectEqual(@as(usize, 2), bulk.value.array.items.len);
+
+        inline for (cases, 0..) |case, i| {
+            const entry = bulk.value.array.items[i].object;
+            try testing.expectEqualStrings(case[0], entry.get("path").?.string);
+            try expectHpDiff(entry.get("diff").?, case[1], case[2]);
+
+            // Explicit paths must share the same root as paths returned by bulk discovery.
+            var single = std.Io.Writer.Allocating.init(arena);
+            var single_err = std.Io.Writer.Allocating.init(arena);
+            const single_code = try run(testing.io, arena, &.{ "--json", "--project", selected, "HEAD", case[0] }, &single.writer, &single_err.writer, false, null);
+            try testing.expectEqual(@as(u8, 0), single_code);
+            try testing.expectEqualStrings("", single_err.toArrayList().items);
+            const parsed = try std.json.parseFromSlice(std.json.Value, arena, single.toArrayList().items, .{});
+            try expectHpDiff(parsed.value, case[1], case[2]);
+        }
+    }
+}
+
+fn expectHpDiff(value: std.json.Value, status: []const u8, after: ?[]const u8) !void {
+    const components = value.object.get("loose").?.array.items;
+    try testing.expectEqual(@as(usize, 1), components.len);
+    try testing.expectEqualStrings(status, components[0].object.get("status").?.string);
+    const fields = components[0].object.get("fields").?.array.items;
+    try testing.expectEqual(@as(usize, 1), fields.len);
+    const field = fields[0].object;
+    try testing.expectEqualStrings("Hp", field.get("path").?.string);
+    try testing.expectEqualStrings(status, field.get("status").?.string);
+    try testing.expectEqualStrings("1", field.get("before").?.string);
+    if (after) |expected| {
+        try testing.expectEqualStrings(expected, field.get("after").?.string);
+    } else {
+        try testing.expect(field.get("after").? == .null);
+    }
+}
+
+test "run: nested --project keeps GUID resolution and source loading relative to the project" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(testing.io, "Game/Assets");
+    const dir = try tmp.dir.realPathFileAlloc(testing.io, ".", arena);
+    const project = try tmp.dir.realPathFileAlloc(testing.io, "Game", arena);
+
+    // Source paths in the GUID index are relative to Game, while Git paths include Game/.
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "Game/Assets/Cylinder.prefab", .data =
+        \\--- !u!1 &10
+        \\GameObject:
+        \\  m_Name: Cyl
+        \\  m_Component:
+        \\  - component: {fileID: 40}
+        \\--- !u!4 &40
+        \\Transform:
+        \\  m_GameObject: {fileID: 10}
+        \\  m_LocalScale: {x: 1, y: 1, z: 1}
+    });
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "Game/Assets/Cylinder.prefab.meta", .data = "fileFormatVersion: 2\nguid: 0123456789abcdef0123456789abcdef\n" });
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "Game/Assets/Variant.prefab", .data = "" });
+    try gitInit(arena, dir);
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "Game/Assets/Variant.prefab", .data =
+        \\--- !u!1001 &1001
+        \\PrefabInstance:
+        \\  m_Modification:
+        \\    m_Modifications:
+        \\    - target: {fileID: 40, guid: 0123456789abcdef0123456789abcdef, type: 3}
+        \\      propertyPath: m_LocalScale.y
+        \\      value: 2
+        \\  m_SourcePrefab: {fileID: 100100000, guid: 0123456789abcdef0123456789abcdef, type: 3}
+    });
+
+    var out = std.Io.Writer.Allocating.init(arena);
+    var err = std.Io.Writer.Allocating.init(arena);
+    const code = try run(testing.io, arena, &.{ "--json", "--project", project, "HEAD", "Game/Assets/Variant.prefab" }, &out.writer, &err.writer, false, null);
+    try testing.expectEqual(@as(u8, 0), code);
+    try testing.expectEqualStrings("", err.toArrayList().items);
+    const parsed = try std.json.parseFromSlice(std.json.Value, arena, out.toArrayList().items, .{});
+    const resolved = parsed.value.object.get("resolved").?.object;
+    try testing.expect(resolved.contains("0123456789abcdef0123456789abcdef"));
+    try testing.expectEqualStrings("Assets/Cylinder.prefab", resolved.get("0123456789abcdef0123456789abcdef").?.string);
+    try testing.expect(parsed.value.object.get("neededSources") == null);
+
+    // Combining the recorded y override with source x/z values requires loading the actual source file.
+    var tree = std.Io.Writer.Allocating.init(arena);
+    var tree_err = std.Io.Writer.Allocating.init(arena);
+    const tree_code = try run(testing.io, arena, &.{ "--no-color", "--project", project }, &tree.writer, &tree_err.writer, false, null);
+    try testing.expectEqual(@as(u8, 0), tree_code);
+    try testing.expectEqualStrings("", tree_err.toArrayList().items);
+    try testing.expect(std.mem.indexOf(u8, tree.toArrayList().items, "Scale: (1, 2, 1)") != null);
+}

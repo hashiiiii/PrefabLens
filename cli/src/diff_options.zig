@@ -15,7 +15,7 @@ pub const Target = union(enum) {
 pub const Options = struct {
     target: Target = .{ .git = .{ .before_ref = "HEAD", .after_ref = "", .path = null } },
     format: Format = .tree,
-    project_root: ?[]const u8 = null, // guid-resolution base and the git repo dir
+    project_root: ?[]const u8 = null, // GUID resolution base; Git uses the containing repository.
     no_project: bool = false, // skip the default guid-resolution scan
     no_color: bool = false,
     force_color: bool = false,

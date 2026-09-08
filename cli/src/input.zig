@@ -143,6 +143,34 @@ const windows_job = struct {
     extern "kernel32" fn CreateJobObjectW(?*windows.SECURITY_ATTRIBUTES, ?windows.LPCWSTR) callconv(.winapi) ?windows.HANDLE;
     extern "kernel32" fn AssignProcessToJobObject(windows.HANDLE, windows.HANDLE) callconv(.winapi) windows.BOOL;
     extern "kernel32" fn TerminateJobObject(windows.HANDLE, windows.UINT) callconv(.winapi) windows.BOOL;
+    extern "kernel32" fn QueryInformationJobObject(windows.HANDLE, c_int, *anyopaque, windows.DWORD, ?*windows.DWORD) callconv(.winapi) windows.BOOL;
+
+    const Accounting = extern struct {
+        total_user_time: i64,
+        total_kernel_time: i64,
+        period_user_time: i64,
+        period_kernel_time: i64,
+        page_faults: u32,
+        total_processes: u32,
+        active_processes: u32,
+        terminated_processes: u32,
+    };
+
+    fn terminateAndWait(job: windows.HANDLE, child: *std.process.Child, io: std.Io) void {
+        if (!TerminateJobObject(job, 1).toBool())
+            std.debug.panic("Could not terminate Git job: {t}", .{windows.GetLastError()});
+        child.kill(io);
+        // Termination is asynchronous. Waiting for the whole job also releases
+        // files held by the real Git behind the Windows launcher.
+        while (true) {
+            var accounting: Accounting = undefined;
+            if (!QueryInformationJobObject(job, 1, &accounting, @sizeOf(Accounting), null).toBool())
+                std.debug.panic("Could not query Git job: {t}", .{windows.GetLastError()});
+            if (accounting.active_processes == 0) return;
+            const interval: windows.LARGE_INTEGER = -10 * 10_000;
+            _ = windows.ntdll.NtDelayExecution(.FALSE, &interval);
+        }
+    }
 };
 
 // Zig 0.16 cancels the output readers before killing the child. On Windows,
@@ -188,9 +216,7 @@ fn runGit(gpa: std.mem.Allocator, io: std.Io, options: std.process.RunOptions) s
     defer multi_reader.deinit();
     // A silent child must exit before Windows waits for pending pipe reads.
     defer if (child.id != null) {
-        const terminated = windows_job.TerminateJobObject(job, 1);
-        std.debug.assert(terminated.toBool());
-        child.kill(io);
+        windows_job.terminateAndWait(job, &child, io);
     };
     const resumed = windows.ntdll.NtResumeThread(child.thread_handle, null);
     if (resumed != .SUCCESS) return windows.unexpectedStatus(resumed);
@@ -350,10 +376,8 @@ test "showAtRef kills git and errors when the timeout passes" {
     }
 
     // Releasing the blocked read must leave the same repository usable.
-    if (builtin.os.tag != .windows) {
-        try tmp.dir.deleteFile(testing.io, include_name);
-        try tmp.dir.writeFile(testing.io, .{ .sub_path = include_name, .data = "" });
-    }
+    try tmp.dir.deleteFile(testing.io, include_name);
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = include_name, .data = "" });
     try testing.expectEqualStrings("v1\n", try showAtRef(testing.io, arena, dir, "HEAD", "Foo.prefab", default_git_timeout));
 }
 

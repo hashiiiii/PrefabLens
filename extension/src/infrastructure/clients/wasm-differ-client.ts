@@ -47,7 +47,12 @@ export function createDifferLoader(
   let differ: Promise<DifferGateway> | undefined;
   return () => {
     // Each JS context shares one WASM instance, including concurrent first requests.
-    differ ??= fetchBytes(wasmUrl).then(createDifferGateway);
+    differ ??= fetchBytes(wasmUrl)
+      .then(createDifferGateway)
+      .catch((error) => {
+        differ = undefined;
+        throw error;
+      });
     return differ;
   };
 }

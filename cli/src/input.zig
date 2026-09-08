@@ -66,7 +66,7 @@ pub fn showAtRef(io: std.Io, arena: std.mem.Allocator, repo_dir: []const u8, ref
         .environ_map = &env,
         .timeout = timeout,
     }) catch |err| switch (err) {
-        // std.process.run kills the child on deadline overrun and returns error.Timeout.
+        // runGit kills the child on deadline overrun and returns error.Timeout.
         error.Timeout => return error.GitTimeout,
         else => return err,
     };
@@ -138,11 +138,22 @@ pub fn changedPaths(
     return out.items;
 }
 
+const windows_job = struct {
+    const windows = std.os.windows;
+
+    extern "kernel32" fn CreateJobObjectW(?*windows.SECURITY_ATTRIBUTES, ?windows.LPCWSTR) callconv(.winapi) ?windows.HANDLE;
+    extern "kernel32" fn AssignProcessToJobObject(windows.HANDLE, windows.HANDLE) callconv(.winapi) windows.BOOL;
+    extern "kernel32" fn TerminateJobObject(windows.HANDLE, windows.UINT) callconv(.winapi) windows.BOOL;
+};
+
 // Zig 0.16 cancels the output readers before killing the child. On Windows,
 // reader cancellation can wait for output first, so a hung Git also hangs its
 // timeout cleanup. Keep the same collection behavior but reverse that order.
 fn runGit(gpa: std.mem.Allocator, io: std.Io, options: std.process.RunOptions) std.process.RunError!std.process.RunResult {
     if (builtin.os.tag != .windows) return std.process.run(gpa, io, options);
+    const windows = std.os.windows;
+    const job = windows_job.CreateJobObjectW(null, null) orelse return windows.unexpectedError(windows.GetLastError());
+    defer windows.CloseHandle(job);
     var child = try std.process.spawn(io, .{
         .argv = options.argv,
         .cwd = options.cwd,
@@ -151,18 +162,38 @@ fn runGit(gpa: std.mem.Allocator, io: std.Io, options: std.process.RunOptions) s
         .progress_node = options.progress_node,
         .create_no_window = options.create_no_window,
         .disable_aslr = options.disable_aslr,
+        // Git for Windows launches the real Git as a child. Assign the launcher
+        // to a job before it runs so timeout cleanup includes its descendants.
+        .start_suspended = true,
 
         .stdin = .ignore,
         .stdout = .pipe,
         .stderr = .pipe,
     });
+    errdefer child.kill(io);
+    if (!windows_job.AssignProcessToJobObject(job, child.id.?).toBool())
+        return windows.unexpectedError(windows.GetLastError());
+
+    // Child.kill and Child.wait normally close these handles. The readers own
+    // them here so cancellation never operates on already-closed handles.
+    const stdout = child.stdout.?;
+    const stderr = child.stderr.?;
+    child.stdout = null;
+    child.stderr = null;
+    defer stdout.close(io);
+    defer stderr.close(io);
 
     var multi_reader_buffer: std.Io.File.MultiReader.Buffer(2) = undefined;
     var multi_reader: std.Io.File.MultiReader = undefined;
-    multi_reader.init(gpa, io, multi_reader_buffer.toStreams(), &.{ child.stdout.?, child.stderr.? });
+    multi_reader.init(gpa, io, multi_reader_buffer.toStreams(), &.{ stdout, stderr });
     defer multi_reader.deinit();
     // A silent child must exit before Windows waits for pending pipe reads.
-    defer child.kill(io);
+    defer if (child.id != null) {
+        std.debug.assert(windows_job.TerminateJobObject(job, 1).toBool());
+        child.kill(io);
+    };
+    const resumed = windows.ntdll.NtResumeThread(child.thread_handle, null);
+    if (resumed != .SUCCESS) return windows.unexpectedStatus(resumed);
 
     const stdout_reader = multi_reader.reader(0);
     const stderr_reader = multi_reader.reader(1);
@@ -325,8 +356,10 @@ test "showAtRef kills git and errors when the timeout passes" {
     }
 
     // Releasing the blocked read must leave the same repository usable.
-    try tmp.dir.deleteFile(testing.io, include_name);
-    try tmp.dir.writeFile(testing.io, .{ .sub_path = include_name, .data = "" });
+    if (builtin.os.tag != .windows) {
+        try tmp.dir.deleteFile(testing.io, include_name);
+        try tmp.dir.writeFile(testing.io, .{ .sub_path = include_name, .data = "" });
+    }
     try testing.expectEqualStrings("v1\n", try showAtRef(testing.io, arena, dir, "HEAD", "Foo.prefab", default_git_timeout));
 }
 

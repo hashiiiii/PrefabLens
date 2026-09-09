@@ -252,7 +252,7 @@ namespace PrefabLens
         {
             if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
                 return;
-            var res = RunProcess("chmod", "+x \"" + cliPath + "\"", ".", RunTimeoutMs);
+            var res = RunProcess("chmod", QuoteArgs(new[] { "+x", cliPath }), ".", RunTimeoutMs);
             if (res.ExitCode != 0)
                 throw new InvalidOperationException(
                     $"chmod +x failed for {cliPath}: "

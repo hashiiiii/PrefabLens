@@ -307,6 +307,29 @@ namespace PrefabLens.Tests
         }
 
         [Test]
+        public void InstallArchiveSucceedsInsideADirectoryWithSpacesAndQuotes()
+        {
+            if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+                Assert.Ignore("Windows filesystem naming rules are out of scope");
+            var root = Path.Combine(Path.GetTempPath(), "Project \"quoted\" " + Path.GetRandomFileName());
+            var finalDirectory = Path.Combine(root, Cli.Version);
+            var archive = CreateNativeCliArchive(NativeCliDirectory());
+            try
+            {
+                var installed = Cli.InstallArchive(archive, finalDirectory, Cli.Version);
+                Assert.AreEqual(Path.Combine(finalDirectory, Cli.BinaryName), installed);
+                var version = Cli.RunProcess(installed, "--version", finalDirectory, 10_000);
+                Assert.AreEqual(0, version.ExitCode);
+                StringAssert.Contains("prefablens " + Cli.Version, version.Stdout.Trim());
+            }
+            finally
+            {
+                if (Directory.Exists(root))
+                    Directory.Delete(root, recursive: true);
+            }
+        }
+
+        [Test]
         public void InstallArchiveKeepsAUsableCacheWhenTheArchiveHasAnotherVersion()
         {
             // Validation must finish in staging before the installer replaces a usable cache.

@@ -8,6 +8,8 @@ pub const Error = parser.Error || error{InvalidValue};
 pub const Replacement = struct { span: source.Span, bytes: []const u8 };
 
 pub fn parseValue(arena: std.mem.Allocator, input: []const u8) Error!*const model.Node {
+    if (std.mem.indexOfAny(u8, input, "\r\n") != null or std.mem.startsWith(u8, std.mem.trimStart(u8, input, " "), "- "))
+        return parseBlockValue(arena, input);
     if (std.mem.indexOfAny(u8, input, "\r\n\x00") != null) return error.InvalidValue;
     try validateRawText(input);
     if (!std.mem.eql(u8, input, std.mem.trim(u8, input, " \t"))) return error.InvalidValue;
@@ -19,6 +21,68 @@ pub fn parseValue(arena: std.mem.Allocator, input: []const u8) Error!*const mode
     const value = body.get("value") orelse return error.InvalidValue;
     const raw = parsed.nodeBytes(value) orelse return error.InvalidValue;
     if (!std.mem.eql(u8, raw, input)) return error.InvalidValue;
+    try validateFlowNode(arena, parsed, value);
+    return value;
+}
+
+fn parseBlockValue(arena: std.mem.Allocator, input: []const u8) Error!*const model.Node {
+    const trimmed = std.mem.trim(u8, input, " \r\n");
+    if (std.mem.startsWith(u8, trimmed, "[") or std.mem.startsWith(u8, trimmed, "{")) {
+        const compact = try arena.dupe(u8, trimmed);
+        var quote: ?u8 = null;
+        var escaped = false;
+        var scalar_start = true;
+        for (compact, 0..) |*byte, index| {
+            if (byte.* == '\r' or byte.* == '\n') {
+                // Only separators may span lines; folding scalar text could change its whitespace.
+                if (quote != null) return error.InvalidValue;
+                const before = std.mem.trimEnd(u8, compact[0..index], " ");
+                const after = std.mem.trimStart(u8, compact[index + 1 ..], " \r\n");
+                const follows_separator = before.len > 0 and std.mem.indexOfScalar(u8, "[{,:", before[before.len - 1]) != null;
+                const precedes_separator = after.len > 0 and std.mem.indexOfScalar(u8, ",:]}", after[0]) != null;
+                if (!follows_separator and !precedes_separator) return error.InvalidValue;
+                byte.* = ' ';
+            }
+            if (escaped) {
+                escaped = false;
+            } else if (quote) |delimiter| {
+                if (delimiter == '"' and byte.* == '\\') escaped = true else if (byte.* == delimiter) quote = null;
+            } else if (scalar_start and (byte.* == '\'' or byte.* == '"')) {
+                quote = byte.*;
+                scalar_start = false;
+            } else if (std.mem.indexOfScalar(u8, "[{,", byte.*) != null or
+                (byte.* == ':' and index + 1 < compact.len and std.ascii.isWhitespace(compact[index + 1])))
+            {
+                scalar_start = true;
+            } else if (!std.ascii.isWhitespace(byte.*)) scalar_start = false;
+        }
+        return parseValue(arena, compact);
+    }
+    if (std.mem.indexOfAny(u8, trimmed, "\r\n") == null and !std.mem.startsWith(u8, trimmed, "- "))
+        return parseValue(arena, trimmed);
+    var lines = std.mem.splitScalar(u8, input, '\n');
+    var indent: ?usize = null;
+    var wrapper: std.ArrayList(u8) = .empty;
+    try wrapper.appendSlice(arena, "--- !u!114 &1\nMonoBehaviour:\n  value:\n");
+    while (lines.next()) |raw| {
+        const line = std.mem.trimEnd(u8, raw, "\r");
+        try validateRawText(line);
+        const content = std.mem.trimStart(u8, line, " ");
+        if (content.len == 0) continue;
+        // The document parser skips directives; a value must not silently discard one.
+        if (content[0] == '%') return error.InvalidValue;
+        if (indent == null) indent = leadingSpaces(line);
+        if (leadingSpaces(line) < indent.?) return error.InvalidValue;
+        try wrapper.appendSlice(arena, "    ");
+        try wrapper.appendSlice(arena, line[indent.?..]);
+        try wrapper.append(arena, '\n');
+    }
+    const parsed = try parser.parseSpanned(arena, try wrapper.toOwnedSlice(arena));
+    if (parsed.diagnostics.len != 0 or parsed.documents.len != 1) return error.InvalidValue;
+    const body = parsed.documents[0].body;
+    if (body.* != .map or body.map.len != 1) return error.InvalidValue;
+    const value = body.get("value") orelse return error.InvalidValue;
+    if (value.* != .seq and value.* != .map) return error.InvalidValue;
     try validateFlowNode(arena, parsed, value);
     return value;
 }

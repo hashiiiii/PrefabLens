@@ -191,6 +191,28 @@ It does not parse the markers.
 If the user quits, startup fails, or the UI is interrupted, the working conflict representation stays in place.
 The user can edit it with another tool and complete the normal Git workflow.
 
+#### Edit Result
+
+Click **Ours** or **Theirs** to preview that value, then focus **Result**.
+Typing replaces the current value, and **Backspace** clears it, as before.
+Press **F2** to keep the current value and edit part of it.
+
+In **F2** editing, arrow keys move the cursor within the value.
+**Home** and **End** move to the start and end of the current line.
+**Ctrl+J** or **Shift+Enter** inserts a newline with the current indentation.
+Adding a newline or pasting also enables cursor movement within the value.
+**Enter** applies the value; **Escape** cancels editing and returns to the hierarchy.
+Clearing the value and leaving **Result** reopens the conflict.
+Applying an empty value still requires confirmation.
+
+Paste the YAML value from a diff, without diff markers, headers, or the enclosing property name.
+Bracketed paste keeps indentation and line breaks and waits for **Enter** before applying the value.
+Collection values accept block YAML and flow YAML split across lines.
+Keep each scalar token on one line; folded scalar input remains unsupported.
+PrefabLens keeps the existing collection shape checks and output formatting rules.
+
+#### Completion checks
+
 Before PrefabLens writes a completed semantic resolution, it verifies these conditions:
 
 1. Every atomic operation has a result.

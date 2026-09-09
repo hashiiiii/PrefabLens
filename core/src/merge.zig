@@ -476,6 +476,56 @@ test "collection public resolves local insertion orders and abort restores ours"
     try testing.expectEqualStrings(prefix ++ "[y, x, a, b, z]\n", try finish(arena, &built.plan));
 }
 
+test "collection public accepts pasted block YAML without changing surrounding source" {
+    var memory = std.heap.ArenaAllocator.init(testing.allocator);
+    defer memory.deinit();
+    const arena = memory.allocator();
+    const prefix = "--- !u!114 &1\r\nMonoBehaviour:\r\n  values:\r\n  - A\r\n";
+    const suffix = "  after: keep # comment\r\n";
+    var built = try build(arena, prefix ++ suffix, prefix ++ "  - Ours\r\n" ++ suffix, prefix ++ "  - Theirs\r\n" ++ suffix);
+
+    // A pasted block replaces only the conflicting interval and retains the file's CRLF layout.
+    try resolve(arena, &built.plan, built.plan.operations[0].id, .{ .custom = "  - One\n  - Two\n" });
+    try testing.expectEqualStrings(prefix ++ "  - One\r\n  - Two\r\n" ++ suffix, try finish(arena, &built.plan));
+}
+
+test "collection public accepts line breaks while editing a flow value" {
+    var memory = std.heap.ArenaAllocator.init(testing.allocator);
+    defer memory.deinit();
+    const arena = memory.allocator();
+    const prefix = "--- !u!114 &1\nMonoBehaviour:\n  values: ";
+    var built = try build(arena, prefix ++ "[A]\n", prefix ++ "[A, Ours]\n", prefix ++ "[A, Theirs]\n");
+    // Existing previews use flow YAML, so adding a line break must keep the same collection shape.
+    try resolve(arena, &built.plan, built.plan.operations[0].id, .{ .custom = "[\n  One,\n  {name: \"two words\", count: 2}\n]\n" });
+    try testing.expectEqualStrings(prefix ++ "[A, One, {name: two words, count: 2}]\n", try finish(arena, &built.plan));
+    // Apostrophes inside a plain scalar do not open a quoted YAML token.
+    try resolve(arena, &built.plan, built.plan.operations[0].id, .{ .custom = "[O'Reilly,\n 'Two',\n \"#Three\"]" });
+    try testing.expectEqualStrings(prefix ++ "[A, O'Reilly, Two, \"#Three\"]\n", try finish(arena, &built.plan));
+}
+
+test "collection public rejects malformed multiline values without changing the result" {
+    const prefix = "--- !u!114 &1\nMonoBehaviour:\n  values: ";
+    for ([_][]const u8{
+        "  - One\ninvalid: sibling",
+        "- One\n\t- Two",
+        "[One,\n {bad: shape]\n]",
+        "[\"first\nsecond\"]",
+        "[first\n  second]",
+        "[first\n\n  second]",
+        "- One\n--- !u!114 &2\nMonoBehaviour:\n  field: value",
+        "- One\n%ignored\n- Two",
+    }) |input| {
+        var memory = std.heap.ArenaAllocator.init(testing.allocator);
+        defer memory.deinit();
+        const arena = memory.allocator();
+        var built = try build(arena, prefix ++ "[A]\n", prefix ++ "[A, Ours]\n", prefix ++ "[A, Theirs]\n");
+        try resolve(arena, &built.plan, built.plan.operations[0].id, .{ .custom = "[Keep]" });
+        // Rejection must leave the previous valid resolution available for completion.
+        try testing.expectError(error.InvalidResolution, resolve(arena, &built.plan, built.plan.operations[0].id, .{ .custom = input }));
+        try testing.expectEqualStrings(prefix ++ "[A, Keep]\n", try finish(arena, &built.plan));
+    }
+}
+
 test "collection public item field conflict retains independent changes" {
     var memory = std.heap.ArenaAllocator.init(testing.allocator);
     defer memory.deinit();

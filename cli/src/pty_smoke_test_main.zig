@@ -73,6 +73,7 @@ pub fn main(init: std.process.Init) !u8 {
     if (args.len == 3) return 0;
     try testCompletion(io, arena, scratch, prefablens);
     try testBackspaceBeforeEditing(io, arena, scratch, prefablens);
+    try testResultEditing(io, arena, scratch, prefablens);
     try testDeletionChoices(io, arena, scratch, prefablens);
     try testCollectionChoices(io, arena, scratch, prefablens);
     try testQuit(io, arena, scratch, prefablens);
@@ -135,6 +136,33 @@ fn testCollectionChoices(
 
 fn collectionFile(arena: std.mem.Allocator, items: []const u8, left: u8, right: u8) ![]const u8 {
     return std.fmt.allocPrint(arena, "--- !u!114 &1\nMonoBehaviour:\n  m_Items: {s}\n  m_Left: {d}\n  m_Right: {d}\n", .{ items, left, right });
+}
+
+fn testResultEditing(io: std.Io, arena: std.mem.Allocator, scratch: []const u8, prefablens: []const u8) !void {
+    const scalar_prefix = "--- !u!114 &1\nMonoBehaviour:\n  m_Value: ";
+    const cases = [_]struct { name: []const u8, base: []const u8, ours: []const u8, theirs: []const u8, keys: []const u8, expected: []const u8 }{
+        // F2 retains the side preview; editing one digit must not replace the rest of the value.
+        .{ .name = "result-cursor", .base = scalar_prefix ++ "5\n", .ours = scalar_prefix ++ "12\n", .theirs = scalar_prefix ++ "8\n", .keys = "\x1b[<0;52;5M\x1b[<0;83;5M\x1bOQ\x1b[D\x7f9\r\r", .expected = scalar_prefix ++ "92\n" },
+        // CRLF inside bracketed paste must not accept a partial interval or trigger Complete.
+        .{ .name = "result-paste", .base = try collectionFile(arena, "[A]", 1, 1), .ours = try collectionFile(arena, "[A, Ours]", 2, 1), .theirs = try collectionFile(arena, "[A, Theirs]", 1, 3), .keys = "\x1b[<0;83;5M\x1b[200~  - One\r\n  - Two\r\n\x1b[201~\r\r", .expected = try collectionFile(arena, "[A, One, Two]", 2, 3) },
+        // A newline retains indentation, and Up edits the preceding line without applying it.
+        .{ .name = "result-multiline", .base = try collectionFile(arena, "[A]", 1, 1), .ours = try collectionFile(arena, "[A, Ours]", 2, 1), .theirs = try collectionFile(arena, "[A, Theirs]", 1, 3), .keys = "\x1b[<0;83;5M  - One\x0a- Two\x1b[A\x1b[F\x7fX\r\r", .expected = try collectionFile(arena, "[A, OnX, Two]", 2, 3) },
+    };
+    for (cases) |case| {
+        const repo = try prepareMergetoolRepositoryWithSides(io, arena, scratch, prefablens, case.name, .{
+            .path = "Assets/Conflict.prefab",
+            .base = case.base,
+            .ours = case.ours,
+            .theirs = case.theirs,
+        });
+        try integration.expectNonzero(try integration.gitRun(io, arena, repo, &.{ "merge", "--no-edit", "remote" }), "prepare Result editing conflict");
+        const result = try runMergetoolInPty(io, arena, repo, case.keys, 30);
+        try integration.expectCode(result, 0, case.name);
+        try integration.expectFile(io, arena, repo, "Assets/Conflict.prefab", case.expected);
+        const unmerged = try integration.gitRun(io, arena, repo, &.{ "ls-files", "-u" });
+        try integration.expectCode(unmerged, 0, "list index after Result editing");
+        try integration.require(unmerged.stdout.len == 0, "Result editing left unmerged entries");
+    }
 }
 
 fn testDeletionChoices(

@@ -736,7 +736,7 @@ pub const View = struct {
                 }
                 ctx.consumeEvent();
             },
-            else => ctx.consumeEvent(),
+            else => {},
         }
     }
 
@@ -1382,6 +1382,31 @@ fn draw(
         for (dialog.top..dialog.bottom) |row| {
             styleRange(surface, @intCast(row), .{ .start = dialog.left, .end = dialog.right }, .{ .bg = Palette.focus_bg });
         }
+        const border_style: vaxis.Style = .{ .fg = Palette.muted, .bg = Palette.focus_bg };
+        for (dialog.top..dialog.bottom) |row| {
+            const top = row == dialog.top;
+            const bottom = row == dialog.bottom - 1;
+            surface.writeCell(dialog.left, @intCast(row), .{
+                .char = .{ .grapheme = if (top) "┌" else if (bottom) "└" else "│", .width = 1 },
+                .style = border_style,
+            });
+            surface.writeCell(dialog.right - 1, @intCast(row), .{
+                .char = .{ .grapheme = if (top) "┐" else if (bottom) "┘" else "│", .width = 1 },
+                .style = border_style,
+            });
+            if (top or bottom) {
+                for (dialog.left + 1..dialog.right - 1) |col| {
+                    surface.writeCell(@intCast(col), @intCast(row), .{
+                        .char = .{ .grapheme = "─", .width = 1 },
+                        .style = border_style,
+                    });
+                }
+            }
+        }
+        styleRange(surface, dialog.prompt_row, .{ .start = dialog.left + 3, .end = dialog.right - 3 }, .{
+            .bold = true,
+            .bg = Palette.focus_bg,
+        });
         var cancel_style: vaxis.Style = .{ .fg = Palette.muted, .bg = Palette.focus_bg };
         var confirm_style: vaxis.Style = .{ .fg = Palette.muted, .bg = Palette.focus_bg };
         if (self.dialog_choice == .cancel) {
@@ -2179,7 +2204,7 @@ test "merge TUI: dialogs cover the text and colors beneath them" {
         const surface = try drawForTest(arena, view.widget(), 100, 20);
         const dialog = DialogGeometry.init(100, 20, kind);
         // Component documents fill several rows beneath the modal, including its blank margins.
-        for (dialog.top..dialog.bottom) |row| {
+        for (dialog.top + 1..dialog.bottom - 1) |row| {
             const expected = if (row == dialog.prompt_row)
                 if (kind == .quit) "Quit before completion?" else "Use an empty value?"
             else if (row == dialog.detail_row)
@@ -2188,7 +2213,7 @@ test "merge TUI: dialogs cover the text and colors beneath them" {
                 if (kind == .quit) "[Cancel]    [Quit]" else "[Cancel]    [Use Empty]"
             else
                 "";
-            try testing.expectEqualStrings(expected, std.mem.trim(u8, try cellsText(arena, surface, @intCast(row), dialog.left, dialog.right - dialog.left), " "));
+            try testing.expectEqualStrings(expected, std.mem.trim(u8, try cellsText(arena, surface, @intCast(row), dialog.left + 1, dialog.right - dialog.left - 2), " "));
             for (dialog.left..dialog.right) |col| {
                 try testing.expect(vaxis.Color.eql(Palette.focus_bg, surface.readCell(@intCast(col), @intCast(row)).style.bg));
             }
@@ -4731,6 +4756,15 @@ test "merge TUI: the empty value dialog owns keyboard focus" {
         .request_focus => |widget| try testing.expect(widget.eql(view.widget())),
         else => return error.TestUnexpectedResult,
     }
+
+    // vxfw changes focus after resetting the last input event, so focus must not consume the next key.
+    ctx.consume_event = false;
+    ctx.phase = .at_target;
+    try view.widget().handleEvent(&ctx, .focus_in);
+    ctx.phase = .capturing;
+    try view.widget().captureEvent(&ctx, .{ .key_press = .{ .codepoint = vaxis.Key.right } });
+    try testing.expect(view.dialog_choice == .confirm);
+    try testing.expect(view.dialog == .empty);
 }
 
 test "merge TUI: the empty value dialog handles captured keys" {

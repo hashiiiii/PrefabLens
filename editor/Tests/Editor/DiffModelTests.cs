@@ -142,6 +142,20 @@ namespace PrefabLens.Tests
         }
 
         [Test]
+        public void ThrowsOnTrailingContentAfterObject()
+        {
+            Assert.That(() => DiffModel.Parse("{\"roots\":[],\"loose\":[]}trailing-garbage"), Throws.Exception);
+            Assert.That(() => DiffModel.Parse("{\"roots\":[],\"loose\":[]}{}"), Throws.Exception);
+        }
+
+        [Test]
+        public void AcceptsTrailingWhitespaceAfterObject()
+        {
+            var m = DiffModel.Parse("{\"roots\":[],\"loose\":[]}  \n\t");
+            Assert.IsTrue(m.IsEmpty);
+        }
+
+        [Test]
         public void ResolveWithFillsOnlyUnresolvedGuids()
         {
             var m = DiffModel.Parse(Golden);

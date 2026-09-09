@@ -27,7 +27,8 @@
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 // Bundled into PrefabLens from: https://gist.github.com/darktable/1411710 (rev 513f1c0, MIT)
-// Changes: namespace MiniJSON -> PrefabLens.MiniJson; removed unused serialization and its example.
+// Changes: namespace MiniJSON -> PrefabLens.MiniJson; removed unused serialization and its example;
+// reject non-whitespace after the root value so CLI output must be one JSON document.
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -89,8 +90,29 @@ namespace PrefabLens.MiniJson
             {
                 using (var instance = new Parser(jsonString))
                 {
-                    return instance.ParseValue();
+                    var value = instance.ParseValue();
+                    if (!instance.IsAtEnd())
+                    {
+                        return null;
+                    }
+
+                    return value;
                 }
+            }
+
+            bool IsAtEnd()
+            {
+                while (json.Peek() != -1)
+                {
+                    if (!Char.IsWhiteSpace(PeekChar))
+                    {
+                        return false;
+                    }
+
+                    json.Read();
+                }
+
+                return true;
             }
 
             public void Dispose()

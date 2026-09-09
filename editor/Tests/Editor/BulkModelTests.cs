@@ -38,6 +38,22 @@ namespace PrefabLens.Tests
         }
 
         [Test]
+        public void ThrowsOnTrailingContentAfterArray()
+        {
+            Assert.That(
+                () => BulkModel.Parse("[{\"path\":\"Assets/Robot.prefab\",\"diff\":{}}]trailing-garbage"),
+                Throws.Exception
+            );
+            Assert.That(() => BulkModel.Parse("[]{}"), Throws.Exception);
+        }
+
+        [Test]
+        public void AcceptsTrailingWhitespaceAfterArray()
+        {
+            Assert.AreEqual(0, BulkModel.Parse("[]  \n\t").Entries.Count);
+        }
+
+        [Test]
         public void SkipsEntriesMissingPathOrDiff()
         {
             var m = BulkModel.Parse(

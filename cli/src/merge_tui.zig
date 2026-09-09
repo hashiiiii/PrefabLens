@@ -400,7 +400,7 @@ pub const View = struct {
             return true;
         }
         self.editor_drag_origin = null;
-        if (key.matches('c', .{ .ctrl = true })) {
+        if (key.matches('c', .{ .super = true }) or key.matches('c', .{ .ctrl = true })) {
             if (self.editorSelection()) |range| {
                 const text = try self.editor.buf.dupe();
                 defer self.editor.buf.allocator.free(text);
@@ -1327,15 +1327,6 @@ fn draw(
         }
     }
 
-    if (self.selectedOperation() != null) {
-        const hint = if (!self.editing)
-            "Ctrl+E Edit Result"
-        else if (self.editorSelection() != null)
-            "Ctrl+C Copy  Shift+Enter Newline  Enter Apply  Esc Cancel"
-        else
-            "Shift+Enter Newline  Enter Apply  Esc Cancel";
-        writeClipped(surface, content_start, footer.row, footer.complete.start - content_start - 1, hint);
-    }
     if (self.state.outcome == .ready) {
         writeClipped(
             surface,
@@ -1366,13 +1357,11 @@ fn draw(
 
     if (self.dialog) |kind| {
         const dialog = DialogGeometry.init(size.width, size.height, kind);
+        // Styling existing cells leaves the underlying diff visible between the modal's labels.
         for (dialog.top..dialog.bottom) |row| {
-            styleRange(
-                surface,
-                @intCast(row),
-                .{ .start = dialog.left, .end = dialog.right },
-                .{ .bg = Palette.focus_bg },
-            );
+            for (dialog.left..dialog.right) |col| {
+                surface.writeCell(@intCast(col), @intCast(row), .{ .char = .{ .grapheme = " ", .width = 1 } });
+            }
         }
         writeClipped(
             surface,
@@ -1390,6 +1379,9 @@ fn draw(
         );
         writeClipped(surface, dialog.cancel.start, dialog.buttons_row, 8, "[Cancel]");
         writeClipped(surface, dialog.confirm.start, dialog.buttons_row, @intCast(kind.confirmLabel().len), kind.confirmLabel());
+        for (dialog.top..dialog.bottom) |row| {
+            styleRange(surface, @intCast(row), .{ .start = dialog.left, .end = dialog.right }, .{ .bg = Palette.focus_bg });
+        }
         var cancel_style: vaxis.Style = .{ .fg = Palette.muted, .bg = Palette.focus_bg };
         var confirm_style: vaxis.Style = .{ .fg = Palette.muted, .bg = Palette.focus_bg };
         if (self.dialog_choice == .cancel) {
@@ -1683,7 +1675,7 @@ fn handleEvent(
             if (self.focus_area == .inspector and self.selected_value != .result and
                 self.canCombine() and key.matches('t', .{ .shift = true }))
                 return self.toggleCombine(ctx);
-            if (key.matches('e', .{ .ctrl = true }) or key.matches(vaxis.Key.f2, .{})) {
+            if (key.matches(vaxis.Key.f2, .{})) {
                 if (self.selectedOperation() == null) return;
                 self.focus_area = .inspector;
                 self.selected_value = .result;
@@ -1763,7 +1755,6 @@ test "merge TUI: collection toggle retains both orders until Enter applies the f
             try testing.expectEqualStrings("1 unresolved", try cellsText(arena, surface, BodyGeometry.init(20).header_row, width - horizontal_padding - 12, 12));
             try testing.expect(std.mem.indexOf(u8, labels, "Ours + Theirs") != null);
             try testing.expect(std.mem.indexOf(u8, labels, "Theirs + Ours") != null);
-            try testing.expectEqualStrings("Ctrl+E Edit Result", std.mem.trim(u8, try rowText(arena, surface, FooterGeometry.init(width, 20).row), " "));
             try testing.expectEqualStrings("", std.mem.trim(u8, try rowText(arena, surface, BodyGeometry.init(20).status_row), " "));
         }
         // Switching the available choices must not create or apply a Result preview.
@@ -2165,6 +2156,47 @@ test "merge TUI: Escape opens a non-writing quit dialog" {
     try testing.expect(!ctx.quit);
 }
 
+test "merge TUI: dialogs cover the text and colors beneath them" {
+    for ([_]Dialog{ .quit, .empty }) |kind| {
+        var memory = std.heap.ArenaAllocator.init(testing.allocator);
+        defer memory.deinit();
+        const arena = memory.allocator();
+        var fixture = try componentDeletePlan(arena);
+        var state = try merge_ui_state.State.init(arena, &fixture.plan);
+        try state.handle(.choose_theirs);
+        var view = try viewForTest(arena, &state, "A.prefab", fixture.partial);
+        defer view.deinit();
+        _ = try drawForTest(arena, view.widget(), 100, 20);
+        var ctx = eventContext(arena);
+        if (kind == .quit) {
+            try pressKeyForTest(&view, &ctx, vaxis.Key.escape);
+        } else {
+            try focusResultForTest(&view, &ctx);
+            try view.beginResultEdit(&ctx, "");
+            try pressKeyForTest(&view, &ctx, vaxis.Key.enter);
+        }
+        try testing.expectEqual(kind, view.dialog.?);
+        const surface = try drawForTest(arena, view.widget(), 100, 20);
+        const dialog = DialogGeometry.init(100, 20, kind);
+        // Component documents fill several rows beneath the modal, including its blank margins.
+        for (dialog.top..dialog.bottom) |row| {
+            const expected = if (row == dialog.prompt_row)
+                if (kind == .quit) "Quit before completion?" else "Use an empty value?"
+            else if (row == dialog.detail_row)
+                if (kind == .quit) "PrefabLens will not write this result." else "This field will contain an empty YAML value."
+            else if (row == dialog.buttons_row)
+                if (kind == .quit) "[Cancel]    [Quit]" else "[Cancel]    [Use Empty]"
+            else
+                "";
+            try testing.expectEqualStrings(expected, std.mem.trim(u8, try cellsText(arena, surface, @intCast(row), dialog.left, dialog.right - dialog.left), " "));
+            for (dialog.left..dialog.right) |col| {
+                try testing.expect(vaxis.Color.eql(Palette.focus_bg, surface.readCell(@intCast(col), @intCast(row)).style.bg));
+            }
+        }
+        try testing.expectEqual(@as(usize, 0), surface.children.len);
+    }
+}
+
 test "merge TUI: y confirms and n cancels the quit dialog" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
@@ -2559,25 +2591,6 @@ test "merge TUI: draws two panes and sparse value columns" {
         " ",
         surface.readCell(geometry.hierarchy.end, body.inspector_labels_row).char.grapheme,
     );
-}
-
-test "merge TUI: the footer exposes Result editing without a status message" {
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
-    var fixture = try screenPlan(arena);
-    var state = try merge_ui_state.State.init(arena, &fixture.plan);
-    var view = try viewForTest(arena, &state, "A.prefab", fixture.partial);
-    defer view.deinit();
-
-    const surface = try drawForTest(arena, view.widget(), 100, 20);
-    const body = BodyGeometry.init(20);
-    const footer = FooterGeometry.init(100, 20);
-    const help = try rowText(arena, surface, body.status_row);
-    const actions = try rowText(arena, surface, footer.row);
-
-    try testing.expectEqual(@as(usize, 0), std.mem.trim(u8, help, " ").len);
-    try testing.expectEqualStrings("Ctrl+E Edit Result", std.mem.trim(u8, actions, " "));
 }
 
 test "merge TUI: side values and primary actions use distinct colors" {
@@ -4225,7 +4238,7 @@ test "merge TUI: the final choice focuses Complete before exit" {
     try testing.expect(ctx.quit);
 }
 
-test "merge TUI: the normal screen keeps only the Result editing hint" {
+test "merge TUI: the normal screen omits action hints" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
@@ -5423,7 +5436,7 @@ test "merge TUI: clicking the collection toggle and a side previews a replacemen
     try testing.expect(std.mem.indexOf(u8, try core.merge.finish(arena, &built.plan), "[A, Theirs, Ours]") != null);
 }
 
-test "merge TUI: Ctrl+E opens the displayed Result and retains inserted text" {
+test "merge TUI: Enter opens the focused Result and retains inserted text" {
     var memory = std.heap.ArenaAllocator.init(testing.allocator);
     defer memory.deinit();
     const arena = memory.allocator();
@@ -5434,7 +5447,11 @@ test "merge TUI: Ctrl+E opens the displayed Result and retains inserted text" {
     _ = try drawForTest(arena, view.widget(), 100, 20);
     var ctx = eventContext(arena);
     try state.handle(.choose_ours);
+    try focusResultForTest(&view, &ctx);
+    // Editing starts from the focused Result; Ctrl+E no longer changes the mode.
     try view.widget().handleEvent(&ctx, .{ .key_press = .{ .codepoint = 'e', .mods = .{ .ctrl = true } } });
+    try testing.expect(!view.editing);
+    try pressKeyForTest(&view, &ctx, vaxis.Key.enter);
     try testing.expect(view.editing);
     var surface = try drawForTest(arena, view.widget(), 100, 20);
     // Starting an edit must show the current value before any key changes it.
@@ -5589,7 +5606,8 @@ test "merge TUI: a retained component can be edited after applying Theirs" {
     defer view.deinit();
     _ = try drawForTest(arena, view.widget(), 100, 20);
     var ctx = eventContext(arena);
-    try view.widget().handleEvent(&ctx, .{ .key_press = .{ .codepoint = 'e', .mods = .{ .ctrl = true } } });
+    try pressKeyForTest(&view, &ctx, vaxis.Key.up);
+    try beginEditingForTest(&view, &ctx);
     const source_text = try view.editor.buf.dupe();
     // The field value is part of the displayed component document, not a standalone scalar.
     const digit = std.mem.indexOf(u8, source_text, "m_Mass: 2").? + "m_Mass: 2".len;
@@ -5602,7 +5620,8 @@ test "merge TUI: a retained component can be edited after applying Theirs" {
     try testing.expectEqualStrings("", state.status);
     try testing.expect(!view.editing);
     // Reopening the result must use the edited document, not the original side preview.
-    try view.widget().handleEvent(&ctx, .{ .key_press = .{ .codepoint = 'e', .mods = .{ .ctrl = true } } });
+    try pressKeyForTest(&view, &ctx, vaxis.Key.up);
+    try beginEditingForTest(&view, &ctx);
     try testing.expect(std.mem.indexOf(u8, try view.editor.buf.dupe(), "m_Mass: 3") != null);
     try pressKeyForTest(&view, &ctx, vaxis.Key.enter);
     try testing.expectEqualStrings("", state.status);
@@ -5721,7 +5740,7 @@ test "merge TUI: a CRLF component stays multiline while editing and keeps CRLF o
     defer view.deinit();
     _ = try drawForTest(arena, view.widget(), 100, 20);
     var ctx = eventContext(arena);
-    try view.widget().handleEvent(&ctx, .{ .key_press = .{ .codepoint = 'e', .mods = .{ .ctrl = true } } });
+    try beginEditingForTest(&view, &ctx);
     // The editor uses logical LF lines; serialization restores the component's existing line ending.
     try testing.expect(std.mem.indexOfScalar(u8, try view.editor.buf.dupe(), '\r') == null);
     var surface = try drawForTest(arena, view.widget(), 100, 20);
@@ -5749,7 +5768,7 @@ test "merge TUI: mouse dragging works before the editor has its first rendered s
     _ = try drawForTest(arena, view.widget(), 100, 20);
     var ctx = eventContext(arena);
     try state.handle(.choose_ours);
-    try view.widget().handleEvent(&ctx, .{ .key_press = .{ .codepoint = 'e', .mods = .{ .ctrl = true } } });
+    try beginEditingForTest(&view, &ctx);
     const geometry = Geometry.init(100);
     const row = BodyGeometry.init(20).inspector_rows.start;
     // Mouse hit testing can still target the root until the frame containing the editor is drawn.
@@ -5842,28 +5861,33 @@ test "merge TUI: modifier key reports preserve selection for terminal paste" {
 }
 
 test "merge TUI: copying a selection preserves its text and selection" {
-    var memory = std.heap.ArenaAllocator.init(testing.allocator);
-    defer memory.deinit();
-    const arena = memory.allocator();
-    var fixture = try screenPlan(arena);
-    var state = try merge_ui_state.State.init(arena, &fixture.plan);
-    var view = try viewForTest(arena, &state, "A.prefab", fixture.partial);
-    defer view.deinit();
-    _ = try drawForTest(arena, view.widget(), 100, 20);
-    var ctx = eventContext(arena);
-    try focusResultForTest(&view, &ctx);
-    const original = "  あい\n  0.4";
-    try view.beginResultEdit(&ctx, original);
-    try dragEditorForTest(arena, &view, &ctx, 2, 0, 5, 1);
-    const surface = try drawForTest(arena, view.widget(), 100, 20);
-    ctx.cmds.clearRetainingCapacity();
-    try routeFocusedEventForTest(arena, surface, view.editor.widget(), &ctx, .{ .key_press = .{ .codepoint = 'c', .mods = .{ .ctrl = true } } });
-    // The clipboard receives source text, including newlines, without the editor's padding or wrapping.
-    try testing.expectEqual(@as(usize, 1), ctx.cmds.items.len);
-    try testing.expectEqualStrings("あい\n  0.4", ctx.cmds.items[0].copy_to_clipboard);
-    try testing.expectEqualStrings(original, try view.editor.buf.dupe());
-    try testing.expect(view.editorSelection() != null);
-    try testing.expect(!view.editor_changed);
-    try routeFocusedEventForTest(arena, surface, view.editor.widget(), &ctx, .{ .paste = try arena.dupe(u8, "7") });
-    try testing.expectEqualStrings("  7", try view.editor.buf.dupe());
+    for ([_][]const u8{ "\x1b[99;9u", "\x03" }) |input| {
+        var memory = std.heap.ArenaAllocator.init(testing.allocator);
+        defer memory.deinit();
+        const arena = memory.allocator();
+        var fixture = try screenPlan(arena);
+        var state = try merge_ui_state.State.init(arena, &fixture.plan);
+        var view = try viewForTest(arena, &state, "A.prefab", fixture.partial);
+        defer view.deinit();
+        _ = try drawForTest(arena, view.widget(), 100, 20);
+        var ctx = eventContext(arena);
+        try focusResultForTest(&view, &ctx);
+        const original = "  あい\n  0.4";
+        try view.beginResultEdit(&ctx, original);
+        try dragEditorForTest(arena, &view, &ctx, 2, 0, 5, 1);
+        const surface = try drawForTest(arena, view.widget(), 100, 20);
+        ctx.cmds.clearRetainingCapacity();
+        // macOS sends Command as Super in Kitty reports; Control also works in legacy terminals.
+        var parser: vaxis.Parser = .{};
+        const key = (try parser.parse(input, arena)).event.?.key_press;
+        try routeFocusedEventForTest(arena, surface, view.editor.widget(), &ctx, .{ .key_press = key });
+        // The clipboard receives source text, including newlines, without the editor's padding or wrapping.
+        try testing.expectEqual(@as(usize, 1), ctx.cmds.items.len);
+        try testing.expectEqualStrings("あい\n  0.4", ctx.cmds.items[0].copy_to_clipboard);
+        try testing.expectEqualStrings(original, try view.editor.buf.dupe());
+        try testing.expect(view.editorSelection() != null);
+        try testing.expect(!view.editor_changed);
+        try routeFocusedEventForTest(arena, surface, view.editor.widget(), &ctx, .{ .paste = try arena.dupe(u8, "7") });
+        try testing.expectEqualStrings("  7", try view.editor.buf.dupe());
+    }
 }

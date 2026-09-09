@@ -183,40 +183,16 @@ fn valueStyle(column: ValueColumn) vaxis.Style {
     };
 }
 
-fn editsOrMovesTextFieldValue(key: vaxis.Key) bool {
-    return key.matches(vaxis.Key.left, .{}) or
-        key.matches(vaxis.Key.right, .{}) or
-        key.matches(vaxis.Key.home, .{}) or
-        key.matches(vaxis.Key.end, .{}) or
-        key.matches(vaxis.Key.delete, .{}) or
-        key.matches('a', .{ .ctrl = true }) or
-        key.matches('b', .{ .ctrl = true }) or
-        key.matches('d', .{ .ctrl = true }) or
-        key.matches('e', .{ .ctrl = true }) or
-        key.matches('f', .{ .ctrl = true }) or
-        key.matches('k', .{ .ctrl = true }) or
-        key.matches('u', .{ .ctrl = true }) or
-        key.matches('w', .{ .ctrl = true }) or
-        key.matches('b', .{ .alt = true }) or
-        key.matches('d', .{ .alt = true }) or
-        key.matches('f', .{ .alt = true }) or
-        key.matches(vaxis.Key.left, .{ .alt = true }) or
-        key.matches(vaxis.Key.right, .{ .alt = true }) or
-        key.matches(vaxis.Key.backspace, .{ .alt = true });
-}
-
 pub const View = struct {
     state: *merge_ui_state.State,
     path: []const u8,
     tree: merge_tree.Model,
     editor: vxfw.TextField,
     editing: bool = false,
-    editor_cursor_mode: bool = false,
     editor_top: usize = 0,
     pasting: bool = false,
     paste_into_result: bool = false,
     paste_buffer: std.ArrayList(u8) = .empty,
-    replace_on_input: bool = false,
     editor_start_resolution: ?core.merge.Resolution = null,
     editor_changed: bool = false,
     editor_reopened: bool = false,
@@ -365,7 +341,6 @@ pub const View = struct {
         self: *View,
         ctx: *vxfw.EventContext,
         initial: []const u8,
-        replace_on_input: bool,
     ) !void {
         self.editor.clearRetainingCapacity();
         try self.editor.insertSliceAtCursor(initial);
@@ -373,9 +348,7 @@ pub const View = struct {
         self.editor.buf.allocator.free(self.editor.previous_val);
         self.editor.previous_val = previous_val;
         self.editing = true;
-        self.editor_cursor_mode = false;
         self.editor_top = 0;
-        self.replace_on_input = replace_on_input;
         self.editor_start_resolution = self.state.pending;
         self.editor_changed = false;
         self.editor_reopened = false;
@@ -388,40 +361,13 @@ pub const View = struct {
         ctx: *vxfw.EventContext,
         key: vaxis.Key,
     ) !void {
-        try self.beginResultEdit(ctx, "", false);
+        try self.beginResultEdit(ctx, self.selectedResultInput());
         if (!self.editing) return;
         try self.editor.handleEvent(ctx, .{ .key_press = key });
     }
 
-    fn prepareEditorInput(
-        self: *View,
-        ctx: *vxfw.EventContext,
-        key: vaxis.Key,
-    ) !bool {
-        if (!self.editing or !self.replace_on_input) return false;
-        if (key.matches(vaxis.Key.backspace, .{})) {
-            try self.clearInitialResult(ctx);
-            return true;
-        }
-        if (editsOrMovesTextFieldValue(key)) {
-            self.replace_on_input = false;
-        } else if (key.text != null and key.text.?.len != 0) {
-            self.editor.clearRetainingCapacity();
-            self.replace_on_input = false;
-        }
-        return false;
-    }
-
     fn handleEditorKey(self: *View, ctx: *vxfw.EventContext, key: vaxis.Key) !bool {
-        if (key.matches(vaxis.Key.f2, .{})) {
-            self.replace_on_input = false;
-            self.editor_cursor_mode = true;
-            ctx.consumeAndRedraw();
-            return true;
-        }
         if (key.matches('j', .{ .ctrl = true }) or key.matches(vaxis.Key.enter, .{ .shift = true })) {
-            self.replace_on_input = false;
-            self.editor_cursor_mode = true;
             const before = self.editor.buf.firstHalf();
             const start = if (std.mem.lastIndexOfScalar(u8, before, '\n')) |at| at + 1 else 0;
             const newline = try std.mem.concat(self.editor.buf.allocator, u8, &.{ "\n", before[start .. start + lineIndent(before[start..])] });
@@ -429,25 +375,22 @@ pub const View = struct {
             try self.editor.handleEvent(ctx, .{ .key_press = .{ .codepoint = 0, .text = newline } });
             return true;
         }
-        if (self.editor_cursor_mode and try result_text.moveLine(&self.editor, key)) {
+        if (try result_text.moveLine(&self.editor, key)) {
             ctx.consumeAndRedraw();
             return true;
         }
-        return self.prepareEditorInput(ctx, key);
+        return false;
     }
 
     fn insertPaste(self: *View, ctx: *vxfw.EventContext, text: []const u8) !void {
         if (text.len == 0) return;
-        if (!self.editing) try self.beginResultEdit(ctx, "", false);
+        if (!self.editing) try self.beginResultEdit(ctx, self.selectedResultInput());
         // A paste is one edit; newline key events must never submit a partial value.
         const normalized = try std.mem.replaceOwned(u8, self.editor.buf.allocator, text, "\r\n", "\n");
         defer self.editor.buf.allocator.free(normalized);
         for (normalized) |*byte| if (byte.* == '\r') {
             byte.* = '\n';
         };
-        if (self.replace_on_input) self.editor.clearRetainingCapacity();
-        self.replace_on_input = false;
-        self.editor_cursor_mode = true;
         try self.editor.handleEvent(ctx, .{ .key_press = .{ .codepoint = 0, .text = normalized } });
     }
 
@@ -491,15 +434,6 @@ pub const View = struct {
         }
         ctx.consumeAndRedraw();
         return true;
-    }
-
-    fn clearInitialResult(self: *View, ctx: *vxfw.EventContext) !void {
-        self.editor.clearRetainingCapacity();
-        self.replace_on_input = false;
-        self.editor_changed = true;
-        try self.state.handle(.reopen_result);
-        self.editor_reopened = true;
-        ctx.consumeAndRedraw();
     }
 
     fn applyPendingResult(
@@ -556,7 +490,15 @@ pub const View = struct {
         const body = BodyGeometry.init(size.height);
         if (self.canCombine() and row == body.inspector_heading_row and inRange(col, self.combineToggleRange(size.width)))
             return ctx.consumeEvent();
-        if (row >= body.inspector_rows.start and row < body.inspector_rows.end and inRange(col, geometry.result)) return;
+        if (row >= body.inspector_rows.start and row < body.inspector_rows.end and inRange(col, geometry.result)) {
+            try result_text.placeCursor(
+                &self.editor,
+                geometry.result.end - geometry.result.start -| 2,
+                self.editor_top + row - body.inspector_rows.start,
+                col -| (geometry.result.start + 2),
+            );
+            return ctx.consumeAndRedraw();
+        }
         if (!try self.finishEditorForNavigation(ctx)) return;
         try self.handleMouse(ctx, mouse, size);
     }
@@ -564,9 +506,7 @@ pub const View = struct {
     fn resetEditor(self: *View) void {
         self.editor.clearRetainingCapacity();
         self.editing = false;
-        self.editor_cursor_mode = false;
         self.editor_top = 0;
-        self.replace_on_input = false;
         self.editor_start_resolution = null;
         self.editor_changed = false;
         self.editor_reopened = false;
@@ -616,19 +556,6 @@ pub const View = struct {
         }
         try submitCustom(self, ctx, input);
         return !self.editing;
-    }
-
-    fn applyEditorAndMove(
-        self: *View,
-        ctx: *vxfw.EventContext,
-        key: vaxis.Key,
-        size: vxfw.Size,
-    ) !void {
-        if (!try self.finishEditorForNavigation(ctx)) return;
-        if (key.matches(vaxis.Key.left, .{})) return self.moveLeft(ctx);
-        if (key.matches(vaxis.Key.right, .{})) return self.moveRight(ctx);
-        if (key.matches(vaxis.Key.up, .{})) return self.moveUp(ctx, size);
-        if (key.matches(vaxis.Key.down, .{})) return self.moveDown(ctx, size);
     }
 
     fn focusComplete(self: *View, ctx: *vxfw.EventContext) void {
@@ -753,13 +680,21 @@ pub const View = struct {
         const resolution = self.state.pending orelse operation.resolution;
         return switch (resolution) {
             .unresolved => "",
-            .take => |side| switch (side) {
-                .base => rawSideText(operation.values.base),
-                .ours => rawSideText(operation.values.ours),
-                .theirs => rawSideText(operation.values.theirs),
-            },
-            .remove => "<removed>",
+            .take => |side| if (operation.values.get(side)) |value|
+                documentPreview(self.state.plan, operation, side) orelse value.bytes
+            else
+                "",
+            .remove => "",
             .custom => |value| value,
+        };
+    }
+
+    fn resultIsRemoval(self: *const View) bool {
+        const operation = self.selectedOperation() orelse return false;
+        return switch (self.state.pending orelse operation.resolution) {
+            .remove => true,
+            .take => |side| operation.values.get(side) == null,
+            else => false,
         };
     }
 
@@ -860,20 +795,6 @@ pub const View = struct {
         }
     }
 
-    fn activateResult(self: *View, ctx: *vxfw.EventContext, size: vxfw.Size) !void {
-        const operation = self.selectedOperation() orelse return;
-        const confirmed_empty = switch (operation.resolution) {
-            .custom => |value| value.len == 0,
-            else => false,
-        };
-        const input = self.selectedResultInput();
-        if (input.len == 0 and !confirmed_empty) {
-            try self.beginResultEdit(ctx, input, true);
-            return self.openDialog(ctx, .empty);
-        }
-        try self.applyPendingResult(ctx, size);
-    }
-
     fn activate(self: *View, ctx: *vxfw.EventContext, size: vxfw.Size) !void {
         switch (self.focus_area) {
             .hierarchy => try self.focusInspector(ctx),
@@ -886,7 +807,7 @@ pub const View = struct {
                     try self.state.handle(self.choiceAction(.theirs));
                     try self.applyPendingResult(ctx, size);
                 },
-                .result => try self.activateResult(ctx, size),
+                .result => try self.beginResultEdit(ctx, self.selectedResultInput()),
             },
             .complete => {
                 if (self.state.outcome == .ready) ctx.quit = true;
@@ -976,8 +897,7 @@ pub const View = struct {
             self.selected_value = .result;
             self.horizontal_offset = 0;
             try self.state.handle(.pane_right);
-            ctx.consumeAndRedraw();
-            return;
+            return self.beginResultEdit(ctx, self.selectedResultInput());
         }
         if (inRange(col, geometry.inspector)) return self.focusInspector(ctx);
     }
@@ -1313,8 +1233,8 @@ fn draw(
         }
     }
 
-    if (self.focus_area == .inspector and self.selected_value == .result) {
-        writeClipped(surface, content_start, footer.row, footer.complete.start - content_start - 1, if (self.editing) "F2 Edit  Ctrl+J Newline  Enter Apply  Esc Cancel" else "F2 Edit value  Enter Apply");
+    if (self.selectedOperation() != null) {
+        writeClipped(surface, content_start, footer.row, footer.complete.start - content_start - 1, if (self.editing) "Shift+Enter Newline  Enter Apply  Esc Cancel" else "Ctrl+E Edit Result");
     }
     if (self.state.outcome == .ready) {
         writeClipped(
@@ -1395,6 +1315,10 @@ fn draw(
                 editor_size,
                 vxfw.MaxSize.fromSize(editor_size),
             ));
+            if (!self.editor_changed and self.resultIsRemoval()) {
+                writeClipped(child_surface, 0, 0, editor_size.width, "<removed>");
+                styleRange(child_surface, 0, .{ .start = 0, .end = editor_size.width }, self.editor.style);
+            }
             const children = try ctx.arena.alloc(vxfw.SubSurface, 1);
             children[0] = .{
                 .origin = .{
@@ -1416,10 +1340,11 @@ fn submitCustom(
 ) !void {
     const self: *View = @ptrCast(@alignCast(userdata.?));
     const input = std.mem.trim(u8, value, "\r\n");
-    const started_empty = if (self.editor_start_resolution) |resolution| switch (resolution) {
+    const started_empty = if (self.editor_start_resolution orelse if (self.selectedOperation()) |op| op.resolution else null) |resolution| switch (resolution) {
         .custom => |start_value| start_value.len == 0,
         else => false,
     } else false;
+    if (!self.editor_changed and self.resultIsRemoval()) return self.applyPendingResult(ctx, self.eventSize());
     if (input.len == 0 and !started_empty) return self.openDialog(ctx, .empty);
     if (self.editor_changed or input.len == 0) {
         try self.state.handle(.{ .edit_result = input });
@@ -1500,12 +1425,13 @@ fn paintColumnValue(
         const visible = if (isPlaceholderValue(text)) line else skipLineIndent(line, indent);
         var rest = visible;
         while (row < end_row) {
-            styleRange(surface, row, range, style);
             if (rest.len == 0) {
+                styleRange(surface, row, range, style);
                 row += 1;
                 break;
             }
             const consumed = writeClippedCount(surface, inner_start, row, inner_width, rest);
+            styleRange(surface, row, range, style);
             if (consumed == 0) break;
             rest = rest[consumed..];
             row += 1;
@@ -1586,15 +1512,8 @@ fn captureEvent(
         else => {},
     };
     switch (event) {
-        .key_press => |key| if (self.editing and !self.editor_cursor_mode and
-            (key.matches(vaxis.Key.left, .{}) or
-                key.matches(vaxis.Key.right, .{}) or
-                key.matches(vaxis.Key.up, .{}) or
-                key.matches(vaxis.Key.down, .{})))
-        {
-            try self.applyEditorAndMove(ctx, key, self.eventSize());
-        } else {
-            if (self.editing and try self.handleEditorKey(ctx, key)) return;
+        .key_press => |key| if (self.editing) {
+            _ = try self.handleEditorKey(ctx, key);
         },
         .mouse => |mouse| if (self.editing) {
             try self.handleMouseWhileEditing(ctx, mouse, self.eventSize());
@@ -1660,21 +1579,22 @@ fn handleEvent(
             if (self.focus_area == .inspector and self.selected_value != .result and
                 self.canCombine() and key.matches('t', .{ .shift = true }))
                 return self.toggleCombine(ctx);
-            if (self.focus_area == .inspector and self.selected_value == .result and key.matches(vaxis.Key.f2, .{})) {
-                try self.beginResultEdit(ctx, self.selectedResultInput(), false);
-                self.editor_cursor_mode = true;
-                return;
+            if (key.matches('e', .{ .ctrl = true }) or key.matches(vaxis.Key.f2, .{})) {
+                if (self.selectedOperation() == null) return;
+                self.focus_area = .inspector;
+                self.selected_value = .result;
+                self.horizontal_offset = 0;
+                try self.state.handle(.pane_right);
+                return self.beginResultEdit(ctx, self.selectedResultInput());
             }
-            if (self.focus_area == .inspector and self.selected_value == .result and
-                key.matches(vaxis.Key.backspace, .{}))
-            {
-                try self.beginResultEdit(ctx, self.selectedResultInput(), true);
-                if (!self.editing) return;
-                return self.clearInitialResult(ctx);
+            if (self.focus_area == .inspector and self.selected_value == .result) {
+                if (key.matches('j', .{ .ctrl = true }) or key.matches(vaxis.Key.enter, .{ .shift = true })) {
+                    try self.beginResultEdit(ctx, self.selectedResultInput());
+                    _ = try self.handleEditorKey(ctx, key);
+                } else if (key.matches(vaxis.Key.backspace, .{}) or (key.text != null and key.text.?.len != 0)) {
+                    try self.beginTypedEdit(ctx, key);
+                }
             }
-            if (self.focus_area == .inspector and self.selected_value == .result and
-                key.text != null and key.text.?.len != 0)
-                return self.beginTypedEdit(ctx, key);
         },
         else => {},
     }
@@ -1735,7 +1655,7 @@ test "merge TUI: collection toggle retains both orders until Enter applies the f
             try testing.expectEqualStrings("1 unresolved", try cellsText(arena, surface, BodyGeometry.init(20).header_row, width - horizontal_padding - 12, 12));
             try testing.expect(std.mem.indexOf(u8, labels, "Ours + Theirs") != null);
             try testing.expect(std.mem.indexOf(u8, labels, "Theirs + Ours") != null);
-            try testing.expectEqualStrings("", std.mem.trim(u8, try rowText(arena, surface, FooterGeometry.init(width, 20).row), " "));
+            try testing.expectEqualStrings("Ctrl+E Edit Result", std.mem.trim(u8, try rowText(arena, surface, FooterGeometry.init(width, 20).row), " "));
             try testing.expectEqualStrings("", std.mem.trim(u8, try rowText(arena, surface, BodyGeometry.init(20).status_row), " "));
         }
         // Switching the available choices must not create or apply a Result preview.
@@ -2011,7 +1931,7 @@ fn focusResultForTest(view: *View, ctx: *vxfw.EventContext) !void {
 fn beginEditingForTest(view: *View, ctx: *vxfw.EventContext) !void {
     try focusResultForTest(view, ctx);
     // Editor tests need a stable setup that does not assign an input event to the behavior under test.
-    try view.beginResultEdit(ctx, view.selectedResultInput(), true);
+    try view.beginResultEdit(ctx, view.selectedResultInput());
 }
 
 fn findFocusedPath(
@@ -2533,7 +2453,7 @@ test "merge TUI: draws two panes and sparse value columns" {
     );
 }
 
-test "merge TUI: the normal status and footer rows are empty" {
+test "merge TUI: the footer exposes Result editing without a status message" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
@@ -2549,7 +2469,7 @@ test "merge TUI: the normal status and footer rows are empty" {
     const actions = try rowText(arena, surface, footer.row);
 
     try testing.expectEqual(@as(usize, 0), std.mem.trim(u8, help, " ").len);
-    try testing.expectEqual(@as(usize, 0), std.mem.trim(u8, actions, " ").len);
+    try testing.expectEqualStrings("Ctrl+E Edit Result", std.mem.trim(u8, actions, " "));
 }
 
 test "merge TUI: side values and primary actions use distinct colors" {
@@ -2563,8 +2483,8 @@ test "merge TUI: side values and primary actions use distinct colors" {
     const surface = try drawForTest(arena, view.widget(), 100, 20);
     const geometry = Geometry.init(100);
     const body = BodyGeometry.init(20);
-    const ours = surface.readCell(geometry.ours.start, body.inspector_rows.start).style.fg;
-    const theirs = surface.readCell(geometry.theirs.start, body.inspector_rows.start).style.fg;
+    const ours = surface.readCell(geometry.ours.start + 2, body.inspector_rows.start).style.fg;
+    const theirs = surface.readCell(geometry.theirs.start + 2, body.inspector_rows.start).style.fg;
 
     // Distinct colors prevent both sides from becoming one undifferentiated value table.
     try testing.expect(ours != .default);
@@ -2801,7 +2721,7 @@ test "merge TUI: selected value style follows Ours Theirs and Result" {
     } });
     surface = try drawForTest(arena, view.widget(), 80, 10);
     // Result focus must stay visible before keyboard input starts the editor.
-    try testing.expectEqual(@as(usize, 0), surface.children.len);
+    try testing.expectEqual(@as(usize, 1), surface.children.len);
     try testing.expectEqualStrings("▌", surface.readCell(geometry.result.start, body.inspector_rows.start).char.grapheme);
     try testing.expect(vaxis.Color.eql(surface.readCell(geometry.result.start, body.inspector_rows.start).style.bg, Palette.focus_bg));
 }
@@ -3058,7 +2978,7 @@ test "merge TUI: TextField applies an arbitrary YAML value" {
     try testing.expect(!ctx.quit);
 }
 
-test "merge TUI: typing in Result replaces the current value" {
+test "merge TUI: typing in an empty Result starts editing" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
@@ -3075,7 +2995,7 @@ test "merge TUI: typing in Result replaces the current value" {
         .text = "100",
     } });
 
-    // Direct input must replace the displayed Result without a separate editor action.
+    // An unresolved value can be entered directly after keyboard navigation.
     try testing.expect(view.editing);
     const value = try view.editor.toOwnedSlice();
     defer arena.free(value);
@@ -3293,7 +3213,7 @@ test "merge TUI: multiline editor keeps its cursor visible and moves by Unicode 
     try testing.expect(surface.children[0].surface.cursor.?.row < surface.children[0].surface.size.height);
 }
 
-test "merge TUI: Enter in Result applies the pending value" {
+test "merge TUI: Enter in Result opens the pending value before applying it" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
@@ -3309,6 +3229,10 @@ test "merge TUI: Enter in Result applies the pending value" {
     try pressKeyForTest(&view, &ctx, vaxis.Key.enter);
 
     // Result Enter must apply the choice instead of opening an editor.
+    try testing.expect(view.editing);
+    try testing.expectEqual(@as(usize, 2), state.unresolvedCount());
+    try testing.expectEqualStrings("12", view.editor.buf.firstHalf());
+    try pressKeyForTest(&view, &ctx, vaxis.Key.enter);
     try testing.expectEqual(@as(usize, 1), state.unresolvedCount());
     try testing.expect(view.focus_area == .hierarchy);
 }
@@ -3378,6 +3302,8 @@ test "merge TUI: Escape keeps the pending value that existed before editing" {
 
     try state.handle(.choose_theirs);
     try focusResultForTest(&view, &ctx);
+    try pressKeyForTest(&view, &ctx, vaxis.Key.enter);
+    try pressKeyForTest(&view, &ctx, vaxis.Key.home);
     try view.widget().handleEvent(&ctx, .{ .key_press = .{
         .codepoint = '{',
         .text = "{bad",
@@ -3394,7 +3320,7 @@ test "merge TUI: Escape keeps the pending value that existed before editing" {
     try testing.expect(view.selected_value == .result);
 }
 
-test "merge TUI: Enter can replace a resolved choice" {
+test "merge TUI: Enter applies edits to a resolved choice" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
@@ -3421,7 +3347,7 @@ test "merge TUI: Enter can replace a resolved choice" {
     try testing.expect(!view.editing);
     try testing.expect(view.focus_area == .hierarchy);
     switch (fixture.plan.operations[operation_index].resolution) {
-        .custom => |value| try testing.expectEqualStrings("100", value),
+        .custom => |value| try testing.expectEqualStrings("12100", value),
         else => return error.TestUnexpectedResult,
     }
 }
@@ -4191,7 +4117,7 @@ test "merge TUI: the final choice focuses Complete before exit" {
     try testing.expect(ctx.quit);
 }
 
-test "merge TUI: the normal screen has no action footer or key help" {
+test "merge TUI: the normal screen keeps only the Result editing hint" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
@@ -4310,7 +4236,7 @@ test "merge TUI: mouse clicks Complete to exit" {
     try testing.expect(ctx.quit);
 }
 
-test "merge TUI: clicking Result focuses it without editing" {
+test "merge TUI: clicking Result starts editing with a text cursor" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
@@ -4322,7 +4248,7 @@ test "merge TUI: clicking Result focuses it without editing" {
     var ctx = eventContext(arena);
     const body = BodyGeometry.init(20);
 
-    // A mouse click must move focus without showing the text cursor.
+    // The visible Result cell is also the entry point for mouse editing.
     try view.widget().handleEvent(&ctx, .{ .mouse = .{
         .col = @intCast(Geometry.init(100).result.start),
         .row = @intCast(body.inspector_rows.start),
@@ -4335,8 +4261,8 @@ test "merge TUI: clicking Result focuses it without editing" {
     try testing.expectEqual(merge_ui_state.Pane.inspector, state.pane);
     try testing.expect(view.focus_area == .inspector);
     try testing.expect(view.selected_value == .result);
-    try testing.expect(!view.editing);
-    try testing.expectEqual(@as(usize, 0), surface.children.len);
+    try testing.expect(view.editing);
+    try testing.expectEqual(@as(usize, 1), surface.children.len);
     try testing.expect(ctx.consume_event);
     try testing.expect(ctx.redraw);
 }
@@ -4357,7 +4283,7 @@ test "merge TUI: failed Result start keeps editor valid" {
     var ctx = eventContext(arena);
 
     // The old value must keep its allocation until the replacement allocation succeeds.
-    try testing.expectError(error.OutOfMemory, view.beginResultEdit(&ctx, "new", true));
+    try testing.expectError(error.OutOfMemory, view.beginResultEdit(&ctx, "new"));
     try testing.expect(failing_allocator.has_induced_failure);
     try testing.expectEqualStrings("old", view.editor.previous_val);
     try testing.expect(!view.editing);
@@ -4447,7 +4373,7 @@ test "merge TUI: input replaces removed Result" {
     );
 }
 
-test "merge TUI: typing after a Result click replaces the displayed value" {
+test "merge TUI: typing after a Result click retains the displayed value" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
@@ -4468,20 +4394,20 @@ test "merge TUI: typing after a Result click replaces the displayed value" {
         .mods = .{},
         .type = .press,
     } });
-    try testing.expect(!view.editing);
+    try testing.expect(view.editing);
     try view.widget().handleEvent(&ctx, .{ .key_press = .{
         .codepoint = '1',
         .text = "100",
     } });
 
-    // Keyboard input must start editing and replace the value that the mouse focused.
+    // A click retains the chosen value, so typing adds text at its cursor.
     try testing.expect(view.editing);
     const value = try view.editor.toOwnedSlice();
     defer arena.free(value);
-    try testing.expectEqualStrings("100", value);
+    try testing.expectEqualStrings("12100", value);
 }
 
-test "merge TUI: focused Result input replaces the displayed value" {
+test "merge TUI: focused Result input inserts into the displayed value" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
@@ -4503,13 +4429,13 @@ test "merge TUI: focused Result input replaces the displayed value" {
         .{ .key_press = .{ .codepoint = '1', .text = "100" } },
     );
 
-    // This test prevents the focused TextField from appending input before the parent can replace its value.
+    // Parent event capture must preserve the same insertion behavior as direct input.
     const value = try view.editor.toOwnedSlice();
     defer arena.free(value);
-    try testing.expectEqualStrings("100", value);
+    try testing.expectEqualStrings("12100", value);
 }
 
-test "merge TUI: an arrow applies Result input before navigation" {
+test "merge TUI: an arrow moves the Result cursor without applying input" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
@@ -4538,18 +4464,15 @@ test "merge TUI: an arrow applies Result input before navigation" {
         .{ .key_press = .{ .codepoint = vaxis.Key.right } },
     );
 
-    // One arrow applies the current value and then performs normal navigation.
-    try testing.expectEqual(@as(usize, 1), state.unresolvedCount());
-    switch (fixture.plan.operations[state.conflict_indices[0]].resolution) {
-        .custom => |value| try testing.expectEqualStrings("100", value),
-        else => return error.TestUnexpectedResult,
-    }
-    try testing.expect(!view.editing);
-    try testing.expect(view.focus_area == .inspector);
-    try testing.expect(view.selected_value == .ours);
+    // Editing must not resolve a conflict just because the user moves the caret.
+    try testing.expectEqual(@as(usize, 2), state.unresolvedCount());
+    try testing.expect(fixture.plan.operations[state.conflict_indices[0]].resolution == .unresolved);
+    try testing.expect(view.editing);
+    try testing.expect(view.selected_value == .result);
+    try testing.expectEqualStrings("100", view.editor.buf.firstHalf());
 }
 
-test "merge TUI: clearing Result and moving reopens the conflict" {
+test "merge TUI: clearing Result leaves an editable unresolved draft" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
@@ -4586,11 +4509,12 @@ test "merge TUI: clearing Result and moving reopens the conflict" {
         .{ .key_press = .{ .codepoint = vaxis.Key.left } },
     );
 
-    // A cleared draft means that the user wants to decide this conflict later.
+    // Cursor movement must keep even an empty draft editable.
     try testing.expect(fixture.plan.operations[operation_index].resolution == .unresolved);
     try testing.expectEqual(@as(usize, 2), state.unresolvedCount());
     try testing.expectEqual(@as(usize, 0), state.selected_conflict);
-    try testing.expect(view.focus_area == .hierarchy);
+    try testing.expect(view.focus_area == .inspector);
+    try testing.expect(view.editing);
 }
 
 test "merge TUI: clearing Result and pressing Escape reopens the conflict" {
@@ -4649,6 +4573,7 @@ test "merge TUI: Enter asks before it applies an empty Result" {
     try pressKeyForTest(&view, &ctx, vaxis.Key.enter);
     try pressKeyForTest(&view, &ctx, vaxis.Key.up);
     try focusResultForTest(&view, &ctx);
+    try pressKeyForTest(&view, &ctx, vaxis.Key.backspace);
     try pressKeyForTest(&view, &ctx, vaxis.Key.backspace);
     try pressKeyForTest(&view, &ctx, vaxis.Key.enter);
 
@@ -4986,6 +4911,9 @@ test "merge TUI: Enter asks when the focused Result is empty" {
     try focusResultForTest(&view, &ctx);
     try pressKeyForTest(&view, &ctx, vaxis.Key.enter);
 
+    try testing.expect(view.dialog == null);
+    try pressKeyForTest(&view, &ctx, vaxis.Key.enter);
+
     // Result focus must not bypass the empty value confirmation.
     try testing.expect(fixture.plan.operations[operation_index].resolution == .unresolved);
     try testing.expectEqual(@as(usize, 2), state.unresolvedCount());
@@ -5013,6 +4941,8 @@ test "merge TUI: Enter does not ask again for a confirmed empty Result" {
     try focusResultForTest(&view, &ctx);
     try pressKeyForTest(&view, &ctx, vaxis.Key.enter);
 
+    try pressKeyForTest(&view, &ctx, vaxis.Key.enter);
+
     // A confirmed empty value does not need a second confirmation.
     switch (fixture.plan.operations[operation_index].resolution) {
         .custom => |value| try testing.expectEqualStrings("", value),
@@ -5026,7 +4956,7 @@ test "merge TUI: Enter does not ask again for a confirmed empty Result" {
     try testing.expect(std.mem.indexOf(u8, screen, "Use an empty value?") == null);
 }
 
-test "merge TUI: invalid Result input blocks arrow navigation" {
+test "merge TUI: invalid Result input remains editable during cursor movement" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
@@ -5057,7 +4987,7 @@ test "merge TUI: invalid Result input blocks arrow navigation" {
 
     // Invalid YAML keeps Result active so the user can correct the value.
     try testing.expectEqual(@as(usize, 2), state.unresolvedCount());
-    try testing.expectEqualStrings("The result is not valid Unity YAML.", state.status);
+    try testing.expectEqualStrings("", state.status);
     try testing.expect(view.editing);
     try testing.expect(view.focus_area == .inspector);
     try testing.expect(view.selected_value == .result);
@@ -5110,7 +5040,7 @@ test "merge TUI: Enter on Theirs resolves the conflict and selects the next row"
     try testing.expect(!ctx.quit);
 }
 
-test "merge TUI: the first Backspace clears a prefilled Result" {
+test "merge TUI: the first Backspace deletes one character from a prefilled Result" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
@@ -5134,14 +5064,14 @@ test "merge TUI: the first Backspace clears a prefilled Result" {
         .{ .key_press = .{ .codepoint = vaxis.Key.backspace } },
     );
 
-    // Result starts as one selected value, so one Backspace must clear all of it.
+    // Editing a resolved choice must retain the other characters and its resolution until apply.
     const value = try view.editor.toOwnedSlice();
     defer arena.free(value);
-    try testing.expectEqualStrings("", value);
-    try testing.expect(fixture.plan.operations[state.conflict_indices[0]].resolution == .unresolved);
+    try testing.expectEqualStrings("1", value);
+    try testing.expect(fixture.plan.operations[state.conflict_indices[0]].resolution != .unresolved);
 }
 
-test "merge TUI: Backspace clears a focused Result before editing" {
+test "merge TUI: Backspace starts editing and deletes one character" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
@@ -5158,15 +5088,15 @@ test "merge TUI: Backspace clears a focused Result before editing" {
     try focusResultForTest(&view, &ctx);
     try pressKeyForTest(&view, &ctx, vaxis.Key.backspace);
 
-    // Keyboard focus must let Backspace clear the value without a mouse edit transition.
+    // Deletion behaves the same whether editing started with the keyboard or the mouse.
     const value = try view.editor.toOwnedSlice();
     defer arena.free(value);
-    try testing.expectEqualStrings("", value);
+    try testing.expectEqualStrings("1", value);
     try testing.expect(view.editing);
     try testing.expect(view.focus_area == .inspector);
     try testing.expect(view.selected_value == .result);
-    try testing.expectEqual(@as(usize, 2), state.unresolvedCount());
-    try testing.expect(fixture.plan.operations[state.conflict_indices[0]].resolution == .unresolved);
+    try testing.expectEqual(@as(usize, 1), state.unresolvedCount());
+    try testing.expect(fixture.plan.operations[state.conflict_indices[0]].resolution != .unresolved);
 }
 
 test "merge TUI: Backspace edits typed Result text one character at a time" {
@@ -5204,7 +5134,7 @@ test "merge TUI: Backspace edits typed Result text one character at a time" {
     try testing.expectEqualStrings("10", value);
 }
 
-test "merge TUI: TextField navigation makes Backspace delete normally" {
+test "merge TUI: TextField navigation retains normal Backspace behavior" {
     const navigation_keys = [_]vaxis.Key{
         .{ .codepoint = 'a', .mods = .{ .ctrl = true } },
         .{ .codepoint = 'e', .mods = .{ .ctrl = true } },
@@ -5246,7 +5176,7 @@ test "merge TUI: TextField navigation makes Backspace delete normally" {
             .{ .key_press = .{ .codepoint = vaxis.Key.backspace } },
         );
 
-        // Navigation cancels whole-value replacement before TextField handles Backspace.
+        // Text navigation must preserve the characters outside the deleted grapheme.
         const value = try view.editor.toOwnedSlice();
         defer arena.free(value);
         try testing.expect(value.len != 0);
@@ -5375,6 +5305,92 @@ test "merge TUI: clicking the collection toggle and a side previews a replacemen
     try view.widget().handleEvent(&ctx, .{ .key_press = .{ .codepoint = 't', .mods = .{ .shift = true } } });
     try pressKeyForTest(&view, &ctx, vaxis.Key.right);
     try pressKeyForTest(&view, &ctx, vaxis.Key.enter);
+    try testing.expect(view.editing);
+    try testing.expectEqualStrings("[Theirs, Ours]", view.editor.buf.firstHalf());
+    try pressKeyForTest(&view, &ctx, vaxis.Key.enter);
     try testing.expectEqual(merge_ui_state.Outcome.ready, state.outcome);
     try testing.expect(std.mem.indexOf(u8, try core.merge.finish(arena, &built.plan), "[A, Theirs, Ours]") != null);
+}
+
+test "merge TUI: Ctrl+E opens the displayed Result and retains inserted text" {
+    var memory = std.heap.ArenaAllocator.init(testing.allocator);
+    defer memory.deinit();
+    const arena = memory.allocator();
+    var fixture = try screenPlan(arena);
+    var state = try merge_ui_state.State.init(arena, &fixture.plan);
+    var view = try viewForTest(arena, &state, "A.prefab", fixture.partial);
+    defer view.deinit();
+    _ = try drawForTest(arena, view.widget(), 100, 20);
+    var ctx = eventContext(arena);
+    try state.handle(.choose_ours);
+    try view.widget().handleEvent(&ctx, .{ .key_press = .{ .codepoint = 'e', .mods = .{ .ctrl = true } } });
+    try testing.expect(view.editing);
+    var surface = try drawForTest(arena, view.widget(), 100, 20);
+    // Starting an edit must show the current value before any key changes it.
+    try testing.expect(std.mem.startsWith(u8, try rowText(arena, surface.children[0].surface, 0), "12"));
+    try routeFocusedEventForTest(arena, surface, view.editor.widget(), &ctx, .{ .key_press = .{ .codepoint = '3', .text = "3" } });
+    surface = try drawForTest(arena, view.widget(), 100, 20);
+    try routeFocusedEventForTest(arena, surface, view.editor.widget(), &ctx, .{ .key_press = .{ .codepoint = vaxis.Key.left } });
+    try testing.expectEqualStrings("123", try view.editor.buf.dupe());
+    try testing.expectEqual(@as(usize, 2), view.editor.buf.cursor);
+    try testing.expectEqual(@as(usize, 2), state.unresolvedCount());
+}
+
+test "merge TUI: Shift+Enter starts a retained multiline Result edit" {
+    var memory = std.heap.ArenaAllocator.init(testing.allocator);
+    defer memory.deinit();
+    const arena = memory.allocator();
+    var fixture = try screenPlan(arena);
+    var state = try merge_ui_state.State.init(arena, &fixture.plan);
+    var view = try viewForTest(arena, &state, "A.prefab", fixture.partial);
+    defer view.deinit();
+    _ = try drawForTest(arena, view.widget(), 100, 20);
+    var ctx = eventContext(arena);
+    try state.handle(.choose_ours);
+    try focusResultForTest(&view, &ctx);
+    try view.widget().handleEvent(&ctx, .{ .key_press = .{ .codepoint = vaxis.Key.enter, .mods = .{ .shift = true } } });
+    try testing.expect(view.editing);
+    try testing.expectEqualStrings("12\n", try view.editor.buf.dupe());
+    try testing.expectEqual(@as(usize, 2), state.unresolvedCount());
+    const surface = try drawForTest(arena, view.widget(), 100, 20);
+    // The editor still owns Shift+Enter after the TextField receives focus.
+    try routeFocusedEventForTest(arena, surface, view.editor.widget(), &ctx, .{ .key_press = .{ .codepoint = vaxis.Key.enter, .mods = .{ .shift = true } } });
+    try testing.expectEqualStrings("12\n\n", try view.editor.buf.dupe());
+    try testing.expectEqual(@as(usize, 2), state.unresolvedCount());
+}
+
+test "merge TUI: clicking inside the editor places the cursor on a Unicode line" {
+    var memory = std.heap.ArenaAllocator.init(testing.allocator);
+    defer memory.deinit();
+    const arena = memory.allocator();
+    var fixture = try screenPlan(arena);
+    var state = try merge_ui_state.State.init(arena, &fixture.plan);
+    var view = try viewForTest(arena, &state, "A.prefab", fixture.partial);
+    defer view.deinit();
+    _ = try drawForTest(arena, view.widget(), 100, 20);
+    var ctx = eventContext(arena);
+    try focusResultForTest(&view, &ctx);
+    try view.beginResultEdit(&ctx, "  あいう\n  second");
+    const surface = try drawForTest(arena, view.widget(), 100, 20);
+    const geometry = Geometry.init(100);
+    const body = BodyGeometry.init(20);
+    // Clicking within a wide grapheme must place the caret at a valid UTF-8 boundary.
+    try routeFocusedEventForTest(arena, surface, view.editor.widget(), &ctx, .{ .mouse = .{
+        .col = @intCast(geometry.result.start + 2 + 3),
+        .row = @intCast(body.inspector_rows.start),
+        .button = .left,
+        .mods = .{},
+        .type = .press,
+    } });
+    try testing.expectEqual(@as(usize, 2), view.editor.buf.cursor);
+    try routeFocusedEventForTest(arena, surface, view.editor.widget(), &ctx, .{ .mouse = .{
+        .col = @intCast(geometry.result.start + 2 + 3),
+        .row = @intCast(body.inspector_rows.start + 1),
+        .button = .left,
+        .mods = .{},
+        .type = .press,
+    } });
+    try routeFocusedEventForTest(arena, surface, view.editor.widget(), &ctx, .{ .key_press = .{ .codepoint = 'X', .text = "X" } });
+    try testing.expectEqualStrings("  あいう\n  sXecond", try view.editor.buf.dupe());
+    try testing.expectEqual(@as(usize, 2), state.unresolvedCount());
 }

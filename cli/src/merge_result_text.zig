@@ -95,3 +95,28 @@ pub fn moveLine(editor: *vxfw.TextField, key: vaxis.Key) !bool {
     if (target < cursor) editor.buf.moveGapLeft(cursor - target) else editor.buf.moveGapRight(target - cursor);
     return true;
 }
+
+pub fn placeCursor(editor: *vxfw.TextField, width: usize, row: usize, col: usize) !void {
+    const text = try editor.buf.dupe();
+    defer editor.buf.allocator.free(text);
+    var position: Position = .{};
+    var target: usize = text.len;
+    var iter = vaxis.unicode.graphemeIterator(text);
+    while (iter.next()) |g| {
+        const bytes = g.bytes(text);
+        const newline = std.mem.eql(u8, bytes, "\n");
+        const cells = vaxis.gwidth.gwidth(bytes, .unicode);
+        if (!newline and position.col + cells > width) {
+            position.row += 1;
+            position.col = 0;
+        }
+        // Hit testing must use the same wrapping and grapheme boundaries as drawing.
+        if (position.row > row or (position.row == row and (newline or col < position.col + cells))) {
+            target = g.start;
+            break;
+        }
+        advance(&position, bytes, width);
+    }
+    const cursor = editor.buf.cursor;
+    if (target < cursor) editor.buf.moveGapLeft(cursor - target) else editor.buf.moveGapRight(target - cursor);
+}

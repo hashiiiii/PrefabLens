@@ -193,14 +193,16 @@ The user can edit it with another tool and complete the normal Git workflow.
 
 #### Edit Result
 
-Click **Ours** or **Theirs** to preview that value, then focus **Result**.
-Typing replaces the current value, and **Backspace** clears it, as before.
-Press **F2** to keep the current value and edit part of it.
+Click **Ours** or **Theirs** to preview a value.
+Click **Result**, or focus it and press **Enter**, to edit the existing value.
+**Ctrl+E** opens the Result editor directly from the selected conflict; **F2** also works.
+Typing and pasting insert at the cursor, and **Backspace** deletes one character.
 
-In **F2** editing, arrow keys move the cursor within the value.
-**Home** and **End** move to the start and end of the current line.
-**Ctrl+J** or **Shift+Enter** inserts a newline with the current indentation.
-Adding a newline or pasting also enables cursor movement within the value.
+Arrow keys move the cursor within the value.
+Click inside the editor to place the cursor.
+**Home** / **Ctrl+A** and **End** / **Ctrl+E** move to the start and end of the current line.
+**Shift+Enter** inserts a newline with the current indentation.
+If your terminal sends the same key code for Enter and Shift+Enter, use **Ctrl+J** or configure Shift+Enter to send a newline (`\n`).
 **Enter** applies the value; **Escape** cancels editing and returns to the hierarchy.
 Clearing the value and leaving **Result** reopens the conflict.
 Applying an empty value still requires confirmation.

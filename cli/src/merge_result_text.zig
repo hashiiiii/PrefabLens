@@ -112,11 +112,10 @@ pub fn moveLine(editor: *vxfw.TextField, key: vaxis.Key) !bool {
     return true;
 }
 
-pub fn cursorAt(editor: *vxfw.TextField, width: usize, row: usize, col: usize) !usize {
+pub fn cellAt(editor: *vxfw.TextField, width: usize, row: usize, col: usize) !Selection {
     const text = try editor.buf.dupe();
     defer editor.buf.allocator.free(text);
     var position: Position = .{};
-    var target: usize = text.len;
     var iter = vaxis.unicode.graphemeIterator(text);
     while (iter.next()) |g| {
         const bytes = g.bytes(text);
@@ -127,13 +126,12 @@ pub fn cursorAt(editor: *vxfw.TextField, width: usize, row: usize, col: usize) !
             position.col = 0;
         }
         // Hit testing must use the same wrapping and grapheme boundaries as drawing.
-        if (position.row > row or (position.row == row and (newline or col < position.col + cells))) {
-            target = g.start;
-            break;
-        }
+        if (position.row > row) return .{ .start = g.start, .end = g.start };
+        if (position.row == row and (newline or col < position.col + cells))
+            return .{ .start = g.start, .end = g.start + if (newline) @as(usize, 0) else g.len };
         advance(&position, bytes, width);
     }
-    return target;
+    return .{ .start = text.len, .end = text.len };
 }
 
 pub fn setCursor(editor: *vxfw.TextField, target: usize) void {

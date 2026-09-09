@@ -193,6 +193,7 @@ The user can edit it with another tool and complete the normal Git workflow.
 
 #### Edit Result
 
+Navigation and automatic selection of the next conflict follow the hierarchy's order from top to bottom.
 Click **Ours** or **Theirs** to preview a value.
 Click **Result**, or focus it and press **Enter**, to edit the existing value.
 **Ctrl+E** opens the Result editor directly from the selected conflict; **F2** also works.
@@ -202,6 +203,8 @@ While editing, typing and pasting insert at the cursor; **Backspace** and **Dele
 Arrow keys move the cursor within the value.
 Click inside the editor to place the cursor, or drag to select text across lines.
 Selected text is highlighted; typing or pasting replaces it.
+**Ctrl+C** copies the selected text and keeps it selected.
+Copy requires a terminal that supports clipboard writes through OSC 52, such as Ghostty.
 **Home** / **Ctrl+A** and **End** / **Ctrl+E** move to the start and end of the current line.
 **Shift+Enter** inserts a newline with the current indentation.
 If your terminal sends the same key code for Enter and Shift+Enter, use **Ctrl+J** or configure Shift+Enter to send a newline (`\n`).

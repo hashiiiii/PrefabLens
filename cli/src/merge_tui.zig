@@ -191,7 +191,7 @@ pub const View = struct {
     editing: bool = false,
     editor_top: usize = 0,
     editor_anchor: ?usize = null,
-    editor_drag_origin: ?usize = null,
+    editor_drag_origin: ?result_text.Selection = null,
     pasting: bool = false,
     paste_into_result: bool = false,
     paste_buffer: std.ArrayList(u8) = .empty,
@@ -394,7 +394,21 @@ pub const View = struct {
     }
 
     fn handleEditorKey(self: *View, ctx: *vxfw.EventContext, key: vaxis.Key) !bool {
+        // Kitty keyboard reports can send a modifier before the copy key or terminal paste.
+        if (key.isModifier()) {
+            ctx.consumeEvent();
+            return true;
+        }
         self.editor_drag_origin = null;
+        if (key.matches('c', .{ .ctrl = true })) {
+            if (self.editorSelection()) |range| {
+                const text = try self.editor.buf.dupe();
+                defer self.editor.buf.allocator.free(text);
+                try ctx.copyToClipboard(text[range.start..range.end]);
+            }
+            ctx.consumeEvent();
+            return true;
+        }
         const newline = key.matches('j', .{ .ctrl = true }) or key.matches(vaxis.Key.enter, .{ .shift = true });
         const deletion = key.matches(vaxis.Key.backspace, .{}) or key.matches(vaxis.Key.delete, .{}) or key.matches('d', .{ .ctrl = true });
         const text_input = key.text != null and key.text.?.len != 0 and !key.mods.ctrl and !key.mods.alt and !key.mods.super;
@@ -522,12 +536,12 @@ pub const View = struct {
         ctx.consumeAndRedraw();
     }
 
-    fn editorCursorAt(self: *View, mouse: vaxis.Mouse, size: vxfw.Size) !usize {
+    fn editorCellAt(self: *View, mouse: vaxis.Mouse, size: vxfw.Size) !result_text.Selection {
         const geometry = self.valueGeometry(size.width);
         const body = BodyGeometry.init(size.height);
         const col: usize = @intCast(@max(mouse.col, 0));
         const row: usize = @intCast(@max(mouse.row, 0));
-        return result_text.cursorAt(
+        return result_text.cellAt(
             &self.editor,
             geometry.result.end - geometry.result.start -| 2,
             self.editor_top + std.math.clamp(row, body.inspector_rows.start, body.inspector_rows.end - 1) - body.inspector_rows.start,
@@ -547,9 +561,15 @@ pub const View = struct {
                 if (mouse.type == .drag) {
                     if (mouse.row < body.inspector_rows.start) self.editor_top -|= 1;
                     if (mouse.row >= body.inspector_rows.end) self.editor_top += 1;
-                    self.editor_anchor = origin;
+                    self.editor_anchor = origin.start;
                 }
-                if (self.editor_anchor != null) result_text.setCursor(&self.editor, try self.editorCursorAt(mouse, size));
+                if (self.editor_anchor != null) {
+                    // Cell coordinates have no left/right half, so both endpoint glyphs belong to a drag.
+                    const cell = try self.editorCellAt(mouse, size);
+                    const backward = cell.start < origin.start;
+                    self.editor_anchor = if (backward) origin.end else origin.start;
+                    result_text.setCursor(&self.editor, if (backward) cell.start else cell.end);
+                }
                 if (mouse.type == .release) self.editor_drag_origin = null;
                 return ctx.consumeAndRedraw();
             }
@@ -563,10 +583,10 @@ pub const View = struct {
         if (self.canCombine() and row == body.inspector_heading_row and inRange(col, self.combineToggleRange(size.width)))
             return ctx.consumeEvent();
         if (row >= body.inspector_rows.start and row < body.inspector_rows.end and inRange(col, geometry.result)) {
-            const cursor = try self.editorCursorAt(mouse, size);
-            result_text.setCursor(&self.editor, cursor);
+            const cell = try self.editorCellAt(mouse, size);
+            result_text.setCursor(&self.editor, cell.start);
             self.editor_anchor = null;
-            self.editor_drag_origin = cursor;
+            self.editor_drag_origin = cell;
             return ctx.consumeAndRedraw();
         }
         if (!try self.finishEditorForNavigation(ctx)) return;
@@ -970,7 +990,7 @@ pub const View = struct {
             self.horizontal_offset = 0;
             try self.state.handle(.pane_right);
             try self.beginResultEdit(ctx, self.selectedResultInput());
-            self.editor_drag_origin = try self.editorCursorAt(mouse, size);
+            self.editor_drag_origin = try self.editorCellAt(mouse, size);
             return;
         }
         if (inRange(col, geometry.inspector)) return self.focusInspector(ctx);
@@ -1308,7 +1328,13 @@ fn draw(
     }
 
     if (self.selectedOperation() != null) {
-        writeClipped(surface, content_start, footer.row, footer.complete.start - content_start - 1, if (self.editing) "Shift+Enter Newline  Enter Apply  Esc Cancel" else "Ctrl+E Edit Result");
+        const hint = if (!self.editing)
+            "Ctrl+E Edit Result"
+        else if (self.editorSelection() != null)
+            "Ctrl+C Copy  Shift+Enter Newline  Enter Apply  Esc Cancel"
+        else
+            "Shift+Enter Newline  Enter Apply  Esc Cancel";
+        writeClipped(surface, content_start, footer.row, footer.complete.start - content_start - 1, hint);
     }
     if (self.state.outcome == .ready) {
         writeClipped(
@@ -1689,7 +1715,8 @@ pub fn run(
     path: []const u8,
     partial: []const u8,
 ) !void {
-    const tree = try merge_tree.build(allocator, partial, state.plan, state.conflict_indices);
+    const tree = try merge_tree.buildForState(allocator, partial, state);
+    try state.handle(.{ .select_conflict = 0 });
     var tty_buffer: [4096]u8 = undefined;
     var app = try vxfw.App.init(io, allocator, env_map, &tty_buffer);
     defer app.deinit();
@@ -1921,7 +1948,7 @@ fn viewForTest(
     path: []const u8,
     partial: []const u8,
 ) !View {
-    const tree = try merge_tree.build(arena, partial, state.plan, state.conflict_indices);
+    const tree = try merge_tree.buildForState(arena, partial, state);
     return View.init(arena, state, path, tree);
 }
 
@@ -2064,7 +2091,7 @@ test "merge TUI: draws the full Unity tree and marks only conflict rows" {
     const arena = arena_state.allocator();
     var fixture = try hierarchyPlan(arena);
     var state = try merge_ui_state.State.init(arena, &fixture.plan);
-    const tree = try merge_tree.build(arena, fixture.partial, &fixture.plan, state.conflict_indices);
+    const tree = try merge_tree.buildForState(arena, fixture.partial, &state);
     var view = View.init(arena, &state, "Assets/Player.prefab", tree);
     defer view.deinit();
 
@@ -2116,7 +2143,7 @@ test "merge TUI: Escape opens a non-writing quit dialog" {
     const arena = arena_state.allocator();
     var fixture = try screenPlan(arena);
     var state = try merge_ui_state.State.init(arena, &fixture.plan);
-    const tree = try merge_tree.build(arena, fixture.partial, &fixture.plan, state.conflict_indices);
+    const tree = try merge_tree.buildForState(arena, fixture.partial, &state);
     var view = View.init(arena, &state, "A.prefab", tree);
     defer view.deinit();
     _ = try drawForTest(arena, view.widget(), 100, 20);
@@ -2199,7 +2226,7 @@ test "merge TUI: uses an empty pane gutter and no value dividers" {
     const arena = arena_state.allocator();
     var fixture = try screenPlan(arena);
     var state = try merge_ui_state.State.init(arena, &fixture.plan);
-    const tree = try merge_tree.build(arena, fixture.partial, &fixture.plan, state.conflict_indices);
+    const tree = try merge_tree.buildForState(arena, fixture.partial, &state);
     var view = View.init(arena, &state, "A.prefab", tree);
     defer view.deinit();
 
@@ -2230,7 +2257,7 @@ test "merge TUI: hides the Result editor while the tree owns focus" {
     const arena = arena_state.allocator();
     var fixture = try screenPlan(arena);
     var state = try merge_ui_state.State.init(arena, &fixture.plan);
-    const tree = try merge_tree.build(arena, fixture.partial, &fixture.plan, state.conflict_indices);
+    const tree = try merge_tree.buildForState(arena, fixture.partial, &state);
     var view = View.init(arena, &state, "A.prefab", tree);
     defer view.deinit();
 
@@ -2246,7 +2273,7 @@ test "merge TUI: keeps resolved conflicts in the tree" {
     const arena = arena_state.allocator();
     var fixture = try hierarchyPlan(arena);
     var state = try merge_ui_state.State.init(arena, &fixture.plan);
-    const tree = try merge_tree.build(arena, fixture.partial, &fixture.plan, state.conflict_indices);
+    const tree = try merge_tree.buildForState(arena, fixture.partial, &state);
     var view = View.init(arena, &state, "Assets/Player.prefab", tree);
     defer view.deinit();
     _ = try drawForTest(arena, view.widget(), 100, 20);
@@ -2269,7 +2296,7 @@ test "merge TUI: context clicks and hierarchy wheel preserve the selected confli
     const arena = arena_state.allocator();
     var fixture = try tallPlan(arena);
     var state = try merge_ui_state.State.init(arena, &fixture.plan);
-    const tree = try merge_tree.build(arena, fixture.partial, &fixture.plan, state.conflict_indices);
+    const tree = try merge_tree.buildForState(arena, fixture.partial, &state);
     var view = View.init(arena, &state, "A.prefab", tree);
     defer view.deinit();
     _ = try drawForTest(arena, view.widget(), 80, 10);
@@ -2309,7 +2336,7 @@ test "merge TUI: hierarchy wheel preserves the focused Result editor" {
     const arena = arena_state.allocator();
     var fixture = try tallPlan(arena);
     var state = try merge_ui_state.State.init(arena, &fixture.plan);
-    const tree = try merge_tree.build(arena, fixture.partial, &fixture.plan, state.conflict_indices);
+    const tree = try merge_tree.buildForState(arena, fixture.partial, &state);
     var view = View.init(arena, &state, "A.prefab", tree);
     defer view.deinit();
     _ = try drawForTest(arena, view.widget(), 80, 10);
@@ -4354,7 +4381,7 @@ test "merge TUI: failed Result start keeps editor valid" {
     const arena = arena_state.allocator();
     var fixture = try screenPlan(arena);
     var state = try merge_ui_state.State.init(arena, &fixture.plan);
-    const tree = try merge_tree.build(arena, fixture.partial, &fixture.plan, state.conflict_indices);
+    const tree = try merge_tree.buildForState(arena, fixture.partial, &state);
     var failing_allocator = testing.FailingAllocator.init(testing.allocator, .{ .fail_index = 2 });
     var view = View.init(failing_allocator.allocator(), &state, "A.prefab", tree);
     defer view.deinit();
@@ -5512,10 +5539,11 @@ test "merge TUI: dragging Result highlights a range and typing replaces it" {
         surface = try drawForTest(arena, view.widget(), 100, 20);
     }
     try testing.expect(surface.children[0].surface.readCell(0, 0).style.reverse);
-    try testing.expect(!surface.children[0].surface.readCell(1, 0).style.reverse);
+    try testing.expect(surface.children[0].surface.readCell(1, 0).style.reverse);
+    try testing.expect(!surface.children[0].surface.readCell(2, 0).style.reverse);
     try routeFocusedEventForTest(arena, surface, view.editor.widget(), &ctx, .{ .key_press = .{ .codepoint = '9', .text = "9" } });
     try pressKeyForTest(&view, &ctx, vaxis.Key.enter);
-    try testing.expectEqualStrings("92", fixture.plan.operations[state.conflict_indices[0]].resolution.custom);
+    try testing.expectEqualStrings("9", fixture.plan.operations[state.conflict_indices[0]].resolution.custom);
 }
 
 test "merge TUI: deletion before editing clears Result without entering the editor" {
@@ -5623,16 +5651,17 @@ test "merge TUI: a backward multiline drag supports paste deletion and indented 
         // Unicode cells and the intervening newline belong to the same selection in either direction.
         try testing.expect(surface.children[0].surface.readCell(2, 0).style.reverse);
         try testing.expect(surface.children[0].surface.readCell(2, 1).style.reverse);
-        try testing.expect(!surface.children[0].surface.readCell(3, 1).style.reverse);
+        try testing.expect(surface.children[0].surface.readCell(3, 1).style.reverse);
+        try testing.expect(!surface.children[0].surface.readCell(4, 1).style.reverse);
         if (case == 3) {
             try routeFocusedEventForTest(arena, surface, view.editor.widget(), &ctx, .{ .paste = try arena.dupe(u8, "X") });
         } else {
             try routeFocusedEventForTest(arena, surface, view.editor.widget(), &ctx, .{ .key_press = events[case] });
         }
         const expected = switch (case) {
-            2 => "  \n  econd",
-            3 => "  Xecond",
-            else => "  econd",
+            2 => "  \n  cond",
+            3 => "  Xcond",
+            else => "  cond",
         };
         try testing.expectEqualStrings(expected, try view.editor.buf.dupe());
         try testing.expect(view.editorSelection() == null);
@@ -5736,5 +5765,105 @@ test "merge TUI: mouse dragging works before the editor has its first rendered s
     try testing.expect(view.editorSelection() != null);
     try view.widget().handleEvent(&ctx, .{ .key_press = .{ .codepoint = '9', .text = "9" } });
     try pressKeyForTest(&view, &ctx, vaxis.Key.enter);
-    try testing.expectEqualStrings("92", fixture.plan.operations[state.conflict_indices[0]].resolution.custom);
+    try testing.expectEqualStrings("9", fixture.plan.operations[state.conflict_indices[0]].resolution.custom);
+}
+
+fn dragEditorForTest(
+    arena: std.mem.Allocator,
+    view: *View,
+    ctx: *vxfw.EventContext,
+    start_col: u16,
+    start_row: u16,
+    end_col: u16,
+    end_row: u16,
+) !void {
+    const surface = try drawForTest(arena, view.widget(), 100, 20);
+    const origin_col = Geometry.init(100).result.start + 2;
+    const origin_row = BodyGeometry.init(20).inspector_rows.start;
+    for ([_]vaxis.Mouse.Type{ .press, .drag, .release }) |kind| {
+        try routeFocusedEventForTest(arena, surface, view.editor.widget(), ctx, .{ .mouse = .{
+            .col = @intCast(origin_col + if (kind == .press) start_col else end_col),
+            .row = @intCast(origin_row + if (kind == .press) start_row else end_row),
+            .button = .left,
+            .mods = .{},
+            .type = kind,
+        } });
+    }
+}
+
+test "merge TUI: dragging through the last character replaces it on paste" {
+    const cases = [_]struct { text: []const u8, last_col: u16, last_row: u16 }{
+        .{ .text = "0.4", .last_col = 2, .last_row = 0 },
+        .{ .text = "あいう", .last_col = 5, .last_row = 0 },
+        .{ .text = "one\nlast", .last_col = 3, .last_row = 1 },
+    };
+    for (cases) |case| {
+        for ([_]bool{ false, true }) |backward| {
+            var memory = std.heap.ArenaAllocator.init(testing.allocator);
+            defer memory.deinit();
+            const arena = memory.allocator();
+            var fixture = try screenPlan(arena);
+            var state = try merge_ui_state.State.init(arena, &fixture.plan);
+            var view = try viewForTest(arena, &state, "A.prefab", fixture.partial);
+            defer view.deinit();
+            _ = try drawForTest(arena, view.widget(), 100, 20);
+            var ctx = eventContext(arena);
+            try focusResultForTest(&view, &ctx);
+            try view.beginResultEdit(&ctx, case.text);
+            try dragEditorForTest(arena, &view, &ctx, if (backward) case.last_col else 0, if (backward) case.last_row else 0, if (backward) 0 else case.last_col, if (backward) 0 else case.last_row);
+            const surface = try drawForTest(arena, view.widget(), 100, 20);
+            // Terminal mouse reports identify cells, so stopping on the final glyph must include that glyph.
+            try routeFocusedEventForTest(arena, surface, view.editor.widget(), &ctx, .paste_start);
+            try routeFocusedEventForTest(arena, surface, view.editor.widget(), &ctx, .{ .key_press = .{ .codepoint = '7', .text = "7" } });
+            try routeFocusedEventForTest(arena, surface, view.editor.widget(), &ctx, .paste_end);
+            try testing.expectEqualStrings("7", try view.editor.buf.dupe());
+        }
+    }
+}
+
+test "merge TUI: modifier key reports preserve selection for terminal paste" {
+    var memory = std.heap.ArenaAllocator.init(testing.allocator);
+    defer memory.deinit();
+    const arena = memory.allocator();
+    var fixture = try screenPlan(arena);
+    var state = try merge_ui_state.State.init(arena, &fixture.plan);
+    var view = try viewForTest(arena, &state, "A.prefab", fixture.partial);
+    defer view.deinit();
+    _ = try drawForTest(arena, view.widget(), 100, 20);
+    var ctx = eventContext(arena);
+    try focusResultForTest(&view, &ctx);
+    try view.beginResultEdit(&ctx, "0.4");
+    try dragEditorForTest(arena, &view, &ctx, 0, 0, 3, 0);
+    const surface = try drawForTest(arena, view.widget(), 100, 20);
+    // A terminal can report Command separately before sending its paste payload.
+    try routeFocusedEventForTest(arena, surface, view.editor.widget(), &ctx, .{ .key_press = .{ .codepoint = vaxis.Key.left_super, .mods = .{ .super = true } } });
+    try routeFocusedEventForTest(arena, surface, view.editor.widget(), &ctx, .{ .paste = try arena.dupe(u8, "0.6") });
+    try testing.expectEqualStrings("0.6", try view.editor.buf.dupe());
+}
+
+test "merge TUI: copying a selection preserves its text and selection" {
+    var memory = std.heap.ArenaAllocator.init(testing.allocator);
+    defer memory.deinit();
+    const arena = memory.allocator();
+    var fixture = try screenPlan(arena);
+    var state = try merge_ui_state.State.init(arena, &fixture.plan);
+    var view = try viewForTest(arena, &state, "A.prefab", fixture.partial);
+    defer view.deinit();
+    _ = try drawForTest(arena, view.widget(), 100, 20);
+    var ctx = eventContext(arena);
+    try focusResultForTest(&view, &ctx);
+    const original = "  あい\n  0.4";
+    try view.beginResultEdit(&ctx, original);
+    try dragEditorForTest(arena, &view, &ctx, 2, 0, 5, 1);
+    const surface = try drawForTest(arena, view.widget(), 100, 20);
+    ctx.cmds.clearRetainingCapacity();
+    try routeFocusedEventForTest(arena, surface, view.editor.widget(), &ctx, .{ .key_press = .{ .codepoint = 'c', .mods = .{ .ctrl = true } } });
+    // The clipboard receives source text, including newlines, without the editor's padding or wrapping.
+    try testing.expectEqual(@as(usize, 1), ctx.cmds.items.len);
+    try testing.expectEqualStrings("あい\n  0.4", ctx.cmds.items[0].copy_to_clipboard);
+    try testing.expectEqualStrings(original, try view.editor.buf.dupe());
+    try testing.expect(view.editorSelection() != null);
+    try testing.expect(!view.editor_changed);
+    try routeFocusedEventForTest(arena, surface, view.editor.widget(), &ctx, .{ .paste = try arena.dupe(u8, "7") });
+    try testing.expectEqualStrings("  7", try view.editor.buf.dupe());
 }

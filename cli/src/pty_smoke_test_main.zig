@@ -140,11 +140,19 @@ fn collectionFile(arena: std.mem.Allocator, items: []const u8, left: u8, right: 
 
 fn testResultEditing(io: std.Io, arena: std.mem.Allocator, scratch: []const u8, prefablens: []const u8) !void {
     const scalar_prefix = "--- !u!114 &1\nMonoBehaviour:\n  m_Value: ";
-    const cases = [_]struct { name: []const u8, base: []const u8, ours: []const u8, theirs: []const u8, keys: []const u8, expected: []const u8 }{
+    const object = "--- !u!1 &1\nGameObject:\n  m_Name: Arm\n  m_Component:\n  - component: {fileID: 4}\n";
+    const sphere_reference = "  - component: {fileID: 135}\n";
+    const transform = "--- !u!4 &4\nTransform:\n  m_GameObject: {fileID: 1}\n  m_Children: []\n  m_Father: {fileID: 0}\n  m_LocalPosition: ";
+    const sphere = "--- !u!135 &135\nSphereCollider:\n  m_GameObject: {fileID: 1}\n  m_Radius: ";
+    const cases = [_]struct { name: []const u8, base: []const u8, ours: []const u8, theirs: []const u8, keys: []const u8, expected: []const u8, clipboard_sequence: ?[]const u8 = null }{
         // Ctrl+E retains the side preview; editing one digit must not replace the rest of the value.
         .{ .name = "result-cursor", .base = scalar_prefix ++ "5\n", .ours = scalar_prefix ++ "12\n", .theirs = scalar_prefix ++ "8\n", .keys = "\x1b[<0;52;5M\x05\x1b[D\x7f9\r\r", .expected = scalar_prefix ++ "92\n" },
         // SGR drag reports must select text in the focused editor before replacement.
-        .{ .name = "result-drag", .base = scalar_prefix ++ "5\n", .ours = scalar_prefix ++ "12\n", .theirs = scalar_prefix ++ "8\n", .keys = "\x1b[<0;52;5M\x05\x1b[<0;85;5M\x1b[<32;86;5M\x1b[<0;86;5m9\r\r", .expected = scalar_prefix ++ "92\n" },
+        .{ .name = "result-drag", .base = scalar_prefix ++ "5\n", .ours = scalar_prefix ++ "12\n", .theirs = scalar_prefix ++ "8\n", .keys = "\x1b[<0;52;5M\x05\x1b[<0;85;5M\x1b[<32;86;5M\x1b[<0;86;5m9\r\r", .expected = scalar_prefix ++ "9\n" },
+        // Copy must emit the entire selection and keep it selected for the following bracketed paste.
+        .{ .name = "result-copy-paste", .base = scalar_prefix ++ "0.1\n", .ours = scalar_prefix ++ "0.4\n", .theirs = scalar_prefix ++ "0.2\n", .keys = "\x1b[<0;52;5M\x05\x1b[<0;85;5M\x1b[<32;87;5M\x1b[<0;87;5m\x03\x1b[200~0.6\x1b[201~\r\r", .expected = scalar_prefix ++ "0.6\n", .clipboard_sequence = "\x1b]52;c;MC40\x1b\\" },
+        // Startup must focus Position.x before SphereCollider, then advance in that same visual order.
+        .{ .name = "result-visual-order", .base = object ++ sphere_reference ++ transform ++ "{x: 0, y: 0, z: 0}\n" ++ sphere ++ "0.25\n", .ours = object ++ transform ++ "{x: 1, y: 0, z: 0}\n", .theirs = object ++ sphere_reference ++ transform ++ "{x: 2, y: 0, z: 0}\n" ++ sphere ++ "0.4\n", .keys = "\x1b[C\x1b[C\r\x1b[C\r\r", .expected = object ++ transform ++ "{x: 2, y: 0, z: 0}\n" },
         // Both deletion keys clear the entire preview before Ctrl+E opens a fresh editor.
         .{ .name = "result-clear-backspace", .base = scalar_prefix ++ "5\n", .ours = scalar_prefix ++ "12\n", .theirs = scalar_prefix ++ "8\n", .keys = "\x1b[<0;52;5M\x1b[C\x1b[C\x7f\x054\r\r", .expected = scalar_prefix ++ "4\n" },
         .{ .name = "result-clear-delete", .base = scalar_prefix ++ "5\n", .ours = scalar_prefix ++ "12\n", .theirs = scalar_prefix ++ "8\n", .keys = "\x1b[<0;52;5M\x1b[C\x1b[C\x1b[3~\x054\r\r", .expected = scalar_prefix ++ "4\n" },
@@ -165,6 +173,8 @@ fn testResultEditing(io: std.Io, arena: std.mem.Allocator, scratch: []const u8, 
         try integration.expectNonzero(try integration.gitRun(io, arena, repo, &.{ "merge", "--no-edit", "remote" }), "prepare Result editing conflict");
         const result = try runMergetoolInPty(io, arena, repo, case.keys, 30);
         try integration.expectCode(result, 0, case.name);
+        if (case.clipboard_sequence) |sequence|
+            try integration.require(std.mem.indexOf(u8, result.stdout, sequence) != null, "Result copy did not emit the selected text to the terminal clipboard");
         try integration.expectFile(io, arena, repo, "Assets/Conflict.prefab", case.expected);
         const unmerged = try integration.gitRun(io, arena, repo, &.{ "ls-files", "-u" });
         try integration.expectCode(unmerged, 0, "list index after Result editing");

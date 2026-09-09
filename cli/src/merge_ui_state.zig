@@ -122,6 +122,39 @@ pub const State = struct {
         self.pending = if (resolution == .unresolved) null else resolution;
     }
 
+    pub fn reorderConflicts(self: *State, visual_order: []const usize) !void {
+        std.debug.assert(visual_order.len == self.conflict_indices.len);
+        if (visual_order.len == 0) {
+            self.selected_conflict = 0;
+            return;
+        }
+
+        // A tree is built after the plan is known, but it may be rebuilt after a
+        // selection or preview exists. Preserve that operation while changing only
+        // the navigation order to match the rendered rows.
+        const selected_operation_index = if (self.selected_conflict < self.conflict_indices.len)
+            self.conflict_indices[self.selected_conflict]
+        else
+            null;
+        const old_conflict_indices = try self.allocator.dupe(usize, self.conflict_indices);
+        defer self.allocator.free(old_conflict_indices);
+        for (visual_order, 0..) |old_index, visual_index| {
+            std.debug.assert(old_index < old_conflict_indices.len);
+            self.conflict_indices[visual_index] = old_conflict_indices[old_index];
+        }
+        if (selected_operation_index) |operation_index| {
+            for (self.conflict_indices, 0..) |candidate, index| {
+                if (candidate == operation_index) {
+                    self.selected_conflict = index;
+                    return;
+                }
+            }
+            std.debug.assert(false);
+        } else {
+            self.selected_conflict = 0;
+        }
+    }
+
     fn advance(self: *State) void {
         if (self.conflict_indices.len == 0) {
             self.outcome = .ready;
@@ -349,6 +382,24 @@ fn groupConflicts(arena: std.mem.Allocator, plan: *core.merge.MergePlan) !void {
         &.{ plan.operations[0].id, plan.operations[1].id },
     );
     plan.atomic_operations = plan.atomic_operations[0..1];
+}
+
+test "merge UI state: visual reordering keeps a preview attached to its operation" {
+    var memory = std.heap.ArenaAllocator.init(testing.allocator);
+    defer memory.deinit();
+    const arena = memory.allocator();
+    var fixture = try conflictPlan(arena, 2);
+    var state = try State.init(arena, &fixture.plan);
+    try state.handle(.choose_ours);
+    try state.reorderConflicts(&.{ 1, 0 });
+    // Rebuilding a tree must not apply the pending Mass preview to Drag after their indices change.
+    try state.handle(.apply_result);
+    try state.handle(.choose_theirs);
+    try state.handle(.apply_result);
+    try testing.expectEqualStrings(
+        "--- !u!54 &54\nRigidbody:\n  m_Mass: 12\n  m_Drag: 3\n",
+        try core.merge.finish(arena, &fixture.plan),
+    );
 }
 
 test "merge UI state: choose and apply advances to the next conflict" {

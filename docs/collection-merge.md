@@ -34,7 +34,9 @@ Scalar fields and array delete/edit conflicts do not show the control.
 Letters enter text when **Result** has focus.
 
 To preview a choice before applying it, click its value.
-Then focus **Result** to inspect, edit, or apply the preview.
+Click **Result**, or focus it and press **Enter**, to edit the preview.
+The existing text stays in place; press **Enter** to apply it.
+See [Edit Result](cli.md#edit-result) for multiline editing and paste controls.
 When all conflicts have a resolution, select **Complete**.
 A local choice retains independent accepted changes elsewhere in the collection.
 

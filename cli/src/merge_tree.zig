@@ -19,6 +19,7 @@ pub const Row = struct {
 pub const Model = struct {
     rows: []const Row,
     conflict_rows: []const usize,
+    visual_conflict_order: []const usize,
 
     pub fn rowForConflict(self: Model, conflict_index: usize) ?usize {
         if (conflict_index >= self.conflict_rows.len) return null;
@@ -211,9 +212,9 @@ const Builder = struct {
         try entry.value_ptr.append(self.arena, ordinal);
     }
 
-    fn emit(self: *Builder, conflict_count: usize) !Model {
+    fn emit(self: *Builder, conflict_indices: []const usize) !Model {
         var rows: std.ArrayList(Row) = .empty;
-        const conflict_rows = try self.arena.alloc(usize, conflict_count);
+        const conflict_rows = try self.arena.alloc(usize, conflict_indices.len);
         @memset(conflict_rows, 0);
         var loose_count: usize = 0;
         for (self.roots.items) |key| {
@@ -243,10 +244,40 @@ const Builder = struct {
                 );
             }
         }
+        const visual_conflict_order = try self.reorderConflicts(rows.items, conflict_rows, conflict_indices);
         return .{
             .rows = try rows.toOwnedSlice(self.arena),
             .conflict_rows = conflict_rows,
+            .visual_conflict_order = visual_conflict_order,
         };
+    }
+
+    fn reorderConflicts(
+        self: *Builder,
+        rows: []Row,
+        conflict_rows: []usize,
+        conflict_indices: []const usize,
+    ) ![]usize {
+        const visual_conflict_order = try self.arena.alloc(usize, conflict_indices.len);
+        if (conflict_indices.len == 0) return visual_conflict_order;
+
+        // Conflict discovery follows plan atomic order, while rows follow the tree order.
+        // Keep row lookup keyed by the rendered sequence and let State remap navigation.
+        const old_conflict_rows = try self.arena.dupe(usize, conflict_rows);
+        defer self.arena.free(old_conflict_rows);
+        var visual_index: usize = 0;
+        for (rows, 0..) |*row, row_index| {
+            row.conflict_index = null;
+            for (old_conflict_rows, 0..) |old_row_index, old_index| {
+                if (old_row_index != row_index) continue;
+                visual_conflict_order[visual_index] = old_index;
+                conflict_rows[visual_index] = row_index;
+                if (row.conflict_index == null) row.conflict_index = visual_index;
+                visual_index += 1;
+            }
+        }
+        std.debug.assert(visual_index == conflict_indices.len);
+        return visual_conflict_order;
     }
 
     fn emitNode(
@@ -342,7 +373,17 @@ pub fn build(
     try builder.addResult(try core.diffBytes(arena, "", plan.theirs.bytes));
     try builder.addResult(try core.diffBytes(arena, "", plan.base.bytes));
     try builder.addConflicts(plan, conflict_indices);
-    return builder.emit(conflict_indices.len);
+    return builder.emit(conflict_indices);
+}
+
+pub fn buildForState(
+    arena: std.mem.Allocator,
+    partial: []const u8,
+    state: *merge_ui_state.State,
+) !Model {
+    const tree = try build(arena, partial, state.plan, state.conflict_indices);
+    try state.reorderConflicts(tree.visual_conflict_order);
+    return tree;
 }
 
 const base =
@@ -474,4 +515,97 @@ test "merge TUI: prefab override conflict uses the Inspector property name" {
     const tree = try build(arena, built.partial, &built.plan, state.conflict_indices);
     const row_index = tree.rowForConflict(0).?;
     try testing.expectEqualStrings("Name", tree.rows[row_index].label);
+}
+
+test "merge TUI: conflict focus follows visual order across an edited component" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    // The component membership is collected from GameObject before later document fields,
+    // while the rendered tree shows Transform before the retained SphereCollider document.
+    const fixture_base =
+        "%YAML 1.1\n" ++
+        "%TAG !u! tag:unity3d.com,2011:\n" ++
+        "--- !u!1 &1\n" ++
+        "GameObject:\n" ++
+        "  m_Component:\n" ++
+        "  - component: {fileID: 4}\n" ++
+        "  - component: {fileID: 135}\n" ++
+        "  m_Name: Arm\n" ++
+        "--- !u!4 &4\n" ++
+        "Transform:\n" ++
+        "  m_GameObject: {fileID: 1}\n" ++
+        "  m_Father: {fileID: 0}\n" ++
+        "  m_Children: []\n" ++
+        "  m_LocalPosition: {x: 0.5, y: 1, z: 0}\n" ++
+        "--- !u!135 &135\n" ++
+        "SphereCollider:\n" ++
+        "  m_GameObject: {fileID: 1}\n" ++
+        "  m_Radius: 0.25\n";
+    const ours =
+        "%YAML 1.1\n" ++
+        "%TAG !u! tag:unity3d.com,2011:\n" ++
+        "--- !u!1 &1\n" ++
+        "GameObject:\n" ++
+        "  m_Component:\n" ++
+        "  - component: {fileID: 4}\n" ++
+        "  m_Name: Arm\n" ++
+        "--- !u!4 &4\n" ++
+        "Transform:\n" ++
+        "  m_GameObject: {fileID: 1}\n" ++
+        "  m_Father: {fileID: 0}\n" ++
+        "  m_Children: []\n" ++
+        "  m_LocalPosition: {x: 0.65, y: 1, z: 0}\n";
+    const theirs =
+        "%YAML 1.1\n" ++
+        "%TAG !u! tag:unity3d.com,2011:\n" ++
+        "--- !u!1 &1\n" ++
+        "GameObject:\n" ++
+        "  m_Component:\n" ++
+        "  - component: {fileID: 4}\n" ++
+        "  - component: {fileID: 135}\n" ++
+        "  m_Name: Arm\n" ++
+        "--- !u!4 &4\n" ++
+        "Transform:\n" ++
+        "  m_GameObject: {fileID: 1}\n" ++
+        "  m_Father: {fileID: 0}\n" ++
+        "  m_Children: []\n" ++
+        "  m_LocalPosition: {x: 0.8, y: 1, z: 0}\n" ++
+        "--- !u!135 &135\n" ++
+        "SphereCollider:\n" ++
+        "  m_GameObject: {fileID: 1}\n" ++
+        "  m_Radius: 0.4\n";
+    var built = try core.merge.build(arena, fixture_base, ours, theirs);
+    var state = try merge_ui_state.State.init(arena, &built.plan);
+    const tree = try buildForState(arena, built.partial, &state);
+    try state.handle(.{ .select_conflict = 0 });
+
+    try testing.expectEqual(@as(usize, 2), state.conflict_indices.len);
+    const first = built.plan.operations[state.conflict_indices[0]];
+    try testing.expect(first.kind == .field);
+    try testing.expectEqualStrings("m_LocalPosition.x", first.property_path);
+    const first_row = tree.rowForConflict(0).?;
+    try testing.expectEqualStrings("Position.x", tree.rows[first_row].label);
+    const second_row = tree.rowForConflict(1).?;
+    try testing.expectEqualStrings("SphereCollider", tree.rows[second_row].label);
+
+    // Movement follows the same visual sequence, and applying the first row advances to the second.
+    try state.handle(.move_down);
+    try testing.expectEqual(@as(usize, 1), state.selected_conflict);
+    try state.handle(.move_up);
+    try testing.expectEqual(@as(usize, 0), state.selected_conflict);
+    try state.handle(.choose_theirs);
+    try state.handle(.apply_result);
+    try testing.expectEqual(@as(usize, 1), state.selected_conflict);
+
+    // Resolving the lower row first wraps auto-advance to the still-unresolved top row.
+    try state.handle(.{ .select_conflict = 0 });
+    try state.handle(.reopen_result);
+    try state.handle(.{ .select_conflict = 1 });
+    try state.handle(.choose_theirs);
+    try state.handle(.apply_result);
+    try testing.expectEqual(@as(usize, 0), state.selected_conflict);
+    try state.handle(.choose_theirs);
+    try state.handle(.apply_result);
+    try testing.expectEqual(merge_ui_state.Outcome.ready, state.outcome);
 }

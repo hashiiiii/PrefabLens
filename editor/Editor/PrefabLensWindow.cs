@@ -1,9 +1,12 @@
 using System;
 using System.Collections.Generic;
+using System.Runtime.CompilerServices;
 using System.Threading;
 using UnityEditor;
 using UnityEngine;
 using UnityEngine.UIElements;
+
+[assembly: InternalsVisibleTo("PrefabLens.Editor.Tests")]
 
 namespace PrefabLens
 {
@@ -27,6 +30,15 @@ namespace PrefabLens
         public static void Open() => GetWindow<PrefabLensWindow>("PrefabLens");
 
         public void CreateGUI()
+        {
+            CreateLayout();
+            // Window-lifetime token for CLI runs; domain reload re-enters CreateGUI with a fresh one.
+            runCts = new CancellationTokenSource();
+            Refresh();
+        }
+
+        /// Toolbar and split view only. Tests feed fixtures through ShowBulkResult without a CLI run.
+        internal void CreateLayout()
         {
             var toolbar = new VisualElement
             {
@@ -68,10 +80,11 @@ namespace PrefabLens
             content = new VisualElement { style = { flexGrow = 1 } };
             split.Add(content);
             rootVisualElement.Add(split);
-            // Window-lifetime token for CLI runs; domain reload re-enters CreateGUI with a fresh one.
-            runCts = new CancellationTokenSource();
-            Refresh();
         }
+
+        internal ListView FileList => list;
+        internal VisualElement DetailPane => content;
+        internal string StatusText => status.text;
 
         /// Unity calls this whenever the window gains focus; before CreateGUI on first open.
         void OnFocus()
@@ -124,7 +137,7 @@ namespace PrefabLens
                 Refresh(); // the base ref changed mid-run: run again with the current field
         }
 
-        void ShowBulkResult(Cli.Result res, string runRef)
+        internal void ShowBulkResult(Cli.Result res, string runRef)
         {
             // Unchanged output — the common focus-triggered refresh. Leave the whole UI
             // alone so the user's tree fold state survives; only restore the status line.
@@ -133,12 +146,11 @@ namespace PrefabLens
                 status.text = CountText(runRef);
                 return;
             }
-            content.Clear();
             if (res.ExitCode != 0)
             {
                 // The CLI's stderr is the primary source (non-git repository, timeout, etc.)
-                lastStdout = null;
-                status.text = "";
+                ResetList();
+                content.Clear();
                 Note(string.IsNullOrEmpty(res.Stderr) ? $"prefablens exited with {res.ExitCode}" : res.Stderr.Trim());
                 return;
             }
@@ -151,8 +163,8 @@ namespace PrefabLens
                 // The generic UI note stays short; the console carries the real reason
                 // (exception type + message) so a version mismatch is diagnosable.
                 Debug.LogException(e);
-                lastStdout = null;
-                status.text = "";
+                ResetList();
+                content.Clear();
                 Note("Could not parse CLI output (CLI version mismatch?):");
                 Note(res.Stdout.Length > 200 ? res.Stdout.Substring(0, 200) + "…" : res.Stdout);
                 return;
@@ -163,7 +175,10 @@ namespace PrefabLens
             status.text = CountText(runRef);
 
             if (bulk.Entries.Count == 0)
+            {
+                content.Clear();
                 return;
+            }
             var idx = bulk.Entries.FindIndex(entry => entry.Path == selectedPath);
             if (idx < 0)
                 idx = 0;
@@ -207,11 +222,12 @@ namespace PrefabLens
                 content.Add(DiffTreeView.BuildTree(entry.Diff));
         }
 
-        /// Clears the list pane and status; the missing-CLI screen and the download
-        /// start share this exact reset.
+        /// Clears the list pane, selection, and status. Missing-CLI, download start,
+        /// and a failed refresh share this reset.
         void ResetList()
         {
             bulk = new BulkModel();
+            list.ClearSelectionWithoutNotify();
             list.itemsSource = bulk.Entries;
             list.RefreshItems();
             lastStdout = null;

@@ -109,12 +109,20 @@ namespace UnityEngine.UIElements
 
     public class VisualElement
     {
+        readonly List<VisualElement> children = new();
+
         public IStyle style { get; } = new Style();
         public string tooltip { get; set; }
 
-        public void Add(VisualElement child) { }
+        public int childCount => children.Count;
 
-        public void Clear() { }
+        public VisualElement this[int key] => children[key];
+
+        public void Add(VisualElement child) => children.Add(child);
+
+        public void Clear() => children.Clear();
+
+        public IEnumerable<VisualElement> Children() => children;
     }
 
     public delegate void EventCallback<in TEventType>(TEventType evt);
@@ -214,6 +222,8 @@ namespace UnityEngine.UIElements
         public event Action<IEnumerable<object>> selectionChanged;
 
         public void SetSelection(int index) { }
+
+        public void ClearSelectionWithoutNotify() { }
 
         public void RefreshItems() { }
     }

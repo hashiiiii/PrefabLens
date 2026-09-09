@@ -3,6 +3,15 @@ const vaxis = @import("vaxis");
 const vxfw = vaxis.vxfw;
 
 const Position = struct { row: usize = 0, col: usize = 0 };
+pub const Selection = struct { start: usize, end: usize };
+
+pub fn normalizeNewlines(allocator: std.mem.Allocator, text: []const u8) ![]u8 {
+    const normalized = try std.mem.replaceOwned(u8, allocator, text, "\r\n", "\n");
+    for (normalized) |*byte| if (byte.* == '\r') {
+        byte.* = '\n';
+    };
+    return normalized;
+}
 
 fn advance(position: *Position, text: []const u8, width: usize) void {
     if (std.mem.eql(u8, text, "\n")) {
@@ -18,7 +27,7 @@ fn advance(position: *Position, text: []const u8, width: usize) void {
     position.col += cells;
 }
 
-pub fn draw(editor: *vxfw.TextField, top: *usize, ctx: vxfw.DrawContext) !vxfw.Surface {
+pub fn draw(editor: *vxfw.TextField, top: *usize, selection: ?Selection, ctx: vxfw.DrawContext) !vxfw.Surface {
     const size = vxfw.Size{ .width = ctx.max.width.?, .height = ctx.max.height.? };
     var surface = try vxfw.Surface.init(ctx.arena, editor.widget(), size);
     @memset(surface.buffer, .{ .style = editor.style });
@@ -40,7 +49,14 @@ pub fn draw(editor: *vxfw.TextField, top: *usize, ctx: vxfw.DrawContext) !vxfw.S
     var iter = vaxis.unicode.graphemeIterator(text);
     while (iter.next()) |g| {
         const bytes = g.bytes(text);
+        var style = editor.style;
+        if (selection) |range| style.reverse = g.start >= range.start and g.start < range.end;
         if (std.mem.eql(u8, bytes, "\n")) {
+            if (style.reverse and position.row >= top.* and position.row < top.* + size.height) {
+                for (position.col..size.width) |col| {
+                    surface.writeCell(@intCast(col), @intCast(position.row - top.*), .{ .style = style });
+                }
+            }
             advance(&position, bytes, size.width);
             continue;
         }
@@ -53,7 +69,7 @@ pub fn draw(editor: *vxfw.TextField, top: *usize, ctx: vxfw.DrawContext) !vxfw.S
         if (cells > 0 and cells <= size.width and position.row >= top.*) {
             surface.writeCell(@intCast(position.col), @intCast(position.row - top.*), .{
                 .char = .{ .grapheme = try ctx.arena.dupe(u8, bytes), .width = @intCast(cells) },
-                .style = editor.style,
+                .style = style,
             });
         }
         position.col += cells;
@@ -96,7 +112,7 @@ pub fn moveLine(editor: *vxfw.TextField, key: vaxis.Key) !bool {
     return true;
 }
 
-pub fn placeCursor(editor: *vxfw.TextField, width: usize, row: usize, col: usize) !void {
+pub fn cursorAt(editor: *vxfw.TextField, width: usize, row: usize, col: usize) !usize {
     const text = try editor.buf.dupe();
     defer editor.buf.allocator.free(text);
     var position: Position = .{};
@@ -117,6 +133,10 @@ pub fn placeCursor(editor: *vxfw.TextField, width: usize, row: usize, col: usize
         }
         advance(&position, bytes, width);
     }
+    return target;
+}
+
+pub fn setCursor(editor: *vxfw.TextField, target: usize) void {
     const cursor = editor.buf.cursor;
     if (target < cursor) editor.buf.moveGapLeft(cursor - target) else editor.buf.moveGapRight(target - cursor);
 }

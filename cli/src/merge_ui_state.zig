@@ -77,6 +77,18 @@ pub const State = struct {
         }
         var conflict_index: usize = 0;
         for (plan.atomic_operations) |atomic| {
+            // A component Result shows its document; the membership only tracks its GameObject reference.
+            if (atomic.kind == .component) {
+                const document_index = for (plan.operations, 0..) |operation_item, index| {
+                    if (operation_item.atomic_id == atomic.id and operation_item.kind == .component and
+                        operation_item.resolution == .unresolved) break index;
+                } else null;
+                if (document_index) |index| {
+                    conflicts[conflict_index] = index;
+                    conflict_index += 1;
+                    continue;
+                }
+            }
             for (atomic.operation_ids) |id| {
                 for (plan.operations, 0..) |operation_item, operation_index| {
                     if (operation_item.id == id and operation_item.resolution == .unresolved) {

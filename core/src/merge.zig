@@ -96,12 +96,17 @@ pub fn resolve(
     const atomic = merge_model.atomicById(plan, operation.atomic_id) orelse
         return error.InvalidResolution;
     var stored_resolution = resolution;
+    var component_custom: ?ComponentCustom = null;
     switch (resolution) {
         .unresolved => return error.InvalidResolution,
         .take => |side| if (side == .base or operation.values.get(side) == null)
             return error.InvalidResolution,
         .custom => |value| {
-            if (operation.collection) |binding_ref| {
+            if (atomic.kind == .component and
+                (operation.kind == .sequence_membership or operation.kind == .component))
+            {
+                component_custom = try validateComponentCustom(arena, plan, operation, atomic, value);
+            } else if (operation.collection) |binding_ref| {
                 const parsed = @import("merge_yaml.zig").parseValue(arena, value) catch |err| switch (err) {
                     error.OutOfMemory => return error.OutOfMemory,
                     else => return error.InvalidResolution,
@@ -128,7 +133,17 @@ pub fn resolve(
     for (atomic.operation_ids, previous) |id, *old_resolution| {
         const member = merge_model.operationById(plan, id).?;
         old_resolution.* = member.resolution;
-        member.resolution = stored_resolution;
+        if (component_custom) |custom| {
+            if (member.id == custom.membership_id) {
+                member.resolution = .{ .take = custom.membership_side };
+            } else if (member.id == custom.document_id) {
+                member.resolution = stored_resolution;
+            } else {
+                return error.InvalidResolution;
+            }
+        } else {
+            member.resolution = stored_resolution;
+        }
     }
     errdefer {
         for (atomic.operation_ids, previous) |id, old_resolution| {
@@ -143,6 +158,94 @@ pub fn resolve(
         error.OutOfMemory => return error.OutOfMemory,
         else => return error.InvalidResolution,
     };
+}
+
+const ComponentCustom = struct {
+    membership_id: OperationId,
+    document_id: OperationId,
+    membership_side: Side,
+};
+
+fn validateComponentCustom(
+    arena: std.mem.Allocator,
+    plan: *const MergePlan,
+    operation: *const Operation,
+    atomic: *const merge_model.AtomicOperation,
+    value: []const u8,
+) Error!ComponentCustom {
+    var membership: ?*const Operation = null;
+    var document: ?*const Operation = null;
+    for (atomic.operation_ids) |member_id| {
+        const member = merge_model.operationByIdConst(plan, member_id) orelse
+            return error.InvalidResolution;
+        switch (member.kind) {
+            .sequence_membership => {
+                if (membership != null) return error.InvalidResolution;
+                membership = member;
+            },
+            .component => {
+                if (document != null) return error.InvalidResolution;
+                document = member;
+            },
+            else => return error.InvalidResolution,
+        }
+    }
+    const membership_operation = membership orelse return error.InvalidResolution;
+    const document_operation = document orelse return error.InvalidResolution;
+    if (atomic.operation_ids.len != 2) return error.InvalidResolution;
+    if (operation.id != membership_operation.id and operation.id != document_operation.id)
+        return error.InvalidResolution;
+    const membership_side = componentMembershipSide(membership_operation);
+    if (membership_operation.values.get(membership_side) == null or
+        document_operation.values.get(membership_side) == null)
+        return error.InvalidResolution;
+    const selected_document = componentDocument(plan, document_operation, membership_side) orelse
+        return error.InvalidResolution;
+
+    const parsed = merge_planner.parseMergeSide(arena, value) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return error.InvalidResolution,
+    };
+    if (parsed.documents.len != 1) return error.InvalidResolution;
+    const custom_document = parsed.documents[0];
+    if (custom_document.class_id != document_operation.identity.document.class_id or
+        custom_document.file_id != document_operation.identity.document.file_id or
+        !std.mem.eql(u8, custom_document.type_name, selected_document.type_name) or
+        custom_document.stripped != selected_document.stripped)
+        return error.InvalidResolution;
+    const owner = custom_document.body.get("m_GameObject") orelse
+        return error.InvalidResolution;
+    if (owner.* != .ref or owner.ref.guid != null or
+        owner.ref.file_id != membership_operation.identity.document.file_id)
+        return error.InvalidResolution;
+
+    return .{
+        .membership_id = membership_operation.id,
+        .document_id = document_operation.id,
+        .membership_side = membership_side,
+    };
+}
+
+fn componentDocument(
+    plan: *const MergePlan,
+    operation: *const Operation,
+    side: Side,
+) ?*const model.Document {
+    const id = operation.identity.document;
+    for (plan.file(side).documents) |*document| {
+        if (document.class_id == id.class_id and document.file_id == id.file_id) return document;
+    }
+    return null;
+}
+
+fn componentMembershipSide(operation: *const Operation) Side {
+    switch (operation.resolution) {
+        .take => |side| if (operation.values.get(side) != null) return side,
+        else => {},
+    }
+    if (operation.values.ours != null) return .ours;
+    if (operation.values.theirs != null) return .theirs;
+    return .base;
 }
 
 pub const CollectionConflict = struct { reason: @import("merge_value.zig").Reason, both_orders: bool };
@@ -167,6 +270,12 @@ pub fn combinedCollectionValue(arena: std.mem.Allocator, plan: *const MergePlan,
 pub fn supportsCustomResolution(plan: *const MergePlan, operation_id: OperationId) bool {
     const operation = merge_model.operationByIdConst(plan, operation_id) orelse return false;
     if (operation.collection != null) return true;
+    const atomic = for (plan.atomic_operations) |*candidate| {
+        if (candidate.id == operation.atomic_id) break candidate;
+    } else return false;
+    if (atomic.kind == .component and
+        (operation.kind == .sequence_membership or operation.kind == .component))
+        return true;
     return (operation.kind == .field or (operation.kind == .prefab_override and operation.item_path != null)) and supportsCustomValue(operation) and wasConflict(operation);
 }
 
@@ -360,6 +469,230 @@ test "map container delete and edit resolves symmetrically" {
         try resolve(arena, &take_edited.plan, edited_operation.id, edited_resolution);
         try std.testing.expectEqualStrings(edited, try finish(arena, &take_edited.plan));
     }
+}
+
+test "component document custom resolution keeps its owner membership" {
+    const support = @import("merge_test_support.zig");
+    const fixture = support.load("component-delete-edit", true);
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var built = try build(arena, fixture.base, fixture.ours, fixture.theirs);
+    const atomic = support.findAtomicByKind(&built.plan, .component).?;
+    const membership = merge_model.operationById(&built.plan, atomic.operation_ids[0]).?;
+    const component = for (atomic.operation_ids) |operation_id| {
+        const candidate = merge_model.operationById(&built.plan, operation_id).?;
+        if (candidate.kind == .component) break candidate;
+    } else return error.TestUnexpectedResult;
+    const corrected = "--- !u!54 &54\n" ++
+        "Rigidbody:\n" ++
+        "  m_GameObject: {fileID: 1}\n" ++
+        "  m_Mass: 3";
+    const expected = try std.mem.replaceOwned(u8, arena, fixture.expected, "m_Mass: 2\n", "m_Mass: 3\n");
+
+    try testing.expectEqual(merge_model.OperationKind.sequence_membership, membership.kind);
+    try testing.expect(supportsCustomResolution(&built.plan, membership.id));
+    try testing.expect(supportsCustomResolution(&built.plan, component.id));
+    try resolve(arena, &built.plan, component.id, .{ .custom = corrected });
+    try testing.expectEqualStrings(expected, try finish(arena, &built.plan));
+}
+
+test "component document custom resolution can be edited again and reversed" {
+    const support = @import("merge_test_support.zig");
+    const fixture = support.load("component-delete-edit", true);
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var built = try build(arena, fixture.base, fixture.ours, fixture.theirs);
+    const atomic = support.findAtomicByKind(&built.plan, .component).?;
+    const membership = merge_model.operationById(&built.plan, atomic.operation_ids[0]).?;
+    const corrected_three =
+        "--- !u!54 &54\n" ++
+        "Rigidbody:\n" ++
+        "  m_GameObject: {fileID: 1}\n" ++
+        "  m_Mass: 3\n";
+    const corrected_four =
+        "--- !u!54 &54\n" ++
+        "Rigidbody:\n" ++
+        "  m_GameObject: {fileID: 1}\n" ++
+        "  m_Mass: 4\n";
+
+    try resolve(arena, &built.plan, membership.id, .{ .custom = corrected_three });
+    try testing.expect(std.mem.indexOf(u8, try finish(arena, &built.plan), "m_Mass: 3") != null);
+    try resolve(arena, &built.plan, membership.id, .{ .custom = corrected_four });
+    try testing.expect(std.mem.indexOf(u8, try finish(arena, &built.plan), "m_Mass: 4") != null);
+    try resolve(arena, &built.plan, membership.id, .{ .take = .theirs });
+    try testing.expectEqualStrings(fixture.theirs, try finish(arena, &built.plan));
+    try resolve(arena, &built.plan, membership.id, .remove);
+    try testing.expectEqualStrings(fixture.ours, try finish(arena, &built.plan));
+}
+
+test "component document custom resolution rejects invalid identity and owner" {
+    const support = @import("merge_test_support.zig");
+    const fixture = support.load("component-delete-edit", true);
+    const invalid_documents = [_][]const u8{
+        "--- !u!54 &99\nRigidbody:\n  m_GameObject: {fileID: 1}\n  m_Mass: 3\n",
+        "--- !u!65 &54\nBoxCollider:\n  m_GameObject: {fileID: 1}\n  m_Mass: 3\n",
+        "--- !u!54 &54\nBoxCollider:\n  m_GameObject: {fileID: 1}\n  m_Mass: 3\n",
+        "--- !u!54 &54\nRigidbody:\n  m_GameObject: {fileID: 2}\n  m_Mass: 3\n",
+        "--- !u!54 &54\nRigidbody:\n  m_GameObject: {fileID: 1, guid: bad}\n  m_Mass: 3\n",
+        "",
+    };
+
+    for (invalid_documents) |invalid| {
+        var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+        defer arena_state.deinit();
+        const arena = arena_state.allocator();
+        var built = try build(arena, fixture.base, fixture.ours, fixture.theirs);
+        const atomic = support.findAtomicByKind(&built.plan, .component).?;
+        const membership = merge_model.operationById(&built.plan, atomic.operation_ids[0]).?;
+        try testing.expectError(
+            error.InvalidResolution,
+            resolve(arena, &built.plan, membership.id, .{ .custom = invalid }),
+        );
+        try testing.expectEqualStrings(
+            fixture.partial.?,
+            try merge_apply.applyResolved(arena, &built.plan, false),
+        );
+    }
+}
+
+test "component document custom resolution preserves a previous edit after rejection" {
+    const support = @import("merge_test_support.zig");
+    const fixture = support.load("component-delete-edit", true);
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var built = try build(arena, fixture.base, fixture.ours, fixture.theirs);
+    const atomic = support.findAtomicByKind(&built.plan, .component).?;
+    const membership = merge_model.operationById(&built.plan, atomic.operation_ids[0]).?;
+    const corrected =
+        "--- !u!54 &54\n" ++
+        "Rigidbody:\n" ++
+        "  m_GameObject: {fileID: 1}\n" ++
+        "  m_Mass: 3\n";
+    const invalid =
+        "--- !u!54 &54\n" ++
+        "Rigidbody:\n" ++
+        "  m_GameObject: {fileID: 2}\n" ++
+        "  m_Mass: 9\n";
+
+    try resolve(arena, &built.plan, membership.id, .{ .custom = corrected });
+    try testing.expectError(
+        error.InvalidResolution,
+        resolve(arena, &built.plan, membership.id, .{ .custom = invalid }),
+    );
+    try testing.expect(std.mem.indexOf(u8, try finish(arena, &built.plan), "m_Mass: 3") != null);
+}
+
+test "component document custom resolution keeps CRLF before a following document" {
+    const support = @import("merge_test_support.zig");
+    const base_lf =
+        "--- !u!1 &1\n" ++
+        "GameObject:\n" ++
+        "  m_Component:\n" ++
+        "  - component: {fileID: 4}\n" ++
+        "  - component: {fileID: 54}\n" ++
+        "  - component: {fileID: 65}\n" ++
+        "--- !u!4 &4\n" ++
+        "Transform:\n" ++
+        "  m_GameObject: {fileID: 1}\n" ++
+        "  m_Children: []\n" ++
+        "  m_Father: {fileID: 0}\n" ++
+        "--- !u!54 &54\n" ++
+        "Rigidbody:\n" ++
+        "  m_GameObject: {fileID: 1}\n" ++
+        "  m_Mass: 1\n" ++
+        "--- !u!65 &65\n" ++
+        "BoxCollider:\n" ++
+        "  m_GameObject: {fileID: 1}\n" ++
+        "  m_IsTrigger: 0\n";
+    const ours_lf =
+        "--- !u!1 &1\n" ++
+        "GameObject:\n" ++
+        "  m_Component:\n" ++
+        "  - component: {fileID: 4}\n" ++
+        "  - component: {fileID: 54}\n" ++
+        "  - component: {fileID: 65}\n" ++
+        "--- !u!4 &4\n" ++
+        "Transform:\n" ++
+        "  m_GameObject: {fileID: 1}\n" ++
+        "  m_Children: []\n" ++
+        "  m_Father: {fileID: 0}\n" ++
+        "--- !u!54 &54\n" ++
+        "Rigidbody:\n" ++
+        "  m_GameObject: {fileID: 1}\n" ++
+        "  m_Mass: 3\n" ++
+        "--- !u!65 &65\n" ++
+        "BoxCollider:\n" ++
+        "  m_GameObject: {fileID: 1}\n" ++
+        "  m_IsTrigger: 0\n";
+    const theirs_lf =
+        "--- !u!1 &1\n" ++
+        "GameObject:\n" ++
+        "  m_Component:\n" ++
+        "  - component: {fileID: 4}\n" ++
+        "  - component: {fileID: 65}\n" ++
+        "--- !u!4 &4\n" ++
+        "Transform:\n" ++
+        "  m_GameObject: {fileID: 1}\n" ++
+        "  m_Children: []\n" ++
+        "  m_Father: {fileID: 0}\n" ++
+        "--- !u!65 &65\n" ++
+        "BoxCollider:\n" ++
+        "  m_GameObject: {fileID: 1}\n" ++
+        "  m_IsTrigger: 0\n";
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const base = try std.mem.replaceOwned(u8, arena, base_lf, "\n", "\r\n");
+    const ours = try std.mem.replaceOwned(u8, arena, ours_lf, "\n", "\r\n");
+    const theirs = try std.mem.replaceOwned(u8, arena, theirs_lf, "\n", "\r\n");
+    var built = try build(arena, base, ours, theirs);
+    const atomic = support.findAtomicByKind(&built.plan, .component).?;
+    const membership = merge_model.operationById(&built.plan, atomic.operation_ids[0]).?;
+    const corrected =
+        "--- !u!54 &54\n" ++
+        "Rigidbody:\n" ++
+        "  m_GameObject: {fileID: 1}\n" ++
+        "  m_Mass: 4";
+    const expected = try std.mem.replaceOwned(u8, arena, ours, "m_Mass: 3\r\n", "m_Mass: 4\r\n");
+
+    try resolve(arena, &built.plan, membership.id, .{ .custom = corrected });
+    try testing.expectEqualStrings(expected, try finish(arena, &built.plan));
+}
+
+test "component document custom insertion follows selected document order" {
+    const support = @import("merge_test_support.zig");
+    const base =
+        "--- !u!1 &1\nGameObject:\n  m_Component:\n  - component: {fileID: 4}\n  - component: {fileID: 54}\n" ++
+        "--- !u!4 &4\nTransform:\n  m_GameObject: {fileID: 1}\n  m_Children: []\n  m_Father: {fileID: 0}\n" ++
+        "--- !u!54 &54\nRigidbody:\n  m_GameObject: {fileID: 1}\n  m_Mass: 1\n";
+    const ours =
+        "--- !u!1 &1\nGameObject:\n  m_Component:\n  - component: {fileID: 4}\n" ++
+        "--- !u!4 &4\nTransform:\n  m_GameObject: {fileID: 1}\n  m_Children: []\n  m_Father: {fileID: 0}\n";
+    const theirs =
+        "--- !u!1 &1\nGameObject:\n  m_Component:\n  - component: {fileID: 4}\n  - component: {fileID: 54}\n  - component: {fileID: 65}\n" ++
+        "--- !u!4 &4\nTransform:\n  m_GameObject: {fileID: 1}\n  m_Children: []\n  m_Father: {fileID: 0}\n" ++
+        "--- !u!54 &54\nRigidbody:\n  m_GameObject: {fileID: 1}\n  m_Mass: 2\n" ++
+        "--- !u!65 &65\nBoxCollider:\n  m_GameObject: {fileID: 1}\n  m_IsTrigger: 0\n";
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var built = try build(arena, base, ours, theirs);
+    const component_atomic = support.findAtomicByKind(&built.plan, .component).?;
+    const component = for (component_atomic.operation_ids) |operation_id| {
+        const candidate = merge_model.operationById(&built.plan, operation_id).?;
+        if (candidate.kind == .component) break candidate;
+    } else return error.TestUnexpectedResult;
+    const corrected =
+        "--- !u!54 &54\nRigidbody:\n  m_GameObject: {fileID: 1}\n  m_Mass: 3\n";
+
+    try resolve(arena, &built.plan, component.id, .{ .custom = corrected });
+    const finished = try finish(arena, &built.plan);
+    const component_54 = std.mem.indexOf(u8, finished, "--- !u!54 &54").?;
+    const component_65 = std.mem.indexOf(u8, finished, "--- !u!65 &65").?;
+    try testing.expect(component_54 < component_65);
 }
 
 test "merge build rejects a malformed flow entry" {

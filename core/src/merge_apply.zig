@@ -1242,21 +1242,39 @@ fn appendDocumentPatch(
     plan: *const merge_model.MergePlan,
     operation: *const merge_model.Operation,
 ) merge_model.Error!void {
+    const custom = switch (operation.resolution) {
+        .custom => |value| if (operation.kind == .component) value else return error.InvalidResolution,
+        else => null,
+    };
+    const custom_bytes = if (custom) |value|
+        try completeCustomDocument(arena, plan, operation, value)
+    else
+        null;
     const selected = switch (operation.resolution) {
         .unresolved => return error.InvalidResolution,
         .remove => null,
         .take => |side| operation.values.get(side),
-        .custom => return error.InvalidResolution,
+        .custom => null,
     };
     if (operation.values.ours) |ours| {
         const span = ours.span orelse return error.UnsupportedStructure;
-        const replacement = if (selected) |value| value.bytes else "";
+        const replacement = if (custom_bytes) |value| value else if (selected) |value| value.bytes else "";
         if (std.mem.eql(u8, span.bytes(plan.ours.bytes), replacement)) return;
         return patches.append(arena, .{
             .span = span,
             .replacement = replacement,
             .atomic_id = operation.atomic_id,
             .order = operation.id,
+        });
+    }
+    if (custom_bytes) |value| {
+        const insertion_side = customComponentInsertionSide(plan, operation) orelse
+            return error.InvalidMerge;
+        return patches.append(arena, .{
+            .span = .{ .start = plan.ours.bytes.len, .end = plan.ours.bytes.len },
+            .replacement = value,
+            .atomic_id = operation.atomic_id,
+            .order = documentInsertionOrder(plan, operation, insertion_side),
         });
     }
     const inserted = selected orelse return;
@@ -1282,6 +1300,76 @@ fn appendDocumentPatch(
     });
 }
 
+fn completeCustomDocument(
+    arena: std.mem.Allocator,
+    plan: *const merge_model.MergePlan,
+    operation: *const merge_model.Operation,
+    value: []const u8,
+) merge_model.Error![]const u8 {
+    const destination_ending = documentLineEnding(plan, operation);
+    const normalized = try normalizeCustomDocument(arena, value, destination_ending);
+    const ours_ending = trailingLineEnding(plan.ours.bytes);
+    const needs_prefix = operation.values.ours == null and plan.ours.bytes.len != 0 and ours_ending == null;
+    const needs_suffix = trailingLineEnding(normalized) == null and destination_ending.len != 0 and
+        customDocumentHasBoundary(plan, operation);
+    if (!needs_prefix and !needs_suffix) return normalized;
+    const prefix = if (needs_prefix) destination_ending else "";
+    const suffix = if (needs_suffix) destination_ending else "";
+    return std.mem.concat(arena, u8, &.{ prefix, normalized, suffix });
+}
+
+fn normalizeCustomDocument(
+    arena: std.mem.Allocator,
+    value: []const u8,
+    destination_ending: []const u8,
+) merge_model.Error![]const u8 {
+    if (std.mem.eql(u8, destination_ending, "\r\n")) {
+        const lf = try std.mem.replaceOwned(u8, arena, value, "\r\n", "\n");
+        return std.mem.replaceOwned(u8, arena, lf, "\n", "\r\n");
+    }
+    if (std.mem.eql(u8, destination_ending, "\n"))
+        return std.mem.replaceOwned(u8, arena, value, "\r\n", "\n");
+    return value;
+}
+
+fn customDocumentHasBoundary(
+    plan: *const merge_model.MergePlan,
+    operation: *const merge_model.Operation,
+) bool {
+    if (operation.values.ours) |ours| {
+        if (ours.span) |span| return trailingLineEnding(span.bytes(plan.ours.bytes)) != null;
+    }
+    if (trailingLineEnding(plan.ours.bytes) != null) return true;
+    inline for (.{ operation.values.theirs, operation.values.base }) |value| {
+        if (value) |present| if (trailingLineEnding(present.bytes) != null) return true;
+    }
+    return false;
+}
+
+fn documentLineEnding(
+    plan: *const merge_model.MergePlan,
+    operation: *const merge_model.Operation,
+) []const u8 {
+    if (operation.values.ours) |ours| {
+        if (ours.span) |span| {
+            if (trailingLineEnding(span.bytes(plan.ours.bytes))) |ending| return ending;
+        }
+    }
+    if (trailingLineEnding(plan.ours.bytes)) |ending| return ending;
+    inline for (.{ operation.values.theirs, operation.values.base }) |value| {
+        if (value) |present| {
+            if (trailingLineEnding(present.bytes)) |ending| return ending;
+        }
+    }
+    return plan.ours.lineEndingAt(plan.ours.bytes.len);
+}
+
+fn trailingLineEnding(bytes: []const u8) ?[]const u8 {
+    if (std.mem.endsWith(u8, bytes, "\r\n")) return "\r\n";
+    if (std.mem.endsWith(u8, bytes, "\n")) return "\n";
+    return null;
+}
+
 fn documentInsertionOrder(
     plan: *const merge_model.MergePlan,
     operation: *const merge_model.Operation,
@@ -1292,6 +1380,22 @@ fn documentInsertionOrder(
         if (document.class_id == operation.identity.document.class_id and
             document.file_id == operation.identity.document.file_id) break index;
     } else selected_file.documents.len;
+}
+
+fn customComponentInsertionSide(
+    plan: *const merge_model.MergePlan,
+    operation: *const merge_model.Operation,
+) ?merge_model.Side {
+    const atomic = atomicByIdConst(plan, operation.atomic_id) orelse return null;
+    for (atomic.operation_ids) |member_id| {
+        const member = merge_model.operationByIdConst(plan, member_id) orelse return null;
+        if (member.kind != .sequence_membership) continue;
+        return switch (member.resolution) {
+            .take => |side| if (member.values.get(side) != null) side else null,
+            else => null,
+        };
+    }
+    return null;
 }
 
 fn documentInsertionOffset(

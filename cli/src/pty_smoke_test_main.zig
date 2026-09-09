@@ -143,6 +143,11 @@ fn testResultEditing(io: std.Io, arena: std.mem.Allocator, scratch: []const u8, 
     const cases = [_]struct { name: []const u8, base: []const u8, ours: []const u8, theirs: []const u8, keys: []const u8, expected: []const u8 }{
         // Ctrl+E retains the side preview; editing one digit must not replace the rest of the value.
         .{ .name = "result-cursor", .base = scalar_prefix ++ "5\n", .ours = scalar_prefix ++ "12\n", .theirs = scalar_prefix ++ "8\n", .keys = "\x1b[<0;52;5M\x05\x1b[D\x7f9\r\r", .expected = scalar_prefix ++ "92\n" },
+        // SGR drag reports must select text in the focused editor before replacement.
+        .{ .name = "result-drag", .base = scalar_prefix ++ "5\n", .ours = scalar_prefix ++ "12\n", .theirs = scalar_prefix ++ "8\n", .keys = "\x1b[<0;52;5M\x05\x1b[<0;85;5M\x1b[<32;86;5M\x1b[<0;86;5m9\r\r", .expected = scalar_prefix ++ "92\n" },
+        // Both deletion keys clear the entire preview before Ctrl+E opens a fresh editor.
+        .{ .name = "result-clear-backspace", .base = scalar_prefix ++ "5\n", .ours = scalar_prefix ++ "12\n", .theirs = scalar_prefix ++ "8\n", .keys = "\x1b[<0;52;5M\x1b[C\x1b[C\x7f\x054\r\r", .expected = scalar_prefix ++ "4\n" },
+        .{ .name = "result-clear-delete", .base = scalar_prefix ++ "5\n", .ours = scalar_prefix ++ "12\n", .theirs = scalar_prefix ++ "8\n", .keys = "\x1b[<0;52;5M\x1b[C\x1b[C\x1b[3~\x054\r\r", .expected = scalar_prefix ++ "4\n" },
         // CRLF inside bracketed paste must not accept a partial interval or trigger Complete.
         .{ .name = "result-paste", .base = try collectionFile(arena, "[A]", 1, 1), .ours = try collectionFile(arena, "[A, Ours]", 2, 1), .theirs = try collectionFile(arena, "[A, Theirs]", 1, 3), .keys = "\x1b[<0;83;5M\x1b[200~  - One\r\n  - Two\r\n\x1b[201~\r\r", .expected = try collectionFile(arena, "[A, One, Two]", 2, 3) },
         // A newline retains indentation, and Up edits the preceding line without applying it.
@@ -337,8 +342,8 @@ fn testBackspaceBeforeEditing(
     _ = try integration.expectMarkers(io, arena, repo, "Assets/Conflict.prefab");
 
     // A raw DEL byte is the macOS Delete key and must work before a Result click.
-    // Enter opens the dialog. Right and Enter apply the empty value. The final Enter confirms Complete.
-    const keys = "\x1b[C\r\x1b[A\x1b[C\x1b[C\x1b[C\x7f\r\x1b[C\r\r";
+    // The first Enter starts editing; the second asks before applying the cleared value.
+    const keys = "\x1b[C\r\x1b[A\x1b[C\x1b[C\x1b[C\x7f\r\r\x1b[C\r\r";
     const result = try runMergetoolInPty(io, arena, repo, keys, 30);
     try integration.expectCode(result, 0, "clear focused Result in PTY");
     try integration.expectFile(io, arena, repo, "Assets/Conflict.prefab", conflict_empty);

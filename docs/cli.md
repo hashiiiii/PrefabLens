@@ -196,10 +196,12 @@ The user can edit it with another tool and complete the normal Git workflow.
 Click **Ours** or **Theirs** to preview a value.
 Click **Result**, or focus it and press **Enter**, to edit the existing value.
 **Ctrl+E** opens the Result editor directly from the selected conflict; **F2** also works.
-Typing and pasting insert at the cursor, and **Backspace** deletes one character.
+Before editing, **Backspace** or **Delete** clears the focused Result and reopens the conflict without starting the editor.
+While editing, typing and pasting insert at the cursor; **Backspace** and **Delete** remove a character or the selected range.
 
 Arrow keys move the cursor within the value.
-Click inside the editor to place the cursor.
+Click inside the editor to place the cursor, or drag to select text across lines.
+Selected text is highlighted; typing or pasting replaces it.
 **Home** / **Ctrl+A** and **End** / **Ctrl+E** move to the start and end of the current line.
 **Shift+Enter** inserts a newline with the current indentation.
 If your terminal sends the same key code for Enter and Shift+Enter, use **Ctrl+J** or configure Shift+Enter to send a newline (`\n`).
@@ -212,6 +214,8 @@ Bracketed paste keeps indentation and line breaks and waits for **Enter** before
 Collection values accept block YAML and flow YAML split across lines.
 Keep each scalar token on one line; folded scalar input remains unsupported.
 PrefabLens keeps the existing collection shape checks and output formatting rules.
+For a component delete/edit conflict, Result contains the whole component document.
+You can edit its properties while keeping its document header, type, and `m_GameObject` reference unchanged.
 
 #### Completion checks
 

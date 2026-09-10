@@ -5,6 +5,10 @@ on:
       version:
         description: 'Release version (X.Y.Z, no v prefix)'
         required: true
+      skip_chrome_extension:
+        description: 'Skip Chrome Web Store publish (GitHub Release still includes the extension zip)'
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -138,7 +142,10 @@ jobs:
   # Store and submits it for review; the store publishes it automatically on
   # approval. Independent from the release: safe to re-run in isolation, but
   # fails while a previous submission is still pending review.
+  # Skipped when skip_chrome_extension is true. The release job still builds
+  # and attaches the zip, so this job can run later on its own.
   publish-extension:
+    if: ${{ !inputs.skip_chrome_extension }}
     needs: release
     runs-on: ubuntu-latest
     env:

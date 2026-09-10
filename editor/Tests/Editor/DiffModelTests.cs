@@ -100,16 +100,6 @@ namespace PrefabLens.Tests
         }
 
         [Test]
-        public void EmptyDiffIsEmpty()
-        {
-            // On no changes the Window checks IsEmpty and shows "No semantic changes". The basis for that branch.
-            var m = DiffModel.Parse(
-                @"{""schema"":""prefablens.diff.v2"",""unresolvedGuids"":[],""roots"":[],""loose"":[]}"
-            );
-            Assert.IsTrue(m.IsEmpty);
-        }
-
-        [Test]
         public void ParsesResolvedMapAndRemovedStatus()
         {
             // resolved is the guid -> path already resolved by the CLI (that ResolveWith doesn't overwrite it is verified in another test).

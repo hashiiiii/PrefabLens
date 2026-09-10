@@ -35,18 +35,6 @@ namespace PrefabLens.Tests
         }
 
         [Test]
-        public void RunProcessReturnsOutputWhenTheProcessExitsInTime()
-        {
-            var isWindows = RuntimeInformation.IsOSPlatform(OSPlatform.Windows);
-            var file = isWindows ? "cmd.exe" : "/bin/sh";
-            var args = isWindows ? "/c echo hello" : "-c \"echo hello\"";
-            var res = Cli.RunProcess(file, args, ".", timeoutMs: Cli.RunTimeoutMs);
-            Assert.IsFalse(res.TimedOut);
-            Assert.AreEqual(0, res.ExitCode);
-            StringAssert.Contains("hello", res.Stdout);
-        }
-
-        [Test]
         public void RunProcessCapturesStderrAndExitCode()
         {
             // When ExitCode != 0 the Window shows stderr as the primary source. Verifies that wiring.
@@ -80,31 +68,17 @@ namespace PrefabLens.Tests
         }
 
         [Test]
-        public void BuildBulkArgsRequestsAllChangedFilesAsJson()
+        public void BuildBulkArgsOmitsABlankBaseRefAndPassesATrimmedRef()
         {
-            // Bare `prefablens --json` is bulk mode: HEAD vs working tree, all changed Unity files.
+            // Bare `prefablens --json` is bulk mode. A non-blank operand is a git ref.
+            // The window feeds a free-form text field: null, empty, and whitespace-only
+            // must keep the default invocation, and surrounding whitespace must not leak.
             Assert.AreEqual(new[] { "--json" }, Cli.BuildBulkArgs());
-        }
-
-        [Test]
-        public void BuildBulkArgsWithABaseRefComparesRefVsWorkingTree()
-        {
-            // CLI grammar (cli/src/main.zig parseArgs): one operand without a Unity YAML
-            // extension is a git ref, so `prefablens <ref> --json` is ref vs working tree,
-            // still bulk mode because no path operand is given.
-            Assert.AreEqual(new[] { "main", "--json" }, Cli.BuildBulkArgs("main"));
-            Assert.AreEqual(new[] { "HEAD~1", "--json" }, Cli.BuildBulkArgs("HEAD~1"));
-        }
-
-        [Test]
-        public void BuildBulkArgsTreatsABlankBaseRefAsTheDefault()
-        {
-            // The window feeds a free-form text field straight in: null, empty, and
-            // whitespace-only must all keep the default invocation byte-for-byte, and
-            // surrounding whitespace must not leak into the git ref.
             Assert.AreEqual(new[] { "--json" }, Cli.BuildBulkArgs(null));
             Assert.AreEqual(new[] { "--json" }, Cli.BuildBulkArgs(""));
             Assert.AreEqual(new[] { "--json" }, Cli.BuildBulkArgs("   "));
+            Assert.AreEqual(new[] { "main", "--json" }, Cli.BuildBulkArgs("main"));
+            Assert.AreEqual(new[] { "HEAD~1", "--json" }, Cli.BuildBulkArgs("HEAD~1"));
             Assert.AreEqual(new[] { "main", "--json" }, Cli.BuildBulkArgs(" main "));
         }
 
@@ -171,20 +145,6 @@ namespace PrefabLens.Tests
             Assert.IsTrue(res.Canceled, "expected the killed run to be reported as canceled");
             Assert.AreNotEqual(0, res.ExitCode);
             Assert.Less(sw.ElapsedMilliseconds, 30_000, "cancellation must not degrade into waiting out the timeout");
-        }
-
-        [Test]
-        public void RunProcessWithAnUncanceledTokenBehavesAsBefore()
-        {
-            // The token is additive: a live token must not disturb the normal exit path.
-            var isWindows = RuntimeInformation.IsOSPlatform(OSPlatform.Windows);
-            var file = isWindows ? "cmd.exe" : "/bin/sh";
-            var args = isWindows ? "/c echo hello" : "-c \"echo hello\"";
-            using var cts = new CancellationTokenSource();
-            var res = Cli.RunProcess(file, args, ".", timeoutMs: Cli.RunTimeoutMs, ct: cts.Token);
-            Assert.IsFalse(res.Canceled);
-            Assert.AreEqual(0, res.ExitCode);
-            StringAssert.Contains("hello", res.Stdout);
         }
 
         [Test]

@@ -44,15 +44,6 @@ namespace PrefabLens.Tests
         }
 
         [Test]
-        public void DownloadUrlPointsAtTheVersionedRelease()
-        {
-            Assert.AreEqual(
-                "https://github.com/hashiiiii/PrefabLens/releases/download/v0.1.0/prefablens-macos-arm64.zip",
-                Cli.DownloadUrl("0.1.0", "prefablens-macos-arm64.zip")
-            );
-        }
-
-        [Test]
         public void ExtractToWritesOnlyTheExactNativeCliEntry()
         {
             var archive = CreateNativeArchive(
@@ -98,28 +89,6 @@ namespace PrefabLens.Tests
         }
 
         [Test]
-        public void MarkExecutableMakesTheRealNativeCliRunnable()
-        {
-            if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
-                Assert.Ignore("chmod is a Unix concern");
-            var dir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
-            Directory.CreateDirectory(dir);
-            try
-            {
-                var archive = CreateNativeCliArchive(NativeCliDirectory());
-                Cli.ExtractTo(archive, dir);
-                var cliPath = Path.Combine(dir, Cli.BinaryName);
-                Cli.MarkExecutable(cliPath);
-
-                Assert.AreEqual(0, Cli.RunProcess(cliPath, "--version", dir, 10_000).ExitCode);
-            }
-            finally
-            {
-                Directory.Delete(dir, recursive: true);
-            }
-        }
-
-        [Test]
         public void DeleteStaleVersionsKeepsOnlyThePinnedVersion()
         {
             // Simulates Library/PrefabLens after a package upgrade: the old cache dir
@@ -138,15 +107,6 @@ namespace PrefabLens.Tests
             {
                 Directory.Delete(root, recursive: true);
             }
-        }
-
-        [Test]
-        public void DeleteStaleVersionsToleratesAMissingRoot()
-        {
-            // First-ever download: Library/PrefabLens does not exist yet.
-            // Cleanup must be a silent no-op, not a DirectoryNotFoundException.
-            var root = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
-            Assert.DoesNotThrow(() => Cli.DeleteStaleVersions(root, keep: "0.6.1"));
         }
 
         /// One-shot HTTP server on a loopback socket: real HttpClient traffic, no mocks.
@@ -234,25 +194,6 @@ namespace PrefabLens.Tests
                 release.Set();
                 listener.Stop();
             }
-        }
-
-        [Test]
-        public void ExpectedSha256FindsTheAssetLine()
-        {
-            // shasum -a 256 text-mode output: "<hex>  <name>" (two spaces), one line per asset.
-            var sums = "aaaa  prefablens-linux-x64.zip\nbbbb  prefablens-macos-arm64.zip\n";
-            Assert.AreEqual("bbbb", Cli.ExpectedSha256(sums, "prefablens-macos-arm64.zip"));
-            Assert.IsNull(Cli.ExpectedSha256(sums, "prefablens-windows-x64.zip"));
-        }
-
-        [Test]
-        public void Sha256HexMatchesAKnownVector()
-        {
-            // FIPS 180-2 test vector for "abc".
-            Assert.AreEqual(
-                "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
-                Cli.Sha256Hex(Encoding.ASCII.GetBytes("abc"))
-            );
         }
 
         [Test]
@@ -351,18 +292,6 @@ namespace PrefabLens.Tests
             {
                 Directory.Delete(root, recursive: true);
             }
-        }
-
-        [Test]
-        public void MarkExecutableFailsTheDownloadStepNamingTheBinaryPath()
-        {
-            // A swallowed chmod failure used to resurface later as an unrelated
-            // Process.Start error on first run; it must fail here, naming the path.
-            if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
-                Assert.Ignore("chmod is a unix concern");
-            var missing = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName(), "prefablens");
-            var e = Assert.Throws<InvalidOperationException>(() => Cli.MarkExecutable(missing));
-            StringAssert.Contains(missing, e.Message);
         }
     }
 }

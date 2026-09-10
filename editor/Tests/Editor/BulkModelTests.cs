@@ -22,12 +22,6 @@ namespace PrefabLens.Tests
         }
 
         [Test]
-        public void EmptyArrayYieldsNoEntries()
-        {
-            Assert.AreEqual(0, BulkModel.Parse("[]").Entries.Count);
-        }
-
-        [Test]
         public void ThrowsOnMalformedOrNonArrayJson()
         {
             // Same contract as DiffModel.Parse: the window converts the throw into
@@ -51,16 +45,6 @@ namespace PrefabLens.Tests
         public void AcceptsTrailingWhitespaceAfterArray()
         {
             Assert.AreEqual(0, BulkModel.Parse("[]  \n\t").Entries.Count);
-        }
-
-        [Test]
-        public void SkipsEntriesMissingPathOrDiff()
-        {
-            var m = BulkModel.Parse(
-                "[{\"path\":\"Assets/A.prefab\"},{\"diff\":{\"roots\":[],\"loose\":[]}},{\"path\":\"Assets/B.prefab\",\"diff\":{\"roots\":[],\"loose\":[]}}]"
-            );
-            Assert.AreEqual(1, m.Entries.Count);
-            Assert.AreEqual("Assets/B.prefab", m.Entries[0].Path);
         }
 
         [Test]

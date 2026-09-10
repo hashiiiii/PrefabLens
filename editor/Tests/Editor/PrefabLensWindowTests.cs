@@ -104,6 +104,68 @@ namespace PrefabLens.Tests
             }
         }
 
+        [Test]
+        public void UnchangedStdoutKeepsTheFileListAndOnlyRestoresTheStatus()
+        {
+            // Focus-triggered refresh reuses the last stdout. The list and tree must stay
+            // put; only the status line follows the current base ref.
+            var window = OpenRenderedWindow();
+            try
+            {
+                window.ShowBulkResult(Ok(OneFile), "HEAD");
+                Assert.AreEqual(1, FileCount(window));
+
+                window.ShowBulkResult(Ok(OneFile), "main");
+
+                Assert.AreEqual(1, FileCount(window));
+                Assert.AreEqual("1 changed vs main", window.StatusText);
+                Assert.That(Labels(window.DetailPane), Does.Contain("Assets/Smoke.prefab"));
+            }
+            finally
+            {
+                CloseWindow(window);
+            }
+        }
+
+        [Test]
+        public void EmptyBulkResultShowsNoFilesAndTheNoChangesStatus()
+        {
+            var window = OpenRenderedWindow();
+            try
+            {
+                window.ShowBulkResult(Ok("[]"), "HEAD");
+
+                Assert.AreEqual(0, FileCount(window));
+                Assert.AreEqual("No changes vs HEAD", window.StatusText);
+            }
+            finally
+            {
+                CloseWindow(window);
+            }
+        }
+
+        [Test]
+        public void EmptySemanticDiffShowsTheFileAndTheNoSemanticChangesNote()
+        {
+            const string emptyDiff =
+                "[{\"path\":\"Assets/Smoke.prefab\",\"diff\":{\"schema\":\"prefablens.diff.v2\",\"unresolvedGuids\":[],\"roots\":[],\"loose\":[]}}]";
+            var window = OpenRenderedWindow();
+            try
+            {
+                window.ShowBulkResult(Ok(emptyDiff), "HEAD");
+
+                Assert.AreEqual(1, FileCount(window));
+                Assert.AreEqual("1 changed vs HEAD", window.StatusText);
+                var labels = Labels(window.DetailPane);
+                Assert.That(labels, Does.Contain("Assets/Smoke.prefab"));
+                Assert.That(labels, Does.Contain("No semantic changes"));
+            }
+            finally
+            {
+                CloseWindow(window);
+            }
+        }
+
         static Cli.Result Ok(string stdout) =>
             new Cli.Result
             {

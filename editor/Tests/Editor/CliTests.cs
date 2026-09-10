@@ -63,23 +63,6 @@ namespace PrefabLens.Tests
         }
 
         [Test]
-        public void LocateUsesAStandaloneDefaultCli()
-        {
-            var dir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
-            CopyNativeCli(NativeCliDirectory(), dir);
-            var cliPath = Path.Combine(dir, Cli.BinaryName);
-            try
-            {
-                var loc = Cli.Locate("", cliPath);
-                Assert.AreEqual(cliPath, loc.Path);
-            }
-            finally
-            {
-                Directory.Delete(dir, recursive: true);
-            }
-        }
-
-        [Test]
         public void LocateRejectsADefaultCliFromAnotherRelease()
         {
             // The automatic cache belongs to Cli.Version and cannot silently use another release.

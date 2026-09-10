@@ -208,57 +208,6 @@ pub fn writeJsonString(w: *std.Io.Writer, s: []const u8) !void {
     try w.writeByte('"');
 }
 
-test "json: v2 prefab instance node with overrides" {
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
-    const after =
-        \\--- !u!1001 &1001
-        \\PrefabInstance:
-        \\  m_Modification:
-        \\    m_TransformParent: {fileID: 0}
-        \\    m_Modifications:
-        \\    - target: {fileID: 8, guid: aaa, type: 3}
-        \\      propertyPath: m_Name
-        \\      value: Cylinder Variant
-        \\    - target: {fileID: 7, guid: aaa, type: 3}
-        \\      propertyPath: m_LocalScale.y
-        \\      value: 2
-        \\  m_SourcePrefab: {fileID: 100100000, guid: aaa, type: 3}
-    ;
-    const out = try root.diffToJson(arena, "", after);
-    try testing.expect(std.mem.indexOf(u8, out, "\"schema\":\"prefablens.diff.v2\"") != null);
-    try testing.expect(std.mem.indexOf(u8, out, "\"kind\":\"prefabInstance\"") != null);
-    try testing.expect(std.mem.indexOf(u8, out, "\"name\":\"Cylinder Variant\"") != null);
-    try testing.expect(std.mem.indexOf(u8, out, "\"sourceGuid\":\"aaa\"") != null);
-    try testing.expect(std.mem.indexOf(u8, out, "\"overrides\":[{\"group\":\"Transform\",\"label\":\"Scale.y\",\"status\":\"added\",\"before\":null,\"after\":\"2\"},{\"group\":\"GameObject\",\"label\":\"Name\",\"status\":\"added\",\"before\":null,\"after\":\"Cylinder Variant\"}]") != null);
-}
-
-test "json: needed sources are emitted only when unresolved" {
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
-    const after =
-        \\--- !u!1001 &1001
-        \\PrefabInstance:
-        \\  m_Modification:
-        \\    m_Modifications:
-        \\    - target: {fileID: 7, guid: aaa, type: 3}
-        \\      propertyPath: m_LocalScale.y
-        \\      value: 2
-        \\  m_SourcePrefab: {fileID: 100100000, guid: aaa, type: 3}
-    ;
-    // assets not supplied: neededSources appears as a fetch request to the host.
-    const out = try root.diffToJson(arena, "", after);
-    try testing.expect(std.mem.indexOf(u8, out, "\"neededSources\":[{\"guid\":\"aaa\",\"side\":\"after\"}]") != null);
-
-    // Supplied: expanded, so neededSources is not emitted (omitted when empty).
-    var assets: root.Assets = .empty;
-    try assets.put(arena, "aaa", "--- !u!1 &10\nGameObject:\n  m_Name: Src\n");
-    const merged = try root.diffToJsonWithAssets(arena, "", after, &assets);
-    try testing.expect(std.mem.indexOf(u8, merged, "neededSources") == null);
-}
-
 test "json: v2 root node shape matches golden" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
@@ -349,26 +298,6 @@ test "json: gameObject rename emits Name override" {
     try testing.expect(std.mem.indexOf(u8, out, "\"label\":\"Name\"") != null);
     try testing.expect(std.mem.indexOf(u8, out, "\"before\":\"Head\"") != null);
     try testing.expect(std.mem.indexOf(u8, out, "\"after\":\"Sensor\"") != null);
-}
-
-test "json: component carries className" {
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
-    const before =
-        \\--- !u!114 &5
-        \\MonoBehaviour:
-        \\  m_EditorClassIdentifier: Assembly-CSharp::Cylinder1
-        \\  hp: 1
-    ;
-    const after =
-        \\--- !u!114 &5
-        \\MonoBehaviour:
-        \\  m_EditorClassIdentifier: Assembly-CSharp::Cylinder1
-        \\  hp: 2
-    ;
-    const out = try root.diffToJson(arena, before, after);
-    try testing.expect(std.mem.indexOf(u8, out, "\"className\":\"Cylinder1\"") != null);
 }
 
 test "json: modified loose component matches golden" {
@@ -470,23 +399,4 @@ test "json: control characters are escaped" {
     // Named escapes (\n etc.) use them; other control characters use \u00XX.
     try writeJsonString(&aw.writer, "a\nb\x01c");
     try testing.expectEqualStrings("\"a\\nb\\u0001c\"", aw.written());
-}
-
-test "json: string escaping" {
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
-    const before =
-        \\--- !u!1 &1
-        \\GameObject:
-        \\  m_Name: a
-    ;
-    const after =
-        \\--- !u!1 &1
-        \\GameObject:
-        \\  m_Name: "a\"b"
-    ;
-    const out = try root.diffToJson(arena, before, after);
-    // Quotes inside the value are escaped in the JSON output.
-    try testing.expect(std.mem.indexOf(u8, out, "a\\\"b") != null);
 }

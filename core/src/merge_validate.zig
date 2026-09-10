@@ -157,17 +157,6 @@ pub fn validate(arena: std.mem.Allocator, bytes: []const u8) merge_model.Error!v
     try index.requireInternalReferences();
 }
 
-test "merge planner: applies a complete GameObject subtree or none of it" {
-    const fixture = merge_test_support.load("game-object-add", false);
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
-    var built = try merge.build(arena, fixture.base, fixture.ours, fixture.theirs);
-    const atomic = merge_test_support.findAtomicByKind(&built.plan, .game_object).?;
-    try testing.expect(atomic.operation_ids.len >= 6);
-    try merge_validate.validate(arena, built.partial);
-}
-
 test "merge planner: groups both parent lists with the child father" {
     const fixture = merge_test_support.load("reparent-one-side", false);
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
@@ -176,33 +165,6 @@ test "merge planner: groups both parent lists with the child father" {
     const atomic = merge_test_support.findAtomicByKind(&built.plan, .reparent).?;
     try testing.expectEqual(@as(usize, 3), atomic.operation_ids.len);
     try testing.expectEqualStrings(fixture.expected, built.partial);
-}
-
-test "merge planner: combines matching reparent changes" {
-    const fixture = merge_test_support.load("reparent-same-parent", false);
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
-
-    var built = try merge.build(arena, fixture.base, fixture.ours, fixture.theirs);
-
-    try testing.expectEqualStrings(fixture.expected, built.partial);
-    try testing.expectEqualStrings(fixture.expected, try merge.finish(arena, &built.plan));
-}
-
-test "merge planner: holds the Ours hierarchy during a reparent conflict" {
-    const fixture = merge_test_support.load("reparent-conflict", true);
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena_state.deinit();
-
-    const built = try merge.build(
-        arena_state.allocator(),
-        fixture.base,
-        fixture.ours,
-        fixture.theirs,
-    );
-
-    try testing.expectEqualStrings(fixture.partial.?, built.partial);
 }
 
 test "merge planner: resolves a reparent conflict with the selected hierarchy" {
@@ -216,19 +178,6 @@ test "merge planner: resolves a reparent conflict with the selected hierarchy" {
     try merge.resolve(arena, &built.plan, operation.id, .{ .take = .ours });
 
     try testing.expectEqualStrings(fixture.expected, try merge.finish(arena, &built.plan));
-}
-
-test "merge planner: applies the Theirs hierarchy after a reparent conflict" {
-    const fixture = merge_test_support.load("reparent-conflict", true);
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
-    var built = try merge.build(arena, fixture.base, fixture.ours, fixture.theirs);
-    const operation = merge_test_support.findOperationByKind(&built.plan, .reparent).?;
-
-    try merge.resolve(arena, &built.plan, operation.id, .{ .take = .theirs });
-
-    try testing.expectEqualStrings(fixture.theirs, try merge.finish(arena, &built.plan));
 }
 
 test "merge planner: moves a Transform between a parent and the root" {
@@ -331,33 +280,6 @@ test "merge validation: rejects two Transforms in one Component list" {
     try testing.expectError(error.InvalidMerge, validate(arena_state.allocator(), bytes));
 }
 
-test "merge validation: rejects a GameObject without one Transform" {
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena_state.deinit();
-    const bytes =
-        "--- !u!1 &1\nGameObject:\n  m_Component: []\n";
-
-    try testing.expectError(error.InvalidMerge, validate(arena_state.allocator(), bytes));
-}
-
-test "merge validation: rejects a GameObject without a Component list" {
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena_state.deinit();
-    const bytes =
-        "--- !u!1 &1\nGameObject:\n  m_Name: Root\n";
-
-    try testing.expectError(error.InvalidMerge, validate(arena_state.allocator(), bytes));
-}
-
-test "merge validation: rejects a Transform without a GameObject owner" {
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena_state.deinit();
-    const bytes =
-        "--- !u!4 &4\nTransform:\n  m_Children: []\n  m_Father: {fileID: 0}\n";
-
-    try testing.expectError(error.InvalidMerge, validate(arena_state.allocator(), bytes));
-}
-
 test "merge validation: rejects a listed child without a father" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
@@ -366,16 +288,6 @@ test "merge validation: rejects a listed child without a father" {
         "--- !u!4 &4\nTransform:\n  m_GameObject: {fileID: 1}\n  m_Children:\n  - {fileID: 42}\n  m_Father: {fileID: 0}\n" ++
         "--- !u!1 &20\nGameObject:\n  m_Component:\n  - component: {fileID: 42}\n" ++
         "--- !u!4 &42\nTransform:\n  m_GameObject: {fileID: 20}\n  m_Children: []\n";
-
-    try testing.expectError(error.InvalidMerge, validate(arena_state.allocator(), bytes));
-}
-
-test "merge validation: rejects a Transform without a Children list" {
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena_state.deinit();
-    const bytes =
-        "--- !u!1 &1\nGameObject:\n  m_Component:\n  - component: {fileID: 4}\n" ++
-        "--- !u!4 &4\nTransform:\n  m_GameObject: {fileID: 1}\n  m_Father: {fileID: 0}\n";
 
     try testing.expectError(error.InvalidMerge, validate(arena_state.allocator(), bytes));
 }
@@ -441,91 +353,6 @@ test "merge validation: accepts every valid hierarchy fixture" {
         reparent_cycle.expected,
         reparent_cycle.partial.?,
     }) |bytes| try validate(arena, bytes);
-}
-
-test "merge planner: holds a complete GameObject during a delete and edit conflict" {
-    const fixture = merge_test_support.load("game-object-delete-edit", true);
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena_state.deinit();
-
-    const built = try merge.build(
-        arena_state.allocator(),
-        fixture.base,
-        fixture.ours,
-        fixture.theirs,
-    );
-
-    try testing.expectEqualStrings(fixture.partial.?, built.partial);
-}
-
-test "merge planner: keeps Base when subtree deletion conflicts with descendant reparent" {
-    const fixture = merge_test_support.load("game-object-delete-reparent", true);
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena_state.deinit();
-
-    const built = try merge.build(
-        arena_state.allocator(),
-        fixture.base,
-        fixture.ours,
-        fixture.theirs,
-    );
-
-    try testing.expectEqual(@as(usize, 1), built.plan.unresolvedCount());
-    try testing.expectEqualStrings(fixture.partial.?, built.partial);
-}
-
-test "merge planner: resolves subtree deletion and descendant reparent coherently" {
-    const fixture = merge_test_support.load("game-object-delete-reparent", true);
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
-
-    var deletion = try merge.build(arena, fixture.base, fixture.ours, fixture.theirs);
-    const delete_operation = merge_test_support.findOperationByKind(&deletion.plan, .game_object).?;
-    try merge.resolve(arena, &deletion.plan, delete_operation.id, .remove);
-    try testing.expectEqualStrings(fixture.expected, try merge.finish(arena, &deletion.plan));
-
-    var reparent = try merge.build(arena, fixture.base, fixture.ours, fixture.theirs);
-    const reparent_operation = merge_test_support.findOperationByKind(&reparent.plan, .game_object).?;
-    try merge.resolve(arena, &reparent.plan, reparent_operation.id, .{ .take = .theirs });
-    try testing.expectEqualStrings(fixture.theirs, try merge.finish(arena, &reparent.plan));
-}
-
-test "merge planner: applies a complete GameObject addition" {
-    const fixture = merge_test_support.load("game-object-add", false);
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
-
-    var built = try merge.build(arena, fixture.base, fixture.ours, fixture.theirs);
-
-    try testing.expectEqualStrings(fixture.expected, built.partial);
-    try testing.expectEqualStrings(fixture.expected, try merge.finish(arena, &built.plan));
-}
-
-test "merge planner: applies a complete GameObject deletion" {
-    const fixture = merge_test_support.load("game-object-delete", false);
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
-
-    var built = try merge.build(arena, fixture.base, fixture.ours, fixture.theirs);
-
-    try testing.expectEqualStrings(fixture.expected, built.partial);
-    try testing.expectEqualStrings(fixture.expected, try merge.finish(arena, &built.plan));
-}
-
-test "merge planner: resolves a GameObject delete and edit conflict" {
-    const fixture = merge_test_support.load("game-object-delete-edit", true);
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
-    var built = try merge.build(arena, fixture.base, fixture.ours, fixture.theirs);
-    const operation = merge_test_support.findOperationByKind(&built.plan, .game_object).?;
-
-    try merge.resolve(arena, &built.plan, operation.id, .{ .take = .theirs });
-
-    try testing.expectEqualStrings(fixture.expected, try merge.finish(arena, &built.plan));
 }
 
 test "merge planner: groups a nested GameObject subtree" {

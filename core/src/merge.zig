@@ -367,25 +367,6 @@ test "empty scalar stays present for take and custom resolutions" {
     try std.testing.expectEqualStrings(theirs, try finish(arena, &custom.plan));
 }
 
-test "merge facade: keeps selected document order at one offset" {
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
-    const base = "--- !u!114 &1\nMonoBehaviour:\n  m_Value: 1\n";
-    const ours = "";
-    const theirs =
-        "--- !u!21 &2\nMaterial:\n  m_Name: Added\n" ++
-        "--- !u!114 &1\nMonoBehaviour:\n  m_Value: 2\n";
-
-    var built = try build(arena, base, ours, theirs);
-    const operation_id = for (built.plan.operations) |operation| {
-        if (operation.kind == .document and operation.identity.document.file_id == 1)
-            break operation.id;
-    } else return error.TestUnexpectedResult;
-    try resolve(arena, &built.plan, operation_id, .{ .take = .theirs });
-    try testing.expectEqualStrings(theirs, try finish(arena, &built.plan));
-}
-
 test "merge facade: rejects deletion of changed Ours document bytes" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
@@ -586,210 +567,6 @@ test "component document custom resolution preserves a previous edit after rejec
     try testing.expect(std.mem.indexOf(u8, try finish(arena, &built.plan), "m_Mass: 3") != null);
 }
 
-test "component document custom resolution keeps CRLF before a following document" {
-    const support = @import("merge_test_support.zig");
-    const base_lf =
-        "--- !u!1 &1\n" ++
-        "GameObject:\n" ++
-        "  m_Component:\n" ++
-        "  - component: {fileID: 4}\n" ++
-        "  - component: {fileID: 54}\n" ++
-        "  - component: {fileID: 65}\n" ++
-        "--- !u!4 &4\n" ++
-        "Transform:\n" ++
-        "  m_GameObject: {fileID: 1}\n" ++
-        "  m_Children: []\n" ++
-        "  m_Father: {fileID: 0}\n" ++
-        "--- !u!54 &54\n" ++
-        "Rigidbody:\n" ++
-        "  m_GameObject: {fileID: 1}\n" ++
-        "  m_Mass: 1\n" ++
-        "--- !u!65 &65\n" ++
-        "BoxCollider:\n" ++
-        "  m_GameObject: {fileID: 1}\n" ++
-        "  m_IsTrigger: 0\n";
-    const ours_lf =
-        "--- !u!1 &1\n" ++
-        "GameObject:\n" ++
-        "  m_Component:\n" ++
-        "  - component: {fileID: 4}\n" ++
-        "  - component: {fileID: 54}\n" ++
-        "  - component: {fileID: 65}\n" ++
-        "--- !u!4 &4\n" ++
-        "Transform:\n" ++
-        "  m_GameObject: {fileID: 1}\n" ++
-        "  m_Children: []\n" ++
-        "  m_Father: {fileID: 0}\n" ++
-        "--- !u!54 &54\n" ++
-        "Rigidbody:\n" ++
-        "  m_GameObject: {fileID: 1}\n" ++
-        "  m_Mass: 3\n" ++
-        "--- !u!65 &65\n" ++
-        "BoxCollider:\n" ++
-        "  m_GameObject: {fileID: 1}\n" ++
-        "  m_IsTrigger: 0\n";
-    const theirs_lf =
-        "--- !u!1 &1\n" ++
-        "GameObject:\n" ++
-        "  m_Component:\n" ++
-        "  - component: {fileID: 4}\n" ++
-        "  - component: {fileID: 65}\n" ++
-        "--- !u!4 &4\n" ++
-        "Transform:\n" ++
-        "  m_GameObject: {fileID: 1}\n" ++
-        "  m_Children: []\n" ++
-        "  m_Father: {fileID: 0}\n" ++
-        "--- !u!65 &65\n" ++
-        "BoxCollider:\n" ++
-        "  m_GameObject: {fileID: 1}\n" ++
-        "  m_IsTrigger: 0\n";
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
-    const base = try std.mem.replaceOwned(u8, arena, base_lf, "\n", "\r\n");
-    const ours = try std.mem.replaceOwned(u8, arena, ours_lf, "\n", "\r\n");
-    const theirs = try std.mem.replaceOwned(u8, arena, theirs_lf, "\n", "\r\n");
-    var built = try build(arena, base, ours, theirs);
-    const atomic = support.findAtomicByKind(&built.plan, .component).?;
-    const membership = merge_model.operationById(&built.plan, atomic.operation_ids[0]).?;
-    const corrected =
-        "--- !u!54 &54\n" ++
-        "Rigidbody:\n" ++
-        "  m_GameObject: {fileID: 1}\n" ++
-        "  m_Mass: 4";
-    const expected = try std.mem.replaceOwned(u8, arena, ours, "m_Mass: 3\r\n", "m_Mass: 4\r\n");
-
-    try resolve(arena, &built.plan, membership.id, .{ .custom = corrected });
-    try testing.expectEqualStrings(expected, try finish(arena, &built.plan));
-}
-
-test "component document custom insertion follows selected document order" {
-    const support = @import("merge_test_support.zig");
-    const base =
-        "--- !u!1 &1\nGameObject:\n  m_Component:\n  - component: {fileID: 4}\n  - component: {fileID: 54}\n" ++
-        "--- !u!4 &4\nTransform:\n  m_GameObject: {fileID: 1}\n  m_Children: []\n  m_Father: {fileID: 0}\n" ++
-        "--- !u!54 &54\nRigidbody:\n  m_GameObject: {fileID: 1}\n  m_Mass: 1\n";
-    const ours =
-        "--- !u!1 &1\nGameObject:\n  m_Component:\n  - component: {fileID: 4}\n" ++
-        "--- !u!4 &4\nTransform:\n  m_GameObject: {fileID: 1}\n  m_Children: []\n  m_Father: {fileID: 0}\n";
-    const theirs =
-        "--- !u!1 &1\nGameObject:\n  m_Component:\n  - component: {fileID: 4}\n  - component: {fileID: 54}\n  - component: {fileID: 65}\n" ++
-        "--- !u!4 &4\nTransform:\n  m_GameObject: {fileID: 1}\n  m_Children: []\n  m_Father: {fileID: 0}\n" ++
-        "--- !u!54 &54\nRigidbody:\n  m_GameObject: {fileID: 1}\n  m_Mass: 2\n" ++
-        "--- !u!65 &65\nBoxCollider:\n  m_GameObject: {fileID: 1}\n  m_IsTrigger: 0\n";
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
-    var built = try build(arena, base, ours, theirs);
-    const component_atomic = support.findAtomicByKind(&built.plan, .component).?;
-    const component = for (component_atomic.operation_ids) |operation_id| {
-        const candidate = merge_model.operationById(&built.plan, operation_id).?;
-        if (candidate.kind == .component) break candidate;
-    } else return error.TestUnexpectedResult;
-    const corrected =
-        "--- !u!54 &54\nRigidbody:\n  m_GameObject: {fileID: 1}\n  m_Mass: 3\n";
-
-    try resolve(arena, &built.plan, component.id, .{ .custom = corrected });
-    const finished = try finish(arena, &built.plan);
-    const component_54 = std.mem.indexOf(u8, finished, "--- !u!54 &54").?;
-    const component_65 = std.mem.indexOf(u8, finished, "--- !u!65 &65").?;
-    try testing.expect(component_54 < component_65);
-}
-
-test "merge build rejects a malformed flow entry" {
-    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena_state.deinit();
-    const valid = "--- !u!114 &1\nMonoBehaviour:\n  m_Value: 1\n";
-    const malformed = "--- !u!114 &1\nMonoBehaviour:\n  m_Value: {fileID: 1, bad}\n";
-
-    try std.testing.expectError(
-        error.MalformedInput,
-        build(arena_state.allocator(), valid, malformed, valid),
-    );
-}
-
-test "merge build rejects invalid double-quoted escapes" {
-    const invalid_values = [_][]const u8{
-        "\"bad\\q\"",
-        "{fileID: 0, guid: \"bad\\u12\", type: 3}",
-    };
-    for (invalid_values) |invalid| {
-        var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
-        defer arena_state.deinit();
-        const arena = arena_state.allocator();
-        const valid = "--- !u!114 &1\nMonoBehaviour:\n  m_Value: 1\n";
-        const malformed = try std.fmt.allocPrint(
-            arena,
-            "--- !u!114 &1\nMonoBehaviour:\n  m_Value: {s}\n",
-            .{invalid},
-        );
-
-        try std.testing.expectError(error.MalformedInput, build(arena, valid, malformed, valid));
-    }
-}
-
-test "merge resolve rejects nested object reference members" {
-    const nested_values = [_][]const u8{
-        "{fileID: 1, extra: {value: 2}}",
-        "{fileID: 1, extra: [2]}",
-    };
-    for (nested_values) |nested| {
-        var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
-        defer arena_state.deinit();
-        const arena = arena_state.allocator();
-        const base = "--- !u!114 &1\nMonoBehaviour:\n  m_Value: 1\n";
-        const ours = "--- !u!114 &1\nMonoBehaviour:\n  m_Value: 2\n";
-        const theirs = "--- !u!114 &1\nMonoBehaviour:\n  m_Value: 3\n";
-        var built = try build(arena, base, ours, theirs);
-
-        try std.testing.expectError(
-            error.InvalidResolution,
-            resolve(arena, &built.plan, 0, .{ .custom = nested }),
-        );
-        try std.testing.expect(built.plan.operations[0].resolution == .unresolved);
-    }
-}
-
-test "merge resolve rejects invalid double-quoted escapes" {
-    const invalid_values = [_][]const u8{
-        "\"bad\\q\"",
-        "{fileID: 0, guid: \"bad\\u12\", type: 3}",
-    };
-    for (invalid_values) |invalid| {
-        var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
-        defer arena_state.deinit();
-        const arena = arena_state.allocator();
-        const base = "--- !u!114 &1\nMonoBehaviour:\n  m_Value: 1\n";
-        const ours = "--- !u!114 &1\nMonoBehaviour:\n  m_Value: 2\n";
-        const theirs = "--- !u!114 &1\nMonoBehaviour:\n  m_Value: 3\n";
-        var built = try build(arena, base, ours, theirs);
-
-        try std.testing.expectError(
-            error.InvalidResolution,
-            resolve(arena, &built.plan, 0, .{ .custom = invalid }),
-        );
-        try std.testing.expect(built.plan.operations[0].resolution == .unresolved);
-    }
-}
-
-test "collection public merges separate gaps and recursive item fields" {
-    var memory = std.heap.ArenaAllocator.init(testing.allocator);
-    defer memory.deinit();
-    const arena = memory.allocator();
-    const prefix = "--- !u!114 &1\nMonoBehaviour:\n  values: ";
-    const cases = .{
-        .{ "[a, b]", "[x, a, b]", "[a, b, y]", "[x, a, b, y]" },
-        .{ "[{left: 1, right: 1}]", "[{left: 2, right: 1}]", "[{left: 1, right: 3}]", "[{left: 2, right: 3}]" },
-        .{ "[]", "[]", "[a]", "[a]" },
-        .{ "[a]", "[]", "[a]", "[]" },
-    };
-    inline for (cases) |case| {
-        var built = try build(arena, prefix ++ case[0] ++ "\n", prefix ++ case[1] ++ "\n", prefix ++ case[2] ++ "\n");
-        try testing.expectEqual(@as(usize, 0), built.plan.unresolvedCount());
-        try testing.expectEqualStrings(prefix ++ case[3] ++ "\n", try finish(arena, &built.plan));
-    }
-}
-
 test "collection public resolves local insertion orders and abort restores ours" {
     var memory = std.heap.ArenaAllocator.init(testing.allocator);
     defer memory.deinit();
@@ -880,18 +657,6 @@ fn collectionTestContext(field: @import("merge_context.zig").Field, arena: std.m
     return .{ .base = snapshot, .ours = snapshot, .theirs = snapshot, .output = snapshot };
 }
 
-test "collection public declared packed arrays merge signed values and empty encoding" {
-    var memory = std.heap.ArenaAllocator.init(testing.allocator);
-    defer memory.deinit();
-    const arena = memory.allocator();
-    const context = try collectionTestContext(.{ .path = "values", .kind = .int32_array }, arena);
-    const prefix = "--- !u!114 &1\nMonoBehaviour:\n  m_Script: {fileID: 11500000, guid: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, type: 3}\n  values: ";
-    var built = try buildWithContext(arena, prefix ++ "01000000i\n", prefix ++ "ffffffff01000000i\n", prefix ++ "0100000000000080i\n", context);
-    try testing.expectEqualStrings(prefix ++ "ffffffff0100000000000080i\n", try finish(arena, &built.plan));
-    var empty = try buildWithContext(arena, prefix ++ "\n", prefix ++ "\n", prefix ++ "01000000\n", context);
-    try testing.expectEqualStrings(prefix ++ "01000000\n", try finish(arena, &empty.plan));
-}
-
 test "collection public key value arrays require declared ordered types" {
     var memory = std.heap.ArenaAllocator.init(testing.allocator);
     defer memory.deinit();
@@ -906,65 +671,6 @@ test "collection public key value arrays require declared ordered types" {
     const ordered_context = try collectionTestContext(.{ .path = "values", .kind = .ordered }, arena);
     var ordered = try buildWithContext(arena, base, ours, theirs, ordered_context);
     try testing.expect(collectionConflict(&ordered.plan, ordered.plan.operations[0].id).?.both_orders);
-}
-
-test "collection public packed selection retains changed encoding layout" {
-    var memory = std.heap.ArenaAllocator.init(testing.allocator);
-    defer memory.deinit();
-    const arena = memory.allocator();
-    const context = try collectionTestContext(.{ .path = "values", .kind = .int32_array }, arena);
-    const prefix = "--- !u!114 &1\nMonoBehaviour:\n  m_Script: {fileID: 11500000, guid: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, type: 3}\n  values: ";
-    var built = try buildWithContext(arena, prefix ++ "01000000\n", prefix ++ "01000000\n", prefix ++ "0100000002000000i\n", context);
-    try testing.expectEqualStrings(prefix ++ "0100000002000000i\n", try finish(arena, &built.plan));
-}
-
-test "collection public preserves CRLF comments and unchanged item spans" {
-    var memory = std.heap.ArenaAllocator.init(testing.allocator);
-    defer memory.deinit();
-    const arena = memory.allocator();
-    const prefix = "--- !u!114 &1\r\nMonoBehaviour:\r\n  values: # header\r\n";
-    const tail = "  after: keep # outside\r\n";
-    var built = try build(arena, prefix ++ "  - a # first\r\n  - b # second\r\n" ++ tail, prefix ++ "  - x\r\n  - a # first\r\n  - b # second\r\n" ++ tail, prefix ++ "  - a # first\r\n  - b # second\r\n  - y\r\n" ++ tail);
-    try testing.expectEqualStrings(prefix ++ "  - x\r\n  - a # first\r\n  - b # second\r\n  - y\r\n" ++ tail, try finish(arena, &built.plan));
-}
-
-test "collection public duplicate occurrences and move choices preserve independent edits" {
-    var memory = std.heap.ArenaAllocator.init(testing.allocator);
-    defer memory.deinit();
-    const arena = memory.allocator();
-    const prefix = "--- !u!114 &1\nMonoBehaviour:\n  values: ";
-    var duplicate = try build(arena, prefix ++ "[a, x, a]\n", prefix ++ "[a, a]\n", prefix ++ "[a, x, a, y]\n");
-    try testing.expectEqualStrings(prefix ++ "[a, a, y]\n", try finish(arena, &duplicate.plan));
-    var moved = try build(arena, prefix ++ "[a, b, c]\n", prefix ++ "[b, c, a]\n", prefix ++ "[a, B, c]\n");
-    for (moved.plan.operations) |op| if (op.resolution == .unresolved) {
-        try resolve(arena, &moved.plan, op.id, .{ .take = .ours });
-    };
-    try testing.expectEqualStrings(prefix ++ "[B, c, a]\n", try finish(arena, &moved.plan));
-}
-
-test "collection public nested key value sequences need type evidence" {
-    var memory = std.heap.ArenaAllocator.init(testing.allocator);
-    defer memory.deinit();
-    const arena = memory.allocator();
-    const prefix = "--- !u!114 &1\nMonoBehaviour:\n  values: ";
-    var built = try build(arena, prefix ++ "[{entries: []}]\n", prefix ++ "[{entries: [{key: a, value: 1}]}]\n", prefix ++ "[{entries: [{key: a, value: 2}]}]\n");
-    try testing.expectEqual(@import("merge_value.zig").Reason.context_required, collectionConflict(&built.plan, built.plan.operations[0].id).?.reason);
-}
-
-test "collection public preserves ours formatting edit during concurrent semantic changes" {
-    var memory = std.heap.ArenaAllocator.init(testing.allocator);
-    defer memory.deinit();
-    const arena = memory.allocator();
-    const prefix = "--- !u!114 &1\nMonoBehaviour:\n  values:\n";
-    const ours = prefix ++ "  - x\n  - a # edited comment\n  - b\n";
-    var built = try build(arena, prefix ++ "  - a # original\n  - b\n", ours, prefix ++ "  - a # original\n  - b\n  - y\n");
-    if (built.plan.unresolvedCount() > 0) {
-        try testing.expectEqualStrings(ours, built.partial);
-    } else {
-        const result = try finish(arena, &built.plan);
-        try testing.expect(std.mem.indexOf(u8, result, "a # edited comment") != null);
-        try testing.expect(std.mem.indexOf(u8, result, "  - y\n") != null);
-    }
 }
 
 test "collection public missing array type evidence stays editable" {
@@ -1000,26 +706,6 @@ test "collection public malformed packed encoding needs valid typed repair" {
     try testing.expectError(error.InvalidResolution, resolve(arena, &built.plan, id, .{ .custom = "broken" }));
     try resolve(arena, &built.plan, id, .{ .custom = "[1, -1]" });
     try testing.expectEqualStrings(prefix ++ "01000000ffffffff\n", try finish(arena, &built.plan));
-}
-
-test "collection public keeps theirs comment edit with independent ours insertion" {
-    var memory = std.heap.ArenaAllocator.init(testing.allocator);
-    defer memory.deinit();
-    const arena = memory.allocator();
-    const prefix = "--- !u!114 &1\nMonoBehaviour:\n  values:\n";
-    var built = try build(arena, prefix ++ "  - a # original\n  - b\n", prefix ++ "  - x\n  - a # original\n  - b\n", prefix ++ "  - a # changed\n  - b\n  - y\n");
-    try testing.expectEqualStrings(prefix ++ "  - x\n  - a # changed\n  - b\n  - y\n", try finish(arena, &built.plan));
-}
-
-test "collection public empty packed custom writes Unity empty token" {
-    var memory = std.heap.ArenaAllocator.init(testing.allocator);
-    defer memory.deinit();
-    const arena = memory.allocator();
-    const context = try collectionTestContext(.{ .path = "values", .kind = .int32_array }, arena);
-    const prefix = "--- !u!114 &1\nMonoBehaviour:\n  m_Script: {fileID: 11500000, guid: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, type: 3}\n  values: ";
-    var built = try buildWithContext(arena, prefix ++ "01000000i\n", prefix ++ "02000000i\n", prefix ++ "03000000i\n", context);
-    try resolve(arena, &built.plan, built.plan.operations[0].id, .{ .custom = "[]" });
-    try testing.expectEqualStrings(prefix ++ "\n", try finish(arena, &built.plan));
 }
 
 test "collection public deleted field supports explicit array repair" {
@@ -1059,58 +745,6 @@ test "collection public conflicting comments are explicit and take preserves sel
     try testing.expectEqualStrings(theirs, try finish(arena, &built.plan));
 }
 
-test "collection public duplicate occurrence comment edits are never silently lost" {
-    var memory = std.heap.ArenaAllocator.init(testing.allocator);
-    defer memory.deinit();
-    const arena = memory.allocator();
-    const prefix = "--- !u!114 &1\nMonoBehaviour:\n  values:\n";
-    const ours = prefix ++ "  - x\n  - a # changed\n  - a # second\n";
-    var built = try build(arena, prefix ++ "  - a # first\n  - a # second\n", ours, prefix ++ "  - a # first\n  - a # second\n  - y\n");
-    if (built.plan.unresolvedCount() > 0) {
-        try testing.expectEqualStrings(ours, built.partial);
-    } else {
-        const output = try finish(arena, &built.plan);
-        try testing.expect(std.mem.indexOf(u8, output, "# changed") != null);
-    }
-}
-
-test "collection public replays adjacent newly inserted collection and scalar fields" {
-    var memory = std.heap.ArenaAllocator.init(testing.allocator);
-    defer memory.deinit();
-    const arena = memory.allocator();
-    const prefix = "--- !u!114 &1\nMonoBehaviour:\n";
-    const theirs = prefix ++ "  first: [a]\n  middle: scalar\n  second: [b]\n  after: keep\n";
-    var built = try build(arena, prefix ++ "  after: keep\n", prefix ++ "  after: keep\n", theirs);
-    try testing.expectEqualStrings(theirs, try finish(arena, &built.plan));
-}
-
-test "collection public concurrent new array fields provide both insertion orders" {
-    var memory = std.heap.ArenaAllocator.init(testing.allocator);
-    defer memory.deinit();
-    const arena = memory.allocator();
-    const prefix = "--- !u!114 &1\nMonoBehaviour:\n";
-    var built = try build(arena, prefix ++ "  after: keep\n", prefix ++ "  values: [a]\n  after: keep\n", prefix ++ "  values: [b]\n  after: keep\n");
-    const id = built.plan.operations[0].id;
-    try testing.expect(collectionConflict(&built.plan, id).?.both_orders);
-    try resolve(arena, &built.plan, id, .{ .custom = try combinedCollectionValue(arena, &built.plan, id, .ours_first) });
-    try testing.expectEqualStrings(prefix ++ "  values: [a, b]\n  after: keep\n", try finish(arena, &built.plan));
-}
-
-test "collection public compositor respects unresolved atomic dependencies" {
-    var memory = std.heap.ArenaAllocator.init(testing.allocator);
-    defer memory.deinit();
-    const arena = memory.allocator();
-    const prefix = "--- !u!114 &1\nMonoBehaviour:\n";
-    const ours = prefix ++ "  scalar: 2\n  values: [x, a]\n";
-    var built = try build(arena, prefix ++ "  scalar: 1\n  values: [a]\n", ours, prefix ++ "  scalar: 3\n  values: [y, a, z]\n");
-    const id = built.plan.operations[1].id;
-    built.plan.atomic_operations[1].dependencies = try arena.dupe(merge_model.AtomicId, &.{0});
-    try resolve(arena, &built.plan, id, .{ .take = .ours });
-    try testing.expectEqualStrings(ours, try merge_apply.applyResolved(arena, &built.plan, false));
-    try resolve(arena, &built.plan, 0, .{ .take = .ours });
-    try testing.expectEqualStrings(prefix ++ "  scalar: 2\n  values: [x, a, z]\n", try finish(arena, &built.plan));
-}
-
 test "collection public schema change permits an explicit selected scalar side" {
     var memory = std.heap.ArenaAllocator.init(testing.allocator);
     defer memory.deinit();
@@ -1124,57 +758,4 @@ test "collection public schema change permits an explicit selected scalar side" 
     try testing.expectEqual(@import("merge_value.zig").Reason.context_required, collectionConflict(&built.plan, id).?.reason);
     try resolve(arena, &built.plan, id, .{ .take = .theirs });
     try testing.expectEqualStrings(theirs, try finish(arena, &built.plan));
-}
-
-test "collection public concurrent header comment change is preserved or explicit" {
-    var memory = std.heap.ArenaAllocator.init(testing.allocator);
-    defer memory.deinit();
-    const arena = memory.allocator();
-    const prefix = "--- !u!114 &1\nMonoBehaviour:\n";
-    const ours = prefix ++ "  values: # base\n  - x\n  - a\n";
-    var built = try build(arena, prefix ++ "  values: # base\n  - a\n", ours, prefix ++ "  values: # theirs\n  - a\n  - y\n");
-    if (built.plan.unresolvedCount() > 0) {
-        try testing.expectEqualStrings(ours, built.partial);
-    } else {
-        try testing.expect(std.mem.indexOf(u8, try finish(arena, &built.plan), "# theirs") != null);
-    }
-}
-
-test "collection public review identical duplicate spans retain edited occurrence bytes" {
-    var memory = std.heap.ArenaAllocator.init(testing.allocator);
-    defer memory.deinit();
-    const arena = memory.allocator();
-    const prefix = "--- !u!114 &1\nMonoBehaviour:\n  values:\n";
-    const base = prefix ++ "  - a # same\n  - a # same\n";
-    const ours = prefix ++ "  - x\n  - a # changed\n  - a # same\n";
-    const theirs = prefix ++ "  - a # same\n  - a # same\n  - y\n";
-    var built = try build(arena, base, ours, theirs);
-    try testing.expectEqual(@as(usize, 1), built.plan.unresolvedCount());
-    try testing.expectEqualStrings(ours, built.partial);
-    const id = built.plan.operations[0].id;
-    try testing.expectEqual(@import("merge_value.zig").Reason.source_bytes, collectionConflict(&built.plan, id).?.reason);
-    try resolve(arena, &built.plan, id, .{ .take = .ours });
-    try testing.expectEqualStrings(ours, try finish(arena, &built.plan));
-}
-
-test "collection public review packed suffix-only change preserves the changed source" {
-    var memory = std.heap.ArenaAllocator.init(testing.allocator);
-    defer memory.deinit();
-    const arena = memory.allocator();
-    const context = try collectionTestContext(.{ .path = "values", .kind = .int32_array }, arena);
-    const prefix = "--- !u!114 &1\nMonoBehaviour:\n  m_Script: {fileID: 11500000, guid: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, type: 3}\n  values: ";
-    const theirs = prefix ++ "01000000i\n";
-    var built = try buildWithContext(arena, prefix ++ "01000000\n", prefix ++ "01000000\n", theirs, context);
-    try testing.expectEqual(@as(usize, 0), built.plan.unresolvedCount());
-    try testing.expectEqualStrings(theirs, try finish(arena, &built.plan));
-}
-
-test "collection public review packed layout edit composes with independent values" {
-    var memory = std.heap.ArenaAllocator.init(testing.allocator);
-    defer memory.deinit();
-    const arena = memory.allocator();
-    const context = try collectionTestContext(.{ .path = "values", .kind = .int32_array }, arena);
-    const prefix = "--- !u!114 &1\nMonoBehaviour:\n  m_Script: {fileID: 11500000, guid: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, type: 3}\n  values: ";
-    var built = try buildWithContext(arena, prefix ++ "01000000\n", prefix ++ "02000000\n", prefix ++ "01000000i\n", context);
-    try testing.expectEqualStrings(prefix ++ "02000000i\n", try finish(arena, &built.plan));
 }

@@ -92,4 +92,5 @@ test {
     _ = @import("merge_validate.zig");
     _ = @import("merge_fixture_test.zig");
     _ = @import("fixture_test.zig");
+    _ = @import("yaml_scalar.zig");
 }

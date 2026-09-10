@@ -89,3 +89,26 @@ pub fn decode(arena: std.mem.Allocator, scalar: []const u8) Error![]const u8 {
     }
     return output.toOwnedSlice(arena);
 }
+
+test "yaml scalar quote and decode round-trip special characters" {
+    const cases = [_][]const u8{
+        "plain",
+        "quote \" and slash \\",
+        "line\nfeed",
+        "\x01\x7f",
+    };
+    for (cases) |value| {
+        var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena_state.deinit();
+        const quoted = try quote(arena_state.allocator(), value);
+        try std.testing.expect(quoted.len >= 2);
+        try std.testing.expectEqual(@as(u8, '"'), quoted[0]);
+        try std.testing.expectEqualStrings(value, try decode(arena_state.allocator(), quoted));
+    }
+
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    try std.testing.expectError(error.InvalidValue, decode(arena, "\"bad\\q\""));
+    try std.testing.expectEqualStrings("it's", try decode(arena, "'it''s'"));
+}

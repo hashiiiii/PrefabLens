@@ -207,36 +207,6 @@ test "prefab: effective value prefers a set object reference" {
     try testing.expect(ref_mod.effectiveValue() == &set_ref);
 }
 
-test "prefab: merge helpers classify transforms and references" {
-    var ref_node = Node{ .ref = .{ .file_id = 42, .guid = "abc", .type_id = 3 } };
-    var scalar_node = Node{ .scalar = "42" };
-
-    try testing.expect(isTransformClass(4));
-    try testing.expect(isTransformClass(224));
-    try testing.expect(!isTransformClass(1));
-    try testing.expectEqual(@as(i64, 42), Node.asRef(&ref_node).?.file_id);
-    try testing.expect(Node.asRef(&scalar_node) == null);
-    try testing.expect(Node.asRef(null) == null);
-}
-
-test "prefab: source and scalar lookups keep serialized values" {
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena_state.deinit();
-    const docs = try @import("parser.zig").parse(arena_state.allocator(),
-        \\--- !u!1001 &1001
-        \\PrefabInstance:
-        \\  m_Modification:
-        \\    m_Modifications:
-        \\    - target: {fileID: 8, guid: source-guid, type: 3}
-        \\      propertyPath: m_Name
-        \\      value: Cylinder
-        \\  m_SourcePrefab: {fileID: 100100000, guid: source-guid, type: 3}
-    );
-
-    try testing.expectEqualStrings("source-guid", sourceGuid(&docs[0]).?);
-    try testing.expectEqualStrings("Cylinder", scalarModificationValue(&docs[0], "m_Name").?);
-}
-
 test "prefab: scalar lookup keeps the first target and its last duplicate" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();

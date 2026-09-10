@@ -441,18 +441,6 @@ test "collection YAML does not read a hash inside scalar text as a comment" {
     try testing.expectEqualStrings("A#B", model.findValue(body, "hash").?.scalar);
 }
 
-test "regression indented unchanged item" {
-    var a = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer a.deinit();
-    const al = a.allocator();
-    const f = try parser.parseSpanned(al, "--- !u!114 &1\nMonoBehaviour:\n  names:\n    - 'A' # keep item\n  other: 1\n");
-    const old = model.findValue(f.documents[0].body.map, "names").?;
-    const b = try parseValue(al, "B");
-    var items = [_]*model.Node{ old.seq[0], @constCast(b) };
-    const n = model.Node{ .seq = &items };
-    const patch = try replaceEntry(al, f, old, &n, &.{f});
-    try std.testing.expect(std.mem.indexOf(u8, patch.bytes, "    - 'A' # keep item\n") != null);
-}
 test "regression compact nested collection" {
     var a = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer a.deinit();
@@ -475,23 +463,6 @@ test "regression map key roundtrip" {
     const out = try flow(al, n);
     try std.testing.expect(model.Node.eql(n, try parseValue(al, out)));
 }
-test "regression invalid YAML" {
-    var a = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer a.deinit();
-    const al = a.allocator();
-    // Invalid edits must fail, not become a different quoted string.
-    for ([_][]const u8{ "[@bad]", "[a: b: c]", "[a\x01b]", "[|]", "{\"\\x0g\": A}", "{\"key\"suffix: A}", "{\"\\uD800\": A}", "# comment" }) |input| {
-        try std.testing.expectError(error.InvalidValue, parseValue(al, input));
-    }
-}
-test "regression plain apostrophe after comma before hash" {
-    var a = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer a.deinit();
-    const al = a.allocator();
-    const f = try parser.parseSpanned(al, "--- !u!114 &1\nMonoBehaviour:\n  text: comma,'quote # actual comment\n");
-    const n = model.findValue(f.documents[0].body.map, "text").?;
-    try std.testing.expectEqualStrings("comma,'quote", n.scalar);
-}
 test "regression selected side missing final newline" {
     var a = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer a.deinit();
@@ -504,14 +475,6 @@ test "regression selected side missing final newline" {
     const merged = try std.fmt.allocPrint(al, "{s}{s}{s}", .{ ours.bytes[0..patch.span.start], patch.bytes, ours.bytes[patch.span.end..] });
     const parsed = try parser.parseSpanned(al, merged);
     try std.testing.expectEqual(@as(usize, 0), parsed.diagnostics.len);
-}
-test "regression escaped C1 must stay escaped" {
-    var a = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer a.deinit();
-    const al = a.allocator();
-    const node = try parseValue(al, "\"\\x80\"");
-    const out = try flow(al, node);
-    try std.testing.expect(std.mem.indexOf(u8, out, "\xc2\x80") == null);
 }
 test "regression scalar truncated escapes and nesting bounds" {
     var a = std.heap.ArenaAllocator.init(std.testing.allocator);

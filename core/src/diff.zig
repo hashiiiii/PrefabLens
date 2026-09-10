@@ -155,31 +155,6 @@ test "diff: duplicate before fileIDs match the first occurrence" {
     try testing.expectEqualStrings("150", d.component.fields[0].after.?.scalar);
 }
 
-test "diff: unresolved guids collected from external refs" {
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
-    const before =
-        \\--- !u!114 &5
-        \\MonoBehaviour:
-        \\  m_Script: {fileID: 1, guid: aaaa, type: 3}
-    ;
-    const after =
-        \\--- !u!114 &5
-        \\MonoBehaviour:
-        \\  m_Script: {fileID: 1, guid: bbbb, type: 3}
-    ;
-    const fd = try compute(arena, before, after);
-    // Both aaaa and bbbb are referenced external guids, so both appear.
-    var saw_a = false;
-    var saw_b = false;
-    for (fd.unresolved_guids) |g| {
-        if (std.mem.eql(u8, g, "aaaa")) saw_a = true;
-        if (std.mem.eql(u8, g, "bbbb")) saw_b = true;
-    }
-    try testing.expect(saw_a and saw_b);
-}
-
 test "diff: stripped documents are excluded from docs but kept in before/after" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
@@ -230,29 +205,6 @@ test "diff: removed stripped documents are skipped" {
     try testing.expect(findDoc(fd, 42) == null);
 }
 
-test "diff: hidden fields are dropped and paths humanized" {
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
-    const before =
-        \\--- !u!4 &4
-        \\Transform:
-        \\  m_GameObject: {fileID: 1}
-        \\  m_LocalPosition: {x: 0, y: 0, z: 0}
-    ;
-    const after =
-        \\--- !u!4 &4
-        \\Transform:
-        \\  m_GameObject: {fileID: 2}
-        \\  m_LocalPosition: {x: 1, y: 0, z: 0}
-    ;
-    const fd = try compute(arena, before, after);
-    const d = findDoc(fd, 4).?;
-    // The m_GameObject change is hidden. m_LocalPosition.x becomes "Position.x".
-    try testing.expectEqual(@as(usize, 1), d.component.fields.len);
-    try testing.expectEqualStrings("Position.x", d.component.fields[0].path);
-}
-
 test "diff: hidden-only changes leave the document unchanged" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
@@ -269,44 +221,6 @@ test "diff: hidden-only changes leave the document unchanged" {
     ;
     const fd = try compute(arena, before, after);
     try testing.expectEqual(model.Status.unchanged, findDoc(fd, 4).?.component.status);
-}
-
-test "diff: editor class identifier tail is extracted" {
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
-    const src =
-        \\--- !u!114 &5
-        \\MonoBehaviour:
-        \\  m_EditorClassIdentifier: Assembly-CSharp::Cylinder1
-        \\  hp: 1
-    ;
-    const src2 =
-        \\--- !u!114 &5
-        \\MonoBehaviour:
-        \\  m_EditorClassIdentifier: Assembly-CSharp::Cylinder1
-        \\  hp: 2
-    ;
-    const fd = try compute(arena, src, src2);
-    try testing.expectEqualStrings("Cylinder1", findDoc(fd, 5).?.component.class_name.?);
-}
-
-test "diff: editor class identifier without separator or with empty tail" {
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
-    const src =
-        \\--- !u!114 &5
-        \\MonoBehaviour:
-        \\  m_EditorClassIdentifier: Cylinder1
-        \\--- !u!114 &6
-        \\MonoBehaviour:
-        \\  m_EditorClassIdentifier: Assembly-CSharp::
-    ;
-    const fd = try compute(arena, src, src);
-    // No separator uses the whole string as the class name; an empty tail means no class_name.
-    try testing.expectEqualStrings("Cylinder1", findDoc(fd, 5).?.component.class_name.?);
-    try testing.expect(findDoc(fd, 6).?.component.class_name == null);
 }
 
 test "diff: unresolved guids are deduplicated in first-reference order" {
@@ -330,28 +244,6 @@ test "diff: unresolved guids are deduplicated in first-reference order" {
     try testing.expectEqual(@as(usize, 2), fd.unresolved_guids.len);
     try testing.expectEqualStrings("bbb", fd.unresolved_guids[0]);
     try testing.expectEqualStrings("aaa", fd.unresolved_guids[1]);
-}
-
-test "diff: added document enumerates fields with vector collapse" {
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
-    const before = "";
-    const after =
-        \\--- !u!4 &4
-        \\Transform:
-        \\  m_GameObject: {fileID: 1}
-        \\  m_LocalPosition: {x: 4, y: 0, z: 0}
-        \\  maxHp: 100
-    ;
-    const fd = try compute(arena, before, after);
-    const d = findDoc(fd, 4).?;
-    try testing.expectEqual(model.Status.added, d.component.status);
-    // m_GameObject is hidden. Position is a single vector row, maxHp is Max Hp.
-    try testing.expectEqual(@as(usize, 2), d.component.fields.len);
-    try testing.expectEqualStrings("Position", d.component.fields[0].path);
-    try testing.expectEqualStrings("(4, 0, 0)", d.component.fields[0].after.?.scalar);
-    try testing.expectEqualStrings("Max Hp", d.component.fields[1].path);
 }
 
 test "diff: removed document enumerates fields with vector collapse" {

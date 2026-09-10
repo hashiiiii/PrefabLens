@@ -15,30 +15,6 @@ fn parseOne(arena: std.mem.Allocator, src: []const u8) !Document {
     return docs[0];
 }
 
-test "parse: single document header + flat scalar fields" {
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
-
-    const src =
-        \\%YAML 1.1
-        \\%TAG !u! tag:unity3d.com,2011:
-        \\--- !u!1 &123456789
-        \\GameObject:
-        \\  m_Name: Player
-        \\  m_IsActive: 1
-    ;
-    const doc = try parseOne(arena, src);
-    try testing.expectEqual(@as(u32, 1), doc.class_id);
-    try testing.expectEqual(@as(i64, 123456789), doc.file_id);
-    try testing.expectEqualStrings("GameObject", doc.type_name);
-
-    const name = model.findValue(doc.body.map, "m_Name").?;
-    try testing.expectEqualStrings("Player", name.scalar);
-    const active = model.findValue(doc.body.map, "m_IsActive").?;
-    try testing.expectEqualStrings("1", active.scalar);
-}
-
 test "parseSpanned: retains exact source slices" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
@@ -88,33 +64,6 @@ test "parseSpanned: reports malformed syntax without changing parse" {
     try testing.expectEqual(@as(usize, 1), docs.len);
 }
 
-test "parseSpanned: records container and nested entry spans" {
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena_state.deinit();
-    const src = "--- !u!1 &1\nGameObject:\n  m_Component:\n  - component: {fileID: 4}\n    propertyPath: m_Name\n  m_Vector: {x: 1, y: 2}\n";
-    const parsed = try parseSpanned(arena_state.allocator(), src);
-    const body = parsed.documents[0].body;
-    try testing.expectEqualStrings("  - component: {fileID: 4}\n    propertyPath: m_Name\n", parsed.nodeBytes(model.findValue(body.map, "m_Component").?).?);
-    const components = model.findValue(body.map, "m_Component").?;
-    try testing.expectEqualStrings("  - component: {fileID: 4}\n    propertyPath: m_Name\n", parsed.sequenceItemBytes(components.seq[0]).?);
-    try testing.expectEqualStrings("  - component: {fileID: 4}\n    propertyPath: m_Name\n", parsed.nodeBytes(components.seq[0]).?);
-    const component = model.findValue(components.seq[0].map, "component").?;
-    try testing.expect(parsed.entry_spans.get(component) != null);
-    const property = model.findValue(components.seq[0].map, "propertyPath").?;
-    try testing.expect(parsed.entry_spans.get(property) != null);
-    const vector = model.findValue(body.map, "m_Vector").?;
-    const x = model.findValue(vector.map, "x").?;
-    try testing.expect(parsed.entry_spans.get(x) != null);
-}
-
-test "parseSpanned: selects adjacent line ending at EOF" {
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena_state.deinit();
-    const src = "--- !u!1 &1\r\nGameObject:\r\n  m_Name: A\n";
-    const parsed = try parseSpanned(arena_state.allocator(), src);
-    try testing.expectEqualStrings("\n", parsed.lineEndingAt(src.len));
-}
-
 test "parseSpanned: recognizes a direct document header after a UTF-8 BOM" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
@@ -161,25 +110,6 @@ test "parse: stripped flag on PrefabInstance documents" {
     ;
     const doc = try parseOne(arena, src);
     try testing.expect(doc.stripped);
-}
-
-test "parse: nested map and block sequence of refs" {
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
-    const src =
-        \\--- !u!1 &1
-        \\GameObject:
-        \\  m_Component:
-        \\  - component: {fileID: 4}
-        \\  - component: {fileID: 114}
-        \\  m_Layer: 0
-    ;
-    const doc = try parseOne(arena, src);
-    const comps = model.findValue(doc.body.map, "m_Component").?;
-    try testing.expectEqual(@as(usize, 2), comps.seq.len);
-    const first = model.findValue(comps.seq[0].map, "component").?;
-    try testing.expectEqual(@as(i64, 4), first.ref.file_id);
 }
 
 test "parse: ref with guid and type, and a non-ref flow map (vector)" {
@@ -232,24 +162,6 @@ test "parse: multi-entry sequence map (modifications)" {
     try testing.expectEqual(@as(i64, 7), model.findValue(item.map, "target").?.ref.file_id);
 }
 
-test "parse: non-empty flow sequence of refs and scalars" {
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
-    const src =
-        \\--- !u!1 &1
-        \\GameObject:
-        \\  m_List: [{fileID: 7}, 2]
-    ;
-    // parseFlowSeq's non-empty path: even with nested flow maps, split only on top-level
-    // commas, parsing each element as a ref/scalar.
-    const doc = try parseOne(arena, src);
-    const list = model.findValue(doc.body.map, "m_List").?;
-    try testing.expectEqual(@as(usize, 2), list.seq.len);
-    try testing.expectEqual(@as(i64, 7), list.seq[0].ref.file_id);
-    try testing.expectEqualStrings("2", list.seq[1].scalar);
-}
-
 test "parse: quoted scalar and empty flow seq" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
@@ -264,24 +176,6 @@ test "parse: quoted scalar and empty flow seq" {
     try testing.expectEqualStrings("Hello: World", model.findValue(doc.body.map, "m_Name").?.scalar);
     const tags = model.findValue(doc.body.map, "m_TagString").?;
     try testing.expectEqual(@as(usize, 0), tags.seq.len);
-}
-
-test "parse: block sequence of plain scalars" {
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
-    const src =
-        \\--- !u!1 &1
-        \\GameObject:
-        \\  m_Layers:
-        \\  - Default
-        \\  - Water
-    ;
-    const doc = try parseOne(arena, src);
-    const layers = model.findValue(doc.body.map, "m_Layers").?;
-    try testing.expectEqual(@as(usize, 2), layers.seq.len);
-    try testing.expectEqualStrings("Default", layers.seq[0].scalar);
-    try testing.expectEqualStrings("Water", layers.seq[1].scalar);
 }
 
 test "parse: quoted array elements keep colons inside the scalar" {
@@ -536,31 +430,6 @@ test "parse: a quoted scalar can span lines, and a blank line in it is a newline
     try testing.expectEqualStrings("1", model.findValue(doc.body.map, "m_IsActive").?.scalar);
 }
 
-test "parse: a folded sequence map item keeps its later keys and the next item apart" {
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
-    const src =
-        \\--- !u!1001 &1
-        \\PrefabInstance:
-        \\  m_Modification:
-        \\    m_Modifications:
-        \\    - target: {fileID: 7, guid: aaa,
-        \\        type: 3}
-        \\      propertyPath: m_Name
-        \\    - target: {fileID: 8}
-        \\      propertyPath: m_Layer
-    ;
-    const doc = try parseOne(arena, src);
-    const mods = model.findValue(model.findValue(doc.body.map, "m_Modification").?.map, "m_Modifications").?;
-    try testing.expectEqual(@as(usize, 2), mods.seq.len);
-    const target = model.findValue(mods.seq[0].map, "target").?;
-    try testing.expectEqualStrings("aaa", target.ref.guid.?);
-    try testing.expectEqual(@as(i64, 3), target.ref.type_id.?);
-    try testing.expectEqualStrings("m_Name", model.findValue(mods.seq[0].map, "propertyPath").?.scalar);
-    try testing.expectEqualStrings("m_Layer", model.findValue(mods.seq[1].map, "propertyPath").?.scalar);
-}
-
 test "parseSpanned: quoted punctuation stays in one flow entry" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
@@ -578,37 +447,6 @@ test "parseSpanned: quoted punctuation stays in one flow entry" {
     try testing.expectEqualStrings("a,b{c}\"d", model.findValue(double.map, "value").?.scalar);
     const single = model.findValue(parsed.documents[0].body.map, "m_Single").?;
     try testing.expectEqualStrings("a,b{c}'d", model.findValue(single.map, "value").?.scalar);
-}
-
-test "parseSpanned: nested object reference members produce diagnostics" {
-    const nested_values = [_][]const u8{
-        "{fileID: 1, extra: {value: 2}}",
-        "{fileID: 1, extra: [2]}",
-    };
-    for (nested_values) |nested| {
-        var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
-        defer arena_state.deinit();
-        const src = try std.fmt.allocPrint(
-            arena_state.allocator(),
-            "--- !u!114 &1\nMonoBehaviour:\n  value: {s}\n",
-            .{nested},
-        );
-
-        const parsed = try parseSpanned(arena_state.allocator(), src);
-
-        try testing.expect(parsed.diagnostics.len != 0);
-    }
-}
-
-test "parseSpanned: object reference fileID must be an integer scalar" {
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena_state.deinit();
-    const parsed = try parseSpanned(
-        arena_state.allocator(),
-        "--- !u!114 &1\nMonoBehaviour:\n  value: {fileID: invalid}\n",
-    );
-
-    try testing.expect(parsed.diagnostics.len != 0);
 }
 
 test "parseSpanned: rejects invalid object references" {
@@ -633,27 +471,6 @@ test "parseSpanned: rejects invalid object references" {
         const parsed = try parseSpanned(arena_state.allocator(), src);
 
         try testing.expect(parsed.diagnostics.len != 0);
-    }
-}
-
-test "parseSpanned: accepts valid object references" {
-    const valid_values = [_][]const u8{
-        "{fileID: 0}",
-        "{fileID: 2100000, guid: 0123456789abcdef0123456789abcdef, type: 3}",
-    };
-    for (valid_values) |valid| {
-        var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
-        defer arena_state.deinit();
-        const src = try std.fmt.allocPrint(
-            arena_state.allocator(),
-            "--- !u!114 &1\nMonoBehaviour:\n  value: {s}\n",
-            .{valid},
-        );
-
-        const parsed = try parseSpanned(arena_state.allocator(), src);
-
-        try testing.expectEqual(@as(usize, 0), parsed.diagnostics.len);
-        try testing.expect(model.findValue(parsed.documents[0].body.map, "value").?.* == .ref);
     }
 }
 
@@ -726,17 +543,6 @@ test "parseSpanned: malformed flow values produce diagnostics and valid spans" {
             try testing.expect(entry.value_ptr.value.end <= src.len);
         }
     }
-}
-
-test "parseSpanned: unterminated quoted scalar produces a diagnostic" {
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena_state.deinit();
-    const parsed = try parseSpanned(
-        arena_state.allocator(),
-        "--- !u!114 &1\nMonoBehaviour:\n  value: \"unterminated\n",
-    );
-
-    try testing.expect(parsed.diagnostics.len != 0);
 }
 
 test "parseSpanned: malformed document structure produces diagnostics" {

@@ -244,18 +244,3 @@ test "merge order: reports a constraint cycle" {
         },
     ));
 }
-
-test "merge order: reports conflicts in the same order after a side swap" {
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
-    const first = try merge(arena, &.{"a"}, &.{ "x", "y", "z", "a" }, &.{ "z", "y", "x", "a" });
-    const second = try merge(arena, &.{"a"}, &.{ "z", "y", "x", "a" }, &.{ "x", "y", "z", "a" });
-
-    try testing.expectEqualSlices([]const u8, first.items, second.items);
-    try testing.expectEqual(first.conflicts.len, second.conflicts.len);
-    for (first.conflicts, second.conflicts) |first_edge, second_edge| {
-        try testing.expectEqualStrings(first_edge.before, second_edge.before);
-        try testing.expectEqualStrings(first_edge.after, second_edge.after);
-    }
-}

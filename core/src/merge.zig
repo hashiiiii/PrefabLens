@@ -15,6 +15,7 @@ pub const OperationId = merge_model.OperationId;
 pub const Resolution = merge_model.Resolution;
 pub const Side = merge_model.Side;
 pub const SideValue = merge_model.SideValue;
+pub const properties = @import("merge_properties.zig");
 
 pub const BuildResult = struct {
     plan: MergePlan,

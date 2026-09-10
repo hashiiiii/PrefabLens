@@ -84,6 +84,7 @@ test {
     _ = prefab;
     _ = @import("source.zig");
     _ = @import("merge_model.zig");
+    _ = @import("merge_properties.zig");
     _ = @import("merge_identity.zig");
     _ = @import("merge_order.zig");
     _ = @import("merge_planner.zig");

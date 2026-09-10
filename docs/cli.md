@@ -197,7 +197,7 @@ Navigation and automatic selection of the next conflict follow the hierarchy's o
 Click **Ours** or **Theirs** to preview a value.
 Click **Result**, or focus it and press **Enter**, to edit the existing value.
 **F2** also opens the Result editor directly from the selected conflict.
-Before editing, **Backspace** or **Delete** clears the focused Result and reopens the conflict without starting the editor.
+Outside the property table, **Backspace** or **Delete** clears Result and reopens the conflict without starting the editor.
 While editing, typing and pasting insert at the cursor; **Backspace** and **Delete** remove a character or the selected range.
 
 Arrow keys move the cursor within the value.
@@ -218,8 +218,22 @@ Bracketed paste keeps indentation and line breaks and waits for **Enter** before
 Collection values accept block YAML and flow YAML split across lines.
 Keep each scalar token on one line; folded scalar input remains unsupported.
 PrefabLens keeps the existing collection shape checks and output formatting rules.
-For a component delete/edit conflict, Result contains the whole component document.
-You can edit its properties while keeping its document header, type, and `m_GameObject` reference unchanged.
+Component conflicts show a Semantic property table for Base, Ours, Theirs, and Result.
+All properties are visible, with changed values in bold.
+Ours is red and Theirs is green in both views.
+Nested maps and arrays show their individual values, including fields from custom components.
+
+Choose **Ours** or **Theirs** to preview the entire component.
+To edit a retained component, click a property in **Result**.
+You can also focus Result, select a property with **Up** / **Down**, and press **Enter**.
+**Enter** applies the component with the edited value; **Escape** cancels the cell edit.
+The component and its GameObject membership are resolved together.
+Ownership references are read-only in the property table.
+
+**Shift+R** switches between Semantic and Raw YAML without changing the selected result; **F3** is an alias.
+While editing, **Shift+R** inserts text.
+Raw Result editing accepts the complete component document.
+Keep its document header, type, and `m_GameObject` reference unchanged.
 
 #### Completion checks
 

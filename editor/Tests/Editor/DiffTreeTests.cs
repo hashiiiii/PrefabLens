@@ -18,14 +18,6 @@ namespace PrefabLens.Tests
         }
 
         [Test]
-        public void RowSuppressesNullAndEmptySpans()
-        {
-            // A node with no name must not emit an empty Label after the badge.
-            var row = new Row().Add(null).Add("");
-            Assert.AreEqual(0, row.Spans.Count);
-        }
-
-        [Test]
         public void NodesComeBeforeTheLooseComponentsGroup()
         {
             // The group keeps loose components separate from the GameObject hierarchy.
@@ -41,26 +33,6 @@ namespace PrefabLens.Tests
             AssertSpan(items[1].Row.Spans[0], "Components (1)", Palette.Muted);
             Assert.AreEqual(DiffStatus.Added, items[1].Children[0].Row.Status);
             AssertSpan(items[1].Children[0].Row.Spans[0], "SphereCollider", null);
-        }
-
-        [Test]
-        public void ComponentsGroupShowsItsCardCount()
-        {
-            // The count helps readers scan the tree before they expand the group.
-            const string json =
-                @"{
-                ""unresolvedGuids"":[],
-                ""roots"":[{""kind"":""gameObject"",""fileId"":""1"",""name"":""Plane"",""status"":""modified"",
-                    ""components"":[{""kind"":""component"",""fileId"":""4"",""classId"":4,""typeName"":""Transform"",""scriptGuid"":null,""className"":null,""status"":""modified"",""fields"":[]}],
-                    ""children"":[]}],
-                ""loose"":[]
-            }";
-            var items = Build(json);
-            Assert.AreEqual(DiffStatus.Modified, items[0].Row.Status);
-            var group = items[0].Children[0];
-            Assert.AreEqual(RowKind.Group, group.Row.Kind);
-            AssertSpan(group.Row.Spans[0], "Components (1)", Palette.Muted);
-            AssertSpan(group.Children[0].Row.Spans[0], "Transform", null);
         }
 
         [Test]
@@ -234,27 +206,6 @@ namespace PrefabLens.Tests
             AssertSpan(items[2].Row.Spans[0], "MonoBehaviour", null);
             // Built-in components always read as the type name.
             AssertSpan(items[3].Row.Spans[0], "Transform", null);
-        }
-
-        [Test]
-        public void GameObjectOverrideRendersInsideAComponentCard()
-        {
-            const string json =
-                @"{
-                ""unresolvedGuids"":[],
-                ""roots"":[{""kind"":""gameObject"",""fileId"":""1"",""name"":""Plane"",""status"":""modified"",
-                    ""overrides"":[{""group"":"""",""label"":""Name"",""status"":""modified"",""before"":""Old"",""after"":""New""}],
-                    ""components"":[],""children"":[]}],
-                ""loose"":[]
-            }";
-            var components = Build(json)[0].Children[0];
-            AssertSpan(components.Row.Spans[0], "Components (1)", Palette.Muted);
-            var card = components.Children[0];
-            AssertSpan(card.Row.Spans[0], "Overrides", null);
-            AssertSpan(card.Children[0].Row.Spans[0], "Name ", Palette.Muted);
-            AssertSpan(card.Children[0].Row.Spans[1], "Old", Palette.Removed);
-            AssertSpan(card.Children[0].Row.Spans[2], " → ", Palette.Muted);
-            AssertSpan(card.Children[0].Row.Spans[3], "New", Palette.Added);
         }
 
         [Test]

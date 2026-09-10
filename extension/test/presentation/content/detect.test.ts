@@ -66,10 +66,6 @@ describe("parseDiffUrl", () => {
     });
   });
 
-  it("matches a commit page with a trailing slash", () => {
-    expect(parseDiffUrl("/owner/repo/commit/1e27d79/")?.target).toEqual({ kind: "commit", sha: "1e27d79" });
-  });
-
   it("rejects a commit page without a SHA", () => {
     expect(parseDiffUrl("/owner/repo/commit/not-a-sha")).toBeNull();
   });

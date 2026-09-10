@@ -129,74 +129,34 @@ describe("getSemanticDiff", () => {
     expect(requests).toHaveLength(0);
   });
 
-  it("returns a complete result when the PR meta index resolves every GUID", async () => {
-    const events = await collect(
-      getSemanticDiff(
-        new MemoryAuthRepository("token"),
-        (base, token) =>
-          createGithubGateway(base, token, async (input) => {
-            const request = new URL(String(input));
-            if (request.pathname === "/repos/o/r/pulls/1") {
-              return new Response(JSON.stringify({ base: { sha: "base-tip" }, head: { sha: "head-sha" } }), {
-                status: 200,
-                headers: { "content-type": "application/json" },
-              });
-            }
-            if (request.pathname === "/repos/o/r/compare/base-tip...head-sha") {
-              return new Response(JSON.stringify({ merge_base_commit: { sha: "base-sha" }, files: [] }), {
-                status: 200,
-                headers: { "content-type": "application/json" },
-              });
-            }
-            if (request.pathname === "/repos/o/r/pulls/1/files") {
-              return new Response(
-                JSON.stringify([
-                  { filename: "Assets/Foo.prefab", status: "modified", sha: "head-blob" },
-                  { filename: "Assets/S.cs.meta", status: "modified", sha: "meta-blob" },
-                ]),
-                { status: 200, headers: { "content-type": "application/json" } },
-              );
-            }
-            if (request.pathname === "/repos/o/r/git/trees/base-sha") {
-              return new Response(
-                JSON.stringify({
-                  truncated: false,
-                  tree: [{ path: "Assets/Foo.prefab", type: "blob", sha: "base-blob" }],
-                }),
-                { status: 200, headers: { "content-type": "application/json" } },
-              );
-            }
-            if (request.pathname === "/repos/o/r/git/blobs/meta-blob")
-              return new Response("guid: def\n", { status: 200 });
-            if (request.pathname === "/repos/o/r/git/blobs/base-blob")
-              return new Response(BEFORE_PREFAB, { status: 200 });
-            if (request.pathname === "/repos/o/r/git/blobs/head-blob")
-              return new Response(AFTER_PREFAB, { status: 200 });
-            return new Response(null, { status: 500 });
-          }),
-        async () => differ,
-        new MemoryGuidRepository(),
-        new MemoryDiffRepository(),
-        new MemoryRepoIndexRepository(),
-        createDiffSession(),
-        {
-          type: "semanticDiff",
-          owner: "o",
-          repo: "r",
-          target: { kind: "pull", prNumber: 1 },
-          path: "Assets/Foo.prefab",
-        },
-      ),
+  it("yields a context failure without starting a diff", async () => {
+    const requests: URL[] = [];
+    const stream = getSemanticDiff(
+      new MemoryAuthRepository("token"),
+      (base, token) =>
+        createGithubGateway(base, token, async (input) => {
+          requests.push(new URL(String(input)));
+          return new Response(null, { status: 429, headers: { "retry-after": "1" } });
+        }),
+      async () => differ,
+      new MemoryGuidRepository(),
+      new MemoryDiffRepository(),
+      new MemoryRepoIndexRepository(),
+      createDiffSession(),
+      {
+        type: "semanticDiff",
+        owner: "o",
+        repo: "r",
+        target: { kind: "pull", prNumber: 1 },
+        path: "Assets/Foo.prefab",
+      },
     );
 
-    expect(events).toHaveLength(1);
-    const response = events[0]?.type === "response" ? events[0].response : undefined;
-    expect(response).toBeDefined();
-    if (!response) return;
-    expect(response.ok).toBe(true);
-    if (!response.ok) return;
-    expect(response.pending).toBeUndefined();
-    expect(response.json.resolved).toEqual({ def: "Assets/S.cs" });
+    expect(await collect(stream)).toEqual([{ type: "response", response: { ok: false, error: "rate-limited" } }]);
+    expect(requests.map((request) => request.pathname).sort()).toEqual([
+      "/repos/o/r/pulls/1",
+      "/repos/o/r/pulls/1/files",
+    ]);
   });
 
   it("yields pending before it starts Code Search", async () => {

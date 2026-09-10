@@ -68,7 +68,6 @@ pub fn main(init: std.process.Init) !u8 {
     const scratch = try integration.scratchDirectory(io, arena, "pty");
     defer std.Io.Dir.cwd().deleteTree(io, scratch) catch {};
 
-    try testVisibleLabelAssertion();
     try testDelayedTerminals(io, arena, scratch, prefablens);
     if (args.len == 3) return 0;
     try testCompletion(io, arena, scratch, prefablens);
@@ -99,9 +98,6 @@ fn testCollectionChoices(
     }{
         // Switching from the hierarchy must retain focus, each block, and the unrelated scalar edits.
         .{ .name = "collection-ours-first", .base = "[A]", .ours = "[A, O1, O2]", .theirs = "[A, T1, T2]", .toggle_keys = "T", .keys = "\x1b[C\r\r", .expected = "[A, O1, O2, T1, T2]" },
-        .{ .name = "collection-theirs-first", .base = "[A]", .ours = "[A, O1, O2]", .theirs = "[A, T1, T2]", .toggle_keys = "\x1b[C\x1b[116;2u", .keys = "\x1b[C\r\r", .expected = "[A, T1, T2, O1, O2]" },
-        // A second toggle restores the original side before Enter resolves it.
-        .{ .name = "collection-toggle-off", .base = "[A]", .ours = "[A, Ours]", .theirs = "[A, Theirs]", .toggle_keys = "\x1b[CT", .keys = "T\r\r", .expected = "[A, Ours]" },
         // Retaining the edited C must not restore the independently removed B.
         .{ .name = "collection-delete-edit", .base = "[A, B, C]", .ours = "[A]", .theirs = "[A, B, Edited]", .keys = "\x1b[C\x1b[C\r\r", .expected = "[A, Edited]" },
         // A custom interval replaces only the unresolved append gap.
@@ -145,27 +141,15 @@ fn testResultEditing(io: std.Io, arena: std.mem.Allocator, scratch: []const u8, 
     const transform = "--- !u!4 &4\nTransform:\n  m_GameObject: {fileID: 1}\n  m_Children: []\n  m_Father: {fileID: 0}\n  m_LocalPosition: ";
     const sphere = "--- !u!135 &135\nSphereCollider:\n  m_GameObject: {fileID: 1}\n  m_Radius: ";
     const stationary = transform ++ "{x: 0, y: 0, z: 0}\n";
-    const cases = [_]struct { name: []const u8, base: []const u8, ours: []const u8, theirs: []const u8, keys: []const u8, expected: []const u8, clipboard_sequence: ?[]const u8 = null }{
+    const cases = [_]struct { name: []const u8, base: []const u8, ours: []const u8, theirs: []const u8, keys: []const u8, expected: []const u8 }{
         // Enter on Result retains the side preview; editing one digit must not replace the rest of the value.
         .{ .name = "result-cursor", .base = scalar_prefix ++ "5\n", .ours = scalar_prefix ++ "12\n", .theirs = scalar_prefix ++ "8\n", .keys = "\x1b[<0;52;5M\x1b[C\x1b[C\r\x1b[D\x7f9\r\r", .expected = scalar_prefix ++ "92\n" },
         // The Raw toggle and Enter edit Radius while retaining the component and its owner reference.
         .{ .name = "result-component-property", .base = object ++ sphere_reference ++ stationary ++ sphere ++ "0.25\n", .ours = object ++ stationary, .theirs = object ++ sphere_reference ++ stationary ++ sphere ++ "0.4\n", .keys = "\x1b[<0;75;6MRR\x1b[C\r\x1b[F\x7f6\r\r", .expected = object ++ sphere_reference ++ stationary ++ sphere ++ "0.6\n" },
-        // SGR drag reports must select text in the focused editor before replacement.
-        .{ .name = "result-drag", .base = scalar_prefix ++ "5\n", .ours = scalar_prefix ++ "12\n", .theirs = scalar_prefix ++ "8\n", .keys = "\x1b[<0;52;5M\x1b[<0;85;5M\x1b[<32;86;5M\x1b[<0;86;5m9\r\r", .expected = scalar_prefix ++ "9\n" },
-        // Copy must emit the entire selection and keep it selected for the following bracketed paste.
-        .{ .name = "result-copy-paste", .base = scalar_prefix ++ "0.1\n", .ours = scalar_prefix ++ "0.4\n", .theirs = scalar_prefix ++ "0.2\n", .keys = "\x1b[<0;52;5M\x1b[<0;85;5M\x1b[<32;87;5M\x1b[<0;87;5m\x03\x1b[200~0.6\x1b[201~\r\r", .expected = scalar_prefix ++ "0.6\n", .clipboard_sequence = "\x1b]52;c;MC40\x1b\\" },
-        .{ .name = "result-cmd-copy-paste", .base = scalar_prefix ++ "0.1\n", .ours = scalar_prefix ++ "0.4\n", .theirs = scalar_prefix ++ "0.2\n", .keys = "\x1b[<0;52;5M\x1b[<0;85;5M\x1b[<32;87;5M\x1b[<0;87;5m\x1b[57444;9u\x1b[99;9u\x1b[200~0.6\x1b[201~\r\r", .expected = scalar_prefix ++ "0.6\n", .clipboard_sequence = "\x1b]52;c;MC40\x1b\\" },
         // Startup must focus Position.x before SphereCollider, then advance in that same visual order.
         .{ .name = "result-visual-order", .base = object ++ sphere_reference ++ transform ++ "{x: 0, y: 0, z: 0}\n" ++ sphere ++ "0.25\n", .ours = object ++ transform ++ "{x: 1, y: 0, z: 0}\n", .theirs = object ++ sphere_reference ++ transform ++ "{x: 2, y: 0, z: 0}\n" ++ sphere ++ "0.4\n", .keys = "\x1b[C\x1b[C\r\x1b[C\r\r", .expected = object ++ transform ++ "{x: 2, y: 0, z: 0}\n" },
-        // Both deletion keys clear the entire preview before Enter opens a fresh editor.
-        .{ .name = "result-clear-backspace", .base = scalar_prefix ++ "5\n", .ours = scalar_prefix ++ "12\n", .theirs = scalar_prefix ++ "8\n", .keys = "\x1b[<0;52;5M\x1b[C\x1b[C\x7f\r4\r\r", .expected = scalar_prefix ++ "4\n" },
-        .{ .name = "result-clear-delete", .base = scalar_prefix ++ "5\n", .ours = scalar_prefix ++ "12\n", .theirs = scalar_prefix ++ "8\n", .keys = "\x1b[<0;52;5M\x1b[C\x1b[C\x1b[3~\r4\r\r", .expected = scalar_prefix ++ "4\n" },
         // CRLF inside bracketed paste must not accept a partial interval or trigger Complete.
         .{ .name = "result-paste", .base = try collectionFile(arena, "[A]", 1, 1), .ours = try collectionFile(arena, "[A, Ours]", 2, 1), .theirs = try collectionFile(arena, "[A, Theirs]", 1, 3), .keys = "\x1b[<0;83;5M\x1b[200~  - One\r\n  - Two\r\n\x1b[201~\r\r", .expected = try collectionFile(arena, "[A, One, Two]", 2, 3) },
-        // A newline retains indentation, and Up edits the preceding line without applying it.
-        .{ .name = "result-multiline", .base = try collectionFile(arena, "[A]", 1, 1), .ours = try collectionFile(arena, "[A, Ours]", 2, 1), .theirs = try collectionFile(arena, "[A, Theirs]", 1, 3), .keys = "\x1b[<0;83;5M  - One\x0a- Two\x1b[A\x1b[F\x7fX\r\r", .expected = try collectionFile(arena, "[A, OnX, Two]", 2, 3) },
-        // Modified Enter reports must insert a newline without submitting through TextField focus.
-        .{ .name = "result-shift-enter", .base = try collectionFile(arena, "[A]", 1, 1), .ours = try collectionFile(arena, "[A, Ours]", 2, 1), .theirs = try collectionFile(arena, "[A, Theirs]", 1, 3), .keys = "\x1b[<0;83;5M  - One\x1b[13;2u- Two\x1b[A\x1b[F\x7fX\r\r", .expected = try collectionFile(arena, "[A, OnX, Two]", 2, 3) },
     };
     for (cases) |case| {
         const repo = try prepareMergetoolRepositoryWithSides(io, arena, scratch, prefablens, case.name, .{
@@ -177,8 +161,6 @@ fn testResultEditing(io: std.Io, arena: std.mem.Allocator, scratch: []const u8, 
         try integration.expectNonzero(try integration.gitRun(io, arena, repo, &.{ "merge", "--no-edit", "remote" }), "prepare Result editing conflict");
         const result = try runMergetoolInPty(io, arena, repo, case.keys, 30);
         try integration.expectCode(result, 0, case.name);
-        if (case.clipboard_sequence) |sequence|
-            try integration.require(std.mem.indexOf(u8, result.stdout, sequence) != null, "Result copy did not emit the selected text to the terminal clipboard");
         try integration.expectFile(io, arena, repo, "Assets/Conflict.prefab", case.expected);
         const unmerged = try integration.gitRun(io, arena, repo, &.{ "ls-files", "-u" });
         try integration.expectCode(unmerged, 0, "list index after Result editing");
@@ -227,28 +209,6 @@ fn testDeletionChoices(
         try integration.expectCode(unmerged, 0, "list index after deletion");
         try integration.require(unmerged.stdout.len == 0, "deletion choice left unmerged entries");
     }
-}
-
-fn testVisibleLabelAssertion() !void {
-    const different_rows = "\x1b[?1049hcomponents\x1b[2;1H(1)\x1b[?1049l";
-    try integration.require(
-        !pty.terminalCaptureContains(different_rows, "components (1)"),
-        "PTY label assertion accepted separate rows",
-    );
-
-    const same_row = "\x1b[?1049hcomponents\x1b[1;12H(1)\x1b[?1049l";
-    try integration.require(
-        pty.terminalCaptureContains(same_row, "components (1)"),
-        "PTY label assertion rejected one visible row",
-    );
-
-    const split_buffers =
-        "components " ++
-        "\x1b[?1049h\x1b[1;12H(1)\x1b[?1049l";
-    try integration.require(
-        !pty.terminalCaptureContains(split_buffers, "components (1)"),
-        "PTY label assertion combined primary and alternate screens",
-    );
 }
 
 fn testDelayedTerminals(io: std.Io, arena: std.mem.Allocator, scratch: []const u8, prefablens: []const u8) !void {

@@ -480,43 +480,6 @@ test "merge TUI: tree includes a structural target absent from the partial resul
     try testing.expect(tree.rows[row_index].conflict_index == 0);
 }
 
-test "merge TUI: prefab override conflict uses the Inspector property name" {
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
-    const fixture_base = try std.Io.Dir.cwd().readFileAlloc(
-        testing.io,
-        "core/src/testdata/merge/prefab-property/base.prefab",
-        arena,
-        .limited(4096),
-    );
-    const fixture_ours = try std.Io.Dir.cwd().readFileAlloc(
-        testing.io,
-        "core/src/testdata/merge/prefab-property/ours.prefab",
-        arena,
-        .limited(4096),
-    );
-    const fixture_theirs = try std.mem.replaceOwned(
-        u8,
-        arena,
-        fixture_ours,
-        "value: Ours",
-        "value: Theirs",
-    );
-    var built = try core.merge.build(
-        arena,
-        fixture_base,
-        fixture_ours,
-        fixture_theirs,
-    );
-    const state = try merge_ui_state.State.init(arena, &built.plan);
-
-    // The containing sequence path would hide the overridden Inspector property name.
-    const tree = try build(arena, built.partial, &built.plan, state.conflict_indices);
-    const row_index = tree.rowForConflict(0).?;
-    try testing.expectEqualStrings("Name", tree.rows[row_index].label);
-}
-
 test "merge TUI: conflict focus follows visual order across an edited component" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();

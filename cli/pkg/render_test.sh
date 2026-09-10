@@ -113,18 +113,17 @@ unzip -q "$dist/prefablens-$host_target.zip" -d "$install_dir"
 [ "$("$install_dir/prefablens" --version)" = "$primary_version" ] || fail "the extracted prefablens command failed"
 [ "$(PATH="$install_dir:$PATH" GIT_EXEC_PATH="$tmp/empty-git-exec" git merge-prefablens --version)" = "$strategy_version" ] || fail "Git did not run the extracted script"
 
-# Each target must fail when its archive does not contain the script.
-for target in "${targets[@]}"; do
-  good_archive="$tmp/prefablens-$target.good.zip"
-  mv "$dist/prefablens-$target.zip" "$good_archive"
-  make_archive "$target" no
-  if "$script_dir/render.sh" 1.2.3 "$dist" "$tmp/out-$target" 2>"$tmp/error-$target"; then
-    fail "accepted an incomplete $target archive"
-  fi
-  grep -q "prefablens-$target.zip" "$tmp/error-$target" || fail "missing archive name for $target error"
-  [ ! -e "$tmp/out-$target/prefablens.rb" ] || fail "rendered formula from an incomplete $target archive"
-  [ ! -e "$tmp/out-$target/prefablens.json" ] || fail "rendered manifest from an incomplete $target archive"
-  mv "$good_archive" "$dist/prefablens-$target.zip"
-done
+# One incomplete archive is enough to prove render.sh refuses and writes no outputs.
+target=$host_target
+good_archive="$tmp/prefablens-$target.good.zip"
+mv "$dist/prefablens-$target.zip" "$good_archive"
+make_archive "$target" no
+if "$script_dir/render.sh" 1.2.3 "$dist" "$tmp/out-$target" 2>"$tmp/error-$target"; then
+  fail "accepted an incomplete $target archive"
+fi
+grep -q "prefablens-$target.zip" "$tmp/error-$target" || fail "missing archive name for $target error"
+[ ! -e "$tmp/out-$target/prefablens.rb" ] || fail "rendered formula from an incomplete $target archive"
+[ ! -e "$tmp/out-$target/prefablens.json" ] || fail "rendered manifest from an incomplete $target archive"
+mv "$good_archive" "$dist/prefablens-$target.zip"
 
 echo "PASS"

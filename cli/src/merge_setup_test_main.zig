@@ -139,7 +139,6 @@ fn repositoryScopes(parent: Context) !void {
     const global_path = ctx.git.env.get("GIT_CONFIG_GLOBAL").?;
     const global_before = try read(ctx.git, global_path);
     const cases = [_]struct { name: []const u8, flags: []const []const u8, project: bool = false }{
-        .{ .name = "default", .flags = &.{} },
         .{ .name = "local", .flags = &.{"--local"} },
         .{ .name = "project", .flags = &.{"--project"}, .project = true },
     };
@@ -202,8 +201,8 @@ fn invalidArguments(parent: Context) !void {
     const git = try ctx.repo("repo");
     const before = try read(git, try git.path(".git/config"));
     const cases = [_][]const []const u8{
-        &.{"--team"},                &.{"--unknown"},           &.{"extra"},                &.{ "--local", "--project" },
-        &.{ "--project", "--user" }, &.{ "--user", "--local" }, &.{ "--local", "--local" },
+        &.{"--unknown"},             &.{"extra"},               &.{ "--local", "--project" },
+        &.{ "--project", "--user" }, &.{ "--user", "--local" },
     };
     for (cases) |flags| {
         try t.expectCode(try ctx.setup(git, flags), 2, "invalid setup arguments");

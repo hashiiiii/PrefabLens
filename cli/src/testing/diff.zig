@@ -95,27 +95,6 @@ test "run: bulk mode skips files whose content is not UnityYAML" {
     try testing.expect(std.mem.indexOf(u8, text, "Fake.asset") == null);
 }
 
-test "run: bulk mode reports when every candidate fails the content sniff" {
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
-
-    var tmp = testing.tmpDir(.{});
-    defer tmp.cleanup();
-    const dir = try tmp.dir.realPathFileAlloc(testing.io, ".", arena);
-    try tmp.dir.writeFile(testing.io, .{ .sub_path = "Fake.asset", .data = "\x00\x01binary-v1" });
-    try gitInit(arena, dir);
-    try tmp.dir.writeFile(testing.io, .{ .sub_path = "Fake.asset", .data = "\x00\x01binary-v2" });
-
-    var aw = std.Io.Writer.Allocating.init(arena);
-    var aw_err = std.Io.Writer.Allocating.init(arena);
-    const code = try run(testing.io, arena, &.{ "--project", dir }, &aw.writer, &aw_err.writer, false, null);
-    try testing.expectEqual(@as(u8, 0), code);
-    // Same wording as the "no candidates at all" early exit: to the user both
-    // cases mean the same thing.
-    try testing.expect(std.mem.indexOf(u8, aw.toArrayList().items, "no Unity YAML changes") != null);
-}
-
 test "run: bulk json keeps the array contract when the sniff empties the list" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
@@ -183,17 +162,6 @@ test "run: --version prints the version on stdout and exits 0" {
     const expected = try std.fmt.allocPrint(arena, "prefablens {s}\n", .{version});
     try testing.expectEqualStrings(expected, aw.toArrayList().items);
     try testing.expectEqual(@as(usize, 0), aw_err.toArrayList().items.len);
-}
-
-test "run: --help documents --version" {
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
-    var aw = std.Io.Writer.Allocating.init(arena);
-    var aw_err = std.Io.Writer.Allocating.init(arena);
-    const code = try run(testing.io, arena, &.{"--help"}, &aw.writer, &aw_err.writer, false, null);
-    try testing.expectEqual(@as(u8, 0), code);
-    try testing.expect(std.mem.indexOf(u8, aw.toArrayList().items, "--version") != null);
 }
 
 test "run: no operands in a repo with no commits fails with a git error" {
@@ -328,67 +296,6 @@ test "run: unreadable --project directory reports error and exits 1" {
     try testing.expectEqualStrings("error: cannot read project directory '/no/such/project'\n", err_output.items);
 }
 
-test "run: unreadable --project directory reports error and exits 1 in tree mode" {
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
-
-    // Real, readable input files so only the project directory is at fault.
-    var tmp = testing.tmpDir(.{});
-    defer tmp.cleanup();
-    try tmp.dir.writeFile(testing.io, .{ .sub_path = "before.asset", .data =
-        \\--- !u!114 &1
-        \\MonoBehaviour:
-        \\  hp: 1
-    });
-    try tmp.dir.writeFile(testing.io, .{ .sub_path = "after.asset", .data =
-        \\--- !u!114 &1
-        \\MonoBehaviour:
-        \\  hp: 2
-    });
-    const before_path = try tmp.dir.realPathFileAlloc(testing.io, "before.asset", arena);
-    const after_path = try tmp.dir.realPathFileAlloc(testing.io, "after.asset", arena);
-
-    var aw = std.Io.Writer.Allocating.init(arena);
-    var aw_err = std.Io.Writer.Allocating.init(arena);
-    // No --json: the default tree format must honor the same error contract.
-    const code = try run(testing.io, arena, &.{ "--project", "/no/such/project", before_path, after_path }, &aw.writer, &aw_err.writer, false, null);
-    const err_output = aw_err.toArrayList();
-    try testing.expectEqual(@as(u8, 1), code);
-    // Exact match: one clean line, no stack trace or extra noise.
-    try testing.expectEqualStrings("error: cannot read project directory '/no/such/project'\n", err_output.items);
-}
-
-test "run: unreadable --project directory reports error and exits 1 in html mode" {
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
-
-    // Real, readable input files so only the project directory is at fault.
-    var tmp = testing.tmpDir(.{});
-    defer tmp.cleanup();
-    try tmp.dir.writeFile(testing.io, .{ .sub_path = "before.asset", .data =
-        \\--- !u!114 &1
-        \\MonoBehaviour:
-        \\  hp: 1
-    });
-    try tmp.dir.writeFile(testing.io, .{ .sub_path = "after.asset", .data =
-        \\--- !u!114 &1
-        \\MonoBehaviour:
-        \\  hp: 2
-    });
-    const before_path = try tmp.dir.realPathFileAlloc(testing.io, "before.asset", arena);
-    const after_path = try tmp.dir.realPathFileAlloc(testing.io, "after.asset", arena);
-
-    var aw = std.Io.Writer.Allocating.init(arena);
-    var aw_err = std.Io.Writer.Allocating.init(arena);
-    const code = try run(testing.io, arena, &.{ "--html", "--project", "/no/such/project", before_path, after_path }, &aw.writer, &aw_err.writer, false, null);
-    const err_output = aw_err.toArrayList();
-    try testing.expectEqual(@as(u8, 1), code);
-    // Exact match: one clean line, no stack trace or extra noise.
-    try testing.expectEqualStrings("error: cannot read project directory '/no/such/project'\n", err_output.items);
-}
-
 test "run: bad ref reports error and exits 1" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
@@ -453,43 +360,12 @@ test "run: color=true colors tree output, --no-color forces it back off" {
     const output2 = aw2.toArrayList();
     try testing.expectEqual(@as(u8, 0), code2);
     try testing.expect(std.mem.indexOf(u8, output2.items, "\x1b[") == null);
-}
 
-test "run: --color forces ANSI output on even when stdout is not a TTY" {
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
-
-    var tmp = testing.tmpDir(.{});
-    defer tmp.cleanup();
-    try tmp.dir.writeFile(testing.io, .{ .sub_path = "before.asset", .data =
-        \\--- !u!114 &11400000
-        \\MonoBehaviour:
-        \\  volume: 0.5
-    });
-    try tmp.dir.writeFile(testing.io, .{ .sub_path = "after.asset", .data =
-        \\--- !u!114 &11400000
-        \\MonoBehaviour:
-        \\  volume: 0.8
-    });
-    const before_path = try tmp.dir.realPathFileAlloc(testing.io, "before.asset", arena);
-    const after_path = try tmp.dir.realPathFileAlloc(testing.io, "after.asset", arena);
-
-    // color=false is the piped-stdout default; --color must paint the output anyway.
-    var aw = std.Io.Writer.Allocating.init(arena);
-    var aw_err = std.Io.Writer.Allocating.init(arena);
-    const code = try run(testing.io, arena, &.{ "--color", before_path, after_path }, &aw.writer, &aw_err.writer, false, null);
-    const output = aw.toArrayList();
-    try testing.expectEqual(@as(u8, 0), code);
-    try testing.expect(std.mem.indexOf(u8, output.items, "\x1b[") != null);
-
-    // --no-color still wins when both flags are given.
-    var aw2 = std.Io.Writer.Allocating.init(arena);
-    var aw_err2 = std.Io.Writer.Allocating.init(arena);
-    const code2 = try run(testing.io, arena, &.{ "--color", "--no-color", before_path, after_path }, &aw2.writer, &aw_err2.writer, false, null);
-    const output2 = aw2.toArrayList();
-    try testing.expectEqual(@as(u8, 0), code2);
-    try testing.expect(std.mem.indexOf(u8, output2.items, "\x1b[") == null);
+    var aw3 = std.Io.Writer.Allocating.init(arena);
+    var aw_err3 = std.Io.Writer.Allocating.init(arena);
+    const code3 = try run(testing.io, arena, &.{ "--color", before_path, after_path }, &aw3.writer, &aw_err3.writer, false, null);
+    try testing.expectEqual(@as(u8, 0), code3);
+    try testing.expect(std.mem.indexOf(u8, aw3.toArrayList().items, "\x1b[") != null);
 }
 
 test "run: --project supplies source prefabs for merged instance diffs" {

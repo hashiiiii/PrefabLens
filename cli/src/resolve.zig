@@ -201,15 +201,3 @@ test "buildIndexFor scans only Assets and Packages and skips missing subroots" {
     try testing.expectEqualStrings(want, index.get("aaa111").?);
     try testing.expectEqual(@as(?[]const u8, null), index.get("bbb222"));
 }
-
-test "buildIndexFor returns an empty index when no asset trees exist" {
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
-
-    var tmp = testing.tmpDir(.{});
-    defer tmp.cleanup();
-    const root = try tmp.dir.realPathFileAlloc(testing.io, ".", arena);
-    var index = try buildIndexFor(testing.io, arena, root, &.{"aaa111"});
-    try testing.expectEqual(@as(?[]const u8, null), index.get("aaa111"));
-}

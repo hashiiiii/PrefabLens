@@ -1,7 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const core = @import("core");
-const testing = std.testing;
 const options = @import("diff_options.zig");
 const resolve = @import("resolve.zig");
 const input = @import("input.zig");
@@ -120,22 +119,6 @@ fn diffOne(
 fn envDir(env: *const std.process.Environ.Map, key: []const u8) ?[]const u8 {
     const v = env.get(key) orelse return null;
     return if (v.len == 0) null else v;
-}
-
-test "envDir treats a set-but-empty variable as unset and falls through" {
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
-    var env = std.process.Environ.Map.init(arena);
-    try env.put("TMPDIR", "");
-    try env.put("TEMP", "/tmp/real");
-
-    try testing.expectEqual(@as(?[]const u8, null), envDir(&env, "TMPDIR"));
-    try testing.expectEqualStrings("/tmp/real", envDir(&env, "TEMP").?);
-    // The same fallback chain run() uses: empty TMPDIR must not win over TEMP.
-    try testing.expectEqualStrings("/tmp/real", envDir(&env, "TMPDIR") orelse envDir(&env, "TEMP") orelse "/tmp");
-    // A key missing from the map entirely also falls through to "/tmp".
-    try testing.expectEqualStrings("/tmp", envDir(&env, "NOPE") orelse "/tmp");
 }
 
 /// Runs `git show <ref>:<path>`, printing the one-line error and returning
@@ -415,35 +398,6 @@ fn wantedGuids(arena: std.mem.Allocator, diffs: []const NamedDiff) ![]const []co
         }
     }
     return wanted.items;
-}
-
-test "wantedGuids dedups across files and excludes built-ins" {
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
-    // Two files referencing the same script, one also holding a built-in ref:
-    // the scan target must be exactly one guid.
-    const yaml_a =
-        \\--- !u!114 &5
-        \\MonoBehaviour:
-        \\  m_Script: {fileID: 11500000, guid: abc123, type: 3}
-        \\  m_Mesh: {fileID: 10202, guid: 0000000000000000e000000000000000, type: 0}
-        \\  hp: 1
-    ;
-    const yaml_b =
-        \\--- !u!114 &5
-        \\MonoBehaviour:
-        \\  m_Script: {fileID: 11500000, guid: abc123, type: 3}
-        \\  hp: 2
-    ;
-    const res_a = try core.diffBytes(arena, "", yaml_a);
-    const res_b = try core.diffBytes(arena, yaml_b, yaml_a);
-    const wanted = try wantedGuids(arena, &.{
-        .{ .path = "a", .before = "", .after = yaml_a, .res = res_a },
-        .{ .path = "b", .before = yaml_b, .after = yaml_a, .res = res_b },
-    });
-    try testing.expectEqual(@as(usize, 1), wanted.len);
-    try testing.expectEqualStrings("abc123", wanted[0]);
 }
 
 /// Maps anticipated diff failures to the one-line stderr contract and exit

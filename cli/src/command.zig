@@ -69,6 +69,10 @@ test "command: parses both merge adapters without changing diff arguments" {
     try testing.expectEqualStrings("merged", tool.mergetool.merged);
     const diff = try parse(&.{ "HEAD", "Assets/A.prefab" });
     try testing.expectEqual(@as(usize, 2), diff.diff.len);
+    const setup = try parse(&.{ "setup-merge", "--local" });
+    try testing.expectEqual(@as(usize, 1), setup.setup_merge.len);
+    const strategy = try parse(&.{ "merge-strategy", "--version" });
+    try testing.expectEqual(@as(usize, 1), strategy.merge_strategy.len);
     try testing.expectError(error.ReservedSubcommand, parse(&.{"diff-driver"}));
     try testing.expectError(error.ReservedSubcommand, parse(&.{"difftool"}));
 }

@@ -5,11 +5,232 @@ const vaxis = @import("vaxis");
 const merge_tree = @import("merge_tree.zig");
 const merge_ui_state = @import("merge_ui_state.zig");
 const result_text = @import("merge_result_text.zig");
+const inspector = @import("merge_inspector.zig");
 const testing = std.testing;
+
+test "merge TUI: side colors survive property text and heading rendering" {
+    var memory = std.heap.ArenaAllocator.init(testing.allocator);
+    defer memory.deinit();
+    const arena = memory.allocator();
+    var fixture = try componentDeletePlan(arena);
+    var state = try merge_ui_state.State.init(arena, &fixture.plan);
+    var view = try viewForTest(arena, &state, "A.prefab", fixture.partial);
+    defer view.deinit();
+    for ([_]bool{ false, true }) |raw| {
+        view.raw_view = raw;
+        const surface = try drawForTest(arena, view.widget(), 120, 24);
+        const geometry = view.valueGeometry(120);
+        const body = BodyGeometry.init(24);
+        // Written characters must retain their side colors, including when neither side has focus.
+        for ([_]ValueColumn{ .ours, .theirs }, [_]vaxis.Color{ Palette.ours, Palette.theirs }) |column, color| {
+            const range = valueRange(geometry, column);
+            try testing.expect(vaxis.Color.eql(color, surface.readCell(range.start + 2, body.inspector_rows.start).style.fg));
+            try testing.expect(vaxis.Color.eql(color, surface.readCell(range.start, body.inspector_labels_row).style.fg));
+        }
+        if (!raw) {
+            // Properties occupy consecutive rows, with the changed value distinguished from unchanged metadata.
+            try testing.expect(std.mem.indexOf(u8, try rowText(arena, surface, body.inspector_rows.start), "Game Object") != null);
+            try testing.expect(std.mem.indexOf(u8, try rowText(arena, surface, body.inspector_rows.start + 1), "Mass") != null);
+            try testing.expect(surface.readCell(geometry.theirs.start + 2, body.inspector_rows.start + 1).style.bold);
+            try testing.expect(!surface.readCell(geometry.theirs.start + 2, body.inspector_rows.start).style.bold);
+        }
+    }
+}
+
+test "merge TUI: component property editing retains its document and owner reference" {
+    var memory = std.heap.ArenaAllocator.init(testing.allocator);
+    defer memory.deinit();
+    const arena = memory.allocator();
+    var fixture = try componentDeletePlan(arena);
+    var state = try merge_ui_state.State.init(arena, &fixture.plan);
+    try state.handle(.choose_theirs);
+    var view = try viewForTest(arena, &state, "A.prefab", fixture.partial);
+    defer view.deinit();
+    _ = try drawForTest(arena, view.widget(), 160, 24);
+    var ctx = eventContext(arena);
+    try focusResultForTest(&view, &ctx);
+    try pressKeyForTest(&view, &ctx, vaxis.Key.down);
+    try pressKeyForTest(&view, &ctx, vaxis.Key.enter);
+    try testing.expectEqualStrings("2", try view.editor.buf.dupe());
+    try pressKeyForTest(&view, &ctx, vaxis.Key.backspace);
+    try view.widget().handleEvent(&ctx, .{ .key_press = .{ .codepoint = '3', .text = "3" } });
+    try pressKeyForTest(&view, &ctx, vaxis.Key.enter);
+    try testing.expectEqualStrings("", state.status);
+    // Editing the displayed cell must retain the selected component and its GameObject membership together.
+    try testing.expectEqualStrings(try std.mem.replaceOwned(u8, arena, fixture.plan.theirs.bytes, "m_Mass: 2", "m_Mass: 3"), try core.merge.finish(arena, &fixture.plan));
+}
 const vxfw = vaxis.vxfw;
 
+test "merge TUI: cancelling an empty property edit retains the component choice" {
+    var memory = std.heap.ArenaAllocator.init(testing.allocator);
+    defer memory.deinit();
+    const arena = memory.allocator();
+    var fixture = try componentDeletePlan(arena);
+    var state = try merge_ui_state.State.init(arena, &fixture.plan);
+    try state.handle(.choose_theirs);
+    var view = try viewForTest(arena, &state, "A.prefab", fixture.partial);
+    defer view.deinit();
+    _ = try drawForTest(arena, view.widget(), 100, 20);
+    var ctx = eventContext(arena);
+    try focusResultForTest(&view, &ctx);
+    try pressKeyForTest(&view, &ctx, vaxis.Key.down);
+    try pressKeyForTest(&view, &ctx, vaxis.Key.enter);
+    try pressKeyForTest(&view, &ctx, vaxis.Key.backspace);
+    try pressKeyForTest(&view, &ctx, vaxis.Key.escape);
+    // Cancelling a cleared cell must not clear the retained component or discard the side preview.
+    try testing.expect(!view.editing);
+    try testing.expectEqual(core.merge.Side.theirs, state.pending.?.take);
+    try state.handle(.apply_result);
+    try testing.expectEqualStrings(fixture.plan.theirs.bytes, try core.merge.finish(arena, &fixture.plan));
+}
+
+test "merge TUI: confirming an empty property preserves the component and permits another edit" {
+    var memory = std.heap.ArenaAllocator.init(testing.allocator);
+    defer memory.deinit();
+    const arena = memory.allocator();
+    var fixture = try componentDeletePlan(arena);
+    var state = try merge_ui_state.State.init(arena, &fixture.plan);
+    try state.handle(.choose_theirs);
+    var view = try viewForTest(arena, &state, "A.prefab", fixture.partial);
+    defer view.deinit();
+    _ = try drawForTest(arena, view.widget(), 140, 24);
+    var ctx = eventContext(arena);
+    try focusResultForTest(&view, &ctx);
+    try pressKeyForTest(&view, &ctx, vaxis.Key.down);
+    try pressKeyForTest(&view, &ctx, vaxis.Key.enter);
+    try pressKeyForTest(&view, &ctx, vaxis.Key.backspace);
+    try pressKeyForTest(&view, &ctx, vaxis.Key.enter);
+    try testing.expectEqual(Dialog.empty, view.dialog.?);
+    try pressKeyForTest(&view, &ctx, 'y');
+    try testing.expectEqualStrings("", state.status);
+    // Clearing a field must never mean removing its containing component.
+    try testing.expectEqualStrings(try std.mem.replaceOwned(u8, arena, fixture.plan.theirs.bytes, "m_Mass: 2", "m_Mass: "), try core.merge.finish(arena, &fixture.plan));
+    const screen = try surfaceText(arena, try drawForTest(arena, view.widget(), 140, 24));
+    try testing.expect(std.mem.indexOf(u8, screen, "<empty>") != null);
+    try pressKeyForTest(&view, &ctx, vaxis.Key.left);
+    try focusResultForTest(&view, &ctx);
+    try pressKeyForTest(&view, &ctx, vaxis.Key.down);
+    try pressKeyForTest(&view, &ctx, vaxis.Key.enter);
+    try testing.expect(view.editing);
+    try testing.expectEqualStrings("", try view.editor.buf.dupe());
+    try view.widget().handleEvent(&ctx, .{ .key_press = .{ .codepoint = '3', .text = "3" } });
+    try pressKeyForTest(&view, &ctx, vaxis.Key.enter);
+    try testing.expectEqualStrings(try std.mem.replaceOwned(u8, arena, fixture.plan.theirs.bytes, "m_Mass: 2", "m_Mass: 3"), try core.merge.finish(arena, &fixture.plan));
+}
+
+test "merge TUI: a removed component cannot acquire an independently edited property" {
+    var memory = std.heap.ArenaAllocator.init(testing.allocator);
+    defer memory.deinit();
+    const arena = memory.allocator();
+    var fixture = try componentDeletePlan(arena);
+    var state = try merge_ui_state.State.init(arena, &fixture.plan);
+    try state.handle(.choose_ours);
+    var view = try viewForTest(arena, &state, "A.prefab", fixture.partial);
+    defer view.deinit();
+    _ = try drawForTest(arena, view.widget(), 100, 20);
+    var ctx = eventContext(arena);
+    try focusResultForTest(&view, &ctx);
+    try pressKeyForTest(&view, &ctx, vaxis.Key.down);
+    try pressKeyForTest(&view, &ctx, vaxis.Key.enter);
+    try testing.expect(!view.editing);
+    try testing.expect(state.status.len > 0);
+    try state.handle(.apply_result);
+    try testing.expectEqualStrings(fixture.plan.ours.bytes, try core.merge.finish(arena, &fixture.plan));
+}
+
+test "merge TUI: property and raw views preserve the selected result across toggles" {
+    var memory = std.heap.ArenaAllocator.init(testing.allocator);
+    defer memory.deinit();
+    const arena = memory.allocator();
+    var fixture = try componentDeletePlan(arena);
+    var state = try merge_ui_state.State.init(arena, &fixture.plan);
+    try state.handle(.choose_theirs);
+    var view = try viewForTest(arena, &state, "A.prefab", fixture.partial);
+    defer view.deinit();
+    const before = try surfaceText(arena, try drawForTest(arena, view.widget(), 120, 24));
+    try testing.expect(std.mem.indexOf(u8, before, "Game Object") != null);
+    var ctx = eventContext(arena);
+    const click_toggle: vxfw.Event = .{ .mouse = .{
+        .col = 110,
+        .row = @intCast(BodyGeometry.init(24).inspector_heading_row),
+        .button = .left,
+        .mods = .{},
+        .type = .press,
+    } };
+    try view.widget().handleEvent(&ctx, click_toggle);
+    const raw = try surfaceText(arena, try drawForTest(arena, view.widget(), 120, 24));
+    try testing.expect(std.mem.indexOf(u8, raw, "Rigidbody:") != null);
+    try testing.expect(std.mem.indexOf(u8, raw, "⇧R Semantic") != null);
+    try view.widget().handleEvent(&ctx, click_toggle);
+    try testing.expect(!view.raw_view);
+    try testing.expectEqual(core.merge.Side.theirs, state.pending.?.take);
+}
+
+test "merge TUI: Raw shortcut preserves typed letters in the Result editor" {
+    // Terminals can report Shift as a modifier or as an uppercase character.
+    for ([_]bool{ false, true }) |explicit_shift| {
+        var memory = std.heap.ArenaAllocator.init(testing.allocator);
+        defer memory.deinit();
+        const arena = memory.allocator();
+        var fixture = try componentDeletePlan(arena);
+        var state = try merge_ui_state.State.init(arena, &fixture.plan);
+        try state.handle(.choose_theirs);
+        var view = try viewForTest(arena, &state, "A.prefab", fixture.partial);
+        defer view.deinit();
+        _ = try drawForTest(arena, view.widget(), 120, 24);
+        var ctx = eventContext(arena);
+        const raw_key: vaxis.Key = .{ .codepoint = if (explicit_shift) 'r' else 'R', .mods = .{ .shift = explicit_shift }, .text = "R" };
+        try view.widget().handleEvent(&ctx, .{ .key_press = raw_key });
+        const raw = try surfaceText(arena, try drawForTest(arena, view.widget(), 120, 24));
+        try testing.expect(std.mem.indexOf(u8, raw, "Rigidbody:") != null);
+        try view.widget().handleEvent(&ctx, .{ .key_press = raw_key });
+        try focusResultForTest(&view, &ctx);
+        try pressKeyForTest(&view, &ctx, vaxis.Key.down);
+        try pressKeyForTest(&view, &ctx, vaxis.Key.enter);
+        try testing.expectEqualStrings("2", try view.editor.buf.dupe());
+        // Mode shortcuts must become ordinary text once the Result editor owns focus.
+        const surface = try drawForTest(arena, view.widget(), 120, 24);
+        try routeFocusedEventForTest(arena, surface, view.editor.widget(), &ctx, .{ .key_press = raw_key });
+        try testing.expectEqualStrings("2R", try view.editor.buf.dupe());
+        try testing.expect(!view.raw_view);
+        for (0..2) |_| try pressKeyForTest(&view, &ctx, vaxis.Key.backspace);
+        try view.widget().handleEvent(&ctx, .{ .key_press = .{ .codepoint = '3', .text = "3" } });
+        try pressKeyForTest(&view, &ctx, vaxis.Key.enter);
+        try testing.expectEqualStrings(try std.mem.replaceOwned(u8, arena, fixture.plan.theirs.bytes, "m_Mass: 2", "m_Mass: 3"), try core.merge.finish(arena, &fixture.plan));
+    }
+}
+
 const minimum_size: vxfw.Size = .{ .width = 80, .height = 10 };
+
 const horizontal_padding: u16 = 2;
+
+test "merge TUI: property navigation keeps the edited cell visible in a narrow terminal" {
+    var memory = std.heap.ArenaAllocator.init(testing.allocator);
+    defer memory.deinit();
+    const arena = memory.allocator();
+    const original = try componentDeletePlan(arena);
+    const fields = "  settings: {a: 1, b: 2, c: 3, d: 4, e: 5, f: 6}\n";
+    var fixture = try core.merge.build(arena, try std.mem.replaceOwned(u8, arena, original.plan.base.bytes, "  m_Mass: 1", fields ++ "  m_Mass: 1"), original.plan.ours.bytes, try std.mem.replaceOwned(u8, arena, original.plan.theirs.bytes, "  m_Mass: 2", fields ++ "  m_Mass: 2"));
+    var state = try merge_ui_state.State.init(arena, &fixture.plan);
+    try state.handle(.choose_theirs);
+    var view = try viewForTest(arena, &state, "A.prefab", fixture.partial);
+    defer view.deinit();
+    _ = try drawForTest(arena, view.widget(), 80, 10);
+    var ctx = eventContext(arena);
+    try focusResultForTest(&view, &ctx);
+    for (0..7) |_| try pressKeyForTest(&view, &ctx, vaxis.Key.down);
+    try pressKeyForTest(&view, &ctx, vaxis.Key.enter);
+    const surface = try drawForTest(arena, view.widget(), 80, 10);
+    try testing.expectEqualStrings("2", try view.editor.buf.dupe());
+    // The selected cell must remain visible when only a few property rows fit.
+    try testing.expect(view.property_top > 0);
+    try testing.expect(surface.children[0].origin.row < BodyGeometry.init(10).inspector_rows.end);
+    try testing.expect(std.mem.indexOf(u8, try rowText(arena, surface, @intCast(surface.children[0].origin.row)), "Mass") != null);
+    try pressKeyForTest(&view, &ctx, vaxis.Key.backspace);
+    try view.widget().handleEvent(&ctx, .{ .key_press = .{ .codepoint = '3', .text = "3" } });
+    try pressKeyForTest(&view, &ctx, vaxis.Key.enter);
+    try testing.expectEqualStrings(try std.mem.replaceOwned(u8, arena, fixture.plan.theirs.bytes, "m_Mass: 2", "m_Mass: 3"), try core.merge.finish(arena, &fixture.plan));
+}
 const vertical_padding: u16 = 1;
 
 const Palette = struct {
@@ -76,9 +297,43 @@ const FooterGeometry = struct {
 
 const ours_combined_label = "Ours + Theirs";
 const theirs_combined_label = "Theirs + Ours";
-const combine_toggle_off = "One side";
-const combine_toggle_on = "Both sides";
-const combine_toggle_shortcut = "⇧T";
+
+const InspectorHeadingGeometry = struct {
+    title: Range,
+    raw: ?Range = null,
+    combine: ?Range = null,
+
+    fn init(inspector_range: Range, properties: bool, combine: bool) InspectorHeadingGeometry {
+        var result: InspectorHeadingGeometry = .{ .title = inspector_range };
+        // Reserve controls from the right so neither another control nor a long title can overlap them.
+        if (properties) {
+            result.raw = .{ .start = result.title.end - textWidth("⇧R Semantic"), .end = result.title.end };
+            result.title.end = result.raw.?.start - 2;
+        }
+        if (combine) {
+            result.combine = .{ .start = result.title.end - textWidth("⇧T Both sides"), .end = result.title.end };
+            result.title.end = result.combine.?.start - 2;
+        }
+        return result;
+    }
+};
+
+test "merge TUI: mode controls share the right edge and leave room for each other and the title" {
+    for ([_]u16{ 80, 100, 140 }) |width| {
+        const range = Geometry.init(width).inspector;
+        const raw = InspectorHeadingGeometry.init(range, true, false);
+        const combine = InspectorHeadingGeometry.init(range, false, true);
+        try testing.expectEqual(raw.raw.?.end, combine.combine.?.end);
+        // Both controls must fit even at the minimum width, independently of the title's length.
+        const both = InspectorHeadingGeometry.init(range, true, true);
+        try testing.expect(both.title.start < both.title.end);
+        try testing.expect(both.title.end < both.combine.?.start);
+        try testing.expect(both.combine.?.end < both.raw.?.start);
+        try testing.expectEqual(range.end, both.raw.?.end);
+        try testing.expectEqual(textWidth("⇧T Both sides"), both.combine.?.end - both.combine.?.start);
+        try testing.expectEqual(textWidth("⇧R Semantic"), both.raw.?.end - both.raw.?.start);
+    }
+}
 
 const Dialog = enum {
     quit,
@@ -207,6 +462,12 @@ pub const View = struct {
     dialog_choice: DialogChoice = .cancel,
     last_size: vxfw.Size = .{},
     live_screen: ?*const vaxis.Screen = null,
+    raw_view: bool = false,
+    property_row: usize = 0,
+    property_top: usize = 0,
+    property_memory: std.heap.ArenaAllocator,
+    editor_document: ?core.merge.properties.Document = null,
+    editor_property: ?[]const core.merge.properties.Segment = null,
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -219,12 +480,14 @@ pub const View = struct {
             .path = path,
             .tree = tree,
             .editor = vxfw.TextField.init(allocator),
+            .property_memory = std.heap.ArenaAllocator.init(allocator),
         };
         if (state.outcome == .ready) view.focus_area = .complete;
         return view;
     }
 
     pub fn deinit(self: *View) void {
+        self.property_memory.deinit();
         self.paste_buffer.deinit(self.editor.buf.allocator);
         self.editor.deinit();
     }
@@ -248,6 +511,15 @@ pub const View = struct {
 
     fn valueGeometry(self: *const View, width: u16) Geometry {
         var result = Geometry.init(width);
+        if (self.usesProperties()) {
+            const width_available = result.inspector.end - result.inspector.start;
+            const start = result.inspector.start + @max(@as(u16, 12), width_available / 5);
+            const value_width = result.inspector.end - start;
+            result.base = .{ .start = start, .end = start + value_width / 4 };
+            result.ours = .{ .start = result.base.end, .end = start + value_width * 2 / 4 };
+            result.theirs = .{ .start = result.ours.end, .end = start + value_width * 3 / 4 };
+            result.result.start = result.theirs.end;
+        }
         if (self.canCombine()) {
             // Keep both order labels readable without moving columns when the mode changes.
             result.ours.end = @max(result.ours.end, result.ours.start + @as(u16, ours_combined_label.len) + 1);
@@ -258,18 +530,45 @@ pub const View = struct {
         return result;
     }
 
-    fn combineToggleRange(self: *const View, width: u16) Range {
-        const geometry = self.valueGeometry(width);
-        const property = selectedPropertyName(self);
-        const heading_width = textWidth(selectedComponentName(self)) +|
-            if (property.len == 0) @as(u16, 0) else textWidth(property) +| 3;
-        const toggle_width = textWidth("⇧T Both sides");
-        // Keep the mode beside its field and above the choices it changes.
-        const start = @min(
-            @max(geometry.ours.start, geometry.inspector.start +| heading_width +| 2),
-            geometry.theirs.end - toggle_width,
-        );
-        return .{ .start = start, .end = start + toggle_width };
+    fn hasProperties(self: *const View) bool {
+        return inspector.supports(self.selectedOperation() orelse return false);
+    }
+
+    fn usesProperties(self: *const View) bool {
+        return !self.raw_view and self.hasProperties();
+    }
+
+    fn propertyModel(self: *const View, arena: std.mem.Allocator) !inspector.Model {
+        const operation = self.selectedOperation().?;
+        return inspector.build(arena, operation, self.state.pending orelse operation.resolution);
+    }
+
+    fn ensurePropertyVisible(self: *View, size: vxfw.Size, count: usize) void {
+        self.property_row = @min(self.property_row, count -| 1);
+        const body = BodyGeometry.init(size.height);
+        const height = body.inspector_rows.end - body.inspector_rows.start;
+        if (self.property_row < self.property_top) self.property_top = self.property_row;
+        if (self.property_row >= self.property_top + height) self.property_top = self.property_row - height + 1;
+        self.property_top = @min(self.property_top, count -| height);
+    }
+
+    fn moveProperty(self: *View, ctx: *vxfw.EventContext, size: vxfw.Size, down: bool) !void {
+        var memory = std.heap.ArenaAllocator.init(self.editor.buf.allocator);
+        defer memory.deinit();
+        const model = try self.propertyModel(memory.allocator());
+        self.property_row = if (down) @min(self.property_row + 1, model.rows.len -| 1) else self.property_row -| 1;
+        self.ensurePropertyVisible(size, model.rows.len);
+        self.horizontal_offset = 0;
+        ctx.consumeAndRedraw();
+    }
+
+    fn editorRow(self: *const View, size: vxfw.Size) u16 {
+        const start = BodyGeometry.init(size.height).inspector_rows.start;
+        return start + if (self.editor_property != null) @as(u16, @intCast(self.property_row -| self.property_top)) else @as(u16, 0);
+    }
+
+    fn inspectorHeadingGeometry(self: *const View, width: u16) InspectorHeadingGeometry {
+        return InspectorHeadingGeometry.init(self.valueGeometry(width).inspector, self.hasProperties(), self.canCombine());
     }
 
     fn ensureSelectionVisible(self: *View, size: vxfw.Size) void {
@@ -332,7 +631,12 @@ pub const View = struct {
         }
         const previous_conflict = self.state.selected_conflict;
         try self.state.handle(action);
-        if (self.state.selected_conflict != previous_conflict) self.combine_mode = false;
+        if (self.state.selected_conflict != previous_conflict) {
+            self.combine_mode = false;
+            self.raw_view = false;
+            self.property_row = 0;
+            self.property_top = 0;
+        }
         self.ensureSelectionVisible(size);
         const should_quit = action == .abort and self.state.outcome == .aborted;
         if (should_quit) ctx.quit = true;
@@ -344,7 +648,30 @@ pub const View = struct {
         ctx: *vxfw.EventContext,
         initial: []const u8,
     ) !void {
-        const normalized = try result_text.normalizeNewlines(self.editor.buf.allocator, initial);
+        var input = initial;
+        if (self.usesProperties()) {
+            if (!core.merge.supportsCustomResolution(self.state.plan, self.selectedOperation().?.id)) {
+                self.state.status = "This component supports side selection only.";
+                return ctx.consumeAndRedraw();
+            }
+            _ = self.property_memory.reset(.retain_capacity);
+            const model = try self.propertyModel(self.property_memory.allocator());
+            const document = model.documents[3] orelse {
+                self.state.status = "Choose a component to keep before editing its properties.";
+                return ctx.consumeAndRedraw();
+            };
+            const index = self.property_row;
+            if (!model.editable(index)) {
+                self.state.status = "This property cannot be edited.";
+                return ctx.consumeAndRedraw();
+            }
+            self.editor_document = document;
+            self.editor_property = model.rows[index].path;
+            self.ensurePropertyVisible(self.eventSize(), model.rows.len);
+            input = document.input(model.rows[index].path).?;
+            self.state.status = "";
+        }
+        const normalized = try result_text.normalizeNewlines(self.editor.buf.allocator, input);
         defer self.editor.buf.allocator.free(normalized);
         self.editor.clearRetainingCapacity();
         try self.editor.insertSliceAtCursor(normalized);
@@ -446,6 +773,7 @@ pub const View = struct {
     fn insertPaste(self: *View, ctx: *vxfw.EventContext, text: []const u8) !void {
         if (text.len == 0) return;
         if (!self.editing) try self.beginResultEdit(ctx, self.selectedResultInput());
+        if (!self.editing) return;
         // A paste is one edit; newline key events must never submit a partial value.
         const normalized = try result_text.normalizeNewlines(self.editor.buf.allocator, text);
         defer self.editor.buf.allocator.free(normalized);
@@ -503,6 +831,7 @@ pub const View = struct {
     ) !void {
         if (self.state.selected_conflict >= self.state.conflict_indices.len) return;
         const operation_index = self.state.conflict_indices[self.state.selected_conflict];
+        const previous_conflict = self.state.selected_conflict;
         try self.state.handle(.apply_result);
         self.ensureSelectionVisible(size);
         const applied = self.state.status.len == 0 and
@@ -510,6 +839,9 @@ pub const View = struct {
         if (applied) {
             self.combine_mode = false;
             self.resetEditor();
+            self.property_row = 0;
+            self.property_top = 0;
+            if (self.state.selected_conflict != previous_conflict) self.raw_view = false;
             if (self.state.outcome == .ready) {
                 self.focus_area = .complete;
             } else {
@@ -544,7 +876,7 @@ pub const View = struct {
         return result_text.cellAt(
             &self.editor,
             geometry.result.end - geometry.result.start -| 2,
-            self.editor_top + std.math.clamp(row, body.inspector_rows.start, body.inspector_rows.end - 1) - body.inspector_rows.start,
+            self.editor_top + std.math.clamp(row, self.editorRow(size), if (self.editor_property != null) self.editorRow(size) else body.inspector_rows.end - 1) - self.editorRow(size),
             col -| (geometry.result.start + 2),
         );
     }
@@ -580,9 +912,9 @@ pub const View = struct {
         const row: u16 = @intCast(mouse.row);
         const geometry = self.valueGeometry(size.width);
         const body = BodyGeometry.init(size.height);
-        if (self.canCombine() and row == body.inspector_heading_row and inRange(col, self.combineToggleRange(size.width)))
-            return ctx.consumeEvent();
-        if (row >= body.inspector_rows.start and row < body.inspector_rows.end and inRange(col, geometry.result)) {
+        if (row >= body.inspector_rows.start and row < body.inspector_rows.end and inRange(col, geometry.result) and
+            (self.editor_property == null or row == self.editorRow(size)))
+        {
             const cell = try self.editorCellAt(mouse, size);
             result_text.setCursor(&self.editor, cell.start);
             self.editor_anchor = null;
@@ -602,6 +934,9 @@ pub const View = struct {
         self.editor_start_resolution = null;
         self.editor_changed = false;
         self.editor_reopened = false;
+        self.editor_document = null;
+        self.editor_property = null;
+        _ = self.property_memory.reset(.retain_capacity);
     }
 
     fn leaveEditorWithoutApply(self: *View, ctx: *vxfw.EventContext) !void {
@@ -623,7 +958,7 @@ pub const View = struct {
     }
 
     fn leaveResultForHierarchy(self: *View, ctx: *vxfw.EventContext) !void {
-        if (self.editor_changed) {
+        if (self.editor_changed and self.editor_property == null) {
             const input = try self.editor.toOwnedSlice();
             defer self.editor.buf.allocator.free(input);
             if (std.mem.trim(u8, input, "\r\n").len == 0) return self.reopenResult(ctx, self.eventSize());
@@ -643,6 +978,10 @@ pub const View = struct {
         const input = try self.editor.toOwnedSlice();
         defer self.editor.buf.allocator.free(input);
         if (std.mem.trim(u8, input, "\r\n").len == 0) {
+            if (self.editor_property != null) {
+                try self.openDialog(ctx, .empty);
+                return false;
+            }
             try self.reopenResult(ctx, self.eventSize());
             return true;
         }
@@ -679,6 +1018,7 @@ pub const View = struct {
         switch (kind) {
             .quit => try self.dispatch(ctx, .abort, size),
             .empty => {
+                if (self.editor_property != null) return self.submitProperty(ctx, "");
                 try self.state.handle(.{ .edit_result = "" });
                 try self.applyPendingResult(ctx, size);
                 if (self.editing) try ctx.requestFocus(self.editor.widget());
@@ -764,7 +1104,25 @@ pub const View = struct {
 
     fn selectedText(self: *const View, arena: std.mem.Allocator) std.mem.Allocator.Error![]const u8 {
         const operation = self.selectedOperation() orelse return "";
+        if (self.usesProperties()) {
+            const model = try self.propertyModel(arena);
+            if (self.property_row >= model.rows.len) return "";
+            return model.text(arena, self.property_row, @intFromEnum(self.selected_value));
+        }
         return self.columnText(arena, operation, self.selected_value);
+    }
+
+    fn submitProperty(self: *View, ctx: *vxfw.EventContext, input: []const u8) !void {
+        const bytes = core.merge.properties.edit(self.property_memory.allocator(), self.editor_document.?, self.editor_property.?, input) catch |err| switch (err) {
+            error.OutOfMemory => return err,
+            else => {
+                self.state.status = "This property value is not valid.";
+                try ctx.requestFocus(self.editor.widget());
+                return ctx.consumeAndRedraw();
+            },
+        };
+        try self.state.handle(.{ .edit_result = bytes });
+        try self.applyPendingResult(ctx, self.eventSize());
     }
 
     fn selectedResultInput(self: *const View) []const u8 {
@@ -869,7 +1227,7 @@ pub const View = struct {
     fn moveUp(self: *View, ctx: *vxfw.EventContext, size: vxfw.Size) !void {
         switch (self.focus_area) {
             .hierarchy => try self.dispatch(ctx, .move_up, size),
-            .inspector => ctx.consumeEvent(),
+            .inspector => if (self.usesProperties()) try self.moveProperty(ctx, size, false) else ctx.consumeEvent(),
             .complete => try self.focusHierarchy(ctx),
         }
     }
@@ -882,7 +1240,7 @@ pub const View = struct {
                 }
                 if (self.state.outcome == .ready) self.focusComplete(ctx) else ctx.consumeEvent();
             },
-            .inspector => if (self.state.outcome == .ready) self.focusComplete(ctx) else ctx.consumeEvent(),
+            .inspector => if (self.usesProperties()) try self.moveProperty(ctx, size, true) else if (self.state.outcome == .ready) self.focusComplete(ctx) else ctx.consumeEvent(),
             .complete => ctx.consumeEvent(),
         }
     }
@@ -941,6 +1299,10 @@ pub const View = struct {
         if (self.handleHierarchyWheel(ctx, mouse, size)) return;
         if (mouse.type != .press) return;
         const geometry = self.valueGeometry(size.width);
+        if (self.usesProperties() and mouse.col >= geometry.inspector.start) {
+            if (mouse.button == .wheel_up) return self.moveProperty(ctx, size, false);
+            if (mouse.button == .wheel_down) return self.moveProperty(ctx, size, true);
+        }
         if (mouse.button == .wheel_left) return self.scrollLeft(ctx);
         if (mouse.button == .wheel_right) return self.scrollRight(ctx, size);
         if (mouse.button != .left or mouse.col < 0 or mouse.row < 0) return;
@@ -948,9 +1310,16 @@ pub const View = struct {
         const row: u16 = @intCast(mouse.row);
         const footer = FooterGeometry.init(size.width, size.height);
         const body = BodyGeometry.init(size.height);
-        if (self.canCombine() and row == body.inspector_heading_row and inRange(col, self.combineToggleRange(size.width))) {
-            if (self.focus_area != .inspector or self.selected_value == .result) try self.focusInspector(ctx);
-            return self.toggleCombine(ctx);
+        if (row == body.inspector_heading_row) {
+            const heading = self.inspectorHeadingGeometry(size.width);
+            if (heading.raw) |toggle| if (inRange(col, toggle)) {
+                self.raw_view = !self.raw_view;
+                self.horizontal_offset = 0;
+                return ctx.consumeAndRedraw();
+            };
+            if (heading.combine) |toggle| if (inRange(col, toggle)) {
+                return self.toggleCombine(ctx);
+            };
         }
         if (self.state.outcome == .ready and
             row == footer.row and inRange(col, footer.complete))
@@ -970,6 +1339,14 @@ pub const View = struct {
             return self.dispatch(ctx, .{ .select_conflict = conflict_index }, size);
         }
         if (row < body.inspector_rows.start or row >= body.inspector_rows.end or self.selectedOperation() == null) return;
+        if (self.usesProperties()) {
+            var memory = std.heap.ArenaAllocator.init(self.editor.buf.allocator);
+            defer memory.deinit();
+            const model = try self.propertyModel(memory.allocator());
+            const index = self.property_top + row - body.inspector_rows.start;
+            if (index >= model.rows.len) return;
+            self.property_row = index;
+        }
         if (inRange(col, geometry.ours)) {
             self.focus_area = .inspector;
             self.selected_value = .ours;
@@ -990,7 +1367,7 @@ pub const View = struct {
             self.horizontal_offset = 0;
             try self.state.handle(.pane_right);
             try self.beginResultEdit(ctx, self.selectedResultInput());
-            self.editor_drag_origin = try self.editorCellAt(mouse, size);
+            if (self.editing) self.editor_drag_origin = try self.editorCellAt(mouse, size);
             return;
         }
         if (inRange(col, geometry.inspector)) return self.focusInspector(ctx);
@@ -1183,26 +1560,23 @@ fn draw(
             selectedPropertyName(self),
         },
     );
-    const heading_end = if (self.canCombine()) self.combineToggleRange(size.width).start - 2 else geometry.inspector.end;
+    const heading = self.inspectorHeadingGeometry(size.width);
     writeClipped(
         surface,
-        geometry.inspector.start,
+        heading.title.start,
         body.inspector_heading_row,
-        heading_end - geometry.inspector.start,
+        heading.title.end - heading.title.start,
         inspector_heading,
     );
     styleRange(surface, body.inspector_heading_row, geometry.inspector, .{ .fg = Palette.muted });
-    if (self.canCombine()) {
-        const toggle = self.combineToggleRange(size.width);
-        const label = if (self.combine_mode) combine_toggle_on else combine_toggle_off;
-        const label_start = toggle.start + 3;
-        if (self.focus_area == .inspector and self.selected_value != .result and !self.editing) {
-            writeClipped(surface, toggle.start, body.inspector_heading_row, 2, combine_toggle_shortcut);
-        }
-        writeClipped(surface, label_start, body.inspector_heading_row, toggle.end - label_start, label);
-        if (!self.editing) {
-            styleRange(surface, body.inspector_heading_row, .{ .start = label_start, .end = label_start + @as(u16, @intCast(label.len)) }, .{ .fg = Palette.accent, .bold = true, .ul_style = .single });
-        }
+    if (heading.raw) |toggle| {
+        writeClipped(surface, toggle.start, body.inspector_heading_row, toggle.end - toggle.start, if (self.raw_view) "⇧R Semantic" else "⇧R Raw");
+    }
+    if (self.usesProperties()) {
+        writeClipped(surface, geometry.inspector.start, body.inspector_labels_row, geometry.base.start - geometry.inspector.start, "Property");
+    }
+    if (heading.combine) |toggle| {
+        writeClipped(surface, toggle.start, body.inspector_heading_row, toggle.end - toggle.start, if (self.combine_mode) "⇧T Both sides" else "⇧T One side");
     }
     inline for (.{
         .{ geometry.base, "Base", ValueColumn.base },
@@ -1223,7 +1597,7 @@ fn draw(
             label,
         );
         var heading_style = valueStyle(column[2]);
-        heading_style.fg = Palette.muted;
+        if (column[2] == .base or column[2] == .result) heading_style.fg = Palette.muted;
         styleRange(surface, body.inspector_labels_row, column[0], heading_style);
     }
     for (body.inspector_rows.start..body.inspector_rows.end) |row| {
@@ -1286,7 +1660,9 @@ fn draw(
         }
     }
 
-    if (self.selectedOperation()) |operation| {
+    if (self.usesProperties()) {
+        try paintProperties(self, ctx.arena, surface, size);
+    } else if (self.selectedOperation()) |operation| {
         const columns = .{
             .{ geometry.base, try self.columnText(ctx.arena, operation, .base), ValueColumn.base },
             .{ geometry.ours, try self.columnText(ctx.arena, operation, .ours), ValueColumn.ours },
@@ -1421,12 +1797,12 @@ fn draw(
     }
 
     if (self.editing and self.focus_area == .inspector and self.dialog != .empty) {
-        const editor_row = body.inspector_rows.start;
+        const editor_row = self.editorRow(size);
         if (editor_row < body.inspector_rows.end) {
             self.editor.style = .{ .bg = Palette.focus_bg };
             const editor_size: vxfw.Size = .{
                 .width = geometry.result.end - geometry.result.start -| 2,
-                .height = body.inspector_rows.end - editor_row,
+                .height = if (self.editor_property != null) 1 else body.inspector_rows.end - editor_row,
             };
             const child_surface = try result_text.draw(&self.editor, &self.editor_top, self.editorSelection(), ctx.withConstraints(
                 editor_size,
@@ -1450,6 +1826,32 @@ fn draw(
     return surface;
 }
 
+fn paintProperties(self: *View, arena: std.mem.Allocator, surface: vxfw.Surface, size: vxfw.Size) !void {
+    const model = try self.propertyModel(arena);
+    self.ensurePropertyVisible(size, model.rows.len);
+    const geometry = self.valueGeometry(size.width);
+    const body = BodyGeometry.init(size.height);
+    for (self.property_top..model.rows.len) |index| {
+        const row: u16 = @intCast(body.inspector_rows.start + index - self.property_top);
+        if (row >= body.inspector_rows.end) break;
+        const selected = self.focus_area == .inspector and self.property_row == index;
+        writeClipped(surface, geometry.inspector.start, row, geometry.base.start - geometry.inspector.start - 1, model.rows[index].label);
+        if (selected) styleRange(surface, row, .{ .start = geometry.inspector.start, .end = geometry.base.start }, .{ .bg = Palette.focus_bg, .bold = true });
+        inline for (.{ ValueColumn.base, ValueColumn.ours, ValueColumn.theirs, ValueColumn.result }, 0..) |column, i| {
+            const range = valueRange(geometry, column);
+            const text = try model.text(arena, index, i);
+            var style = valueStyle(column);
+            if (selected and self.selected_value == column) style.bg = Palette.focus_bg;
+            if (model.rows[index].changed) style.bold = true;
+            writeClipped(surface, range.start + 2, row, range.end - range.start -| 2, if (selected and self.selected_value == column) skipGraphemes(text, self.horizontal_offset) else text);
+            styleRange(surface, row, range, style);
+            if (selected and self.selected_value == column) {
+                surface.writeCell(range.start, row, .{ .char = .{ .grapheme = "▌", .width = 1 }, .style = .{ .fg = Palette.accent, .bg = Palette.focus_bg } });
+            }
+        }
+    }
+}
+
 fn submitCustom(
     userdata: ?*anyopaque,
     ctx: *vxfw.EventContext,
@@ -1468,6 +1870,7 @@ fn submitCustom(
     } else false;
     if (!self.editor_changed and self.resultIsRemoval()) return self.applyPendingResult(ctx, self.eventSize());
     if (input.len == 0 and !started_empty) return self.openDialog(ctx, .empty);
+    if (self.editor_property != null) return self.submitProperty(ctx, input);
     if (self.editor_changed or input.len == 0) {
         try self.state.handle(.{ .edit_result = input });
     } else {
@@ -1487,7 +1890,7 @@ fn markEditorChanged(
 ) !void {
     const self: *View = @ptrCast(@alignCast(userdata.?));
     self.editor_changed = true;
-    if (value.len == 0) {
+    if (value.len == 0 and self.editor_property == null) {
         try self.state.handle(.reopen_result);
         self.editor_reopened = true;
     }
@@ -1702,8 +2105,12 @@ fn handleEvent(
             if (key.matches(vaxis.Key.up, .{})) return self.moveUp(ctx, size);
             if (key.matches(vaxis.Key.down, .{})) return self.moveDown(ctx, size);
             if (key.matches(vaxis.Key.enter, .{})) return self.activate(ctx, size);
-            if (self.focus_area == .inspector and self.selected_value != .result and
-                self.canCombine() and key.matches('t', .{ .shift = true }))
+            if (self.hasProperties() and (key.matches('r', .{ .shift = true }) or key.matches(vaxis.Key.f3, .{}))) {
+                self.raw_view = !self.raw_view;
+                self.horizontal_offset = 0;
+                return ctx.consumeAndRedraw();
+            }
+            if (self.canCombine() and key.matches('t', .{ .shift = true }))
                 return self.toggleCombine(ctx);
             if (key.matches(vaxis.Key.f2, .{})) {
                 if (self.selectedOperation() == null) return;
@@ -1718,6 +2125,11 @@ fn handleEvent(
                     try self.beginResultEdit(ctx, self.selectedResultInput());
                     _ = try self.handleEditorKey(ctx, key);
                 } else if (key.matches(vaxis.Key.backspace, .{}) or key.matches(vaxis.Key.delete, .{})) {
+                    if (self.usesProperties()) {
+                        try self.beginResultEdit(ctx, self.selectedResultInput());
+                        if (self.editing) return self.editor.handleEvent(ctx, event);
+                        return;
+                    }
                     self.horizontal_offset = 0;
                     try self.dispatch(ctx, .reopen_result, size);
                 } else if (key.text != null and key.text.?.len != 0) {
@@ -1766,13 +2178,14 @@ test "merge TUI: collection toggle retains both orders until Enter applies the f
         var state = try merge_ui_state.State.init(arena, &built.plan);
         var view = try viewForTest(arena, &state, "Array.prefab", built.partial);
         defer view.deinit();
-        _ = try drawForTest(arena, view.widget(), 140, 20);
+        const initial = try drawForTest(arena, view.widget(), 140, 20);
+        try testing.expect(std.mem.indexOf(u8, try rowText(arena, initial, BodyGeometry.init(20).inspector_heading_row), "⇧T One side") != null);
         var ctx = eventContext(arena);
-        try pressKeyForTest(&view, &ctx, vaxis.Key.right);
-        if (column == .theirs) try pressKeyForTest(&view, &ctx, vaxis.Key.right);
         var parser: vaxis.Parser = .{};
         const key = (try parser.parse(input, arena)).event.?.key_press;
+        // Mode shortcuts must work from the hierarchy without moving focus or choosing a Result.
         try view.widget().handleEvent(&ctx, .{ .key_press = key });
+        try testing.expectEqual(FocusArea.hierarchy, view.focus_area);
         // Terminal modifier reports and focus changes must not undo an explicit toggle.
         try view.widget().handleEvent(&ctx, .{ .key_release = .{ .codepoint = vaxis.Key.left_shift } });
         try view.widget().handleEvent(&ctx, .focus_out);
@@ -1780,7 +2193,10 @@ test "merge TUI: collection toggle retains both orders until Enter applies the f
             const surface = try drawForTest(arena, view.widget(), width, 20);
             const heading = try rowText(arena, surface, BodyGeometry.init(20).inspector_heading_row);
             const labels = try rowText(arena, surface, BodyGeometry.init(20).inspector_labels_row);
-            try testing.expect(std.mem.indexOf(u8, heading, "⇧T Both sides") != null);
+            try testing.expectEqualStrings("⇧T Both sides", try cellsText(arena, surface, BodyGeometry.init(20).inspector_heading_row, width - horizontal_padding - 13, 13));
+            for (width - horizontal_padding - 13..width - horizontal_padding) |col| {
+                try testing.expectEqualDeep(vaxis.Style{}, surface.readCell(@intCast(col), BodyGeometry.init(20).inspector_heading_row).style);
+            }
             try testing.expect(std.mem.indexOf(u8, heading, "MonoBehaviour › Items") != null);
             try testing.expectEqualStrings("1 unresolved", try cellsText(arena, surface, BodyGeometry.init(20).header_row, width - horizontal_padding - 12, 12));
             try testing.expect(std.mem.indexOf(u8, labels, "Ours + Theirs") != null);
@@ -1790,6 +2206,8 @@ test "merge TUI: collection toggle retains both orders until Enter applies the f
         // Switching the available choices must not create or apply a Result preview.
         try testing.expectEqual(@as(usize, 1), state.unresolvedCount());
         try testing.expect(state.pending == null);
+        try pressKeyForTest(&view, &ctx, vaxis.Key.right);
+        if (column == .theirs) try pressKeyForTest(&view, &ctx, vaxis.Key.right);
         try testing.expectEqual(column, view.selected_value);
         try pressKeyForTest(&view, &ctx, vaxis.Key.enter);
         try testing.expectEqual(merge_ui_state.Outcome.ready, state.outcome);
@@ -2196,6 +2614,7 @@ test "merge TUI: dialogs cover the text and colors beneath them" {
         try state.handle(.choose_theirs);
         var view = try viewForTest(arena, &state, "A.prefab", fixture.partial);
         defer view.deinit();
+        view.raw_view = true;
         _ = try drawForTest(arena, view.widget(), 100, 20);
         var ctx = eventContext(arena);
         if (kind == .quit) {
@@ -2714,6 +3133,7 @@ test "merge TUI: component YAML uses following inspector rows" {
     var state = try merge_ui_state.State.init(arena, &fixture.plan);
     var view = try viewForTest(arena, &state, "Assets/Conflict.prefab", fixture.partial);
     defer view.deinit();
+    view.raw_view = true;
     const surface = try drawForTest(arena, view.widget(), 140, 20);
     const body = BodyGeometry.init(20);
     const geometry = Geometry.init(140);
@@ -2746,6 +3166,7 @@ test "merge TUI: inspector focus covers every row of a wrapped value" {
     var state = try merge_ui_state.State.init(arena, &fixture.plan);
     var view = try viewForTest(arena, &state, "Assets/Conflict.prefab", fixture.partial);
     defer view.deinit();
+    view.raw_view = true;
     _ = try drawForTest(arena, view.widget(), 140, 20);
     var ctx = eventContext(arena);
     try pressKeyForTest(&view, &ctx, vaxis.Key.right);
@@ -2785,6 +3206,7 @@ test "merge TUI: a click on a wrapped value row still selects that side" {
     var state = try merge_ui_state.State.init(arena, &fixture.plan);
     var view = try viewForTest(arena, &state, "Assets/Conflict.prefab", fixture.partial);
     defer view.deinit();
+    view.raw_view = true;
     _ = try drawForTest(arena, view.widget(), 140, 20);
     var ctx = eventContext(arena);
     var surface = try drawForTest(arena, view.widget(), 140, 20);
@@ -5423,7 +5845,7 @@ test "merge TUI: a small terminal reports its required size" {
     try testing.expectEqual(@as(usize, 0), surface.children.len);
 }
 
-test "merge TUI: Result accepts the toggle letter as text before and during editing" {
+test "merge TUI: Result treats Shift+T as a mode shortcut until editing begins" {
     for ([_][]const u8{ "", "[Edited", "[invalid" }) |prefix| {
         var memory = std.heap.ArenaAllocator.init(testing.allocator);
         defer memory.deinit();
@@ -5436,23 +5858,26 @@ test "merge TUI: Result accepts the toggle letter as text before and during edit
         var ctx = eventContext(arena);
         try focusResultForTest(&view, &ctx);
         const heading = try rowText(arena, try drawForTest(arena, view.widget(), 100, 20), BodyGeometry.init(20).inspector_heading_row);
-        // The shortcut must not be advertised where its letter enters a Result value.
-        try testing.expect(std.mem.indexOf(u8, heading, "One side") != null);
-        try testing.expect(std.mem.indexOf(u8, heading, "⇧T") == null);
+        try testing.expect(std.mem.indexOf(u8, heading, "⇧T One side") != null);
         var parser: vaxis.Parser = .{};
         const event = (try parser.parse("T", arena)).event.?;
-        if (prefix.len != 0) {
+        try view.widget().handleEvent(&ctx, .{ .key_press = event.key_press });
+        try testing.expect(view.combine_mode);
+        try testing.expect(!view.editing);
+        try testing.expectEqual(FocusArea.inspector, view.focus_area);
+        try testing.expectEqual(ValueColumn.result, view.selected_value);
+        try pressKeyForTest(&view, &ctx, vaxis.Key.enter);
+        if (prefix.len != 0)
             try view.widget().handleEvent(&ctx, .{ .key_press = .{ .codepoint = '[', .text = prefix } });
-            const surface = try drawForTest(arena, view.widget(), 100, 20);
-            try routeFocusedEventForTest(arena, surface, view.editor.widget(), &ctx, .{ .key_press = event.key_press });
-        } else {
-            try view.widget().handleEvent(&ctx, .{ .key_press = event.key_press });
-        }
+        const surface = try drawForTest(arena, view.widget(), 100, 20);
+        try testing.expect(std.mem.indexOf(u8, try rowText(arena, surface, BodyGeometry.init(20).inspector_heading_row), "⇧T Both sides") != null);
+        try routeFocusedEventForTest(arena, surface, view.editor.widget(), &ctx, .{ .key_press = event.key_press });
         // A display mode shortcut must not replace or submit a Result draft.
         try testing.expectEqualStrings(try std.fmt.allocPrint(arena, "{s}T", .{prefix}), try view.editor.toOwnedSlice());
         try testing.expect(state.pending == null);
         try testing.expectEqual(@as(usize, 1), state.unresolvedCount());
         try testing.expect(view.editing);
+        try testing.expect(view.combine_mode);
     }
 }
 
@@ -5470,9 +5895,8 @@ test "merge TUI: clicking the collection toggle and a side previews a replacemen
     try pressKeyForTest(&view, &ctx, vaxis.Key.enter);
     try testing.expectEqual(merge_ui_state.Outcome.ready, state.outcome);
     try pressKeyForTest(&view, &ctx, vaxis.Key.left);
-    try pressKeyForTest(&view, &ctx, vaxis.Key.right);
     try view.widget().handleEvent(&ctx, .{ .mouse = .{
-        .col = @intCast(Geometry.init(140).ours.start + 2),
+        .col = 130,
         .row = @intCast(BodyGeometry.init(20).inspector_heading_row),
         .button = .left,
         .mods = .{},
@@ -5480,6 +5904,8 @@ test "merge TUI: clicking the collection toggle and a side previews a replacemen
     } });
     // Merely viewing the available orders must leave the confirmed result intact.
     try testing.expectEqual(merge_ui_state.Outcome.ready, state.outcome);
+    try testing.expectEqual(FocusArea.hierarchy, view.focus_area);
+    try testing.expect(view.combine_mode);
     try view.widget().handleEvent(&ctx, .{ .mouse = .{
         .col = @intCast(Geometry.init(140).theirs.start + 2),
         .row = @intCast(BodyGeometry.init(20).inspector_rows.start),
@@ -5500,7 +5926,21 @@ test "merge TUI: clicking the collection toggle and a side previews a replacemen
     try pressKeyForTest(&view, &ctx, vaxis.Key.enter);
     try testing.expect(view.editing);
     try testing.expectEqualStrings("[Theirs, Ours]", view.editor.buf.firstHalf());
-    try pressKeyForTest(&view, &ctx, vaxis.Key.enter);
+    const editing_surface = try drawForTest(arena, view.widget(), 140, 20);
+    try routeFocusedEventForTest(arena, editing_surface, view.editor.widget(), &ctx, .{ .mouse = .{
+        .col = 130,
+        .row = @intCast(BodyGeometry.init(20).inspector_heading_row),
+        .button = .left,
+        .mods = .{},
+        .type = .press,
+    } });
+    // A mode click leaves an unchanged editor through the same navigation path as Raw / Semantic.
+    try testing.expect(!view.editing);
+    try testing.expect(view.combine_mode);
+    try testing.expectEqual(ValueColumn.result, view.selected_value);
+    try testing.expectEqualStrings("[Theirs, Ours]", state.pending.?.custom);
+    try routeFocusedEventForTest(arena, try drawForTest(arena, view.widget(), 140, 20), view.widget(), &ctx, .{ .key_press = .{ .codepoint = vaxis.Key.enter } });
+    try routeFocusedEventForTest(arena, try drawForTest(arena, view.widget(), 140, 20), view.editor.widget(), &ctx, .{ .key_press = .{ .codepoint = vaxis.Key.enter } });
     try testing.expectEqual(merge_ui_state.Outcome.ready, state.outcome);
     try testing.expect(std.mem.indexOf(u8, try core.merge.finish(arena, &built.plan), "[A, Theirs, Ours]") != null);
 }
@@ -5673,6 +6113,7 @@ test "merge TUI: a retained component can be edited after applying Theirs" {
     try state.handle(.{ .select_conflict = 0 });
     var view = try viewForTest(arena, &state, "A.prefab", fixture.partial);
     defer view.deinit();
+    view.raw_view = true;
     _ = try drawForTest(arena, view.widget(), 100, 20);
     var ctx = eventContext(arena);
     try pressKeyForTest(&view, &ctx, vaxis.Key.up);
@@ -5807,6 +6248,7 @@ test "merge TUI: a CRLF component stays multiline while editing and keeps CRLF o
     try state.handle(.choose_theirs);
     var view = try viewForTest(arena, &state, "A.prefab", fixture.partial);
     defer view.deinit();
+    view.raw_view = true;
     _ = try drawForTest(arena, view.widget(), 100, 20);
     var ctx = eventContext(arena);
     try beginEditingForTest(&view, &ctx);

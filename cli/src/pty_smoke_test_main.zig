@@ -97,8 +97,8 @@ fn testCollectionChoices(
         expected: []const u8,
         toggle_keys: ?[]const u8 = null,
     }{
-        // Both insertion orders must retain each block and the unrelated scalar edits.
-        .{ .name = "collection-ours-first", .base = "[A]", .ours = "[A, O1, O2]", .theirs = "[A, T1, T2]", .toggle_keys = "\x1b[CT", .keys = "\r\r", .expected = "[A, O1, O2, T1, T2]" },
+        // Switching from the hierarchy must retain focus, each block, and the unrelated scalar edits.
+        .{ .name = "collection-ours-first", .base = "[A]", .ours = "[A, O1, O2]", .theirs = "[A, T1, T2]", .toggle_keys = "T", .keys = "\x1b[C\r\r", .expected = "[A, O1, O2, T1, T2]" },
         .{ .name = "collection-theirs-first", .base = "[A]", .ours = "[A, O1, O2]", .theirs = "[A, T1, T2]", .toggle_keys = "\x1b[C\x1b[116;2u", .keys = "\x1b[C\r\r", .expected = "[A, T1, T2, O1, O2]" },
         // A second toggle restores the original side before Enter resolves it.
         .{ .name = "collection-toggle-off", .base = "[A]", .ours = "[A, Ours]", .theirs = "[A, Theirs]", .toggle_keys = "\x1b[CT", .keys = "T\r\r", .expected = "[A, Ours]" },
@@ -144,9 +144,12 @@ fn testResultEditing(io: std.Io, arena: std.mem.Allocator, scratch: []const u8, 
     const sphere_reference = "  - component: {fileID: 135}\n";
     const transform = "--- !u!4 &4\nTransform:\n  m_GameObject: {fileID: 1}\n  m_Children: []\n  m_Father: {fileID: 0}\n  m_LocalPosition: ";
     const sphere = "--- !u!135 &135\nSphereCollider:\n  m_GameObject: {fileID: 1}\n  m_Radius: ";
+    const stationary = transform ++ "{x: 0, y: 0, z: 0}\n";
     const cases = [_]struct { name: []const u8, base: []const u8, ours: []const u8, theirs: []const u8, keys: []const u8, expected: []const u8, clipboard_sequence: ?[]const u8 = null }{
         // Enter on Result retains the side preview; editing one digit must not replace the rest of the value.
         .{ .name = "result-cursor", .base = scalar_prefix ++ "5\n", .ours = scalar_prefix ++ "12\n", .theirs = scalar_prefix ++ "8\n", .keys = "\x1b[<0;52;5M\x1b[C\x1b[C\r\x1b[D\x7f9\r\r", .expected = scalar_prefix ++ "92\n" },
+        // The Raw toggle and Enter edit Radius while retaining the component and its owner reference.
+        .{ .name = "result-component-property", .base = object ++ sphere_reference ++ stationary ++ sphere ++ "0.25\n", .ours = object ++ stationary, .theirs = object ++ sphere_reference ++ stationary ++ sphere ++ "0.4\n", .keys = "\x1b[<0;75;6MRR\x1b[C\r\x1b[F\x7f6\r\r", .expected = object ++ sphere_reference ++ stationary ++ sphere ++ "0.6\n" },
         // SGR drag reports must select text in the focused editor before replacement.
         .{ .name = "result-drag", .base = scalar_prefix ++ "5\n", .ours = scalar_prefix ++ "12\n", .theirs = scalar_prefix ++ "8\n", .keys = "\x1b[<0;52;5M\x1b[<0;85;5M\x1b[<32;86;5M\x1b[<0;86;5m9\r\r", .expected = scalar_prefix ++ "9\n" },
         // Copy must emit the entire selection and keep it selected for the following bracketed paste.

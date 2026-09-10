@@ -1419,9 +1419,9 @@ fn collectSequence(
         if (kind == .prefab_properties) {
             const item = base_item orelse ours_item orelse theirs_item.?;
             const path = item.identity.property_path.?;
-            if (std.mem.endsWith(u8, path, ".Array.size") or std.mem.indexOf(u8, path, ".Array.data[") != null) {
-                // The ordinary override merge cannot prove that array indices
-                // still refer to the same inherited items.
+            if (std.mem.endsWith(u8, path, ".Array.size")) {
+                // A size change reshuffles inherited item identity. Value-only
+                // Array.data[i] edits keep their propertyPath key and can merge.
                 const base_node = if (base_item) |v| v.node else null;
                 const ours_node = if (ours_item) |v| v.node else null;
                 const theirs_node = if (theirs_item) |v| v.node else null;
@@ -2796,22 +2796,33 @@ test "merge planner: deletes the final child from a block sequence" {
     try testing.expectEqualStrings(inline_empty, built.partial);
 }
 
-test "merge planner: changed collection overrides require unsupported fallback" {
+test "merge planner: changed collection size overrides require unsupported fallback" {
     var memory = std.heap.ArenaAllocator.init(testing.allocator);
     defer memory.deinit();
     const arena = memory.allocator();
     const merge = @import("merge.zig");
     const prefix = "--- !u!1001 &1\nPrefabInstance:\n  m_Modification:\n    m_Modifications:\n    - target: {fileID: 40, guid: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, type: 3}\n      propertyPath: ";
-    // Serialized indices do not prove the identity of inherited array items.
-    // Keep these edits out of the ordinary keyed override merge.
-    for ([_][]const u8{ "items.Array.size", "items.Array.data[0].speed" }) |path| {
-        const base = try std.fmt.allocPrint(arena, "{s}{s}\n      value: 1\n      objectReference: {{fileID: 0}}\n", .{ prefix, path });
-        const changed = try std.mem.replaceOwned(u8, arena, base, "value: 1", "value: 2");
-        try testing.expectError(error.UnsupportedStructure, merge.build(arena, base, base, changed));
-        try testing.expectError(error.UnsupportedStructure, merge.build(arena, base, changed, base));
-        const unchanged = try merge.build(arena, base, base, base);
-        try testing.expectEqualStrings(base, unchanged.partial);
-    }
+    // A size change cannot prove that later Array.data[i] rows still name the
+    // same inherited items, so keep it out of the ordinary keyed override merge.
+    const base = try std.fmt.allocPrint(arena, "{s}items.Array.size\n      value: 1\n      objectReference: {{fileID: 0}}\n", .{prefix});
+    const changed = try std.mem.replaceOwned(u8, arena, base, "value: 1", "value: 2");
+    try testing.expectError(error.UnsupportedStructure, merge.build(arena, base, base, changed));
+    try testing.expectError(error.UnsupportedStructure, merge.build(arena, base, changed, base));
+    const unchanged = try merge.build(arena, base, base, base);
+    try testing.expectEqualStrings(base, unchanged.partial);
+}
+
+test "merge planner: value-only collection data overrides merge by property path" {
+    var memory = std.heap.ArenaAllocator.init(testing.allocator);
+    defer memory.deinit();
+    const arena = memory.allocator();
+    const merge = @import("merge.zig");
+    const prefix = "--- !u!1001 &1\nPrefabInstance:\n  m_Modification:\n    m_Modifications:\n    - target: {fileID: 40, guid: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, type: 3}\n      propertyPath: items.Array.data[0].speed\n      value: ";
+    const base = prefix ++ "1\n      objectReference: {fileID: 0}\n";
+    const changed = prefix ++ "2\n      objectReference: {fileID: 0}\n";
+    const built = try merge.build(arena, base, base, changed);
+    try testing.expectEqual(@as(usize, 0), built.plan.unresolvedCount());
+    try testing.expectEqualStrings(changed, built.partial);
 }
 
 test "merge planner: rejects a structural override without its object change" {

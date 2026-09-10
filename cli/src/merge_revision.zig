@@ -106,6 +106,7 @@ pub const Store = struct {
                     try fields.append(arena, .{ .path = field.name, .kind = switch (field.kind) {
                         .ordered_array => .ordered,
                         .int32_array => .int32_array,
+                        .dictionary => .dictionary,
                     } });
                 }
             }

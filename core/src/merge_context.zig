@@ -1,6 +1,6 @@
 const std = @import("std");
 
-pub const Kind = enum { ordered, int32_array };
+pub const Kind = enum { ordered, int32_array, dictionary };
 pub const Field = struct {
     path: []const u8,
     kind: Kind,

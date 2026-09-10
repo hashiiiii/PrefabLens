@@ -35,19 +35,25 @@ pub fn collect(arena: std.mem.Allocator, state: *State, operations: *std.ArrayLi
     for (plan.conflicts, 0..) |c, i| {
         const id: mm.OperationId = @intCast(operations.items.len);
         const atomic_id: mm.AtomicId = @intCast(atomics.items.len);
-        try operations.append(arena, .{ .id = id, .atomic_id = atomic_id, .kind = .field, .identity = .{ .document = document, .property_path = path }, .hierarchy_path = hierarchy, .property_path = path, .item_path = if (c.path.len > 0) c.path else null, .values = .{ .base = try side(arena, c.nodes.base), .ours = try side(arena, c.nodes.ours), .theirs = try side(arena, c.nodes.theirs) }, .resolution = .unresolved, .collection = .{ .binding = binding_id, .conflict = i } });
+        try operations.append(arena, .{ .id = id, .atomic_id = atomic_id, .kind = .field, .identity = .{ .document = document, .property_path = path }, .hierarchy_path = hierarchy, .property_path = path, .item_path = if (c.path.len > 0) c.path else null, .values = .{ .base = try side(arena, c.nodes.base, files), .ours = try side(arena, c.nodes.ours, files), .theirs = try side(arena, c.nodes.theirs, files) }, .resolution = .unresolved, .collection = .{ .binding = binding_id, .conflict = i } });
         const members = try arena.dupe(mm.OperationId, &.{id});
         try atomics.append(arena, .{ .id = atomic_id, .kind = .field, .operation_ids = members });
         try ids.append(arena, id);
     }
     try state.bindings.append(arena, .{ .plan = plan, .source_nodes = nodes, .original = original, .identity = .{ .document = document, .property_path = path }, .operation_ids = try ids.toOwnedSlice(arena) });
 }
-fn side(arena: std.mem.Allocator, n: ?*const model.Node) mm.Error!?mm.SideValue {
+fn side(arena: std.mem.Allocator, n: ?*const model.Node, files: [3]source.ParsedFile) mm.Error!?mm.SideValue {
     const v = n orelse return null;
-    return .{ .node = v, .span = null, .bytes = yaml.flow(arena, v) catch |err| switch (err) {
-        error.OutOfMemory => return error.OutOfMemory,
-        else => return error.InvalidResolution,
-    } };
+    const bytes = blk: {
+        for (files) |file| {
+            if (file.sequenceItemBytes(v)) |raw| break :blk std.mem.trim(u8, raw, "\r\n");
+        }
+        break :blk yaml.flow(arena, v) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => return error.InvalidResolution,
+        };
+    };
+    return .{ .node = v, .span = null, .bytes = bytes };
 }
 pub fn choices(arena: std.mem.Allocator, plan: *const mm.MergePlan, binding: Binding) mm.Error![]value.Choice {
     const result = try arena.alloc(value.Choice, binding.operation_ids.len);
@@ -57,10 +63,14 @@ pub fn choices(arena: std.mem.Allocator, plan: *const mm.MergePlan, binding: Bin
             .unresolved => .unresolved,
             .remove => .remove,
             .take => |s| .{ .take = @enumFromInt(@intFromEnum(s)) },
-            .custom => |text| .{ .custom = yaml.parseValue(arena, text) catch |err| switch (err) {
-                error.OutOfMemory => return error.OutOfMemory,
-                else => return error.InvalidResolution,
-            } },
+            .custom => |text| blk: {
+                const parsed = yaml.parseValue(arena, text) catch |err| switch (err) {
+                    error.OutOfMemory => return error.OutOfMemory,
+                    else => return error.InvalidResolution,
+                };
+                const reference = op.collection orelse break :blk .{ .custom = parsed };
+                break :blk .{ .custom = try pairCustom(arena, binding.plan.conflicts[reference.conflict], parsed) };
+            },
         };
     }
     return result;
@@ -148,6 +158,30 @@ pub fn validateSelection(arena: std.mem.Allocator, plan: *const mm.MergePlan, re
     };
 }
 
+fn pairCustom(arena: std.mem.Allocator, conflict: value.Conflict, parsed: *const model.Node) mm.Error!*const model.Node {
+    if (conflict.sequence) {
+        if (parsed.* != .seq) return error.InvalidResolution;
+        return parsed;
+    }
+    if (parsed.* == .map or parsed.* == .seq) return parsed;
+    const template = conflict.nodes.ours orelse conflict.nodes.theirs orelse conflict.nodes.base orelse
+        return error.InvalidResolution;
+    if (template.* != .map) return parsed;
+    var value_key: ?[]const u8 = null;
+    for (template.map) |entry| {
+        if (std.mem.eql(u8, entry.key, "value") or std.mem.eql(u8, entry.key, "second")) {
+            value_key = entry.key;
+            break;
+        }
+    }
+    const value_field = value_key orelse return parsed;
+    const entries = try arena.dupe(model.Entry, template.map);
+    for (entries) |*entry| {
+        if (std.mem.eql(u8, entry.key, value_field)) entry.value = @constCast(parsed);
+    }
+    return value.node(arena, .{ .map = entries });
+}
+
 fn uniqueItem(sequence: *const model.Node, target: *const model.Node) ?*const model.Node {
     var found: ?*const model.Node = null;
     for (sequence.seq) |item| {
@@ -219,6 +253,17 @@ fn preserveItems(arena: std.mem.Allocator, result: *const model.Node, n: value.N
             changed = true;
         }
     }
+    for (items) |*item| {
+        const has_bytes = for (files) |file| {
+            if (itemBytes(file, item.*) != null) break true;
+        } else false;
+        if (has_bytes) continue;
+        const selected = uniqueItem(n.theirs.?, item.*) orelse uniqueItem(n.ours.?, item.*) orelse uniqueItem(n.base.?, item.*) orelse continue;
+        if (item.* != selected) {
+            item.* = @constCast(selected);
+            changed = true;
+        }
+    }
     return if (changed) try value.node(arena, .{ .seq = items }) else result;
 }
 
@@ -230,7 +275,7 @@ fn insertReplacement(arena: std.mem.Allocator, plan: *const mm.MergePlan, bindin
         error.OutOfMemory => return error.OutOfMemory,
         else => return error.InvalidResolution,
     };
-    const operation: mm.Operation = .{ .id = 0, .atomic_id = 0, .kind = .field, .identity = binding.identity, .hierarchy_path = "", .property_path = binding.identity.property_path, .values = .{ .base = try side(arena, binding.source_nodes.base), .ours = null, .theirs = try side(arena, binding.source_nodes.theirs) }, .resolution = .{ .take = template_side } };
+    const operation: mm.Operation = .{ .id = 0, .atomic_id = 0, .kind = .field, .identity = binding.identity, .hierarchy_path = "", .property_path = binding.identity.property_path, .values = .{ .base = try side(arena, binding.source_nodes.base, .{ plan.base, plan.ours, plan.theirs }), .ours = null, .theirs = try side(arena, binding.source_nodes.theirs, .{ plan.base, plan.ours, plan.theirs }) }, .resolution = .{ .take = template_side } };
     const offset = try @import("merge_apply.zig").insertionOffset(plan, &operation);
     return .{ .span = .{ .start = offset, .end = offset }, .bytes = rendered.bytes };
 }

@@ -230,10 +230,7 @@ pub fn replaceEntry(
                 break;
             }
             if (!preserved) {
-                try output.appendNTimes(arena, ' ', indent);
-                try output.appendSlice(arena, "- ");
-                try appendFlow(arena, &output, item, 0);
-                try output.appendSlice(arena, ending);
+                try appendReconstructedItem(arena, &output, item, indent, ending);
             }
         }
     } else {
@@ -249,6 +246,33 @@ pub fn replaceEntry(
         } else try output.appendSlice(arena, ours.bytes[value_span.end..span.end]);
     }
     return .{ .span = span, .bytes = try output.toOwnedSlice(arena) };
+}
+
+fn appendReconstructedItem(
+    arena: std.mem.Allocator,
+    output: *std.ArrayList(u8),
+    item: *const model.Node,
+    indent: usize,
+    ending: []const u8,
+) Error!void {
+    try output.appendNTimes(arena, ' ', indent);
+    try output.appendSlice(arena, "- ");
+    if (item.* == .map and item.map.len > 0) {
+        for (item.map, 0..) |entry, i| {
+            if (i != 0) {
+                try output.appendNTimes(arena, ' ', indent + 2);
+            }
+            try validatePlain(entry.key, true);
+            if (entry.key[0] == '"' or entry.key[0] == '\'') _ = try decodeScalar(arena, entry.key);
+            try output.appendSlice(arena, entry.key);
+            try output.appendSlice(arena, ": ");
+            try appendFlow(arena, output, entry.value, 0);
+            try output.appendSlice(arena, ending);
+        }
+        return;
+    }
+    try appendFlow(arena, output, item, 0);
+    try output.appendSlice(arena, ending);
 }
 
 fn lineEnd(bytes: []const u8, offset: usize) usize {
@@ -454,6 +478,20 @@ test "regression compact nested collection" {
     const merged = try std.fmt.allocPrint(al, "{s}{s}{s}", .{ f.bytes[0..patch.span.start], patch.bytes, f.bytes[patch.span.end..] });
     const parsed = try parser.parseSpanned(al, merged);
     try std.testing.expectEqual(@as(usize, 0), parsed.diagnostics.len);
+}
+test "collection YAML writes reconstructed dictionary pairs as block items" {
+    var memory = std.heap.ArenaAllocator.init(testing.allocator);
+    defer memory.deinit();
+    const arena = memory.allocator();
+    const parsed = try parser.parseSpanned(arena, "--- !u!114 &1\nMonoBehaviour:\n  m_Stats:\n  - key: Goblin\n    value: 3\n");
+    const stats = model.findValue(parsed.documents[0].body.map, "m_Stats").?;
+    const custom = try parseValue(arena, "key: Goblin\nvalue: 4");
+    var items = [_]*model.Node{@constCast(custom)};
+    const result = model.Node{ .seq = &items };
+    const patch = try replaceEntry(arena, parsed, stats, &result, &.{parsed});
+    // Custom pairs have no source item to copy. Flow `{key: Goblin, value: 4}` would
+    // restyle a block dictionary Unity wrote as two indented fields.
+    try testing.expectEqualStrings("  m_Stats:\n  - key: Goblin\n    value: 4\n", patch.bytes);
 }
 test "regression map key roundtrip" {
     var a = std.heap.ArenaAllocator.init(std.testing.allocator);

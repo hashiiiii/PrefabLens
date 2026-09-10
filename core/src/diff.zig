@@ -223,6 +223,101 @@ test "diff: hidden-only changes leave the document unchanged" {
     try testing.expectEqual(model.Status.unchanged, findDoc(fd, 4).?.component.status);
 }
 
+test "diff: dictionary pairs and parallel keys match by key not index" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const before =
+        \\--- !u!114 &5
+        \\MonoBehaviour:
+        \\  stats:
+        \\  - key: Goblin
+        \\    value: 10
+        \\  - key: Slime
+        \\    value: 3
+        \\  named:
+        \\    m_Keys:
+        \\    - Fire
+        \\    m_Values:
+        \\    - 1
+    ;
+    const after =
+        \\--- !u!114 &5
+        \\MonoBehaviour:
+        \\  stats:
+        \\  - key: Dragon
+        \\    value: 50
+        \\  - key: Goblin
+        \\    value: 12
+        \\  - key: Slime
+        \\    value: 3
+        \\  named:
+        \\    m_Keys:
+        \\    - Ice
+        \\    - Fire
+        \\    m_Values:
+        \\    - 2
+        \\    - 1
+    ;
+    const fd = try compute(arena, before, after);
+    const d = findDoc(fd, 5).?;
+    var saw_dragon = false;
+    var saw_goblin = false;
+    var saw_ice = false;
+    var saw_index = false;
+    for (d.component.fields) |f| {
+        if (std.mem.indexOf(u8, f.path, "[0]") != null or std.mem.indexOf(u8, f.path, "[1]") != null) saw_index = true;
+        if (std.mem.eql(u8, f.path, "Stats[Dragon]")) {
+            saw_dragon = true;
+            try testing.expectEqual(model.Status.added, f.status);
+        }
+        if (std.mem.eql(u8, f.path, "Stats[Goblin]")) {
+            saw_goblin = true;
+            try testing.expectEqual(model.Status.modified, f.status);
+            try testing.expectEqualStrings("10", f.before.?.scalar);
+            try testing.expectEqualStrings("12", f.after.?.scalar);
+        }
+        if (std.mem.eql(u8, f.path, "Named[Ice]")) {
+            saw_ice = true;
+            try testing.expectEqual(model.Status.added, f.status);
+        }
+    }
+    try testing.expect(saw_dragon);
+    try testing.expect(saw_goblin);
+    try testing.expect(saw_ice);
+    try testing.expect(!saw_index);
+}
+
+test "diff: dictionary reorder without value change is hidden" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const before =
+        \\--- !u!114 &5
+        \\MonoBehaviour:
+        \\  stats:
+        \\  - key: Goblin
+        \\    value: 10
+        \\  - key: Slime
+        \\    value: 3
+    ;
+    const after =
+        \\--- !u!114 &5
+        \\MonoBehaviour:
+        \\  stats:
+        \\  - key: Slime
+        \\    value: 3
+        \\  - key: Goblin
+        \\    value: 10
+    ;
+    const fd = try compute(arena, before, after);
+    const d = findDoc(fd, 5).?;
+    // Index matching would mark every moved pair modified. A pure key shuffle
+    // is not a content change.
+    try testing.expectEqual(model.Status.unchanged, d.component.status);
+    try testing.expectEqual(@as(usize, 0), d.component.fields.len);
+}
+
 test "diff: unresolved guids are deduplicated in first-reference order" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
@@ -273,6 +368,7 @@ test "diff: removed document enumerates fields with vector collapse" {
 const parser = @import("parser.zig");
 const classid = @import("classid.zig");
 const inspector = @import("inspector.zig");
+const dictionary = @import("merge_dictionary.zig");
 const diff_overrides = @import("diff_overrides.zig");
 const Node = model.Node;
 const Status = model.Status;
@@ -413,6 +509,7 @@ fn diffNode(
     a: *const Node,
     b: *const Node,
 ) std.mem.Allocator.Error!void {
+    if (try diffDictionary(arena, out, prefix, a, b)) return;
     // Recurse if the same kind.
     if (a.* == .map and b.* == .map) {
         try diffMap(arena, out, prefix, a.map, b.map);
@@ -475,6 +572,35 @@ fn diffSeq(
     }
 }
 
+fn diffDictionary(
+    arena: std.mem.Allocator,
+    out: *std.ArrayList(FieldDiff),
+    prefix: []const u8,
+    a: *const Node,
+    b: *const Node,
+) std.mem.Allocator.Error!bool {
+    switch (dictionary.detect(a, b, a)) {
+        .none, .malformed => return false,
+        .shape => |shape| {
+            const before = (try dictionary.entries(arena, a, shape)) orelse return false;
+            const after = (try dictionary.entries(arena, b, shape)) orelse return false;
+            for (before) |entry| {
+                const path = try dictionary.keyPath(arena, prefix, entry.key);
+                if (dictionary.find(after, entry.key)) |matched| {
+                    try diffNode(arena, out, path, entry.value, matched.value);
+                } else {
+                    try flattenSubtree(arena, out, path, entry.value, .removed);
+                }
+            }
+            for (after) |entry| {
+                if (dictionary.contains(before, entry.key)) continue;
+                try flattenSubtree(arena, out, try dictionary.keyPath(arena, prefix, entry.key), entry.value, .added);
+            }
+            return true;
+        },
+    }
+}
+
 fn joinKey(arena: std.mem.Allocator, prefix: []const u8, key: []const u8) ![]const u8 {
     if (prefix.len == 0) return key;
     return std.fmt.allocPrint(arena, "{s}.{s}", .{ prefix, key });
@@ -512,6 +638,17 @@ fn flattenSubtree(
     node: *const Node,
     status: Status,
 ) std.mem.Allocator.Error!void {
+    switch (dictionary.detect(node, node, node)) {
+        .shape => |shape| {
+            if ((try dictionary.entries(arena, node, shape))) |list| {
+                for (list) |entry| {
+                    try flattenSubtree(arena, out, try dictionary.keyPath(arena, prefix, entry.key), entry.value, status);
+                }
+                return;
+            }
+        },
+        else => {},
+    }
     switch (node.*) {
         .map => |entries| {
             if (isVectorMap(entries)) {

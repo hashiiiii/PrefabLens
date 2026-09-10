@@ -48,9 +48,45 @@ Competing source formatting can require a choice for the complete collection.
 Packed `int[]` values use the same collection rules.
 PrefabLens preserves their integer values and serialized format.
 
+## Dictionaries
+
+PrefabLens merges these YAML shapes by key, not by list position:
+
+- Pair sequences `{ key, value }` or `{ first, second }`
+- Parallel `SerializedDictionary` maps with `m_Keys` and `m_Values` of equal length
+
+Independent key insertions and removals combine.
+The same key with different values is an edit/edit conflict.
+A delete on one side and an edit on the other is a delete/edit conflict.
+Nested lists stay ordered. Nested dictionaries stay keyed.
+
+If only one side reorders shared keys, that side's order is kept.
+If both sides reorder shared keys differently, the field is an insertion-order conflict.
+Dictionaries do not offer **Both sides** mode.
+New keys land after the preceding shared key; extras already on the order-keeping side stay before extras from the other side.
+
+A C# schema of `Dictionary<,>` or `SerializedDictionary<,>` selects this path.
+Without a schema, the YAML shape is enough.
+A schema that marks a pair sequence `.ordered` still uses list merge.
+
+Unknown or malformed dictionary YAML, duplicate keys, and `m_Keys`/`m_Values` length mismatch stay a whole-collection conflict.
+
+Diff hides a pure reorder.
+Paths use the key, such as `Stats[Goblin]` or `Stats[Goblin].Hp`.
+
+## Prefab Variant collections
+
+When a source prefab is available, PrefabLens instantiates both sides of a modified Prefab Variant before display.
+`Array.size` runs first so later `Array.data[i]` rows can resolve.
+The diff then shows resolved item paths such as `Items[2].Speed` instead of the raw modification rows.
+
+Value-only `Array.data[i]` property overrides merge like other Prefab modifications, keyed by `target` and `propertyPath`.
+`Array.size` changes stay unsupported: a resize can retarget later indices, and PrefabLens does not yet re-encode resolved collections back into `m_Modifications`.
+Without the source prefab, collection overrides stay as modification rows.
+
 ## Unsupported collection shapes
 
-PrefabLens does not merge dictionary fields or collection overrides in Prefab Variants.
+Odin dictionaries and other unrecognized keyed shapes stay a whole-collection conflict.
 Use an explicit result for the whole collection or file when such a change needs resolution.
 
 ## Missing merge context

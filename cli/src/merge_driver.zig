@@ -328,7 +328,7 @@ test "merge driver: preserves a commented document" {
     try runDriverCase(base, ours, theirs_commented_document, expected_commented_document, 0);
 }
 
-test "merge driver: merges ordered arrays and falls back for keyed shapes" {
+test "merge driver: merges ordered arrays and keyed dictionaries" {
     const valid = "--- !u!114 &1\nMonoBehaviour:\n  m_Value: 1\n";
     // A misleading extension must not let non-Unity content reach the merge engine.
     try runDriverCase("not Unity YAML\n", valid, valid, valid, 0);
@@ -338,11 +338,11 @@ test "merge driver: merges ordered arrays and falls back for keyed shapes" {
     const ours = "--- !u!114 &1\nMonoBehaviour:\n  m_Unknown:\n  - 1\n  - 3\n";
     try runDriverCase(base, ours, base, ours, 0);
 
-    // A keyed shape remains a whole-field choice because its identity is
-    // outside the supported ordered-array schema.
+    // Independent keyed insertions merge without field type metadata.
     const keyed_base = "--- !u!114 &1\nMonoBehaviour:\n  m_Unknown:\n  - key: A\n    value: 1\n";
-    const keyed_ours = "--- !u!114 &1\nMonoBehaviour:\n  m_Unknown:\n  - key: A\n    value: 2\n";
-    try runDriverCase(keyed_base, keyed_ours, keyed_base, "<<<<<<< ours\n" ++ keyed_ours ++ "=======\n" ++ keyed_base ++ ">>>>>>> theirs\n", 1);
+    const keyed_ours = "--- !u!114 &1\nMonoBehaviour:\n  m_Unknown:\n  - key: A\n    value: 1\n  - key: B\n    value: 2\n";
+    const keyed_theirs = "--- !u!114 &1\nMonoBehaviour:\n  m_Unknown:\n  - key: A\n    value: 1\n  - key: C\n    value: 3\n";
+    try runDriverCase(keyed_base, keyed_ours, keyed_theirs, "--- !u!114 &1\nMonoBehaviour:\n  m_Unknown:\n  - key: A\n    value: 1\n  - key: B\n    value: 2\n  - key: C\n    value: 3\n", 0);
 }
 
 test "merge driver: keeps ours unchanged when an input cannot be read" {

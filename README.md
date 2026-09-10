@@ -128,9 +128,7 @@ git merge origin/main
 ```
 
 <div align="center">
-
-https://github.com/user-attachments/assets/8e9bec29-8070-456a-a666-3af6488ba437
-
+  https://github.com/user-attachments/assets/5a89e4d8-2d0b-493c-adc6-062154a36417
 </div>
 
 ## Development

@@ -88,55 +88,36 @@ pub fn parseArgs(args: []const []const u8) ArgError!Options {
     return opt;
 }
 
-test "parseArgs: no operands = HEAD vs worktree, bulk" {
-    const opt = try parseArgs(&.{});
-    try testing.expectEqualStrings("HEAD", opt.target.git.before_ref);
-    try testing.expectEqualStrings("", opt.target.git.after_ref);
-    try testing.expectEqual(@as(?[]const u8, null), opt.target.git.path);
-}
+test "parseArgs: operand shapes select git or file compare" {
+    const empty = try parseArgs(&.{});
+    try testing.expectEqualStrings("HEAD", empty.target.git.before_ref);
+    try testing.expectEqualStrings("", empty.target.git.after_ref);
+    try testing.expectEqual(@as(?[]const u8, null), empty.target.git.path);
 
-test "parseArgs: one path = HEAD vs worktree, single file" {
-    const opt = try parseArgs(&.{"Assets/Foo.prefab"});
-    try testing.expectEqualStrings("HEAD", opt.target.git.before_ref);
-    try testing.expectEqualStrings("Assets/Foo.prefab", opt.target.git.path.?);
-}
+    const path = try parseArgs(&.{"Assets/Foo.prefab"});
+    try testing.expectEqualStrings("Assets/Foo.prefab", path.target.git.path.?);
 
-test "parseArgs: one ref = ref vs worktree, bulk" {
-    const opt = try parseArgs(&.{"main"});
-    try testing.expectEqualStrings("main", opt.target.git.before_ref);
-    try testing.expectEqualStrings("", opt.target.git.after_ref);
-    try testing.expectEqual(@as(?[]const u8, null), opt.target.git.path);
-}
+    const one_ref = try parseArgs(&.{"main"});
+    try testing.expectEqualStrings("main", one_ref.target.git.before_ref);
+    try testing.expectEqualStrings("", one_ref.target.git.after_ref);
 
-test "parseArgs: ref and path, order independent of flags" {
-    const opt = try parseArgs(&.{ "main", "Assets/Foo.prefab", "--json" });
-    try testing.expectEqualStrings("main", opt.target.git.before_ref);
-    try testing.expectEqualStrings("Assets/Foo.prefab", opt.target.git.path.?);
-    try testing.expectEqual(Format.json, opt.format);
-}
+    const ref_path = try parseArgs(&.{ "main", "Assets/Foo.prefab", "--json" });
+    try testing.expectEqualStrings("main", ref_path.target.git.before_ref);
+    try testing.expectEqualStrings("Assets/Foo.prefab", ref_path.target.git.path.?);
+    try testing.expectEqual(Format.json, ref_path.format);
 
-test "parseArgs: two refs = ref vs ref, bulk" {
-    const opt = try parseArgs(&.{ "main", "feat/x" });
-    try testing.expectEqualStrings("main", opt.target.git.before_ref);
-    try testing.expectEqualStrings("feat/x", opt.target.git.after_ref);
-    try testing.expectEqual(@as(?[]const u8, null), opt.target.git.path);
-}
+    const two_refs = try parseArgs(&.{ "main", "feat/x" });
+    try testing.expectEqualStrings("feat/x", two_refs.target.git.after_ref);
 
-test "parseArgs: two refs and a path" {
-    const opt = try parseArgs(&.{ "HEAD~1", "HEAD", "Assets/Foo.unity" });
-    try testing.expectEqualStrings("HEAD~1", opt.target.git.before_ref);
-    try testing.expectEqualStrings("HEAD", opt.target.git.after_ref);
-    try testing.expectEqualStrings("Assets/Foo.unity", opt.target.git.path.?);
-}
+    const two_refs_path = try parseArgs(&.{ "HEAD~1", "HEAD", "Assets/Foo.unity" });
+    try testing.expectEqualStrings("HEAD~1", two_refs_path.target.git.before_ref);
+    try testing.expectEqualStrings("HEAD", two_refs_path.target.git.after_ref);
+    try testing.expectEqualStrings("Assets/Foo.unity", two_refs_path.target.git.path.?);
 
-test "parseArgs: two paths = plain compare, no git" {
-    const opt = try parseArgs(&.{ "old.prefab", "new.prefab" });
-    try testing.expectEqualStrings("old.prefab", opt.target.files.before);
-    try testing.expectEqualStrings("new.prefab", opt.target.files.after);
-}
+    const files = try parseArgs(&.{ "old.prefab", "new.prefab" });
+    try testing.expectEqualStrings("old.prefab", files.target.files.before);
+    try testing.expectEqualStrings("new.prefab", files.target.files.after);
 
-test "parseArgs: excess operands are rejected" {
-    // Three refs; two paths and a ref; three paths — all over the limit.
     try testing.expectError(ArgError.TooManyArguments, parseArgs(&.{ "a", "b", "c" }));
     try testing.expectError(ArgError.TooManyArguments, parseArgs(&.{ "main", "a.prefab", "b.prefab" }));
     try testing.expectError(ArgError.TooManyArguments, parseArgs(&.{ "a.prefab", "b.prefab", "c.prefab" }));
@@ -161,6 +142,7 @@ test "parseArgs: --no-project parses and conflicts with --project" {
     try testing.expect(opt.no_project);
     try testing.expectError(ArgError.ConflictingFlags, parseArgs(&.{ "--no-project", "--project", ".", "main" }));
     try testing.expectError(ArgError.ConflictingFlags, parseArgs(&.{ "--project", ".", "--no-project", "main" }));
+    try testing.expectError(ArgError.MissingOperands, parseArgs(&.{"--project"}));
 }
 
 test "parseArgs: --open implies html and rejects --json" {

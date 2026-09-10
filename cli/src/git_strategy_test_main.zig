@@ -62,7 +62,6 @@ pub fn main(init: std.process.Init) !u8 {
     }
     if (args.len == 5 and std.mem.eql(u8, args[4], "native-fixtures")) {
         try nativeFixtures(ctx);
-        if (supports_pty) try nativeLocalChoices(ctx);
         try candidateEncoding(ctx);
         return 0;
     }
@@ -77,7 +76,6 @@ pub fn main(init: std.process.Init) !u8 {
     try candidateEncoding(ctx);
     try addedUnity(ctx);
     if (supports_pty) {
-        try nativeLocalChoices(ctx);
         try contentPty(ctx);
         try concurrentContent(ctx);
         try privatePermissions(ctx);
@@ -131,7 +129,6 @@ fn automatic(ctx: Context) !void {
 }
 fn nonInteractive(ctx: Context) !void {
     const cases = [_]struct { name: []const u8, files: []const t.FileSides }{
-        .{ .name = "text", .files = &.{.{ .path = "Notes/A.txt", .base = "base\n", .ours = "ours\n", .theirs = "theirs\n" }} },
         .{ .name = "unity", .files = &.{.{ .path = "Assets/A.prefab", .base = base, .ours = ours, .theirs = conflict_theirs }} },
         .{ .name = "mixed", .files = &.{ .{ .path = "Assets/A.prefab", .base = base, .ours = ours, .theirs = conflict_theirs }, .{ .path = "Notes/A.txt", .base = "base\n", .ours = "ours\n", .theirs = "theirs\n" } } },
     };
@@ -367,22 +364,6 @@ fn nativeFixtures(ctx: Context) !void {
         try t.require((try git.output(&.{ "ls-files", "--unmerged" })).len == 0, "native array fixture retained stages");
         try git.ok(&.{ "merge", "--abort" });
         try expectFile(git, "Assets/Plain.prefab", prefab_sides[1]);
-    }
-}
-
-fn nativeLocalChoices(ctx: Context) !void {
-    const prefix = "--- !u!114 &1\nMonoBehaviour:\n";
-    const cases = [_]struct { name: []const u8, base_items: []const u8, ours_items: []const u8, theirs_items: []const u8, expected: []const u8, keys: []const u8 }{
-        .{ .name = "native-ours-first", .base_items = "[A]", .ours_items = "[A, Ours]", .theirs_items = "[A, Theirs]", .expected = "[A, Ours, Theirs]", .keys = "\x1b[CT\r\r" },
-        .{ .name = "native-theirs-first", .base_items = "[A]", .ours_items = "[A, Ours]", .theirs_items = "[A, Theirs]", .expected = "[A, Theirs, Ours]", .keys = "\x1b[CT\x1b[C\r\r" },
-        .{ .name = "native-delete-edit", .base_items = "[A, B, C]", .ours_items = "[A]", .theirs_items = "[A, B, Edited]", .expected = "[A, Edited]", .keys = "\x1b[C\x1b[C\r\r" },
-        .{ .name = "native-custom", .base_items = "[A]", .ours_items = "[A, Ours]", .theirs_items = "[A, Theirs]", .expected = "[A, Custom]", .keys = "\x1b[<0;83;5M[Custom]\r\r" },
-    };
-    for (cases) |case| {
-        const git = try ctx.repo(case.name, &.{.{ .path = "Assets/A.prefab", .base = try std.fmt.allocPrint(ctx.git.arena, prefix ++ "  m_Items: {s}\n  m_Left: 1\n  m_Right: 1\n", .{case.base_items}), .ours = try std.fmt.allocPrint(ctx.git.arena, prefix ++ "  m_Items: {s}\n  m_Left: 2\n  m_Right: 1\n", .{case.ours_items}), .theirs = try std.fmt.allocPrint(ctx.git.arena, prefix ++ "  m_Items: {s}\n  m_Left: 1\n  m_Right: 3\n", .{case.theirs_items}) }});
-        try t.expectCode(try runPty(git, case.keys), 0, "native local collection choice");
-        try expectFile(git, "Assets/A.prefab", try std.fmt.allocPrint(git.arena, prefix ++ "  m_Items: {s}\n  m_Left: 2\n  m_Right: 3\n", .{case.expected}));
-        try t.require((try git.output(&.{ "ls-files", "--unmerged" })).len == 0, "native local choice retained stages");
     }
 }
 

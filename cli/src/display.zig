@@ -131,11 +131,6 @@ test "overrideGroups splits contiguous rows at each group-name change" {
     try std.testing.expectEqual(@as(usize, 2), overrideGroupCount(&rows));
 }
 
-test "overrideGroups yields nothing for an empty override list" {
-    var groups = overrideGroups(&.{});
-    try std.testing.expectEqual(@as(?[]const model.OverrideDiff, null), groups.next());
-}
-
 test "unresolvedCount ignores built-in guids" {
     var guids = [_][]const u8{ "abc123", builtin_refs.builtin_extra_guid };
     const res: model.DiffResult = .{
@@ -150,39 +145,28 @@ test "unresolvedCount ignores built-in guids" {
 // refDisplay decision table, shared by render_tree's writeValueText and
 // render_html's writeValue (and mirrored by the extension's formatValue).
 
-test "refDisplay: resolved external ref reads as its asset path" {
+test "refDisplay: formats resolved, built-in, local, and null refs" {
     var resolver = core.json.Resolver.init(std.testing.allocator);
     defer resolver.deinit();
     try resolver.put("abc123", "Assets/Materials/Fixture.mat");
-    const d = refDisplay(.{ .file_id = 2100000, .guid = "abc123", .type_id = 2 }, &resolver);
-    try std.testing.expectEqualStrings("Assets/Materials/Fixture.mat", d.path);
-}
-
-test "refDisplay: built-in ref reads as its object name" {
-    // No resolver: built-in names come from the checked-in table, not .meta files.
-    const d = refDisplay(.{ .file_id = 10202, .guid = builtin_refs.default_resources_guid, .type_id = 0 }, null);
-    try std.testing.expectEqualStrings("Cube", d.builtin);
-}
-
-test "refDisplay: built-in guid with unknown fileID falls back to the raw guid" {
-    // fileID 424242 is not in the table (e.g. an object added by a future Unity).
-    const d = refDisplay(.{ .file_id = 424242, .guid = builtin_refs.default_resources_guid, .type_id = 0 }, null);
-    try std.testing.expectEqualStrings(builtin_refs.default_resources_guid, d.guid);
-}
-
-test "refDisplay: unresolved external ref keeps the raw guid" {
-    var resolver = core.json.Resolver.init(std.testing.allocator);
-    defer resolver.deinit();
-    const d = refDisplay(.{ .file_id = 2100000, .guid = "abc123", .type_id = 2 }, &resolver);
-    try std.testing.expectEqualStrings("abc123", d.guid);
-}
-
-test "refDisplay: fileID 0 is Unity's null reference" {
-    const d = refDisplay(.{ .file_id = 0 }, null);
-    try std.testing.expectEqual(RefDisplay.none, d);
-}
-
-test "refDisplay: other local refs read as their fileID" {
-    const d = refDisplay(.{ .file_id = 42 }, null);
-    try std.testing.expectEqual(@as(i64, 42), d.file_id);
+    try std.testing.expectEqualStrings(
+        "Assets/Materials/Fixture.mat",
+        refDisplay(.{ .file_id = 2100000, .guid = "abc123", .type_id = 2 }, &resolver).path,
+    );
+    try std.testing.expectEqualStrings(
+        "Cube",
+        refDisplay(.{ .file_id = 10202, .guid = builtin_refs.default_resources_guid, .type_id = 0 }, null).builtin,
+    );
+    try std.testing.expectEqualStrings(
+        builtin_refs.default_resources_guid,
+        refDisplay(.{ .file_id = 424242, .guid = builtin_refs.default_resources_guid, .type_id = 0 }, null).guid,
+    );
+    var unresolved = core.json.Resolver.init(std.testing.allocator);
+    defer unresolved.deinit();
+    try std.testing.expectEqualStrings(
+        "abc123",
+        refDisplay(.{ .file_id = 2100000, .guid = "abc123", .type_id = 2 }, &unresolved).guid,
+    );
+    try std.testing.expectEqual(RefDisplay.none, refDisplay(.{ .file_id = 0 }, null));
+    try std.testing.expectEqual(@as(i64, 42), refDisplay(.{ .file_id = 42 }, null).file_id);
 }

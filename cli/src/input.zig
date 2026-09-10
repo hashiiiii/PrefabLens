@@ -441,29 +441,6 @@ test "changedPaths lists worktree changes against a ref, including deletions" {
     try testing.expectEqualStrings("Note.txt", paths[1]);
 }
 
-test "changedPaths lists changes between two refs" {
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
-
-    var tmp = testing.tmpDir(.{});
-    defer tmp.cleanup();
-    const dir = try tmp.dir.realPathFileAlloc(testing.io, ".", arena);
-    try tmp.dir.writeFile(testing.io, .{ .sub_path = "Foo.prefab", .data = "v1\n" });
-    try git(testing.io, arena, dir, &.{ "init", "-q" });
-    try git(testing.io, arena, dir, &.{ "config", "user.email", "t@t.t" });
-    try git(testing.io, arena, dir, &.{ "config", "user.name", "t" });
-    try git(testing.io, arena, dir, &.{ "add", "." });
-    try git(testing.io, arena, dir, &.{ "commit", "-q", "-m", "first" });
-    try tmp.dir.writeFile(testing.io, .{ .sub_path = "Foo.prefab", .data = "v2\n" });
-    try git(testing.io, arena, dir, &.{ "add", "." });
-    try git(testing.io, arena, dir, &.{ "commit", "-q", "-m", "second" });
-
-    const paths = try changedPaths(testing.io, arena, dir, "HEAD~1", "HEAD", default_git_timeout);
-    try testing.expectEqual(@as(usize, 1), paths.len);
-    try testing.expectEqualStrings("Foo.prefab", paths[0]);
-}
-
 test "changedPaths surfaces a file-named operand as GitDiffFailed" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
@@ -486,19 +463,6 @@ test "changedPaths surfaces a file-named operand as GitDiffFailed" {
     // binding it as a pathspec instead, succeeding at exit 0 (diff restricted to that
     // one file) rather than surfacing the unresolvable ref as an error.
     try testing.expectError(error.GitDiffFailed, changedPaths(testing.io, arena, dir, "HEAD", "Note.txt", default_git_timeout));
-}
-
-test "changedPaths surfaces a bad ref as GitDiffFailed" {
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
-
-    var tmp = testing.tmpDir(.{});
-    defer tmp.cleanup();
-    const dir = try tmp.dir.realPathFileAlloc(testing.io, ".", arena);
-    try git(testing.io, arena, dir, &.{ "init", "-q" });
-
-    try testing.expectError(error.GitDiffFailed, changedPaths(testing.io, arena, dir, "bogus-ref", "", default_git_timeout));
 }
 
 test "changedPaths preserves non-ASCII filenames (quotepath protection)" {

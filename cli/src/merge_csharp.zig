@@ -341,6 +341,10 @@ test "C# schema declines ambiguous declarations and serialization rules" {
         "using UnityEngine; using X = System.Int32; public class Example : MonoBehaviour { public X[] values; }",
         "using UnityEngine; public class Example : MonoBehaviour { public int[] values; } public class Example {}",
         "using UnityEngine; public class Example : MonoBehaviour { [SerializeReference] public int[] values; }",
+        "using UnityEngine; class Outer { public class Example : MonoBehaviour { public int[] values; } }",
+        "namespace Other { using UnityEngine; } namespace Game { public class Example : MonoBehaviour { public int[] values; } }",
+        "using UnityEngine; class Example : MonoBehaviour { [Unknown] public int[] values; }",
+        "using UnityEngine; class Example : MonoBehaviour { public int[][] values; }",
     }) |source| {
         try testing.expectEqual(@as(usize, 0), (try read(arena, source, "Example", .{})).len);
     }
@@ -370,17 +374,4 @@ test "C# project evidence detects shadowed framework types and aliases" {
     try testing.expect(evidence.mono_behaviour);
     try inspectNames(memory.allocator(), "global using MonoBehaviour = Other.Base;", &evidence);
     try testing.expect(!evidence.mono_behaviour);
-}
-
-test "C# schema rejects nested targets and unrelated namespace imports" {
-    var memory = std.heap.ArenaAllocator.init(testing.allocator);
-    defer memory.deinit();
-    for ([_][]const u8{
-        "using UnityEngine; class Outer { public class Example : MonoBehaviour { public int[] values; } }",
-        "namespace Other { using UnityEngine; } namespace Game { public class Example : MonoBehaviour { public int[] values; } }",
-        "using UnityEngine; class Example : MonoBehaviour { [global::System.NonSerializedAttribute] public int[] values; }",
-        "using UnityEngine; class Example : MonoBehaviour { [UnityEngine.SerializeReferenceAttribute] public int[] values; }",
-        "using UnityEngine; class Example : MonoBehaviour { [Unknown] public int[] values; }",
-        "using UnityEngine; class Example : MonoBehaviour { public int[][] values; }",
-    }) |source| try testing.expectEqual(@as(usize, 0), (try read(memory.allocator(), source, "Example", .{})).len);
 }

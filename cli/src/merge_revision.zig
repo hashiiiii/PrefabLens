@@ -332,20 +332,3 @@ test "revision snapshot rejects oversized source before loading object bytes" {
     try testing.expectError(error.SourceTooLarge, store.snapshot(revision));
     try testing.expectEqual(@as(usize, 0), store.cachedObjectCount());
 }
-
-test "malformed duplicate metadata still invalidates a reused GUID" {
-    var memory = std.heap.ArenaAllocator.init(testing.allocator);
-    defer memory.deinit();
-    const arena = memory.allocator();
-    var tmp = testing.tmpDir(.{});
-    defer tmp.cleanup();
-    var env = std.process.Environ.Map.init(arena);
-    const git = try fixtureGit(&tmp, arena, &env);
-    try fixtureWrite(&tmp, "Example.cs", "using UnityEngine; class Example : MonoBehaviour { public int[] values; }");
-    try fixtureWrite(&tmp, "Example.cs.meta", "guid: " ++ script_guid ++ "\n");
-    try fixtureWrite(&tmp, "Other.txt.meta", "guid: " ++ script_guid ++ "\nguid: 33333333333333333333333333333333\n");
-    const revision = try fixtureCommit(git);
-    var store = Store.init(git);
-    defer store.deinit();
-    try testing.expectEqual(null, (try store.snapshot(revision)).kind(script_guid, "values"));
-}

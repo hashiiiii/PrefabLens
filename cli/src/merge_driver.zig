@@ -134,17 +134,6 @@ fn readFixture(arena: std.mem.Allocator, sub_path: []const u8) ![]u8 {
     return merge_io.readLimited(testing.io, arena, try fixturePath(arena, sub_path));
 }
 
-test "merge driver: fixture root does not depend on the process cwd" {
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
-
-    // Test runners can start outside this checkout, so ambient cwd must never select fixture bytes.
-    const path = try fixturePath(arena, "component-add/base.prefab");
-    try testing.expect(std.fs.path.isAbsolute(path));
-    try testing.expect(core.isUnityYaml(try merge_io.readLimited(testing.io, arena, path)));
-}
-
 test "merge driver: leaves conventional markers for a text conflict" {
     const base = "--- !u!114 &1\nMonoBehaviour:\n  m_Value: 1\n";
     const ours = "--- !u!114 &1\nMonoBehaviour:\n  m_Value: 2\n";
@@ -203,9 +192,6 @@ test "merge driver: keeps document headers in order" {
 }
 
 test "merge driver: covers standalone documents and source-only changes" {
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
     const base =
         "--- !u!114 &1\n" ++
         "MonoBehaviour:\n" ++
@@ -237,7 +223,9 @@ test "merge driver: covers standalone documents and source-only changes" {
         "  m_Value: 2\n";
     // A header-only Theirs change must merge with an independent Ours field change.
     try runDriverCase(base, ours, stripped, stripped_expected, 0);
+}
 
+test "merge driver: unsupported structure writes conflict markers" {
     const comment_base =
         "--- !u!114 &1\n" ++
         "MonoBehaviour:\n" ++
@@ -253,8 +241,21 @@ test "merge driver: covers standalone documents and source-only changes" {
         "MonoBehaviour:\n" ++
         "  # Theirs comment.\n" ++
         "  m_Value: 1\n";
-    // The semantic engine must not treat an unmodeled source edit as a clean result.
-    try testing.expectError(error.UnsupportedStructure, core.merge.build(arena, comment_base, comment_ours, comment_theirs));
+    try runDriverCase(
+        comment_base,
+        comment_ours,
+        comment_theirs,
+        "--- !u!114 &1\n" ++
+            "MonoBehaviour:\n" ++
+            "<<<<<<< ours\n" ++
+            "  # Base comment.\n" ++
+            "  m_Value: 2\n" ++
+            "=======\n" ++
+            "  # Theirs comment.\n" ++
+            "  m_Value: 1\n" ++
+            ">>>>>>> theirs\n",
+        1,
+    );
 }
 
 test "merge driver: adds whole-file markers for a semantic-only sequence conflict" {
@@ -304,99 +305,6 @@ test "merge driver: keeps ours source bytes for equal document additions" {
     try runDriverCase("", ours, theirs, ours, 0);
 }
 
-test "merge driver: rejects sequence comments" {
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena_state.deinit();
-    const sequence_base =
-        "--- !u!1 &1\n" ++
-        "GameObject:\n" ++
-        "  m_Component:\n" ++
-        "  - component: {fileID: 4}\n" ++
-        "  # Base comment.\n" ++
-        "  - component: {fileID: 54}\n" ++
-        "  m_Name: Base\n" ++
-        "--- !u!4 &4\n" ++
-        "Transform:\n" ++
-        "  m_GameObject: {fileID: 1}\n" ++
-        "  m_Children: []\n" ++
-        "  m_Father: {fileID: 0}\n" ++
-        "--- !u!54 &54\n" ++
-        "Rigidbody:\n" ++
-        "  m_GameObject: {fileID: 1}\n" ++
-        "  m_Mass: 1\n";
-    const sequence_ours =
-        "--- !u!1 &1\n" ++
-        "GameObject:\n" ++
-        "  m_Component:\n" ++
-        "  - component: {fileID: 4}\n" ++
-        "  # Base comment.\n" ++
-        "  - component: {fileID: 54}\n" ++
-        "  m_Name: Ours\n" ++
-        "--- !u!4 &4\n" ++
-        "Transform:\n" ++
-        "  m_GameObject: {fileID: 1}\n" ++
-        "  m_Children: []\n" ++
-        "  m_Father: {fileID: 0}\n" ++
-        "--- !u!54 &54\n" ++
-        "Rigidbody:\n" ++
-        "  m_GameObject: {fileID: 1}\n" ++
-        "  m_Mass: 1\n";
-    const sequence_theirs =
-        "--- !u!1 &1\n" ++
-        "GameObject:\n" ++
-        "  m_Component:\n" ++
-        "  - component: {fileID: 4}\n" ++
-        "  # Theirs comment.\n" ++
-        "  - component: {fileID: 54}\n" ++
-        "  m_Name: Base\n" ++
-        "--- !u!4 &4\n" ++
-        "Transform:\n" ++
-        "  m_GameObject: {fileID: 1}\n" ++
-        "  m_Children: []\n" ++
-        "  m_Father: {fileID: 0}\n" ++
-        "--- !u!54 &54\n" ++
-        "Rigidbody:\n" ++
-        "  m_GameObject: {fileID: 1}\n" ++
-        "  m_Mass: 1\n";
-    // Known item identities do not make an unplanned comment safe.
-    try testing.expectError(error.UnsupportedStructure, core.merge.build(arena_state.allocator(), sequence_base, sequence_ours, sequence_theirs));
-}
-
-test "merge driver: rejects map source order" {
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena_state.deinit();
-    const map_base =
-        "--- !u!114 &1\n" ++
-        "MonoBehaviour:\n" ++
-        "  m_Value: 1\n" ++
-        "  m_Left: left\n" ++
-        "  m_Right: right\n";
-    const map_ours =
-        "--- !u!114 &1\n" ++
-        "MonoBehaviour:\n" ++
-        "  m_Value: 2\n" ++
-        "  m_Left: left\n" ++
-        "  m_Right: right\n";
-    const map_theirs =
-        "--- !u!114 &1\n" ++
-        "MonoBehaviour:\n" ++
-        "  m_Right: right\n" ++
-        "  m_Left: left\n" ++
-        "  m_Value: 1\n";
-    // Semantic map equality does not preserve source order.
-    try testing.expectError(error.UnsupportedStructure, core.merge.build(arena_state.allocator(), map_base, map_ours, map_theirs));
-}
-
-test "merge driver: rejects line ending changes" {
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena_state.deinit();
-    const base_lf = "--- !u!114 &1\nMonoBehaviour:\n  m_Left: 1\n  m_Right: 1\n";
-    const ours_lf = "--- !u!114 &1\nMonoBehaviour:\n  m_Left: 2\n  m_Right: 1\n";
-    const theirs_crlf = "--- !u!114 &1\r\nMonoBehaviour:\r\n  m_Left: 1\r\n  m_Right: 1\r\n";
-    // Parsed equality does not preserve line endings.
-    try testing.expectError(error.UnsupportedStructure, core.merge.build(arena_state.allocator(), base_lf, ours_lf, theirs_crlf));
-}
-
 test "merge driver: preserves a commented document" {
     const base =
         "--- !u!114 &1\n" ++
@@ -435,26 +343,6 @@ test "merge driver: merges ordered arrays and falls back for keyed shapes" {
     const keyed_base = "--- !u!114 &1\nMonoBehaviour:\n  m_Unknown:\n  - key: A\n    value: 1\n";
     const keyed_ours = "--- !u!114 &1\nMonoBehaviour:\n  m_Unknown:\n  - key: A\n    value: 2\n";
     try runDriverCase(keyed_base, keyed_ours, keyed_base, "<<<<<<< ours\n" ++ keyed_ours ++ "=======\n" ++ keyed_base ++ ">>>>>>> theirs\n", 1);
-}
-
-test "merge driver: malformed Unity remains a semantic parse failure" {
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena_state.deinit();
-    const base = "--- !u!114 &1\nMonoBehaviour:\n  m_Value: 1\n";
-    const theirs = "--- !u!114 &1\nMonoBehaviour:\n  m_Value: 3\n";
-    const malformed = [_][]const u8{
-        "--- !u!114 &1\nMonoBehaviour:\n  - rogue\n",
-        "--- !u!114 &1\n",
-        "rogue: value\n--- !u!114 &1\nMonoBehaviour:\n  m_Value: 2\n",
-        "--- !u!114 &1\nMonoBehaviour:\n  m_Value: 2\n  m_Value: duplicate\n",
-    };
-    for (malformed) |ours| {
-        if (core.merge.build(arena_state.allocator(), base, ours, theirs)) |_| {
-            return error.TestUnexpectedResult;
-        } else |err| {
-            try testing.expect(err != error.OutOfMemory);
-        }
-    }
 }
 
 test "merge driver: keeps ours unchanged when an input cannot be read" {

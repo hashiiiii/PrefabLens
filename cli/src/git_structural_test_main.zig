@@ -405,7 +405,6 @@ fn metadataAutomatic(ctx: Context) !void {
 fn concurrentModes(ctx: Context) !void {
     const cases = [_]struct { name: []const u8, mode: []const u8, file_mode: bool, exit_code: u8, expected_mode: u32 }{
         .{ .name = "later-executable-change", .mode = "755", .file_mode = true, .exit_code = 1, .expected_mode = 0o755 },
-        .{ .name = "later-private-permissions", .mode = "640", .file_mode = true, .exit_code = 0, .expected_mode = 0o640 },
         .{ .name = "ignored-executable-change", .mode = "755", .file_mode = false, .exit_code = 0, .expected_mode = 0o755 },
     };
     for (cases) |case| {

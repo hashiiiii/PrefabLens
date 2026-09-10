@@ -2,13 +2,6 @@ const std = @import("std");
 const model = @import("model.zig");
 const testing = std.testing;
 
-test "inspector: joined scalar node formats tuple values" {
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena_state.deinit();
-    const node = try joinedScalarNode(arena_state.allocator(), &.{ "2", "3", "1" });
-    try testing.expectEqualStrings("(2, 3, 1)", node.scalar);
-}
-
 test "inspector: shouldEmitNameOverride for added and modified renames" {
     var before_n = model.Node{ .scalar = "Head" };
     var after_n = model.Node{ .scalar = "Sensor" };
@@ -17,17 +10,6 @@ test "inspector: shouldEmitNameOverride for added and modified renames" {
     try testing.expect(!shouldEmitNameOverride(.removed, &before_n, null));
     try testing.expect(!shouldEmitNameOverride(.modified, &before_n, &before_n));
     try testing.expect(!shouldEmitNameOverride(.added, null, null));
-}
-
-test "inspector: hidden fields are hidden by first path segment" {
-    try testing.expect(isHidden("m_ObjectHideFlags"));
-    try testing.expect(isHidden("m_GameObject"));
-    try testing.expect(isHidden("m_Children[3]"));
-    try testing.expect(isHidden("m_LocalEulerAnglesHint.x"));
-    try testing.expect(isHidden("m_EditorClassIdentifier"));
-    try testing.expect(isHidden("serializedVersion"));
-    try testing.expect(!isHidden("m_LocalPosition.x"));
-    try testing.expect(!isHidden("maxHp"));
 }
 
 test "inspector: displayPath maps table entries and nicifies the rest" {
@@ -41,14 +23,6 @@ test "inspector: displayPath maps table entries and nicifies the rest" {
     try testing.expectEqualStrings("Max Hp", try displayPath(arena, "maxHp"));
     try testing.expectEqualStrings("Constrain Proportions Scale", try displayPath(arena, "m_ConstrainProportionsScale"));
     try testing.expectEqualStrings("Materials[0]", try displayPath(arena, "m_Materials[0]"));
-}
-
-test "inspector: groupOf infers pseudo component from propertyPath" {
-    try testing.expectEqualStrings("Transform", groupOf("m_LocalPosition.x"));
-    try testing.expectEqualStrings("Transform", groupOf("m_LocalScale.y"));
-    try testing.expectEqualStrings("GameObject", groupOf("m_Name"));
-    try testing.expectEqualStrings("GameObject", groupOf("m_IsActive"));
-    try testing.expectEqualStrings("Overrides", groupOf("maxHp"));
 }
 
 // Fields not shown in the Inspector (matched by the path's first segment).

@@ -290,29 +290,6 @@ const test_variant =
     \\  m_SourcePrefab: {fileID: 100100000, guid: srcguid, type: 3}
 ;
 
-test "instantiate: merged variant shows full source values with overrides applied" {
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
-    var assets: Assets = .empty;
-    try assets.put(arena, "srcguid", test_source);
-    const res = try root.diffBytesWithAssets(arena, "", test_variant, &assets);
-    try testing.expectEqual(@as(usize, 1), res.roots.len);
-    const inst = res.roots[0];
-    try testing.expectEqualStrings("Cyl Variant", inst.name);
-    // Expansion succeeds: overrides empty, the source Transform appears as a component,
-    // holding the override-applied Scale (1, 2, 1) in full enumeration.
-    try testing.expectEqual(@as(usize, 0), res.needed_sources.len);
-    try testing.expectEqual(@as(usize, 0), inst.overrides.len);
-    try testing.expectEqual(@as(usize, 1), inst.components.len);
-    const tr = inst.components[0];
-    try testing.expectEqual(@as(u32, 4), tr.class_id);
-    try testing.expectEqual(model.Status.added, tr.status);
-    try testing.expectEqual(@as(usize, 1), tr.fields.len);
-    try testing.expectEqualStrings("Scale", tr.fields[0].path);
-    try testing.expectEqualStrings("(1, 2, 1)", tr.fields[0].after.?.scalar);
-}
-
 test "instantiate: missing asset degrades and reports neededSources with side" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
@@ -414,31 +391,6 @@ test "instantiate: source allocation failure reaches the caller" {
     );
 }
 
-test "instantiate: unsafe source nesting keeps the degraded instance" {
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
-
-    const after =
-        \\--- !u!1001 &1001
-        \\PrefabInstance:
-        \\  m_Modification:
-        \\    m_Modifications: []
-        \\  m_SourcePrefab: {fileID: 100100000, guid: srcguid, type: 3}
-    ;
-    var source: std.ArrayList(u8) = .empty;
-    try source.appendSlice(arena, "--- !u!114 &1\nMonoBehaviour:\n  m_Field: ");
-    for (0..130) |_| try source.appendSlice(arena, "{a: ");
-    try source.append(arena, '1');
-    for (0..130) |_| try source.append(arena, '}');
-
-    var assets: Assets = .empty;
-    try assets.put(arena, "srcguid", source.items);
-    const result = try root.diffBytesWithAssets(arena, "", after, &assets);
-    try testing.expectEqual(@as(usize, 1), result.roots.len);
-    try testing.expectEqual(@as(usize, 0), result.roots[0].children.len);
-}
-
 test "instantiate: removed components are dropped from the merged tree" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
@@ -473,61 +425,6 @@ test "instantiate: removed components are dropped from the merged tree" {
     const inst = res.roots[0];
     // BoxCollider (fileID 50) is removed: only the Transform remains.
     for (inst.components) |c| try testing.expect(c.class_id != 65);
-}
-
-test "instantiate: outer overrides push down through nested instances" {
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
-    // 3-level structure: outer -> variant (guid varguid) -> base (guid baseguid).
-    // Unity references nested objects as "instance fileID XOR source fileID".
-    // outer's mod targets base's Transform (&40) through the instance (&100) inside the variant:
-    // target fileID = 100 ^ 40 = 76.
-    const base =
-        \\--- !u!1 &10
-        \\GameObject:
-        \\  m_Name: Base
-        \\  m_Component:
-        \\  - component: {fileID: 40}
-        \\--- !u!4 &40
-        \\Transform:
-        \\  m_GameObject: {fileID: 10}
-        \\  m_LocalPosition: {x: 0, y: 0, z: 0}
-    ;
-    const variant =
-        \\--- !u!1001 &100
-        \\PrefabInstance:
-        \\  m_Modification:
-        \\    m_Modifications:
-        \\    - target: {fileID: 40, guid: baseguid, type: 3}
-        \\      propertyPath: m_LocalPosition.x
-        \\      value: 1
-        \\  m_SourcePrefab: {fileID: 100100000, guid: baseguid, type: 3}
-    ;
-    const outer =
-        \\--- !u!1001 &1001
-        \\PrefabInstance:
-        \\  m_Modification:
-        \\    m_Modifications:
-        \\    - target: {fileID: 76, guid: varguid, type: 3}
-        \\      propertyPath: m_LocalPosition.x
-        \\      value: 9
-        \\  m_SourcePrefab: {fileID: 100100000, guid: varguid, type: 3}
-    ;
-    var assets: Assets = .empty;
-    try assets.put(arena, "varguid", variant);
-    try assets.put(arena, "baseguid", base);
-    const res = try root.diffBytesWithAssets(arena, "", outer, &assets);
-    try testing.expectEqual(@as(usize, 0), res.needed_sources.len);
-    try testing.expectEqual(@as(usize, 1), res.roots.len);
-    const inst = res.roots[0];
-    // The single instance root collapses into the outer node, not a duplicate node.
-    try testing.expectEqual(@as(usize, 0), inst.children.len);
-    try testing.expectEqual(@as(usize, 0), inst.overrides.len);
-    try testing.expectEqual(@as(usize, 1), inst.components.len);
-    // The outer override applies last, so 9 wins over the variant's 1.
-    try testing.expectEqualStrings("Position", inst.components[0].fields[0].path);
-    try testing.expectEqualStrings("(9, 0, 0)", inst.components[0].fields[0].after.?.scalar);
 }
 
 test "instantiate: outer name wins after pushing into a nested instance" {

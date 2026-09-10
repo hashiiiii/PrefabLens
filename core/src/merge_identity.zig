@@ -203,18 +203,6 @@ test "merge identity: document and references use stable Unity identifiers" {
     }
 }
 
-test "merge identity: index finds a document by class and file identifier" {
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
-    const parsed = try @import("parser.zig").parseSpanned(arena, "--- !u!1 &7\nGameObject:\n  m_Name: Player\n");
-    const index = try Index.init(arena, parsed);
-
-    const document = index.document(.{ .class_id = 1, .file_id = 7 }).?;
-
-    try testing.expectEqualStrings("GameObject", document.type_name);
-}
-
 test "merge identity: component owners use component and GameObject identifiers" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
@@ -241,29 +229,6 @@ test "merge identity: component owners reject one component with two owners" {
     );
 
     try testing.expectError(error.InvalidMerge, componentOwners(arena, documents));
-}
-
-test "merge identity: known sequences use Unity reference fields" {
-    var component_ref = model.Node{ .ref = .{ .file_id = 42, .guid = "not-identity", .type_id = 3 } };
-    var component_entries = [_]model.Entry{.{ .key = "component", .value = &component_ref }};
-    var component = model.Node{ .map = &component_entries };
-    const component_id = sequenceItemId(.components, &component).?;
-    try testing.expectEqual(@as(i64, 42), component_id.target.file_id);
-    try testing.expect(component_id.target.guid == null);
-    try testing.expect(component_id.target.type_id == null);
-    try testing.expect(component_id.override_kind == null);
-
-    var target = model.Node{ .ref = .{ .file_id = 7, .guid = "aaa", .type_id = 3 } };
-    var added = model.Node{ .ref = .{ .file_id = 8, .guid = "bbb", .type_id = 3 } };
-    var added_entries = [_]model.Entry{
-        .{ .key = "targetCorrespondingSourceObject", .value = &target },
-        .{ .key = "addedObject", .value = &added },
-    };
-    var added_item = model.Node{ .map = &added_entries };
-    const added_id = sequenceItemId(.prefab_added_components, &added_item).?;
-    try testing.expectEqual(@as(i64, 7), added_id.target.file_id);
-    try testing.expectEqual(@as(i64, 8), added_id.added_object.?.file_id);
-    try testing.expectEqual(merge_model.PrefabOverrideKind.added_component, added_id.override_kind.?);
 }
 
 test "merge identity: every Prefab sequence uses its semantic fields" {

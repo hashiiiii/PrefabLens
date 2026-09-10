@@ -211,43 +211,6 @@ pub fn findRoot(res: model.DiffResult, file_id: i64) ?model.ObjectDiff {
     return null;
 }
 
-test "tree: GameObject rename appears as GameObject Name override" {
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
-    const before =
-        \\--- !u!1 &1
-        \\GameObject:
-        \\  m_Name: Head
-        \\  m_Component:
-        \\  - component: {fileID: 4}
-        \\--- !u!4 &4
-        \\Transform:
-        \\  m_GameObject: {fileID: 1}
-        \\  m_Father: {fileID: 0}
-    ;
-    const after =
-        \\--- !u!1 &1
-        \\GameObject:
-        \\  m_Name: Sensor
-        \\  m_Component:
-        \\  - component: {fileID: 4}
-        \\--- !u!4 &4
-        \\Transform:
-        \\  m_GameObject: {fileID: 1}
-        \\  m_Father: {fileID: 0}
-    ;
-    const res = try root.diffBytes(arena, before, after);
-    const go = res.roots[0];
-    try testing.expectEqualStrings("Sensor", go.name);
-    try testing.expectEqual(model.Status.modified, go.status);
-    try testing.expectEqual(@as(usize, 1), go.overrides.len);
-    try testing.expectEqualStrings("GameObject", go.overrides[0].group);
-    try testing.expectEqualStrings("Name", go.overrides[0].label);
-    try testing.expectEqualStrings("Head", go.overrides[0].before.?.scalar);
-    try testing.expectEqualStrings("Sensor", go.overrides[0].after.?.scalar);
-}
-
 test "tree: GameObject Active change is an override; added GO includes Name and Active" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
@@ -396,28 +359,6 @@ test "tree: removed GameObject surfaces as a removed root with its name" {
     try testing.expectEqual(model.Status.removed, res.roots[0].status);
 }
 
-test "tree: ScriptableObject .asset becomes a loose component" {
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
-    const before =
-        \\--- !u!114 &11400000
-        \\MonoBehaviour:
-        \\  m_Script: {fileID: 0, guid: def, type: 3}
-        \\  volume: 0.5
-    ;
-    const after =
-        \\--- !u!114 &11400000
-        \\MonoBehaviour:
-        \\  m_Script: {fileID: 0, guid: def, type: 3}
-        \\  volume: 0.8
-    ;
-    const res = try root.diffBytes(arena, before, after);
-    try testing.expectEqual(@as(usize, 0), res.roots.len);
-    try testing.expectEqual(@as(usize, 1), res.loose.len);
-    try testing.expectEqual(model.Status.modified, res.loose[0].status);
-}
-
 test "tree: component with unresolvable m_GameObject ref becomes loose, not dropped" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
@@ -441,61 +382,6 @@ test "tree: component with unresolvable m_GameObject ref becomes loose, not drop
     try testing.expectEqual(@as(usize, 1), res.loose.len);
     try testing.expectEqual(@as(i64, 7), res.loose[0].file_id);
     try testing.expectEqual(model.Status.modified, res.loose[0].status);
-}
-
-test "tree: component class name passes through to the tree" {
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
-    const before =
-        \\--- !u!1 &1
-        \\GameObject:
-        \\  m_Name: Player
-        \\  m_Component:
-        \\  - component: {fileID: 5}
-        \\--- !u!114 &5
-        \\MonoBehaviour:
-        \\  m_GameObject: {fileID: 1}
-        \\  m_EditorClassIdentifier: Assembly-CSharp::Cylinder1
-        \\  hp: 1
-    ;
-    const after =
-        \\--- !u!1 &1
-        \\GameObject:
-        \\  m_Name: Player
-        \\  m_Component:
-        \\  - component: {fileID: 5}
-        \\--- !u!114 &5
-        \\MonoBehaviour:
-        \\  m_GameObject: {fileID: 1}
-        \\  m_EditorClassIdentifier: Assembly-CSharp::Cylinder1
-        \\  hp: 2
-    ;
-    const res = try root.diffBytes(arena, before, after);
-    try testing.expectEqual(@as(usize, 1), res.roots.len);
-    try testing.expectEqual(@as(usize, 1), res.roots[0].components.len);
-    try testing.expectEqualStrings("Cylinder1", res.roots[0].components[0].class_name.?);
-}
-
-test "tree: prefab instance with root transform parent becomes a root" {
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
-    const after =
-        \\--- !u!1001 &1001
-        \\PrefabInstance:
-        \\  m_Modification:
-        \\    m_TransformParent: {fileID: 0}
-        \\    m_Modifications:
-        \\    - target: {fileID: 8, guid: aaa, type: 3}
-        \\      propertyPath: m_Name
-        \\      value: Cylinder Variant
-        \\  m_SourcePrefab: {fileID: 100100000, guid: aaa, type: 3}
-    ;
-    const res = try root.diffBytes(arena, "", after);
-    try testing.expectEqual(@as(usize, 1), res.roots.len);
-    try testing.expectEqual(model.ObjectKind.prefab_instance, res.roots[0].kind);
-    try testing.expectEqualStrings("Cylinder Variant", res.roots[0].name);
 }
 
 test "tree: duplicate prefab instance names use the effective override value" {

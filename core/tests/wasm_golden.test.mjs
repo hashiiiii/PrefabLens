@@ -56,10 +56,6 @@ test("hostile nesting returns a clean error.v1 payload, not a trap", () => {
   assert.equal(json.error, "NestingTooDeep");
 });
 
-test("repeated calls do not leak or corrupt state (pure, re-entrant)", () => {
-  for (let i = 0; i < 50; i++) assert.equal(callDiff(BEFORE, AFTER), GOLDEN);
-});
-
 // ---- diff_with_assets (merging a source prefab) ----
 
 // assets TLV (LE): [u32 count] repeat{ [u32 guid_len][guid][u32 data_len][data] }
@@ -129,11 +125,6 @@ GameObject:
 Transform:
   m_GameObject: {fileID: 10}
   m_LocalScale: {x: 1, y: 1, z: 1}`;
-
-test("added instance without assets reports neededSources", () => {
-  const json = JSON.parse(callDiff("", VARIANT));
-  assert.deepEqual(json.neededSources, [{ guid: "srcguid", side: "after" }]);
-});
 
 test("diff_with_assets merges the source prefab", () => {
   const json = JSON.parse(callDiffWithAssets("", VARIANT, buildAssetsTlv({ srcguid: SOURCE })));

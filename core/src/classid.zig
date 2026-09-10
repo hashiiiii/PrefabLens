@@ -369,16 +369,6 @@ pub fn typeName(class_id: u32) ?[]const u8 {
     return null;
 }
 
-test "classID lookup covers common types and returns null for unknown" {
-    try std.testing.expectEqualStrings("GameObject", typeName(1).?);
-    try std.testing.expectEqualStrings("Transform", typeName(4).?);
-    try std.testing.expectEqualStrings("MonoBehaviour", typeName(114).?);
-    try std.testing.expectEqualStrings("MeshRenderer", typeName(23).?);
-    try std.testing.expectEqualStrings("RectTransform", typeName(224).?);
-    try std.testing.expectEqualStrings("PrefabInstance", typeName(1001).?);
-    try std.testing.expect(typeName(999999) == null);
-}
-
 test "classID lookup covers the full ClassIDReference table" {
     // Unity 6000.5 ClassIDReference has 343 entries. Cover the whole range with the
     // boundaries (min/max ID) and representative entries absent from the old subset.
@@ -388,4 +378,5 @@ test "classID lookup covers the full ClassIDReference table" {
     try std.testing.expectEqualStrings("AnimatorState", typeName(1102).?);
     try std.testing.expectEqualStrings("Tilemap", typeName(1839735485).?);
     try std.testing.expectEqualStrings("ShaderIncludeImporter", typeName(2103361453).?);
+    try std.testing.expect(typeName(999999) == null);
 }

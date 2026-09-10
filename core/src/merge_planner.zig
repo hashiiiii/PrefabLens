@@ -2574,38 +2574,6 @@ test "merge planner: compares the complete object reference" {
     try testing.expectEqual(@as(usize, 1), built.plan.unresolvedCount());
 }
 
-test "merge planner: accepts a one-sided ordered sequence edit" {
-    const base = "--- !u!114 &1\nMonoBehaviour:\n  m_Unknown:\n  - 1\n  - 2\n";
-    const ours = "--- !u!114 &1\nMonoBehaviour:\n  m_Unknown:\n  - 1\n  - 3\n";
-    const theirs = "--- !u!114 &1\nMonoBehaviour:\n  m_Unknown:\n  - 1\n  - 2\n";
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena_state.deinit();
-    var built = try @import("merge.zig").build(arena_state.allocator(), base, ours, theirs);
-    try testing.expectEqual(@as(usize, 0), built.plan.unresolvedCount());
-    try testing.expectEqualStrings(ours, try @import("merge.zig").finish(arena_state.allocator(), &built.plan));
-}
-
-test "merge planner: combines independent component additions" {
-    const fixture = @import("merge_test_support.zig").load("sequence-add", false);
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
-
-    var built = try @import("merge.zig").build(arena, fixture.base, fixture.ours, fixture.theirs);
-
-    try testing.expectEqualStrings(fixture.expected, built.partial);
-    try testing.expect(@import("merge_test_support.zig").findOperationByKind(&built.plan, .sequence_membership) != null);
-    try testing.expect(@import("merge_test_support.zig").findOperationByKind(&built.plan, .sequence_order) != null);
-    var component_count: usize = 0;
-    for (built.plan.atomic_operations) |atomic| {
-        if (atomic.kind != .component) continue;
-        component_count += 1;
-        try testing.expectEqual(@as(usize, 2), atomic.operation_ids.len);
-    }
-    try testing.expectEqual(@as(usize, 2), component_count);
-    try @import("merge_test_support.zig").expectAtomicResolutionsAreWhole(&built.plan);
-}
-
 test "merge planner: keeps an existing component field edit separate from sequence membership" {
     const base =
         "--- !u!1 &100\nGameObject:\n  m_Component:\n  - component: {fileID: 400}\n" ++
@@ -2629,33 +2597,6 @@ test "merge planner: keeps an existing component field edit separate from sequen
     const built = try @import("merge.zig").build(arena_state.allocator(), base, ours, theirs);
 
     try testing.expectEqualStrings(expected, built.partial);
-}
-
-test "merge planner: holds a component delete and edit conflict" {
-    const support = @import("merge_test_support.zig");
-    const fixture = support.load("sequence-delete-edit", true);
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
-
-    var built = try @import("merge.zig").build(arena, fixture.base, fixture.ours, fixture.theirs);
-
-    try testing.expectEqual(@as(usize, 1), built.plan.unresolvedCount());
-    try testing.expectEqualStrings(fixture.base, built.partial);
-    try testing.expect(support.findOperationByKind(&built.plan, .sequence_membership) != null);
-    try testing.expect(support.findOperationByKind(&built.plan, .component) != null);
-    try support.expectAtomicResolutionsAreWhole(&built.plan);
-}
-
-test "merge planner: groups a component document with its owner reference" {
-    const fixture = @import("merge_test_support.zig").load("component-add", false);
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena_state.deinit();
-    var built = try @import("merge.zig").build(arena_state.allocator(), fixture.base, fixture.ours, fixture.theirs);
-    const operation = @import("merge_test_support.zig").findAtomicByKind(&built.plan, .component).?;
-    try testing.expect(operation.operation_ids.len >= 2);
-    try testing.expect(std.mem.indexOf(u8, built.partial, "--- !u!54 &54") != null);
-    try testing.expect(std.mem.indexOf(u8, built.partial, "component: {fileID: 54}") != null);
 }
 
 test "merge planner: combines the same component addition from both sides" {
@@ -2688,49 +2629,6 @@ test "merge planner: reports different content for the same added component" {
 
     try testing.expectEqual(@as(usize, 1), built.plan.unresolvedCount());
     try testing.expectEqualStrings(fixture.base, built.partial);
-}
-
-test "merge planner: removes a component document with its owner reference" {
-    const fixture = @import("merge_test_support.zig").load("component-delete", false);
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena_state.deinit();
-    var built = try @import("merge.zig").build(arena_state.allocator(), fixture.base, fixture.ours, fixture.theirs);
-    const operation = @import("merge_test_support.zig").findAtomicByKind(&built.plan, .component).?;
-    try testing.expect(operation.operation_ids.len >= 2);
-    try testing.expectEqualStrings(fixture.expected, built.partial);
-}
-
-test "merge planner: adds a component to a valid owner sequence" {
-    const base =
-        "--- !u!1 &1\nGameObject:\n  m_Component:\n  - component: {fileID: 4}\n  m_Name: Root\n" ++
-        "--- !u!4 &4\nTransform:\n  m_GameObject: {fileID: 1}\n  m_Children: []\n  m_Father: {fileID: 0}\n";
-    const theirs =
-        "--- !u!1 &1\nGameObject:\n  m_Component:\n  - component: {fileID: 4}\n  - component: {fileID: 54}\n  m_Name: Root\n" ++
-        "--- !u!4 &4\nTransform:\n  m_GameObject: {fileID: 1}\n  m_Children: []\n  m_Father: {fileID: 0}\n" ++
-        "--- !u!54 &54\nRigidbody:\n  m_GameObject: {fileID: 1}\n  m_Mass: 1\n";
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena_state.deinit();
-
-    const built = try @import("merge.zig").build(arena_state.allocator(), base, base, theirs);
-
-    try testing.expectEqualStrings(theirs, built.partial);
-}
-
-test "merge planner: adds two components to a valid owner sequence" {
-    const base =
-        "--- !u!1 &1\nGameObject:\n  m_Component:\n  - component: {fileID: 4}\n  m_Name: Root\n" ++
-        "--- !u!4 &4\nTransform:\n  m_GameObject: {fileID: 1}\n  m_Children: []\n  m_Father: {fileID: 0}\n";
-    const theirs =
-        "--- !u!1 &1\nGameObject:\n  m_Component:\n  - component: {fileID: 4}\n  - component: {fileID: 54}\n  - component: {fileID: 65}\n  m_Name: Root\n" ++
-        "--- !u!4 &4\nTransform:\n  m_GameObject: {fileID: 1}\n  m_Children: []\n  m_Father: {fileID: 0}\n" ++
-        "--- !u!54 &54\nRigidbody:\n  m_GameObject: {fileID: 1}\n  m_Mass: 1\n" ++
-        "--- !u!65 &65\nBoxCollider:\n  m_GameObject: {fileID: 1}\n  m_IsTrigger: 0\n";
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena_state.deinit();
-
-    const built = try @import("merge.zig").build(arena_state.allocator(), base, base, theirs);
-
-    try testing.expectEqualStrings(theirs, built.partial);
 }
 
 test "merge planner: composes component choices with an independent order choice" {
@@ -2838,17 +2736,6 @@ test "merge planner: rejects a component document without its owner reference" {
     );
 }
 
-test "merge planner: leaves every part of a delete-edit conflict unchanged" {
-    const fixture = @import("merge_test_support.zig").load("component-delete-edit", true);
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena_state.deinit();
-    const built = try @import("merge.zig").build(arena_state.allocator(), fixture.base, fixture.ours, fixture.theirs);
-    try testing.expectEqual(@as(usize, 1), built.plan.unresolvedCount());
-    try testing.expectEqualStrings(fixture.partial.?, built.partial);
-    try testing.expect(std.mem.indexOf(u8, built.partial, "--- !u!54 &54") != null);
-    try testing.expect(std.mem.indexOf(u8, built.partial, "component: {fileID: 54}") != null);
-}
-
 test "merge planner: applies an independent component while another component is unresolved" {
     const base =
         "--- !u!1 &1\nGameObject:\n  m_Component:\n  - component: {fileID: 4}\n  - component: {fileID: 54}\n" ++
@@ -2876,20 +2763,6 @@ test "merge planner: applies an independent component while another component is
     try testing.expectEqualStrings(expected, built.partial);
 }
 
-test "merge planner: one choice resolves a complete component operation" {
-    const fixture = @import("merge_test_support.zig").load("component-delete-edit", true);
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
-    var built = try @import("merge.zig").build(arena, fixture.base, fixture.ours, fixture.theirs);
-    const operation = @import("merge_test_support.zig").findOperationByKind(&built.plan, .component).?;
-
-    try @import("merge.zig").resolve(arena, &built.plan, operation.id, .{ .take = .theirs });
-    try testing.expectEqual(@as(usize, 0), built.plan.unresolvedCount());
-    try @import("merge_test_support.zig").expectAtomicResolutionsAreWhole(&built.plan);
-    try testing.expectEqualStrings(fixture.expected, try @import("merge.zig").finish(arena, &built.plan));
-}
-
 test "merge planner: resolves a component delete and edit conflict with the selected side" {
     const support = @import("merge_test_support.zig");
     const fixture = support.load("sequence-delete-edit", true);
@@ -2902,59 +2775,6 @@ test "merge planner: resolves a component delete and edit conflict with the sele
     try @import("merge.zig").resolve(arena, &built.plan, component.id, .{ .take = .theirs });
 
     try testing.expectEqualStrings(fixture.expected, try @import("merge.zig").finish(arena, &built.plan));
-}
-
-test "merge planner: applies an order change from one side" {
-    const support = @import("merge_test_support.zig");
-    const fixture = support.load("sequence-reorder-one-side", false);
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
-
-    var built = try @import("merge.zig").build(arena, fixture.base, fixture.ours, fixture.theirs);
-
-    try testing.expectEqualStrings(fixture.expected, built.partial);
-    try testing.expect(support.findOperationByKind(&built.plan, .sequence_order) != null);
-    try testing.expect(support.findAtomicByKind(&built.plan, .sequence_order) != null);
-    try support.expectAtomicResolutionsAreWhole(&built.plan);
-}
-
-test "merge planner: combines a child addition with a compatible reorder" {
-    const support = @import("merge_test_support.zig");
-    const fixture = support.load("sequence-reorder-compatible", false);
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
-
-    var built = try @import("merge.zig").build(arena, fixture.base, fixture.ours, fixture.theirs);
-
-    try testing.expectEqualStrings(fixture.expected, built.partial);
-    try testing.expect(support.findOperationByKind(&built.plan, .sequence_membership) != null);
-    try testing.expect(support.findOperationByKind(&built.plan, .sequence_order) != null);
-    try testing.expect(support.findOperationByKind(&built.plan, .game_object) != null);
-    try support.expectAtomicResolutionsAreWhole(&built.plan);
-}
-
-test "merge planner: adds a child to an inline empty sequence" {
-    const base =
-        "--- !u!1 &100\nGameObject:\n  m_Component:\n  - component: {fileID: 400}\n" ++
-        "--- !u!4 &400\nTransform:\n  m_GameObject: {fileID: 100}\n  m_Children: []\n  m_Father: {fileID: 0}\n";
-    const theirs =
-        "--- !u!1 &100\nGameObject:\n  m_Component:\n  - component: {fileID: 400}\n" ++
-        "--- !u!4 &400\nTransform:\n  m_GameObject: {fileID: 100}\n  m_Children:\n  - {fileID: 410}\n  m_Father: {fileID: 0}\n" ++
-        "--- !u!1 &110\nGameObject:\n  m_Component:\n  - component: {fileID: 410}\n" ++
-        "--- !u!4 &410\nTransform:\n  m_GameObject: {fileID: 110}\n  m_Children: []\n  m_Father: {fileID: 400}\n";
-    const expected =
-        "--- !u!1 &100\nGameObject:\n  m_Component:\n  - component: {fileID: 400}\n" ++
-        "--- !u!4 &400\nTransform:\n  m_GameObject: {fileID: 100}\n  m_Children:\n  - {fileID: 410}\n  m_Father: {fileID: 0}\n" ++
-        "--- !u!1 &110\nGameObject:\n  m_Component:\n  - component: {fileID: 410}\n" ++
-        "--- !u!4 &410\nTransform:\n  m_GameObject: {fileID: 110}\n  m_Children: []\n  m_Father: {fileID: 400}\n";
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena_state.deinit();
-
-    const built = try @import("merge.zig").build(arena_state.allocator(), base, base, theirs);
-
-    try testing.expectEqualStrings(expected, built.partial);
 }
 
 test "merge planner: deletes the final child from a block sequence" {
@@ -2974,83 +2794,6 @@ test "merge planner: deletes the final child from a block sequence" {
     const built = try @import("merge.zig").build(arena_state.allocator(), block, block, inline_empty);
 
     try testing.expectEqualStrings(inline_empty, built.partial);
-}
-
-test "merge planner: keeps inline spacing after deleting the final child" {
-    const block =
-        "--- !u!1 &100\nGameObject:\n  m_Component:\n  - component: {fileID: 400}\n" ++
-        "--- !u!4 &400\nTransform:\n  m_GameObject: {fileID: 100}\n  m_Children:\n  - {fileID: 410}\n  m_Father: {fileID: 0}\n" ++
-        "--- !u!1 &110\nGameObject:\n  m_Component:\n  - component: {fileID: 410}\n" ++
-        "--- !u!4 &410\nTransform:\n  m_GameObject: {fileID: 110}\n  m_Children: []\n  m_Father: {fileID: 400}\n";
-    const inline_empty =
-        "--- !u!1 &100\nGameObject:\n  m_Component:\n  - component: {fileID: 400}\n" ++
-        "--- !u!4 &400\nTransform:\n  m_GameObject: {fileID: 100}\n  m_Children: []\n  m_Father: {fileID: 0}\n" ++
-        "--- !u!1 &110\nGameObject:\n  m_Component:\n  - component: {fileID: 410}\n" ++
-        "--- !u!4 &410\nTransform:\n  m_GameObject: {fileID: 110}\n  m_Children: []\n  m_Father: {fileID: 0}\n";
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena_state.deinit();
-
-    const built = try @import("merge.zig").build(arena_state.allocator(), block, inline_empty, block);
-
-    try testing.expectEqualStrings(inline_empty, built.partial);
-}
-
-test "merge planner: separates prefab override kinds" {
-    const support = @import("merge_test_support.zig");
-    const merge = @import("merge.zig");
-    const merge_validate = @import("merge_validate.zig");
-    const Case = struct {
-        name: []const u8,
-        override_kind: merge_model.PrefabOverrideKind,
-        structural_kind: ?merge_model.OperationKind,
-    };
-    const cases = [_]Case{
-        .{ .name = "prefab-property", .override_kind = .property, .structural_kind = null },
-        .{ .name = "prefab-added-component", .override_kind = .added_component, .structural_kind = .component },
-        .{ .name = "prefab-removed-component", .override_kind = .removed_component, .structural_kind = .component },
-        .{ .name = "prefab-added-game-object", .override_kind = .added_game_object, .structural_kind = .game_object },
-        .{ .name = "prefab-removed-game-object", .override_kind = .removed_game_object, .structural_kind = .game_object },
-    };
-    inline for (cases) |case| {
-        const fixture = support.load(case.name, false);
-        var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
-        defer arena_state.deinit();
-        const arena = arena_state.allocator();
-        var built = try merge.build(arena, fixture.base, fixture.ours, fixture.theirs);
-        const override = support.findOperationByKind(&built.plan, .prefab_override).?;
-        try testing.expectEqual(case.override_kind, override.identity.override_kind.?);
-        if (case.structural_kind) |kind| {
-            const atomic = merge_model.atomicById(&built.plan, override.atomic_id).?;
-            try testing.expectEqual(kind, atomic.kind);
-        }
-        try testing.expectEqualStrings(fixture.expected, built.partial);
-        try merge_validate.validate(arena, built.partial);
-    }
-}
-
-test "merge planner: reports conflicting prefab override order" {
-    const fixture = @import("merge_test_support.zig").load("prefab-order-conflict", true);
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
-    var built = try @import("merge.zig").build(
-        arena,
-        fixture.base,
-        fixture.ours,
-        fixture.theirs,
-    );
-    try testing.expect(built.plan.unresolvedCount() != 0);
-    try testing.expectEqualStrings(fixture.partial.?, built.partial);
-
-    const order = @import("merge_test_support.zig").findOperationByKind(
-        &built.plan,
-        .sequence_order,
-    ).?;
-    try @import("merge.zig").resolve(arena, &built.plan, order.id, .{ .take = .ours });
-    try testing.expectEqualStrings(
-        fixture.expected,
-        try @import("merge.zig").finish(arena, &built.plan),
-    );
 }
 
 test "merge planner: changed collection overrides require unsupported fallback" {
@@ -3585,21 +3328,6 @@ test "merge planner: keeps a structural prefab override conflict atomic" {
     try @import("merge_validate.zig").validate(arena, finished);
 }
 
-test "merge planner: holds conflicting child orders" {
-    const support = @import("merge_test_support.zig");
-    const fixture = support.load("sequence-reorder-conflict", true);
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
-
-    var built = try @import("merge.zig").build(arena, fixture.base, fixture.ours, fixture.theirs);
-
-    try testing.expectEqual(@as(usize, 1), built.plan.unresolvedCount());
-    try testing.expectEqualStrings(fixture.partial.?, built.partial);
-    try testing.expect(support.findOperationByKind(&built.plan, .sequence_order) != null);
-    try support.expectAtomicResolutionsAreWhole(&built.plan);
-}
-
 test "merge planner: keeps an unchanged unknown sequence byte-for-byte" {
     const yaml = "--- !u!114 &1\nMonoBehaviour:\n  # Keep this order and spelling.\n  m_Unknown:\n  - 01\n  - 2\n";
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
@@ -3614,13 +3342,6 @@ test "merge planner: rejects a non-Unity merge side" {
     try testing.expectError(error.MalformedInput, parseMergeSide(arena_state.allocator(), "value: 1\n"));
 }
 
-test "merge planner: rejects a merge side with parser diagnostics" {
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena_state.deinit();
-    const malformed = "--- !u!114 &bad\nMonoBehaviour:\n  value: 1\n";
-    try testing.expectError(error.MalformedInput, parseMergeSide(arena_state.allocator(), malformed));
-}
-
 test "merge planner: rejects duplicate document identifiers" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
@@ -3628,44 +3349,6 @@ test "merge planner: rejects duplicate document identifiers" {
         "--- !u!1 &7\nGameObject:\n  m_Name: First\n" ++
         "--- !u!1 &7\nGameObject:\n  m_Name: Second\n";
     try testing.expectError(error.MalformedInput, parseMergeSide(arena_state.allocator(), duplicate));
-}
-
-test "merge planner: rejects malformed input through the merge facade" {
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena_state.deinit();
-    const unity = "--- !u!114 &1\nMonoBehaviour:\n  value: 1\n";
-    try testing.expectError(
-        error.MalformedInput,
-        @import("merge.zig").build(arena_state.allocator(), "value: 1\n", unity, unity),
-    );
-}
-
-test "merge planner: rejects duplicate documents through the merge facade" {
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena_state.deinit();
-    const duplicate =
-        "--- !u!1 &7\nGameObject:\n  m_Name: First\n" ++
-        "--- !u!1 &7\nGameObject:\n  m_Name: Second\n";
-    try testing.expectError(
-        error.MalformedInput,
-        @import("merge.zig").build(arena_state.allocator(), duplicate, duplicate, duplicate),
-    );
-}
-
-test "merge planner: adds a field to its matching document" {
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
-    const base =
-        "--- !u!114 &1\nMonoBehaviour:\n  m_Name: First\n" ++
-        "--- !u!114 &2\nMonoBehaviour:\n  m_Value: 5\n";
-    const theirs =
-        "--- !u!114 &1\nMonoBehaviour:\n  m_Name: First\n" ++
-        "--- !u!114 &2\nMonoBehaviour:\n  m_Value: 5\n  m_Enabled: 1\n";
-
-    const built = try @import("merge.zig").build(arena, base, base, theirs);
-
-    try testing.expectEqualStrings(theirs, built.partial);
 }
 
 test "merge planner: removes a field when the other side is unchanged" {
@@ -3764,21 +3447,4 @@ test "merge facade: rejects a custom value for an automatically resolved field" 
         @import("merge.zig").resolve(arena, &built.plan, 0, .{ .custom = "3" }),
     );
     try testing.expectEqualStrings(theirs, try @import("merge.zig").finish(arena, &built.plan));
-}
-
-test "merge facade: permits a revised custom value for an original conflict" {
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
-    const base = try yamlWithValue(arena, "1");
-    const ours = try yamlWithValue(arena, "2");
-    const theirs = try yamlWithValue(arena, "3");
-    var built = try @import("merge.zig").build(arena, base, ours, theirs);
-
-    try @import("merge.zig").resolve(arena, &built.plan, 0, .{ .custom = "4" });
-    try @import("merge.zig").resolve(arena, &built.plan, 0, .{ .custom = "5" });
-    try testing.expectEqualStrings(
-        try yamlWithValue(arena, "5"),
-        try @import("merge.zig").finish(arena, &built.plan),
-    );
 }

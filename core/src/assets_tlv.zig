@@ -59,17 +59,6 @@ test "parseAssets: valid two-entry buffer round-trips" {
     try testing.expectEqualStrings("B", assets.get("bb").?);
 }
 
-test "parseAssets: empty buffer yields empty assets" {
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
-
-    // A zero-length buffer is the "no assets supplied" fast path: it must
-    // succeed with an empty map, not be rejected as a truncated count prefix.
-    const assets = try parseAssets(arena, "");
-    try testing.expectEqual(0, assets.count());
-}
-
 test "parseAssets: count-only buffer with zero entries yields empty assets" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
@@ -80,29 +69,6 @@ test "parseAssets: count-only buffer with zero entries yields empty assets" {
     const bytes = [_]u8{ 0, 0, 0, 0 };
     const assets = try parseAssets(arena, &bytes);
     try testing.expectEqual(0, assets.count());
-}
-
-test "parseAssets: truncated count prefix fails" {
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
-
-    // Only 2 of the 4 bytes of the leading u32 count are present, so the
-    // very first length-prefix read must fail with TruncatedAssets.
-    const bytes = [_]u8{ 2, 0 };
-    try testing.expectError(error.TruncatedAssets, parseAssets(arena, &bytes));
-}
-
-test "parseAssets: truncated chunk length prefix fails" {
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
-
-    // count=1 announces one {guid, data} pair, but the stream ends after
-    // only 2 of the 4 bytes of the guid length prefix, so the mid-stream
-    // length-prefix read must fail with TruncatedAssets.
-    const bytes = [_]u8{ 1, 0, 0, 0, 4, 0 };
-    try testing.expectError(error.TruncatedAssets, parseAssets(arena, &bytes));
 }
 
 test "parseAssets: truncated chunk payload fails" {

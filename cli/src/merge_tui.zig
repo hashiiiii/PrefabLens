@@ -1456,6 +1456,11 @@ fn submitCustom(
     value: []const u8,
 ) !void {
     const self: *View = @ptrCast(@alignCast(userdata.?));
+    if (!self.editing) {
+        // A queued Enter can still target the TextField after apply closed it.
+        if (self.focus_area == .complete) return self.activate(ctx, self.eventSize());
+        return;
+    }
     const input = std.mem.trim(u8, value, "\r\n");
     const started_empty = if (self.editor_start_resolution) |resolution| switch (resolution) {
         .custom => |start_value| start_value.len == 0,
@@ -5078,6 +5083,36 @@ test "merge TUI: Enter asks when the focused Result is empty" {
     try testing.expect(view.focus_area == .inspector);
     const screen = try surfaceText(arena, try drawForTest(arena, view.widget(), 100, 20));
     try testing.expect(std.mem.indexOf(u8, screen, "Use an empty value?") != null);
+}
+
+test "merge TUI: a queued Enter after apply completes instead of asking for empty" {
+    var memory = std.heap.ArenaAllocator.init(testing.allocator);
+    defer memory.deinit();
+    const arena = memory.allocator();
+    var fixture = try core.merge.build(
+        arena,
+        "--- !u!114 &1\nMonoBehaviour:\n  m_Value: 1\n",
+        "--- !u!114 &1\nMonoBehaviour:\n  m_Value: 2\n",
+        "--- !u!114 &1\nMonoBehaviour:\n  m_Value: 3\n",
+    );
+    var state = try merge_ui_state.State.init(arena, &fixture.plan);
+    var view = try viewForTest(arena, &state, "A.prefab", fixture.partial);
+    defer view.deinit();
+    _ = try drawForTest(arena, view.widget(), 100, 20);
+    var ctx = eventContext(arena);
+
+    try focusResultForTest(&view, &ctx);
+    try view.widget().handleEvent(&ctx, .{ .key_press = .{ .codepoint = '4', .text = "4" } });
+    const surface = try drawForTest(arena, view.widget(), 100, 20);
+    try routeFocusedEventForTest(arena, surface, view.editor.widget(), &ctx, .{ .key_press = .{ .codepoint = vaxis.Key.enter } });
+    try testing.expectEqual(merge_ui_state.Outcome.ready, state.outcome);
+    try testing.expect(!view.editing);
+    try testing.expect(view.focus_area == .complete);
+
+    // The TextField can still be focused for a queued Enter after apply cleared it.
+    try routeFocusedEventForTest(arena, surface, view.editor.widget(), &ctx, .{ .key_press = .{ .codepoint = vaxis.Key.enter } });
+    try testing.expect(view.dialog == null);
+    try testing.expect(ctx.quit);
 }
 
 test "merge TUI: Enter does not ask again for a confirmed empty Result" {

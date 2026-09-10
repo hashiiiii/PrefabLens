@@ -91,6 +91,12 @@ jobs:
           pnpm run typecheck
           pnpm test
           pnpm run build
+      - name: Disable hosted browser apt sources
+        # GitHub-hosted Ubuntu images register Google Chrome and Microsoft Edge
+        # apt sources. playwright install-deps runs apt-get update against every
+        # source, so a Hash Sum mismatch from dl.google.com fails the job even
+        # though E2E launches Playwright's Chromium channel, not those browsers.
+        run: sudo rm -f /etc/apt/sources.list.d/google-chrome* /etc/apt/sources.list.d/microsoft-edge*
       - name: Install Playwright browsers
         if: steps.playwright-cache.outputs.cache-hit != 'true'
         working-directory: extension

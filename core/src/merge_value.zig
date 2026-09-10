@@ -688,3 +688,56 @@ test "value keyed first-second pairs and parallel keys merge by key" {
     try std.testing.expectEqualStrings("2", par.get("m_Values").?.seq[1].scalar);
     try std.testing.expectEqualStrings("3", par.get("m_Values").?.seq[2].scalar);
 }
+
+test "value keyed pairs report delete/edit when one side removes a changed key" {
+    var memory = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer memory.deinit();
+    const arena = memory.allocator();
+    const yaml = @import("merge_yaml.zig");
+    const b = try yaml.parseValue(arena, "[{key: a, value: 1}]");
+    const o = try yaml.parseValue(arena, "[]");
+    const t = try yaml.parseValue(arena, "[{key: a, value: 2}]");
+    const plan = try build(arena, .{ .nodes = .{ .base = b, .ours = o, .theirs = t } });
+    // Taking Theirs would restore a key Ours deleted. The conflict has to stay
+    // explicit instead of auto-keeping the edited pair.
+    try std.testing.expectEqual(@as(usize, 1), plan.conflicts.len);
+    try std.testing.expectEqual(Reason.delete_edit, plan.conflicts[0].reason);
+    try std.testing.expectEqualStrings("[a]", plan.conflicts[0].path);
+}
+
+test "value keyed pairs keep the side that reorders shared keys" {
+    var memory = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer memory.deinit();
+    const arena = memory.allocator();
+    const yaml = @import("merge_yaml.zig");
+    const b = try yaml.parseValue(arena, "[{key: a, value: 1}, {key: b, value: 2}]");
+    const o = try yaml.parseValue(arena, "[{key: a, value: 1}, {key: b, value: 2}]");
+    const t = try yaml.parseValue(arena, "[{key: b, value: 2}, {key: a, value: 1}]");
+    const plan = try build(arena, .{ .nodes = .{ .base = b, .ours = o, .theirs = t } });
+    try std.testing.expectEqual(@as(usize, 0), plan.conflicts.len);
+    const result = (try materialize(arena, plan, &.{})).?;
+    try std.testing.expectEqualStrings("b", model.findValue(result.seq[0].map, "key").?.scalar);
+    try std.testing.expectEqualStrings("a", model.findValue(result.seq[1].map, "key").?.scalar);
+}
+
+test "value keyed collections stay unresolved when YAML is malformed" {
+    var memory = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer memory.deinit();
+    const arena = memory.allocator();
+    const yaml = @import("merge_yaml.zig");
+    const cases = [_][3][]const u8{
+        .{ "[{key: a, value: 1}]", "[{key: a, value: 1}, {key: a, value: 2}]", "[{key: a, value: 1}]" },
+        .{ "{m_Keys: [a], m_Values: [1]}", "{m_Keys: [a, b], m_Values: [1]}", "{m_Keys: [a], m_Values: [1]}" },
+    };
+    for (cases) |sides| {
+        const plan = try build(arena, .{ .nodes = .{
+            .base = try yaml.parseValue(arena, sides[0]),
+            .ours = try yaml.parseValue(arena, sides[1]),
+            .theirs = try yaml.parseValue(arena, sides[2]),
+        } });
+        // Duplicate keys and m_Keys/m_Values length mismatch cannot prove identity.
+        try std.testing.expectEqual(@as(usize, 1), plan.conflicts.len);
+        try std.testing.expectEqual(Reason.context_required, plan.conflicts[0].reason);
+        try std.testing.expectEqualStrings("", plan.conflicts[0].path);
+    }
+}

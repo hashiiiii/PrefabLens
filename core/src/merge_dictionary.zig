@@ -41,10 +41,7 @@ pub fn detect(base: ?*const model.Node, ours: ?*const model.Node, theirs: ?*cons
 
 fn nodeShape(node: *const model.Node) Detected {
     if (node.* == .seq) return sequenceShape(node.seq);
-    if (node.* == .map) {
-        if (parallelShape(node)) return .{ .shape = .parallel };
-        return .none;
-    }
+    if (node.* == .map) return parallelShape(node);
     return .none;
 }
 
@@ -93,10 +90,12 @@ pub fn pairValue(item: *const model.Node, shape: Shape) ?*const model.Node {
     return model.findValue(item.map, fields.value);
 }
 
-fn parallelShape(node: *const model.Node) bool {
-    const keys = node.get("m_Keys") orelse return false;
-    const values = node.get("m_Values") orelse return false;
-    return keys.* == .seq and values.* == .seq and keys.seq.len == values.seq.len;
+fn parallelShape(node: *const model.Node) Detected {
+    const keys = node.get("m_Keys") orelse return .none;
+    const values = node.get("m_Values") orelse return .none;
+    if (keys.* != .seq or values.* != .seq) return .none;
+    if (keys.seq.len != values.seq.len) return .malformed;
+    return .{ .shape = .parallel };
 }
 
 pub fn entries(arena: std.mem.Allocator, node: ?*const model.Node, shape: Shape) std.mem.Allocator.Error!?[]Entry {
@@ -172,4 +171,3 @@ pub fn sharedOrderChanged(side: []const Entry, base: []const Entry) bool {
         base_i += 1;
     }
 }
-

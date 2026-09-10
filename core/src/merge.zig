@@ -253,8 +253,17 @@ pub const CollectionConflict = struct { reason: @import("merge_value.zig").Reaso
 pub fn collectionConflict(plan: *const MergePlan, operation_id: OperationId) ?CollectionConflict {
     const operation = merge_model.operationByIdConst(plan, operation_id) orelse return null;
     const ref = operation.collection orelse return null;
-    const conflict = plan.collections[ref.binding].plan.conflicts[ref.conflict];
-    return .{ .reason = conflict.reason, .both_orders = conflict.reason == .insertion_order };
+    const collection = plan.collections[ref.binding];
+    const conflict = collection.plan.conflicts[ref.conflict];
+    return .{ .reason = conflict.reason, .both_orders = offersBothOrders(collection.plan, conflict) };
+}
+fn offersBothOrders(plan: @import("merge_value.zig").Plan, conflict: @import("merge_value.zig").Conflict) bool {
+    if (conflict.reason != .insertion_order) return false;
+    if (plan.input.schema) |schema| return schema.kind != .dictionary;
+    return switch (@import("merge_dictionary.zig").detect(conflict.nodes.base, conflict.nodes.ours, conflict.nodes.theirs)) {
+        .shape => false,
+        else => true,
+    };
 }
 pub fn combinedCollectionValue(arena: std.mem.Allocator, plan: *const MergePlan, operation_id: OperationId, order: @import("merge_value.zig").Order) Error![]const u8 {
     const operation = merge_model.operationByIdConst(plan, operation_id) orelse return error.InvalidResolution;
@@ -730,6 +739,36 @@ test "collection public key value arrays merge by key without a schema" {
     const ordered_context = try collectionTestContext(.{ .path = "values", .kind = .ordered }, arena);
     var ordered = try buildWithContext(arena, base, ours, theirs, ordered_context);
     try testing.expect(collectionConflict(&ordered.plan, ordered.plan.operations[0].id).?.both_orders);
+}
+
+test "collection public dictionary reorder conflict does not offer both orders" {
+    var memory = std.heap.ArenaAllocator.init(testing.allocator);
+    defer memory.deinit();
+    const arena = memory.allocator();
+    const prefix = "--- !u!114 &1\nMonoBehaviour:\n  m_Stats:\n";
+    var merged = try build(
+        arena,
+        prefix ++ "  - key: a\n    value: 1\n  - key: b\n    value: 2\n  - key: c\n    value: 3\n",
+        prefix ++ "  - key: c\n    value: 3\n  - key: b\n    value: 2\n  - key: a\n    value: 1\n",
+        prefix ++ "  - key: b\n    value: 2\n  - key: a\n    value: 1\n  - key: c\n    value: 3\n",
+    );
+    try testing.expectEqual(@as(usize, 1), merged.plan.unresolvedCount());
+    const conflict = collectionConflict(&merged.plan, merged.plan.operations[0].id).?;
+    // Concatenating pair sequences would duplicate keys. Dictionaries only
+    // accept one side's order, unlike ordered arrays.
+    try testing.expectEqual(@import("merge_value.zig").Reason.insertion_order, conflict.reason);
+    try testing.expect(!conflict.both_orders);
+}
+
+test "collection public packed integer insertion order still offers both orders" {
+    var memory = std.heap.ArenaAllocator.init(testing.allocator);
+    defer memory.deinit();
+    const arena = memory.allocator();
+    const context = try collectionTestContext(.{ .path = "values", .kind = .int32_array }, arena);
+    const prefix = "--- !u!114 &1\nMonoBehaviour:\n  m_Script: {fileID: 11500000, guid: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, type: 3}\n  values: ";
+    var built = try buildWithContext(arena, prefix ++ "01000000\n", prefix ++ "0100000002000000\n", prefix ++ "0100000003000000\n", context);
+    // Packed int[] uses the same Both sides insertion-order choice as ordered arrays.
+    try testing.expect(collectionConflict(&built.plan, built.plan.operations[0].id).?.both_orders);
 }
 
 test "collection public missing array type evidence stays editable" {

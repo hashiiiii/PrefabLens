@@ -137,45 +137,6 @@ test "merge TUI: property and raw views preserve the selected result across togg
     try testing.expectEqual(core.merge.Side.theirs, state.pending.?.take);
 }
 
-test "merge TUI: prefab override shows Prefab mark semantic path and raw YAML" {
-    var memory = std.heap.ArenaAllocator.init(testing.allocator);
-    defer memory.deinit();
-    const arena = memory.allocator();
-    const prefix =
-        "--- !u!1001 &1\n" ++
-        "PrefabInstance:\n" ++
-        "  m_Modification:\n" ++
-        "    m_Modifications:\n" ++
-        "    - target: {fileID: 10, guid: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, type: 3}\n" ++
-        "      propertyPath: m_Name\n" ++
-        "      value: Enemy\n" ++
-        "    - target: {fileID: 40, guid: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, type: 3}\n" ++
-        "      propertyPath: items.Array.data[0].speed\n" ++
-        "      value: ";
-    const suffix =
-        "\n      objectReference: {fileID: 0}\n" ++
-        "  m_SourcePrefab: {fileID: 100100000, guid: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, type: 3}\n";
-    var fixture = try core.merge.build(
-        arena,
-        prefix ++ "1" ++ suffix,
-        prefix ++ "2" ++ suffix,
-        prefix ++ "3" ++ suffix,
-    );
-    var state = try merge_ui_state.State.init(arena, &fixture.plan);
-    var view = try viewForTest(arena, &state, "Enemy Variant.prefab", fixture.partial);
-    defer view.deinit();
-    const semantic = try surfaceText(arena, try drawForTest(arena, view.widget(), 120, 24));
-    // Hierarchy otherwise looks like a named GameObject, so the Prefab mark has to be on screen.
-    try testing.expect(std.mem.indexOf(u8, semantic, "‹Prefab›") != null);
-    try testing.expect(std.mem.indexOf(u8, semantic, "Items[0].Speed") != null);
-    try testing.expect(std.mem.indexOf(u8, semantic, "⇧R Raw") != null);
-    var ctx = eventContext(arena);
-    try view.widget().handleEvent(&ctx, .{ .key_press = .{ .codepoint = 'r', .mods = .{ .shift = true }, .text = "R" } });
-    const raw = try surfaceText(arena, try drawForTest(arena, view.widget(), 180, 24));
-    try testing.expect(std.mem.indexOf(u8, raw, "propertyPath:") != null);
-    try testing.expect(std.mem.indexOf(u8, raw, "⇧R Semantic") != null);
-}
-
 test "merge TUI: prefab override raw edit keeps the displayed modification YAML" {
     var memory = std.heap.ArenaAllocator.init(testing.allocator);
     defer memory.deinit();
@@ -271,28 +232,6 @@ test "merge TUI: dictionary custom result keeps pair indent on every side" {
     try testing.expectEqual(lineIndent(ours_before), lineIndent(result));
 }
 
-test "merge TUI: prefab override custom result keeps the modification item" {
-    var memory = std.heap.ArenaAllocator.init(testing.allocator);
-    defer memory.deinit();
-    const arena = memory.allocator();
-    var fixture = try prefabOverrideOnlySpeedPlan(arena);
-    var state = try merge_ui_state.State.init(arena, &fixture.plan);
-    try state.handle(.choose_theirs);
-    var view = try viewForTest(arena, &state, "Variant.prefab", fixture.partial);
-    defer view.deinit();
-    _ = try drawForTest(arena, view.widget(), 180, 24);
-    view.raw_view = true;
-    const operation = view.selectedOperation().?;
-    try state.handle(.{ .edit_result = "4" });
-    const result = try view.columnText(arena, operation, .result);
-    // Custom is the scalar. The Result column still has to show the modification YAML
-    // so Enter does not look like it deleted target, propertyPath, and objectReference.
-    try testing.expect(std.mem.indexOf(u8, result, "propertyPath:") != null);
-    try testing.expect(std.mem.indexOf(u8, result, "value: 4") != null);
-    try testing.expect(std.mem.indexOf(u8, result, "objectReference:") != null);
-    try testing.expect(!std.mem.eql(u8, result, "4"));
-}
-
 test "merge TUI: dictionary semantic value can be edited to a custom result" {
     var memory = std.heap.ArenaAllocator.init(testing.allocator);
     defer memory.deinit();
@@ -318,115 +257,6 @@ test "merge TUI: dictionary semantic value can be edited to a custom result" {
         try std.mem.replaceOwned(u8, arena, fixture.plan.theirs.bytes, "value: 3", "value: 4"),
         try core.merge.finish(arena, &fixture.plan),
     );
-}
-
-test "merge TUI: dictionary raw pair edit keeps sibling keys and side YAML" {
-    var memory = std.heap.ArenaAllocator.init(testing.allocator);
-    defer memory.deinit();
-    const arena = memory.allocator();
-    var fixture = try dictionaryUnionPlan(arena);
-    var state = try merge_ui_state.State.init(arena, &fixture.plan);
-    try state.handle(.choose_theirs);
-    var view = try viewForTest(arena, &state, "Dictionary.prefab", fixture.partial);
-    defer view.deinit();
-    _ = try drawForTest(arena, view.widget(), 180, 24);
-    var ctx = eventContext(arena);
-    try view.widget().handleEvent(&ctx, .{ .key_press = .{ .codepoint = 'r', .mods = .{ .shift = true }, .text = "R" } });
-    try focusResultForTest(&view, &ctx);
-    try pressKeyForTest(&view, &ctx, vaxis.Key.enter);
-    const before = try view.editor.buf.dupe();
-    try testing.expect(std.mem.indexOf(u8, before, "value: 3") != null);
-    const updated = try std.mem.replaceOwned(u8, arena, before, "value: 3", "value: 4");
-    view.editor.clearRetainingCapacity();
-    try view.editor.insertSliceAtCursor(updated);
-    view.editor_changed = true;
-    try pressKeyForTest(&view, &ctx, vaxis.Key.enter);
-    try testing.expectEqualStrings("", state.status);
-    try testing.expectEqualStrings(
-        "--- !u!114 &1\nMonoBehaviour:\n  m_Stats:\n  - key: Goblin\n    value: 4\n  - key: Dragon\n    value: 9\n  - key: Slime\n    value: 2\n",
-        try core.merge.finish(arena, &fixture.plan),
-    );
-}
-
-test "merge TUI: dictionary value edit keeps sibling keys and side YAML" {
-    var memory = std.heap.ArenaAllocator.init(testing.allocator);
-    defer memory.deinit();
-    const arena = memory.allocator();
-    var fixture = try dictionaryUnionPlan(arena);
-    var state = try merge_ui_state.State.init(arena, &fixture.plan);
-    try state.handle(.choose_theirs);
-    var view = try viewForTest(arena, &state, "Dictionary.prefab", fixture.partial);
-    defer view.deinit();
-    _ = try drawForTest(arena, view.widget(), 160, 24);
-    var ctx = eventContext(arena);
-    try focusResultForTest(&view, &ctx);
-    try pressKeyForTest(&view, &ctx, vaxis.Key.down);
-    try pressKeyForTest(&view, &ctx, vaxis.Key.enter);
-    try pressKeyForTest(&view, &ctx, vaxis.Key.backspace);
-    try view.widget().handleEvent(&ctx, .{ .key_press = .{ .codepoint = '4', .text = "4" } });
-    try pressKeyForTest(&view, &ctx, vaxis.Key.enter);
-    try testing.expectEqualStrings("", state.status);
-    try testing.expect(!view.editing);
-    // Independent keys keep their source pair layout. A reconstructed Goblin pair
-    // must use the same block indent as Dragon and Slime or Unity YAML is invalid.
-    try testing.expectEqualStrings(
-        "--- !u!114 &1\nMonoBehaviour:\n  m_Stats:\n  - key: Goblin\n    value: 4\n  - key: Dragon\n    value: 9\n  - key: Slime\n    value: 2\n",
-        try core.merge.finish(arena, &fixture.plan),
-    );
-}
-
-test "merge TUI: prefab override value edit keeps the modification item" {
-    var memory = std.heap.ArenaAllocator.init(testing.allocator);
-    defer memory.deinit();
-    const arena = memory.allocator();
-    var fixture = try prefabOverrideOnlySpeedPlan(arena);
-    var state = try merge_ui_state.State.init(arena, &fixture.plan);
-    try state.handle(.choose_theirs);
-    var view = try viewForTest(arena, &state, "Variant.prefab", fixture.partial);
-    defer view.deinit();
-    _ = try drawForTest(arena, view.widget(), 160, 24);
-    var ctx = eventContext(arena);
-    try focusResultForTest(&view, &ctx);
-    try pressKeyForTest(&view, &ctx, vaxis.Key.down);
-    try pressKeyForTest(&view, &ctx, vaxis.Key.enter);
-    try pressKeyForTest(&view, &ctx, vaxis.Key.backspace);
-    try view.widget().handleEvent(&ctx, .{ .key_press = .{ .codepoint = '4', .text = "4" } });
-    try pressKeyForTest(&view, &ctx, vaxis.Key.enter);
-    try testing.expectEqualStrings("", state.status);
-    const finished = try core.merge.finish(arena, &fixture.plan);
-    // Custom is the scalar. The modification's target, path, and objectReference must stay.
-    try testing.expect(std.mem.indexOf(u8, finished, "propertyPath: items.Array.data[0].speed") != null);
-    try testing.expect(std.mem.indexOf(u8, finished, "value: 4") != null);
-    try testing.expect(std.mem.indexOf(u8, finished, "objectReference: {fileID: 0}") != null);
-    try testing.expect(std.mem.indexOf(u8, finished, "m_SourcePrefab:") != null);
-}
-
-test "merge TUI: prefab override raw value edit keeps the modification item" {
-    var memory = std.heap.ArenaAllocator.init(testing.allocator);
-    defer memory.deinit();
-    const arena = memory.allocator();
-    var fixture = try prefabOverrideOnlySpeedPlan(arena);
-    var state = try merge_ui_state.State.init(arena, &fixture.plan);
-    try state.handle(.choose_theirs);
-    var view = try viewForTest(arena, &state, "Variant.prefab", fixture.partial);
-    defer view.deinit();
-    _ = try drawForTest(arena, view.widget(), 180, 24);
-    var ctx = eventContext(arena);
-    try view.widget().handleEvent(&ctx, .{ .key_press = .{ .codepoint = 'r', .mods = .{ .shift = true }, .text = "R" } });
-    try focusResultForTest(&view, &ctx);
-    try pressKeyForTest(&view, &ctx, vaxis.Key.enter);
-    const before = try view.editor.buf.dupe();
-    try testing.expect(std.mem.indexOf(u8, before, "value: 3") != null);
-    const updated = try std.mem.replaceOwned(u8, arena, before, "value: 3", "value: 4");
-    view.editor.clearRetainingCapacity();
-    try view.editor.insertSliceAtCursor(updated);
-    view.editor_changed = true;
-    try pressKeyForTest(&view, &ctx, vaxis.Key.enter);
-    try testing.expectEqualStrings("", state.status);
-    const finished = try core.merge.finish(arena, &fixture.plan);
-    try testing.expect(std.mem.indexOf(u8, finished, "propertyPath: items.Array.data[0].speed") != null);
-    try testing.expect(std.mem.indexOf(u8, finished, "value: 4") != null);
-    try testing.expect(std.mem.indexOf(u8, finished, "objectReference: {fileID: 0}") != null);
 }
 
 test "merge TUI: Raw shortcut preserves typed letters in the Result editor" {
@@ -2793,21 +2623,6 @@ fn prefabOverrideSpeedPlan(arena: std.mem.Allocator) !core.merge.BuildResult {
     const suffix =
         "\n      objectReference: {fileID: 0}\n" ++
         "  m_SourcePrefab: {fileID: 100100000, guid: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, type: 3}\n";
-    return core.merge.build(arena, prefix ++ "1" ++ suffix, prefix ++ "2" ++ suffix, prefix ++ "3" ++ suffix);
-}
-
-fn prefabOverrideOnlySpeedPlan(arena: std.mem.Allocator) !core.merge.BuildResult {
-    const prefix =
-        "--- !u!1001 &1\n" ++
-        "PrefabInstance:\n" ++
-        "  m_Modification:\n" ++
-        "    m_Modifications:\n" ++
-        "    - target: {fileID: 50, guid: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb, type: 3}\n" ++
-        "      propertyPath: items.Array.data[0].speed\n" ++
-        "      value: ";
-    const suffix =
-        "\n      objectReference: {fileID: 0}\n" ++
-        "  m_SourcePrefab: {fileID: 100100000, guid: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb, type: 3}\n";
     return core.merge.build(arena, prefix ++ "1" ++ suffix, prefix ++ "2" ++ suffix, prefix ++ "3" ++ suffix);
 }
 

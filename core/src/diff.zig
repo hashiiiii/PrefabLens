@@ -288,6 +288,36 @@ test "diff: dictionary pairs and parallel keys match by key not index" {
     try testing.expect(!saw_index);
 }
 
+test "diff: dictionary reorder without value change is hidden" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const before =
+        \\--- !u!114 &5
+        \\MonoBehaviour:
+        \\  stats:
+        \\  - key: Goblin
+        \\    value: 10
+        \\  - key: Slime
+        \\    value: 3
+    ;
+    const after =
+        \\--- !u!114 &5
+        \\MonoBehaviour:
+        \\  stats:
+        \\  - key: Slime
+        \\    value: 3
+        \\  - key: Goblin
+        \\    value: 10
+    ;
+    const fd = try compute(arena, before, after);
+    const d = findDoc(fd, 5).?;
+    // Index matching would mark every moved pair modified. A pure key shuffle
+    // is not a content change.
+    try testing.expectEqual(model.Status.unchanged, d.component.status);
+    try testing.expectEqual(@as(usize, 0), d.component.fields.len);
+}
+
 test "diff: unresolved guids are deduplicated in first-reference order" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();

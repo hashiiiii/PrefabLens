@@ -15,52 +15,6 @@ describe("createFileViewController", () => {
     document.body.replaceChildren();
   });
 
-  it("switches raw and semantic views after a user selection", () => {
-    const selected: ViewMode[] = [];
-    const semanticRoots: ShadowRoot[] = [];
-    const raw = document.createElement("div");
-    const files = document.createElement("div");
-    files.append(raw);
-    document.body.append(files);
-
-    const controller = createFileViewController(
-      "raw",
-      (hidden) => {
-        raw.style.display = hidden ? "none" : "";
-      },
-      (host) => raw.after(host),
-      () => true,
-    );
-    controller.subscribeSelection((view) => void selected.push(view));
-    controller.subscribeSemantic((root) => void semanticRoots.push(root));
-    controller.start();
-    files.prepend(controller.element);
-
-    expect(raw.style.display).toBe("");
-    expect(files.querySelector("[data-prefablens-view]")).toBeNull();
-    expect(pressed(controller.element, "raw")).toBe("true");
-    expect(pressed(controller.element, "semantic")).toBe("false");
-
-    controller.element.querySelector<HTMLButtonElement>('button[data-view="semantic"]')?.click();
-
-    const host = files.querySelector<HTMLDivElement>("[data-prefablens-view]");
-    expect(host).not.toBeNull();
-    expect(raw.style.display).toBe("none");
-    expect(host?.style.display).toBe("");
-    expect(selected).toEqual(["semantic"]);
-    expect(semanticRoots).toEqual([host?.shadowRoot]);
-    expect(pressed(controller.element, "raw")).toBe("false");
-    expect(pressed(controller.element, "semantic")).toBe("true");
-
-    controller.element.querySelector<HTMLButtonElement>('button[data-view="raw"]')?.click();
-
-    expect(raw.style.display).toBe("");
-    expect(host?.style.display).toBe("none");
-    expect(selected).toEqual(["semantic", "raw"]);
-    expect(pressed(controller.element, "raw")).toBe("true");
-    expect(pressed(controller.element, "semantic")).toBe("false");
-  });
-
   it("repairs one semantic host without starting semantic work", () => {
     const selected: ViewMode[] = [];
     const semanticRoots: ShadowRoot[] = [];

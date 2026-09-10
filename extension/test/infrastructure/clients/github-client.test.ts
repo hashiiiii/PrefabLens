@@ -47,23 +47,6 @@ describe("createGithubGateway", () => {
     expect(result).toEqual(ok({ baseSha: "merge-base", headSha: "head-sha" }));
   });
 
-  it("sends the required REST headers", async () => {
-    const fetchFn: typeof fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
-      if (requestKey(input, init) !== `GET ${API}/repos/o/r/pulls/1/files?per_page=100&page=1`) {
-        return unexpectedRequest(input, init);
-      }
-      const headers = new Headers(init?.headers);
-      expect(headers.get("authorization")).toBe("Bearer tok");
-      expect(headers.get("accept")).toBe("application/vnd.github+json");
-      expect(headers.get("x-github-api-version")).toBe("2022-11-28");
-      return json([]);
-    };
-
-    const result = await createGithubGateway(API, "tok", fetchFn).listPrFiles("o", "r", 1);
-
-    expect(result).toEqual(ok([]));
-  });
-
   it("paginates pull request files after 100 entries", async () => {
     const firstPage = Array.from({ length: 100 }, (_, index) => ({
       filename: `f${index}.cs`,

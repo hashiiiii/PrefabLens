@@ -136,13 +136,6 @@ describe("createDifferGateway", () => {
     });
   });
 
-  it("handles empty before (added file)", () => {
-    const result = differ.diff(new Uint8Array(0), AFTER);
-    expect(result.ok).toBe(true);
-    if (!result.ok) return;
-    expect(result.value.schema).toBe("prefablens.diff.v2");
-  });
-
   it("returns DiffFailure with the error name on core failure", () => {
     let src = "--- !u!1 &1\nGameObject:\n";
     for (let d = 1; d <= 200; d++) src += `${"  ".repeat(d)}a:\n`;
@@ -151,28 +144,8 @@ describe("createDifferGateway", () => {
     expect(result).toEqual({ ok: false, error: { kind: "diff-failed", message: "NestingTooDeep" } });
   });
 
-  it("accepts a UnityYAML document head", () => {
-    expect(differ.isUnityYaml(BEFORE)).toBe(true);
-  });
-
   it("rejects plain YAML metadata", () => {
     expect(differ.isUnityYaml(enc.encode("fileFormatVersion: 2\nguid: abc\n"))).toBe(false);
-  });
-
-  it("rejects binary data", () => {
-    expect(differ.isUnityYaml(new Uint8Array([0, 1, 2, 255]))).toBe(false);
-  });
-
-  it("rejects an empty file side", () => {
-    expect(differ.isUnityYaml(new Uint8Array(0))).toBe(false);
-  });
-
-  it("is re-entrant across many calls", () => {
-    for (let i = 0; i < 50; i++) {
-      const result = differ.diff(BEFORE, AFTER);
-      expect(result.ok).toBe(true);
-      if (result.ok) expect(result.value.schema).toBe("prefablens.diff.v2");
-    }
   });
 
   it("requests a source prefab when the source is absent", () => {

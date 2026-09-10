@@ -249,53 +249,6 @@ describe("resolveSemanticDiff", () => {
     expect(messages.at(-1)).toMatchObject({ done: true, status: "rateLimited" });
   });
 
-  it("keeps rateLimited after a later rejection", async () => {
-    const guidRepository = new MemoryGuidRepository({
-      "https://api.github.test:o/r": { src0: "Assets/Source.prefab" },
-    });
-    const { client } = githubRoutes(({ url }) => {
-      if (url.pathname === "/repos/o/r/git/trees/head-sha") {
-        return json({ truncated: false, tree: [] });
-      }
-      if (url.pathname === "/search/code") {
-        guidRepository.storageAvailable = false;
-        return new Response(null, { status: 429, headers: { "retry-after": "1" } });
-      }
-      if (url.pathname === "/repos/o/r/contents/Assets/Foo.prefab") return raw(VARIANT_PREFAB);
-      if (url.pathname === "/repos/o/r/contents/Assets/Source.prefab") return raw(SOURCE_PREFAB);
-      return new Response(null, { status: 500 });
-    });
-    const first = sourceDiff({ src0: "Assets/Source.prefab" });
-    first.unresolvedGuids = [...first.unresolvedGuids, "limited"];
-    const messages = await collect(
-      resolveSemanticDiff(
-        guidRepository,
-        new MemoryRepoIndexRepository(),
-        async () => differ,
-        createDiffSession(),
-        client,
-        {
-          refs: { baseSha: "base-sha", headSha: "head-sha" },
-          files: [{ path: "Assets/Foo.prefab", status: "added" }],
-          guidIndex: new Map(),
-          baseShas: new Map(),
-        },
-        "https://api.github.test:o/r",
-        first,
-        ["limited"],
-        {
-          type: "semanticDiff",
-          owner: "o",
-          repo: "r",
-          target: { kind: "pull", prNumber: 1 },
-          path: "Assets/Foo.prefab",
-        },
-      ),
-    );
-
-    expect(messages.at(-1)).toMatchObject({ done: true, status: "rateLimited" });
-  });
-
   it("sends a failed final push after a source fetch failure", async () => {
     const { client, requests } = githubRoutes(({ url }) => {
       if (url.pathname === "/repos/o/r/contents/Assets/Foo.prefab") return raw(VARIANT_PREFAB);

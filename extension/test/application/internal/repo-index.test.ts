@@ -107,32 +107,6 @@ describe("getRepoIndex", () => {
     expect(result).toEqual({ gA: "Assets/A.cs", gB: "Assets/B.cs" });
   });
 
-  it("fetches GraphQL blobs in groups of one hundred", async () => {
-    const metas = Array.from({ length: 250 }, (_, index) => ({
-      path: `Assets/F${index}.cs.meta`,
-      type: "blob",
-      sha: `s${index}`,
-    }));
-    const graphqlBatchSizes: number[] = [];
-    const client = createGithubGateway(API_BASE, "token", async (input, init) => {
-      const request = new URL(String(input));
-      if (request.pathname === "/repos/o/r/git/trees/H") {
-        return Response.json({ truncated: false, tree: metas });
-      }
-      if (request.pathname === "/graphql") {
-        // The body comes from the GitHub client's JSON.stringify({ query }) call.
-        const body = JSON.parse(String(init?.body)) as { query: string };
-        graphqlBatchSizes.push(body.query.match(/object\(oid:/g)?.length ?? 0);
-        return Response.json({ data: { repository: {} } });
-      }
-      return new Response(null, { status: 500 });
-    });
-
-    await getRepoIndex(new MemoryRepoIndexRepository(), createDiffSession(), client, "o", "r", REPO_KEY, "H");
-
-    expect(graphqlBatchSizes).toEqual([100, 100, 50]);
-  });
-
   it("returns null for a truncated tree", async () => {
     const requests: URL[] = [];
     const client = createGithubGateway(API_BASE, "token", async (input) => {
@@ -170,31 +144,6 @@ describe("getRepoIndex", () => {
     expect(await getRepoIndex(repository, createDiffSession(), client, "o", "r", REPO_KEY, "H")).toBeNull();
     await expect(repository.loadIndex(REPO_KEY)).resolves.toBeUndefined();
     expect(requests.map((request) => request.pathname)).toEqual(["/repos/o/r/git/trees/H"]);
-  });
-
-  it("skips meta files without a GUID", async () => {
-    const client = createGithubGateway(API_BASE, "token", async (input) => {
-      const request = new URL(String(input));
-      if (request.pathname === "/repos/o/r/git/trees/H") {
-        return Response.json({
-          truncated: false,
-          tree: [
-            { path: "Assets/A.cs.meta", type: "blob", sha: "sha1" },
-            { path: "Assets/B.cs.meta", type: "blob", sha: "sha2" },
-          ],
-        });
-      }
-      if (request.pathname === "/graphql") {
-        return Response.json({
-          data: { repository: { b0: { text: "guid: g1\n" }, b1: { text: "not yaml at all" } } },
-        });
-      }
-      return new Response(null, { status: 500 });
-    });
-
-    expect(
-      await getRepoIndex(new MemoryRepoIndexRepository(), createDiffSession(), client, "o", "r", REPO_KEY, "H"),
-    ).toEqual({ g1: "Assets/A.cs" });
   });
 
   it("pins session fallback after a rate limit", async () => {

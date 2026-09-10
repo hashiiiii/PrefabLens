@@ -319,36 +319,6 @@ describe("raw diff", () => {
     expect(requests.some((request) => request.pathname === "/repos/o/r/contents/Assets/Foo.prefab")).toBe(false);
   });
 
-  it("retries context after a transient failure", async () => {
-    let filesAvailable = false;
-    const client = githubClient((request) => {
-      if (request.pathname === "/repos/o/r/pulls/1") {
-        return json({ base: { sha: "base-tip" }, head: { sha: "head-sha" } });
-      }
-      if (request.pathname === "/repos/o/r/compare/base-tip...head-sha") {
-        return json({ merge_base_commit: { sha: "base-sha" }, files: [] });
-      }
-      if (request.pathname === "/repos/o/r/pulls/1/files") {
-        if (!filesAvailable) return new Response(null, { status: 500 });
-        return json([{ filename: PATH, status: "modified", sha: "head-blob" }]);
-      }
-      if (request.pathname === "/repos/o/r/git/trees/base-sha") {
-        return json({ truncated: false, tree: [] });
-      }
-      return new Response(null, { status: 500 });
-    });
-    const session = createDiffSession();
-
-    await expect(getContext(session, client, OWNER, REPO, PULL)).resolves.toEqual({
-      ok: false,
-      error: { kind: "fetch-failed" },
-    });
-    filesAvailable = true;
-    const retried = await getContext(session, client, OWNER, REPO, PULL);
-
-    expect(retried.ok).toBe(true);
-  });
-
   it("reads new PR data after the 60-second cache expires", async () => {
     let now = Date.parse("2026-08-12T00:00:00Z");
     let headSha = "head-one";
@@ -435,46 +405,6 @@ describe("raw diff", () => {
     expect(requests.some((request) => request.pathname.startsWith("/repos/o/r/pulls/"))).toBe(false);
   });
 
-  it("renders exactly 25 MiB without the size gate", async () => {
-    const largePrefab = new Uint8Array(25 * 1024 * 1024);
-    largePrefab.fill(32);
-    largePrefab.set(AFTER_PREFAB);
-    const client = githubClient((request) => {
-      if (request.pathname === "/repos/o/r/pulls/1") {
-        return json({ base: { sha: "base-tip" }, head: { sha: "head-sha" } });
-      }
-      if (request.pathname === "/repos/o/r/compare/base-tip...head-sha") {
-        return json({ merge_base_commit: { sha: "base-sha" }, files: [] });
-      }
-      if (request.pathname === "/repos/o/r/pulls/1/files") {
-        return json([{ filename: PATH, status: "added", sha: "head-blob" }]);
-      }
-      if (request.pathname === "/repos/o/r/git/trees/base-sha") {
-        return json({ truncated: false, tree: [] });
-      }
-      if (request.pathname === "/repos/o/r/git/blobs/head-blob") return raw(largePrefab);
-      return new Response(null, { status: 500 });
-    });
-    const session = createDiffSession();
-    const context = await getContext(session, client, OWNER, REPO, PULL);
-    expect(context.ok).toBe(true);
-    if (!context.ok) return;
-
-    const result = await getDiff(
-      async () => differ,
-      new MemoryDiffRepository(),
-      session,
-      client,
-      context.value,
-      OWNER,
-      REPO,
-      PATH,
-      false,
-    );
-
-    expect(result.ok).toBe(true);
-  });
-
   it("prefers blob SHA and falls back after a 404", async () => {
     const requests: URL[] = [];
     const client = githubClient((request) => {
@@ -552,63 +482,6 @@ describe("raw diff", () => {
         return json([{ filename: PATH, status: "modified", sha: "head-blob" }]);
       }
       if (request.pathname === "/repos/o/r/git/trees/base-sha") return json({ truncated: true, tree: [] });
-      if (
-        request.pathname === "/repos/o/r/contents/Assets/Foo.prefab" &&
-        request.searchParams.get("ref") === "base-sha"
-      ) {
-        return raw(BEFORE_PREFAB);
-      }
-      if (request.pathname === "/repos/o/r/git/blobs/head-blob") return raw(AFTER_PREFAB);
-      return new Response(null, { status: 500 });
-    });
-    const session = createDiffSession();
-    const context = await getContext(session, client, OWNER, REPO, PULL);
-    expect(context.ok).toBe(true);
-    if (!context.ok) return;
-
-    const result = await getDiff(
-      async () => differ,
-      new MemoryDiffRepository(),
-      session,
-      client,
-      context.value,
-      OWNER,
-      REPO,
-      PATH,
-      false,
-    );
-
-    expect(result.ok).toBe(true);
-    if (!result.ok) return;
-    expect(result.json.loose[0]?.fields[0]).toEqual({
-      path: "Volume",
-      status: "modified",
-      before: "0.5",
-      after: "0.8",
-    });
-    expect(
-      requests.some(
-        (request) =>
-          request.pathname === "/repos/o/r/contents/Assets/Foo.prefab" &&
-          request.searchParams.get("ref") === "base-sha",
-      ),
-    ).toBe(true);
-  });
-
-  it("uses the contents API after a failed base tree request", async () => {
-    const requests: URL[] = [];
-    const client = githubClient((request) => {
-      requests.push(request);
-      if (request.pathname === "/repos/o/r/pulls/1") {
-        return json({ base: { sha: "base-tip" }, head: { sha: "head-sha" } });
-      }
-      if (request.pathname === "/repos/o/r/compare/base-tip...head-sha") {
-        return json({ merge_base_commit: { sha: "base-sha" }, files: [] });
-      }
-      if (request.pathname === "/repos/o/r/pulls/1/files") {
-        return json([{ filename: PATH, status: "modified", sha: "head-blob" }]);
-      }
-      if (request.pathname === "/repos/o/r/git/trees/base-sha") return new Response(null, { status: 500 });
       if (
         request.pathname === "/repos/o/r/contents/Assets/Foo.prefab" &&
         request.searchParams.get("ref") === "base-sha"

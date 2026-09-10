@@ -122,28 +122,33 @@ pub fn run(io: std.Io, arena: std.mem.Allocator, args: []const []const u8, env: 
 fn resolveSession(git: Git, candidate: *candidate_module.Candidate, env: *std.process.Environ.Map, stderr: *std.Io.Writer) !u8 {
     // Git owns MERGE_HEAD, merge commits, squash and abort after this command returns.
     const tty = (std.Io.File.stdin().isTty(git.io) catch false) and (std.Io.File.stdout().isTty(git.io) catch false);
-    if (tty) while (true) {
-        const index = for (candidate.items.items, 0..) |_, i| {
-            if (candidate.ready(i)) break i;
-        } else break;
-        candidate.items.items[index].attempted = true;
-        const item = candidate.items.items[index];
-        var captured = try session_context.readIndex(&candidate.store);
-        captured.snapshot = session_context.maskUnresolved(captured.snapshot, try candidate.pendingPaths());
-        if (item.conflict != null and isStructural(item.conflict.?.kind)) {
-            switch (try file_conflict.resolveWithContext(git, candidate.result, item.conflict.?, env, captured)) {
-                .unresolved => {},
-                .aborted => break,
-                .resolved => |paths| try candidate.refresh(paths),
-            }
-        } else {
-            switch (try resolveContent(git, candidate, index, captured, env)) {
-                .resolved => try candidate.refresh(item.paths),
-                .aborted => break,
-                .unresolved => {},
+    if (tty) {
+        var tty_buffer: [4096]u8 = undefined;
+        var session: ?merge_tui.Session = null;
+        defer if (session) |*open| open.deinit();
+        while (true) {
+            const index = for (candidate.items.items, 0..) |_, i| {
+                if (candidate.ready(i)) break i;
+            } else break;
+            candidate.items.items[index].attempted = true;
+            const item = candidate.items.items[index];
+            var captured = try session_context.readIndex(&candidate.store);
+            captured.snapshot = session_context.maskUnresolved(captured.snapshot, try candidate.pendingPaths());
+            if (item.conflict != null and isStructural(item.conflict.?.kind)) {
+                switch (try file_conflict.resolveWithContext(git, candidate.result, item.conflict.?, env, captured)) {
+                    .unresolved => {},
+                    .aborted => break,
+                    .resolved => |paths| try candidate.refresh(paths),
+                }
+            } else {
+                switch (try resolveContent(git, candidate, index, captured, env, &tty_buffer, &session)) {
+                    .resolved => try candidate.refresh(item.paths),
+                    .aborted => break,
+                    .unresolved => {},
+                }
             }
         }
-    };
+    }
     for (candidate.result.conflicts) |conflict| try stderr.writeAll(conflict.message);
     const remaining = try git.output(&.{ "ls-files", "--unmerged", "-z" });
     return if (candidate.result.conflicts.len != 0 or remaining.len != 0) 1 else 0;
@@ -230,7 +235,15 @@ pub fn blob(git: Git, stage: ?Stage) ![]const u8 {
 
 const ContentOutcome = enum { resolved, unresolved, aborted };
 
-fn resolveContent(git: Git, candidate: *candidate_module.Candidate, index: usize, captured: session_context.Index, env: *std.process.Environ.Map) !ContentOutcome {
+fn resolveContent(
+    git: Git,
+    candidate: *candidate_module.Candidate,
+    index: usize,
+    captured: session_context.Index,
+    env: *std.process.Environ.Map,
+    tty_buffer: []u8,
+    session: *?merge_tui.Session,
+) !ContentOutcome {
     const path = candidate.items.items[index].paths[0];
     if (candidate.result.sources.?.known == null) {
         if (candidate.items.items[index].paths.len != 1) return .unresolved;
@@ -246,7 +259,12 @@ fn resolveContent(git: Git, candidate: *candidate_module.Candidate, index: usize
     const prepared = try file_conflict.prepareContent(git, candidate.result, path) orelse return .unresolved;
     if (!std.mem.eql(u8, captured.before, prepared.index_before)) return error.SourceChanged;
     var state = try merge_ui_state.State.init(git.arena, &built.plan);
-    if (state.outcome != .ready) try merge_tui.run(git.io, git.arena, env, &state, path, built.partial);
+    if (state.outcome != .ready) {
+        if (session.* == null) session.* = try merge_tui.Session.init(git.io, git.arena, env, tty_buffer);
+        if (session.*) |*open| {
+            try open.present(git.arena, &state, path, built.partial);
+        } else unreachable;
+    }
     if (state.outcome == .aborted) return .aborted;
     if (state.outcome != .ready) return .unresolved;
     const bytes = core.merge.finish(git.arena, &built.plan) catch return .unresolved;

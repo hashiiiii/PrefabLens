@@ -1,7 +1,7 @@
 const std = @import("std");
 const testing = std.testing;
 
-pub const Kind = enum { ordered_array, int32_array };
+pub const Kind = enum { ordered_array, int32_array, dictionary };
 pub const Field = struct { name: []const u8, kind: Kind };
 
 // A revision reader must inspect all available source declarations before read().
@@ -275,10 +275,50 @@ fn fieldDeclaration(declaration: []const Token, imports: Imports, names: Names) 
     if (end < at + 2 or declaration[end - 1].kind != .identifier) return null;
     const field_name = declaration[end - 1].text;
     const type_tokens = declaration[at .. end - 1];
+    if (dictionaryType(type_tokens)) return .{ .name = field_name, .kind = .dictionary };
     if (type_tokens.len < 3 or !type_tokens[type_tokens.len - 2].is("[") or !type_tokens[type_tokens.len - 1].is("]")) return null;
     const element = type_tokens[0 .. type_tokens.len - 2];
     for (element) |token| if (token.kind != .identifier and !token.is(".") and !token.is(":")) return null;
     return .{ .name = field_name, .kind = if (pathIs(element, "int")) .int32_array else .ordered_array };
+}
+
+fn dictionaryType(type_tokens: []const Token) bool {
+    var lt: ?usize = null;
+    for (type_tokens, 0..) |token, i| {
+        if (token.is("<")) {
+            lt = i;
+            break;
+        }
+    }
+    const open = lt orelse return false;
+    if (open == 0) return false;
+    const name = type_tokens[0..open];
+    for (name) |token| if (token.kind != .identifier and !token.is(".") and !token.is(":")) return false;
+    return pathIs(name, "Dictionary") or
+        pathIs(name, "SerializedDictionary") or
+        pathIs(name, "System.Collections.Generic.Dictionary") or
+        pathIs(name, "UnityEngine.SerializedDictionary") or
+        pathIs(name, "UnityEngine.UIElements.Experimental.SerializedDictionary");
+}
+
+test "C# collection schema recognizes serialized dictionaries" {
+    var memory = std.heap.ArenaAllocator.init(testing.allocator);
+    defer memory.deinit();
+    const arena = memory.allocator();
+    const source =
+        \\using System.Collections.Generic;
+        \\using UnityEngine;
+        \\public class Inventory : MonoBehaviour {
+        \\  public Dictionary<string, int> stats;
+        \\  public SerializedDictionary<string, float> named;
+        \\  public int[] numbers;
+        \\}
+    ;
+    const fields = try read(arena, source, "Inventory", .{});
+    try testing.expectEqual(@as(usize, 3), fields.len);
+    try testing.expectEqual(Kind.dictionary, find(fields, "stats").?);
+    try testing.expectEqual(Kind.dictionary, find(fields, "named").?);
+    try testing.expectEqual(Kind.int32_array, find(fields, "numbers").?);
 }
 
 test "C# collection schema recognizes direct serialized arrays" {

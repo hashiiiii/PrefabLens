@@ -3,6 +3,7 @@ const model = @import("model.zig");
 const ordered = @import("merge_collection.zig");
 const context = @import("merge_context.zig");
 const packed_int = @import("merge_packed.zig");
+const dictionary = @import("merge_dictionary.zig");
 const A = std.mem.Allocator;
 pub const Side = enum { base, ours, theirs };
 pub const Nodes = struct { base: ?*const model.Node, ours: ?*const model.Node, theirs: ?*const model.Node };
@@ -47,9 +48,11 @@ pub fn build(arena: A, input: Input) Error!Plan {
                 root = try planValue(arena, &conflicts, logical, false);
             },
             .ordered => root = try planValue(arena, &conflicts, input.nodes, true),
+            .dictionary => root = try planDictionary(arena, &conflicts, input.nodes) orelse
+                try conflict(arena, &conflicts, input.nodes, .context_required, anySequence(input.nodes)),
         }
-    } else if (keyValueShape(input.nodes) and !(eql(input.nodes.base, input.nodes.ours) and eql(input.nodes.base, input.nodes.theirs))) {
-        root = try conflict(arena, &conflicts, input.nodes, .context_required, true);
+    } else if (try planDictionary(arena, &conflicts, input.nodes)) |planned| {
+        root = planned;
     } else root = try planValue(arena, &conflicts, logical, false);
     return .{ .root = root, .conflicts = try conflicts.toOwnedSlice(arena), .input = input, .packed_layout = layout, .logical_nodes = if (layout != null) logical else null };
 }
@@ -95,11 +98,283 @@ fn conflict(arena: A, list: *std.ArrayList(Conflict), n: Nodes, reason: Reason, 
     try list.append(arena, .{ .nodes = n, .reason = reason, .sequence = sequence });
     return alloc(arena, .{ .conflict = id });
 }
+
+fn planDictionary(arena: A, list: *std.ArrayList(Conflict), n: Nodes) Error!?*const Value {
+    if (n.ours == null or n.theirs == null) return null;
+    switch (dictionary.detect(n.base, n.ours, n.theirs)) {
+        .none => return null,
+        .malformed => return try conflict(arena, list, n, .context_required, anySequence(n)),
+        .shape => |shape| {
+            if (eql(n.ours, n.theirs) or eql(n.base, n.theirs)) return alloc(arena, .{ .accepted = n.ours });
+            if (eql(n.base, n.ours)) return alloc(arena, .{ .accepted = n.theirs });
+            const base_entries = (try dictionary.entries(arena, n.base, shape)) orelse
+                return try conflict(arena, list, n, .context_required, anySequence(n));
+            const ours_entries = (try dictionary.entries(arena, n.ours, shape)) orelse
+                return try conflict(arena, list, n, .context_required, anySequence(n));
+            const theirs_entries = (try dictionary.entries(arena, n.theirs, shape)) orelse
+                return try conflict(arena, list, n, .context_required, anySequence(n));
+            if (dictionary.sharedOrderChanged(ours_entries, base_entries) and
+                dictionary.sharedOrderChanged(theirs_entries, base_entries) and
+                sharedKeyOrderDiffers(ours_entries, theirs_entries))
+            {
+                return try conflict(arena, list, n, .insertion_order, true);
+            }
+            const use_theirs_order = dictionary.sharedOrderChanged(theirs_entries, base_entries) and
+                !dictionary.sharedOrderChanged(ours_entries, base_entries);
+            const primary = if (use_theirs_order) theirs_entries else ours_entries;
+            const secondary = if (use_theirs_order) ours_entries else theirs_entries;
+            const keys = try mergeKeyOrder(arena, primary, secondary);
+            return switch (shape) {
+                .pair_key_value, .pair_first_second => try planPairEntries(
+                    arena,
+                    list,
+                    shape,
+                    keys,
+                    base_entries,
+                    ours_entries,
+                    theirs_entries,
+                ),
+                .parallel => try planParallelEntries(
+                    arena,
+                    list,
+                    n,
+                    keys,
+                    base_entries,
+                    ours_entries,
+                    theirs_entries,
+                ),
+            };
+        },
+    }
+}
+
+fn sharedKeyOrderDiffers(ours: []const dictionary.Entry, theirs: []const dictionary.Entry) bool {
+    var ours_i: usize = 0;
+    var theirs_i: usize = 0;
+    while (true) {
+        while (ours_i < ours.len and dictionary.find(theirs, ours[ours_i].key) == null) ours_i += 1;
+        while (theirs_i < theirs.len and dictionary.find(ours, theirs[theirs_i].key) == null) theirs_i += 1;
+        if (ours_i == ours.len or theirs_i == theirs.len) return ours_i != ours.len or theirs_i != theirs.len;
+        if (!model.Node.eql(ours[ours_i].key, theirs[theirs_i].key)) return true;
+        ours_i += 1;
+        theirs_i += 1;
+    }
+}
+
+fn mergeKeyOrder(
+    arena: A,
+    primary: []const dictionary.Entry,
+    secondary: []const dictionary.Entry,
+) A.Error![]const *const model.Node {
+    var keys: std.ArrayList(*const model.Node) = .empty;
+    for (primary) |entry| try keys.append(arena, entry.key);
+    for (secondary) |entry| {
+        if (dictionary.contains(primary, entry.key)) continue;
+        var insert_at = keys.items.len;
+        if (indexOfEntry(secondary, entry.key)) |here| {
+            var previous = here;
+            while (previous > 0) {
+                previous -= 1;
+                if (indexOfKey(keys.items, secondary[previous].key)) |idx| {
+                    insert_at = idx + 1;
+                    while (insert_at < keys.items.len and dictionary.find(secondary, keys.items[insert_at]) == null)
+                        insert_at += 1;
+                    break;
+                }
+            }
+        }
+        try keys.insert(arena, insert_at, entry.key);
+    }
+    return keys.items;
+}
+
+fn indexOfEntry(list: []const dictionary.Entry, key: *const model.Node) ?usize {
+    for (list, 0..) |entry, i| {
+        if (model.Node.eql(entry.key, key)) return i;
+    }
+    return null;
+}
+
+fn indexOfKey(list: []const *const model.Node, key: *const model.Node) ?usize {
+    for (list, 0..) |item, i| {
+        if (model.Node.eql(item, key)) return i;
+    }
+    return null;
+}
+
+fn planPairEntries(
+    arena: A,
+    list: *std.ArrayList(Conflict),
+    shape: dictionary.Shape,
+    keys: []const *const model.Node,
+    base_entries: []const dictionary.Entry,
+    ours_entries: []const dictionary.Entry,
+    theirs_entries: []const dictionary.Entry,
+) Error!*const Value {
+    var pieces: std.ArrayList(Piece) = .empty;
+    for (keys) |key| {
+        const first_conflict = list.items.len;
+        const planned = try planDictionaryEntry(
+            arena,
+            list,
+            dictionary.find(base_entries, key),
+            dictionary.find(ours_entries, key),
+            dictionary.find(theirs_entries, key),
+            shape,
+        );
+        if (planned) |value| try pieces.append(arena, .{ .spread = false, .value = value });
+        try prefixConflicts(arena, list, first_conflict, try dictionaryKeyPath(arena, key));
+    }
+    return alloc(arena, .{ .sequence = try pieces.toOwnedSlice(arena) });
+}
+
+fn planParallelEntries(
+    arena: A,
+    list: *std.ArrayList(Conflict),
+    n: Nodes,
+    keys: []const *const model.Node,
+    base_entries: []const dictionary.Entry,
+    ours_entries: []const dictionary.Entry,
+    theirs_entries: []const dictionary.Entry,
+) Error!*const Value {
+    var key_nodes: std.ArrayList(*model.Node) = .empty;
+    var value_pieces: std.ArrayList(Piece) = .empty;
+    for (keys) |key| {
+        const first_conflict = list.items.len;
+        const base_entry = dictionary.find(base_entries, key);
+        const ours_entry = dictionary.find(ours_entries, key);
+        const theirs_entry = dictionary.find(theirs_entries, key);
+        const planned = try planDictionaryValue(
+            arena,
+            list,
+            if (base_entry) |e| e.value else null,
+            if (ours_entry) |e| e.value else null,
+            if (theirs_entry) |e| e.value else null,
+        );
+        if (planned) |value| {
+            try key_nodes.append(arena, @constCast(if (ours_entry) |e| e.key else if (theirs_entry) |e| e.key else key));
+            try value_pieces.append(arena, .{ .spread = false, .value = value });
+        }
+        try prefixConflicts(arena, list, first_conflict, try dictionaryKeyPath(arena, key));
+    }
+    var fields: std.ArrayList(Field) = .empty;
+    const template = n.ours.?;
+    if (template.* == .map) {
+        for (template.map) |entry| {
+            if (std.mem.eql(u8, entry.key, "m_Keys") or std.mem.eql(u8, entry.key, "m_Values")) continue;
+            try fields.append(arena, .{
+                .key = entry.key,
+                .value = try planValue(arena, list, .{
+                    .base = if (n.base) |base| base.get(entry.key) else null,
+                    .ours = n.ours.?.get(entry.key),
+                    .theirs = if (n.theirs) |theirs| theirs.get(entry.key) else null,
+                }, false),
+            });
+        }
+    }
+    const key_seq = try alloc(arena, .{ .accepted = try node(arena, .{ .seq = try key_nodes.toOwnedSlice(arena) }) });
+    const value_seq = try alloc(arena, .{ .sequence = try value_pieces.toOwnedSlice(arena) });
+    try fields.append(arena, .{ .key = "m_Keys", .value = key_seq });
+    try fields.append(arena, .{ .key = "m_Values", .value = value_seq });
+    return alloc(arena, .{ .map = try fields.toOwnedSlice(arena) });
+}
+
+fn planDictionaryEntry(
+    arena: A,
+    list: *std.ArrayList(Conflict),
+    base_entry: ?dictionary.Entry,
+    ours_entry: ?dictionary.Entry,
+    theirs_entry: ?dictionary.Entry,
+    shape: dictionary.Shape,
+) Error!?*const Value {
+    _ = shape;
+    if (base_entry == null) {
+        if (ours_entry == null) return alloc(arena, .{ .accepted = theirs_entry.?.item });
+        if (theirs_entry == null) return alloc(arena, .{ .accepted = ours_entry.?.item });
+        if (model.Node.eql(ours_entry.?.item, theirs_entry.?.item)) return alloc(arena, .{ .accepted = ours_entry.?.item });
+        return try conflict(arena, list, .{
+            .base = null,
+            .ours = ours_entry.?.item,
+            .theirs = theirs_entry.?.item,
+        }, .edit_edit, false);
+    }
+    if (ours_entry == null and theirs_entry == null) return null;
+    if (ours_entry == null) {
+        if (model.Node.eql(theirs_entry.?.item, base_entry.?.item)) return null;
+        return try conflict(arena, list, .{
+            .base = base_entry.?.item,
+            .ours = null,
+            .theirs = theirs_entry.?.item,
+        }, .delete_edit, false);
+    }
+    if (theirs_entry == null) {
+        if (model.Node.eql(ours_entry.?.item, base_entry.?.item)) return null;
+        return try conflict(arena, list, .{
+            .base = base_entry.?.item,
+            .ours = ours_entry.?.item,
+            .theirs = null,
+        }, .delete_edit, false);
+    }
+    if (leafDictionaryValue(ours_entry.?.value) and leafDictionaryValue(theirs_entry.?.value) and
+        leafDictionaryValue(base_entry.?.value))
+    {
+        if (eql(ours_entry.?.item, theirs_entry.?.item) or eql(base_entry.?.item, theirs_entry.?.item))
+            return alloc(arena, .{ .accepted = ours_entry.?.item });
+        if (eql(base_entry.?.item, ours_entry.?.item))
+            return alloc(arena, .{ .accepted = theirs_entry.?.item });
+        return try conflict(arena, list, .{
+            .base = base_entry.?.item,
+            .ours = ours_entry.?.item,
+            .theirs = theirs_entry.?.item,
+        }, .edit_edit, false);
+    }
+    return planValue(arena, list, .{
+        .base = base_entry.?.item,
+        .ours = ours_entry.?.item,
+        .theirs = theirs_entry.?.item,
+    }, false);
+}
+
+fn leafDictionaryValue(n: *const model.Node) bool {
+    return n.* != .map and n.* != .seq;
+}
+
+fn planDictionaryValue(
+    arena: A,
+    list: *std.ArrayList(Conflict),
+    base_value: ?*const model.Node,
+    ours_value: ?*const model.Node,
+    theirs_value: ?*const model.Node,
+) Error!?*const Value {
+    if (base_value == null) {
+        if (ours_value == null) return alloc(arena, .{ .accepted = theirs_value });
+        if (theirs_value == null) return alloc(arena, .{ .accepted = ours_value });
+        if (eql(ours_value, theirs_value)) return alloc(arena, .{ .accepted = ours_value });
+        return try conflict(arena, list, .{ .base = null, .ours = ours_value, .theirs = theirs_value }, .edit_edit, false);
+    }
+    if (ours_value == null and theirs_value == null) return null;
+    if (ours_value == null) {
+        if (eql(theirs_value, base_value)) return null;
+        return try conflict(arena, list, .{ .base = base_value, .ours = null, .theirs = theirs_value }, .delete_edit, false);
+    }
+    if (theirs_value == null) {
+        if (eql(ours_value, base_value)) return null;
+        return try conflict(arena, list, .{ .base = base_value, .ours = ours_value, .theirs = null }, .delete_edit, false);
+    }
+    return planValue(arena, list, .{ .base = base_value, .ours = ours_value, .theirs = theirs_value }, false);
+}
+
+fn dictionaryKeyPath(arena: A, key: *const model.Node) A.Error![]const u8 {
+    return dictionary.keyBracket(arena, key);
+}
+
 fn planValue(arena: A, list: *std.ArrayList(Conflict), n: Nodes, ordered_schema: bool) Error!*const Value {
     if (n.base == null and n.ours != null and n.theirs != null and n.ours.?.* == .seq and n.theirs.?.* == .seq) {
         return planValue(arena, list, .{ .base = try node(arena, .{ .seq = &.{} }), .ours = n.ours, .theirs = n.theirs }, ordered_schema);
     }
-    if (!ordered_schema and keyValueShape(n) and !(eql(n.base, n.ours) and eql(n.base, n.theirs))) return conflict(arena, list, n, .context_required, true);
+    if (!ordered_schema) {
+        if (try planDictionary(arena, list, n)) |planned| return planned;
+    }
     if (eql(n.ours, n.theirs) or eql(n.base, n.theirs)) return alloc(arena, .{ .accepted = n.ours });
     if (eql(n.base, n.ours)) return alloc(arena, .{ .accepted = n.theirs });
     if (n.base != null and n.ours != null and n.theirs != null and n.base.?.* == .map and n.ours.?.* == .map and n.theirs.?.* == .map) {
@@ -312,17 +587,6 @@ fn decodePackedNode(arena: A, n: ?*const model.Node) Error!?*const model.Node {
 fn decodePackedNodes(arena: A, n: Nodes) Error!Nodes {
     return .{ .base = try decodePackedNode(arena, n.base), .ours = try decodePackedNode(arena, n.ours), .theirs = try decodePackedNode(arena, n.theirs) };
 }
-fn keyValueShape(n: Nodes) bool {
-    for ([_]?*const model.Node{ n.base, n.ours, n.theirs }) |optional| {
-        if (optional) |v| {
-            if (v.* != .seq) continue;
-            for (v.seq) |item| {
-                if (item.* == .map and model.findValue(item.map, "key") != null and model.findValue(item.map, "value") != null) return true;
-            }
-        }
-    }
-    return false;
-}
 
 test "value materialization preserves leaf pointer provenance" {
     var memory = std.heap.ArenaAllocator.init(std.testing.allocator);
@@ -359,4 +623,68 @@ test "value packed byte-only choices retain their source or expose a conflict" {
     try std.testing.expectEqual(Reason.source_bytes, plan.conflicts[0].reason);
     const selected = (try materialize(arena, plan, &.{.{ .take = .theirs }})).?;
     try std.testing.expect(selected == t);
+}
+
+test "value keyed pairs merge independent key insertions" {
+    var memory = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer memory.deinit();
+    const arena = memory.allocator();
+    const yaml = @import("merge_yaml.zig");
+    const b = try yaml.parseValue(arena, "[{key: a, value: 1}]");
+    const o = try yaml.parseValue(arena, "[{key: a, value: 1}, {key: b, value: 2}]");
+    const t = try yaml.parseValue(arena, "[{key: a, value: 1}, {key: c, value: 3}]");
+    const plan = try build(arena, .{ .nodes = .{ .base = b, .ours = o, .theirs = t } });
+    try std.testing.expectEqual(@as(usize, 0), plan.conflicts.len);
+    const result = (try materialize(arena, plan, &.{})).?;
+    try std.testing.expectEqual(@as(usize, 3), result.seq.len);
+    try std.testing.expectEqualStrings("a", model.findValue(result.seq[0].map, "key").?.scalar);
+    try std.testing.expectEqualStrings("b", model.findValue(result.seq[1].map, "key").?.scalar);
+    try std.testing.expectEqualStrings("c", model.findValue(result.seq[2].map, "key").?.scalar);
+    try std.testing.expectEqualStrings("2", model.findValue(result.seq[1].map, "value").?.scalar);
+    try std.testing.expectEqualStrings("3", model.findValue(result.seq[2].map, "value").?.scalar);
+}
+
+test "value keyed pairs conflict when both sides edit the same key" {
+    var memory = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer memory.deinit();
+    const arena = memory.allocator();
+    const yaml = @import("merge_yaml.zig");
+    const b = try yaml.parseValue(arena, "[{key: a, value: 1}]");
+    const o = try yaml.parseValue(arena, "[{key: a, value: 2}]");
+    const t = try yaml.parseValue(arena, "[{key: a, value: 3}]");
+    const plan = try build(arena, .{ .nodes = .{ .base = b, .ours = o, .theirs = t } });
+    try std.testing.expectEqual(@as(usize, 1), plan.conflicts.len);
+    try std.testing.expectEqual(Reason.edit_edit, plan.conflicts[0].reason);
+    try std.testing.expectEqualStrings("[a]", plan.conflicts[0].path);
+}
+
+test "value keyed first-second pairs and parallel keys merge by key" {
+    var memory = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer memory.deinit();
+    const arena = memory.allocator();
+    const yaml = @import("merge_yaml.zig");
+    const pair_b = try yaml.parseValue(arena, "[{first: a, second: 1}]");
+    const pair_o = try yaml.parseValue(arena, "[{first: a, second: 1}, {first: b, second: 2}]");
+    const pair_t = try yaml.parseValue(arena, "[{first: a, second: 1}, {first: c, second: 3}]");
+    const pair_plan = try build(arena, .{ .nodes = .{ .base = pair_b, .ours = pair_o, .theirs = pair_t } });
+    try std.testing.expectEqual(@as(usize, 0), pair_plan.conflicts.len);
+    const pair = (try materialize(arena, pair_plan, &.{})).?;
+    try std.testing.expectEqual(@as(usize, 3), pair.seq.len);
+    try std.testing.expectEqualStrings("b", model.findValue(pair.seq[1].map, "first").?.scalar);
+    try std.testing.expectEqualStrings("c", model.findValue(pair.seq[2].map, "first").?.scalar);
+
+    const par_b = try yaml.parseValue(arena, "{m_Keys: [a], m_Values: [1]}");
+    try std.testing.expect(par_b.* == .map);
+    try std.testing.expect(par_b.get("m_Keys").?.* == .seq);
+    const par_o = try yaml.parseValue(arena, "{m_Keys: [a, b], m_Values: [1, 2]}");
+    const par_t = try yaml.parseValue(arena, "{m_Keys: [a, c], m_Values: [1, 3]}");
+    const par_plan = try build(arena, .{ .nodes = .{ .base = par_b, .ours = par_o, .theirs = par_t } });
+    try std.testing.expectEqual(@as(usize, 0), par_plan.conflicts.len);
+    const par = (try materialize(arena, par_plan, &.{})).?;
+    try std.testing.expectEqual(@as(usize, 3), par.get("m_Keys").?.seq.len);
+    try std.testing.expectEqualStrings("a", par.get("m_Keys").?.seq[0].scalar);
+    try std.testing.expectEqualStrings("b", par.get("m_Keys").?.seq[1].scalar);
+    try std.testing.expectEqualStrings("c", par.get("m_Keys").?.seq[2].scalar);
+    try std.testing.expectEqualStrings("2", par.get("m_Values").?.seq[1].scalar);
+    try std.testing.expectEqualStrings("3", par.get("m_Values").?.seq[2].scalar);
 }

@@ -137,6 +137,298 @@ test "merge TUI: property and raw views preserve the selected result across togg
     try testing.expectEqual(core.merge.Side.theirs, state.pending.?.take);
 }
 
+test "merge TUI: prefab override shows Prefab mark semantic path and raw YAML" {
+    var memory = std.heap.ArenaAllocator.init(testing.allocator);
+    defer memory.deinit();
+    const arena = memory.allocator();
+    const prefix =
+        "--- !u!1001 &1\n" ++
+        "PrefabInstance:\n" ++
+        "  m_Modification:\n" ++
+        "    m_Modifications:\n" ++
+        "    - target: {fileID: 10, guid: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, type: 3}\n" ++
+        "      propertyPath: m_Name\n" ++
+        "      value: Enemy\n" ++
+        "    - target: {fileID: 40, guid: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, type: 3}\n" ++
+        "      propertyPath: items.Array.data[0].speed\n" ++
+        "      value: ";
+    const suffix =
+        "\n      objectReference: {fileID: 0}\n" ++
+        "  m_SourcePrefab: {fileID: 100100000, guid: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, type: 3}\n";
+    var fixture = try core.merge.build(
+        arena,
+        prefix ++ "1" ++ suffix,
+        prefix ++ "2" ++ suffix,
+        prefix ++ "3" ++ suffix,
+    );
+    var state = try merge_ui_state.State.init(arena, &fixture.plan);
+    var view = try viewForTest(arena, &state, "Enemy Variant.prefab", fixture.partial);
+    defer view.deinit();
+    const semantic = try surfaceText(arena, try drawForTest(arena, view.widget(), 120, 24));
+    // Hierarchy otherwise looks like a named GameObject, so the Prefab mark has to be on screen.
+    try testing.expect(std.mem.indexOf(u8, semantic, "‹Prefab›") != null);
+    try testing.expect(std.mem.indexOf(u8, semantic, "Items[0].Speed") != null);
+    try testing.expect(std.mem.indexOf(u8, semantic, "⇧R Raw") != null);
+    var ctx = eventContext(arena);
+    try view.widget().handleEvent(&ctx, .{ .key_press = .{ .codepoint = 'r', .mods = .{ .shift = true }, .text = "R" } });
+    const raw = try surfaceText(arena, try drawForTest(arena, view.widget(), 180, 24));
+    try testing.expect(std.mem.indexOf(u8, raw, "propertyPath:") != null);
+    try testing.expect(std.mem.indexOf(u8, raw, "⇧R Semantic") != null);
+}
+
+test "merge TUI: prefab override raw edit keeps the displayed modification YAML" {
+    var memory = std.heap.ArenaAllocator.init(testing.allocator);
+    defer memory.deinit();
+    const arena = memory.allocator();
+    var fixture = try prefabOverrideSpeedPlan(arena);
+    var state = try merge_ui_state.State.init(arena, &fixture.plan);
+    try state.handle(.choose_theirs);
+    var view = try viewForTest(arena, &state, "Enemy Variant.prefab", fixture.partial);
+    defer view.deinit();
+    _ = try drawForTest(arena, view.widget(), 180, 24);
+    var ctx = eventContext(arena);
+    try view.widget().handleEvent(&ctx, .{ .key_press = .{ .codepoint = 'r', .mods = .{ .shift = true }, .text = "R" } });
+    try focusResultForTest(&view, &ctx);
+    try pressKeyForTest(&view, &ctx, vaxis.Key.enter);
+    // Raw Result already shows the modification item. The editor must open on that YAML,
+    // not the scalar conflict bytes that apply uses.
+    const text = try view.editor.buf.dupe();
+    try testing.expect(view.editing);
+    try testing.expect(std.mem.indexOf(u8, text, "propertyPath:") != null);
+    try testing.expect(std.mem.indexOf(u8, text, "value: 3") != null);
+    try testing.expect(!std.mem.eql(u8, text, "3"));
+}
+
+test "merge TUI: prefab override semantic value can be edited to a custom result" {
+    var memory = std.heap.ArenaAllocator.init(testing.allocator);
+    defer memory.deinit();
+    const arena = memory.allocator();
+    var fixture = try prefabOverrideSpeedPlan(arena);
+    var state = try merge_ui_state.State.init(arena, &fixture.plan);
+    try state.handle(.choose_theirs);
+    var view = try viewForTest(arena, &state, "Enemy Variant.prefab", fixture.partial);
+    defer view.deinit();
+    _ = try drawForTest(arena, view.widget(), 160, 24);
+    var ctx = eventContext(arena);
+    try focusResultForTest(&view, &ctx);
+    try pressKeyForTest(&view, &ctx, vaxis.Key.down);
+    try pressKeyForTest(&view, &ctx, vaxis.Key.enter);
+    try testing.expectEqualStrings("3", try view.editor.buf.dupe());
+    try pressKeyForTest(&view, &ctx, vaxis.Key.backspace);
+    try view.widget().handleEvent(&ctx, .{ .key_press = .{ .codepoint = '4', .text = "4" } });
+    try pressKeyForTest(&view, &ctx, vaxis.Key.enter);
+    try testing.expectEqualStrings("", state.status);
+    try testing.expectEqualStrings(
+        try std.mem.replaceOwned(u8, arena, fixture.plan.theirs.bytes, "value: 3", "value: 4"),
+        try core.merge.finish(arena, &fixture.plan),
+    );
+}
+
+test "merge TUI: dictionary raw edit keeps the displayed pair YAML" {
+    var memory = std.heap.ArenaAllocator.init(testing.allocator);
+    defer memory.deinit();
+    const arena = memory.allocator();
+    var fixture = try dictionaryGoblinPlan(arena);
+    var state = try merge_ui_state.State.init(arena, &fixture.plan);
+    try state.handle(.choose_theirs);
+    var view = try viewForTest(arena, &state, "Stats.prefab", fixture.partial);
+    defer view.deinit();
+    _ = try drawForTest(arena, view.widget(), 160, 24);
+    var ctx = eventContext(arena);
+    try view.widget().handleEvent(&ctx, .{ .key_press = .{ .codepoint = 'r', .mods = .{ .shift = true }, .text = "R" } });
+    try focusResultForTest(&view, &ctx);
+    try pressKeyForTest(&view, &ctx, vaxis.Key.enter);
+    // Pair conflicts display the sequence item. Opening the editor must not drop the key.
+    const text = try view.editor.buf.dupe();
+    try testing.expect(view.editing);
+    try testing.expect(std.mem.indexOf(u8, text, "key: Goblin") != null);
+    try testing.expect(std.mem.indexOf(u8, text, "value: 3") != null);
+    try testing.expect(!std.mem.eql(u8, text, "3"));
+}
+
+test "merge TUI: dictionary custom result keeps pair indent on every side" {
+    var memory = std.heap.ArenaAllocator.init(testing.allocator);
+    defer memory.deinit();
+    const arena = memory.allocator();
+    var fixture = try dictionaryUnionPlan(arena);
+    var state = try merge_ui_state.State.init(arena, &fixture.plan);
+    try state.handle(.choose_theirs);
+    var view = try viewForTest(arena, &state, "Dictionary.prefab", fixture.partial);
+    defer view.deinit();
+    _ = try drawForTest(arena, view.widget(), 180, 24);
+    view.raw_view = true;
+    const operation = view.selectedOperation().?;
+    const ours_before = try view.columnText(arena, operation, .ours);
+    const theirs_before = try view.columnText(arena, operation, .theirs);
+    try state.handle(.{ .edit_result = "key: Goblin\nvalue: 4" });
+    // Result must keep the sequence-item indent. Otherwise common indent drops to 0
+    // and Ours/Theirs appear to shift by two spaces of invalid YAML.
+    try testing.expectEqualStrings(ours_before, try view.columnText(arena, operation, .ours));
+    try testing.expectEqualStrings(theirs_before, try view.columnText(arena, operation, .theirs));
+    const result = try view.columnText(arena, operation, .result);
+    try testing.expect(std.mem.indexOf(u8, result, "key: Goblin") != null);
+    try testing.expect(std.mem.indexOf(u8, result, "value: 4") != null);
+    try testing.expectEqual(lineIndent(ours_before), lineIndent(result));
+}
+
+test "merge TUI: prefab override custom result keeps the modification item" {
+    var memory = std.heap.ArenaAllocator.init(testing.allocator);
+    defer memory.deinit();
+    const arena = memory.allocator();
+    var fixture = try prefabOverrideOnlySpeedPlan(arena);
+    var state = try merge_ui_state.State.init(arena, &fixture.plan);
+    try state.handle(.choose_theirs);
+    var view = try viewForTest(arena, &state, "Variant.prefab", fixture.partial);
+    defer view.deinit();
+    _ = try drawForTest(arena, view.widget(), 180, 24);
+    view.raw_view = true;
+    const operation = view.selectedOperation().?;
+    try state.handle(.{ .edit_result = "4" });
+    const result = try view.columnText(arena, operation, .result);
+    // Custom is the scalar. The Result column still has to show the modification YAML
+    // so Enter does not look like it deleted target, propertyPath, and objectReference.
+    try testing.expect(std.mem.indexOf(u8, result, "propertyPath:") != null);
+    try testing.expect(std.mem.indexOf(u8, result, "value: 4") != null);
+    try testing.expect(std.mem.indexOf(u8, result, "objectReference:") != null);
+    try testing.expect(!std.mem.eql(u8, result, "4"));
+}
+
+test "merge TUI: dictionary semantic value can be edited to a custom result" {
+    var memory = std.heap.ArenaAllocator.init(testing.allocator);
+    defer memory.deinit();
+    const arena = memory.allocator();
+    var fixture = try dictionaryGoblinPlan(arena);
+    var state = try merge_ui_state.State.init(arena, &fixture.plan);
+    try state.handle(.choose_theirs);
+    var view = try viewForTest(arena, &state, "Stats.prefab", fixture.partial);
+    defer view.deinit();
+    _ = try drawForTest(arena, view.widget(), 160, 24);
+    var ctx = eventContext(arena);
+    try focusResultForTest(&view, &ctx);
+    try pressKeyForTest(&view, &ctx, vaxis.Key.down);
+    try pressKeyForTest(&view, &ctx, vaxis.Key.enter);
+    try testing.expectEqualStrings("3", try view.editor.buf.dupe());
+    try pressKeyForTest(&view, &ctx, vaxis.Key.backspace);
+    try view.widget().handleEvent(&ctx, .{ .key_press = .{ .codepoint = '4', .text = "4" } });
+    try pressKeyForTest(&view, &ctx, vaxis.Key.enter);
+    try testing.expectEqualStrings("", state.status);
+    // A Value-cell edit is still the original pair. Reconstructing a flow map would
+    // change YAML Unity did not ask to restyle.
+    try testing.expectEqualStrings(
+        try std.mem.replaceOwned(u8, arena, fixture.plan.theirs.bytes, "value: 3", "value: 4"),
+        try core.merge.finish(arena, &fixture.plan),
+    );
+}
+
+test "merge TUI: dictionary raw pair edit keeps sibling keys and side YAML" {
+    var memory = std.heap.ArenaAllocator.init(testing.allocator);
+    defer memory.deinit();
+    const arena = memory.allocator();
+    var fixture = try dictionaryUnionPlan(arena);
+    var state = try merge_ui_state.State.init(arena, &fixture.plan);
+    try state.handle(.choose_theirs);
+    var view = try viewForTest(arena, &state, "Dictionary.prefab", fixture.partial);
+    defer view.deinit();
+    _ = try drawForTest(arena, view.widget(), 180, 24);
+    var ctx = eventContext(arena);
+    try view.widget().handleEvent(&ctx, .{ .key_press = .{ .codepoint = 'r', .mods = .{ .shift = true }, .text = "R" } });
+    try focusResultForTest(&view, &ctx);
+    try pressKeyForTest(&view, &ctx, vaxis.Key.enter);
+    const before = try view.editor.buf.dupe();
+    try testing.expect(std.mem.indexOf(u8, before, "value: 3") != null);
+    const updated = try std.mem.replaceOwned(u8, arena, before, "value: 3", "value: 4");
+    view.editor.clearRetainingCapacity();
+    try view.editor.insertSliceAtCursor(updated);
+    view.editor_changed = true;
+    try pressKeyForTest(&view, &ctx, vaxis.Key.enter);
+    try testing.expectEqualStrings("", state.status);
+    try testing.expectEqualStrings(
+        "--- !u!114 &1\nMonoBehaviour:\n  m_Stats:\n  - key: Goblin\n    value: 4\n  - key: Dragon\n    value: 9\n  - key: Slime\n    value: 2\n",
+        try core.merge.finish(arena, &fixture.plan),
+    );
+}
+
+test "merge TUI: dictionary value edit keeps sibling keys and side YAML" {
+    var memory = std.heap.ArenaAllocator.init(testing.allocator);
+    defer memory.deinit();
+    const arena = memory.allocator();
+    var fixture = try dictionaryUnionPlan(arena);
+    var state = try merge_ui_state.State.init(arena, &fixture.plan);
+    try state.handle(.choose_theirs);
+    var view = try viewForTest(arena, &state, "Dictionary.prefab", fixture.partial);
+    defer view.deinit();
+    _ = try drawForTest(arena, view.widget(), 160, 24);
+    var ctx = eventContext(arena);
+    try focusResultForTest(&view, &ctx);
+    try pressKeyForTest(&view, &ctx, vaxis.Key.down);
+    try pressKeyForTest(&view, &ctx, vaxis.Key.enter);
+    try pressKeyForTest(&view, &ctx, vaxis.Key.backspace);
+    try view.widget().handleEvent(&ctx, .{ .key_press = .{ .codepoint = '4', .text = "4" } });
+    try pressKeyForTest(&view, &ctx, vaxis.Key.enter);
+    try testing.expectEqualStrings("", state.status);
+    try testing.expect(!view.editing);
+    // Independent keys keep their source pair layout. A reconstructed Goblin pair
+    // must use the same block indent as Dragon and Slime or Unity YAML is invalid.
+    try testing.expectEqualStrings(
+        "--- !u!114 &1\nMonoBehaviour:\n  m_Stats:\n  - key: Goblin\n    value: 4\n  - key: Dragon\n    value: 9\n  - key: Slime\n    value: 2\n",
+        try core.merge.finish(arena, &fixture.plan),
+    );
+}
+
+test "merge TUI: prefab override value edit keeps the modification item" {
+    var memory = std.heap.ArenaAllocator.init(testing.allocator);
+    defer memory.deinit();
+    const arena = memory.allocator();
+    var fixture = try prefabOverrideOnlySpeedPlan(arena);
+    var state = try merge_ui_state.State.init(arena, &fixture.plan);
+    try state.handle(.choose_theirs);
+    var view = try viewForTest(arena, &state, "Variant.prefab", fixture.partial);
+    defer view.deinit();
+    _ = try drawForTest(arena, view.widget(), 160, 24);
+    var ctx = eventContext(arena);
+    try focusResultForTest(&view, &ctx);
+    try pressKeyForTest(&view, &ctx, vaxis.Key.down);
+    try pressKeyForTest(&view, &ctx, vaxis.Key.enter);
+    try pressKeyForTest(&view, &ctx, vaxis.Key.backspace);
+    try view.widget().handleEvent(&ctx, .{ .key_press = .{ .codepoint = '4', .text = "4" } });
+    try pressKeyForTest(&view, &ctx, vaxis.Key.enter);
+    try testing.expectEqualStrings("", state.status);
+    const finished = try core.merge.finish(arena, &fixture.plan);
+    // Custom is the scalar. The modification's target, path, and objectReference must stay.
+    try testing.expect(std.mem.indexOf(u8, finished, "propertyPath: items.Array.data[0].speed") != null);
+    try testing.expect(std.mem.indexOf(u8, finished, "value: 4") != null);
+    try testing.expect(std.mem.indexOf(u8, finished, "objectReference: {fileID: 0}") != null);
+    try testing.expect(std.mem.indexOf(u8, finished, "m_SourcePrefab:") != null);
+}
+
+test "merge TUI: prefab override raw value edit keeps the modification item" {
+    var memory = std.heap.ArenaAllocator.init(testing.allocator);
+    defer memory.deinit();
+    const arena = memory.allocator();
+    var fixture = try prefabOverrideOnlySpeedPlan(arena);
+    var state = try merge_ui_state.State.init(arena, &fixture.plan);
+    try state.handle(.choose_theirs);
+    var view = try viewForTest(arena, &state, "Variant.prefab", fixture.partial);
+    defer view.deinit();
+    _ = try drawForTest(arena, view.widget(), 180, 24);
+    var ctx = eventContext(arena);
+    try view.widget().handleEvent(&ctx, .{ .key_press = .{ .codepoint = 'r', .mods = .{ .shift = true }, .text = "R" } });
+    try focusResultForTest(&view, &ctx);
+    try pressKeyForTest(&view, &ctx, vaxis.Key.enter);
+    const before = try view.editor.buf.dupe();
+    try testing.expect(std.mem.indexOf(u8, before, "value: 3") != null);
+    const updated = try std.mem.replaceOwned(u8, arena, before, "value: 3", "value: 4");
+    view.editor.clearRetainingCapacity();
+    try view.editor.insertSliceAtCursor(updated);
+    view.editor_changed = true;
+    try pressKeyForTest(&view, &ctx, vaxis.Key.enter);
+    try testing.expectEqualStrings("", state.status);
+    const finished = try core.merge.finish(arena, &fixture.plan);
+    try testing.expect(std.mem.indexOf(u8, finished, "propertyPath: items.Array.data[0].speed") != null);
+    try testing.expect(std.mem.indexOf(u8, finished, "value: 4") != null);
+    try testing.expect(std.mem.indexOf(u8, finished, "objectReference: {fileID: 0}") != null);
+}
+
 test "merge TUI: Raw shortcut preserves typed letters in the Result editor" {
     // Terminals can report Shift as a modifier or as an uppercase character.
     for ([_]bool{ false, true }) |explicit_shift| {
@@ -395,6 +687,7 @@ pub const View = struct {
     property_memory: std.heap.ArenaAllocator,
     editor_document: ?core.merge.properties.Document = null,
     editor_property: ?[]const core.merge.properties.Segment = null,
+    editor_semantic_value: bool = false,
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -489,9 +782,13 @@ pub const View = struct {
         ctx.consumeAndRedraw();
     }
 
+    fn editsPropertyCell(self: *const View) bool {
+        return self.editor_property != null or self.editor_semantic_value;
+    }
+
     fn editorRow(self: *const View, size: vxfw.Size) u16 {
         const start = BodyGeometry.init(size.height).inspector_rows.start;
-        return start + if (self.editor_property != null) @as(u16, @intCast(self.property_row -| self.property_top)) else @as(u16, 0);
+        return start + if (self.editsPropertyCell()) @as(u16, @intCast(self.property_row -| self.property_top)) else @as(u16, 0);
     }
 
     fn inspectorHeadingGeometry(self: *const View, width: u16) InspectorHeadingGeometry {
@@ -583,19 +880,30 @@ pub const View = struct {
             }
             _ = self.property_memory.reset(.retain_capacity);
             const model = try self.propertyModel(self.property_memory.allocator());
-            const document = model.documents[3] orelse {
+            if (model.documents[3]) |document| {
+                if (!model.editable(self.property_row)) {
+                    self.state.status = "This property cannot be edited.";
+                    return ctx.consumeAndRedraw();
+                }
+                self.editor_document = document;
+                self.editor_property = model.rows[self.property_row].path;
+                input = document.input(model.rows[self.property_row].path).?;
+            } else if (hasParsedDocuments(model)) {
                 self.state.status = "Choose a component to keep before editing its properties.";
                 return ctx.consumeAndRedraw();
-            };
-            const index = self.property_row;
-            if (!model.editable(index)) {
-                self.state.status = "This property cannot be edited.";
-                return ctx.consumeAndRedraw();
+            } else {
+                if (!selectEditableProperty(&self.property_row, model)) {
+                    self.state.status = "This property cannot be edited.";
+                    return ctx.consumeAndRedraw();
+                }
+                // Dictionary and Variant tables are not Unity documents. Edit the Value cell.
+                self.editor_document = null;
+                self.editor_property = null;
+                self.editor_semantic_value = true;
+                const cell = try model.text(self.property_memory.allocator(), self.property_row, 3);
+                input = if (isPlaceholderValue(cell) or std.mem.eql(u8, cell, "—")) "" else cell;
             }
-            self.editor_document = document;
-            self.editor_property = model.rows[index].path;
             self.ensurePropertyVisible(self.eventSize(), model.rows.len);
-            input = document.input(model.rows[index].path).?;
             self.state.status = "";
         }
         const normalized = try result_text.normalizeNewlines(self.editor.buf.allocator, input);
@@ -803,7 +1111,7 @@ pub const View = struct {
         return result_text.cellAt(
             &self.editor,
             geometry.result.end - geometry.result.start -| 2,
-            self.editor_top + std.math.clamp(row, self.editorRow(size), if (self.editor_property != null) self.editorRow(size) else body.inspector_rows.end - 1) - self.editorRow(size),
+            self.editor_top + std.math.clamp(row, self.editorRow(size), if (self.editsPropertyCell()) self.editorRow(size) else body.inspector_rows.end - 1) - self.editorRow(size),
             col -| (geometry.result.start + 2),
         );
     }
@@ -840,7 +1148,7 @@ pub const View = struct {
         const geometry = self.valueGeometry(size.width);
         const body = BodyGeometry.init(size.height);
         if (row >= body.inspector_rows.start and row < body.inspector_rows.end and inRange(col, geometry.result) and
-            (self.editor_property == null or row == self.editorRow(size)))
+            (self.editsPropertyCell() == false or row == self.editorRow(size)))
         {
             const cell = try self.editorCellAt(mouse, size);
             result_text.setCursor(&self.editor, cell.start);
@@ -863,6 +1171,7 @@ pub const View = struct {
         self.editor_reopened = false;
         self.editor_document = null;
         self.editor_property = null;
+        self.editor_semantic_value = false;
         _ = self.property_memory.reset(.retain_capacity);
     }
 
@@ -885,7 +1194,7 @@ pub const View = struct {
     }
 
     fn leaveResultForHierarchy(self: *View, ctx: *vxfw.EventContext) !void {
-        if (self.editor_changed and self.editor_property == null) {
+        if (self.editor_changed and !self.editsPropertyCell()) {
             const input = try self.editor.toOwnedSlice();
             defer self.editor.buf.allocator.free(input);
             if (std.mem.trim(u8, input, "\r\n").len == 0) return self.reopenResult(ctx, self.eventSize());
@@ -905,7 +1214,7 @@ pub const View = struct {
         const input = try self.editor.toOwnedSlice();
         defer self.editor.buf.allocator.free(input);
         if (std.mem.trim(u8, input, "\r\n").len == 0) {
-            if (self.editor_property != null) {
+            if (self.editsPropertyCell()) {
                 try self.openDialog(ctx, .empty);
                 return false;
             }
@@ -946,7 +1255,8 @@ pub const View = struct {
             .quit => try self.dispatch(ctx, .abort, size),
             .empty => {
                 if (self.editor_property != null) return self.submitProperty(ctx, "");
-                try self.state.handle(.{ .edit_result = "" });
+                const payload = try self.customResultInput("");
+                try self.state.handle(.{ .edit_result = payload });
                 try self.applyPendingResult(ctx, size);
                 if (self.editing) try ctx.requestFocus(self.editor.widget());
             },
@@ -1025,7 +1335,7 @@ pub const View = struct {
             .base => displaySide(self.state.plan, operation, .base, operation.values.base),
             .ours => displaySide(self.state.plan, operation, .ours, operation.values.ours),
             .theirs => displaySide(self.state.plan, operation, .theirs, operation.values.theirs),
-            .result => displayResolution(self.state.plan, operation, pending),
+            .result => try displayResolution(arena, self.state.plan, operation, pending),
         };
     }
 
@@ -1057,13 +1367,22 @@ pub const View = struct {
         const resolution = self.state.pending orelse operation.resolution;
         return switch (resolution) {
             .unresolved => "",
-            .take => |side| if (operation.values.get(side)) |value|
-                documentPreview(self.state.plan, operation, side) orelse value.bytes
-            else
-                "",
+            .take => |side| displaySide(self.state.plan, operation, side, operation.values.get(side)),
             .remove => "",
-            .custom => |value| value,
+            .custom => |value| displayResolution(self.editor.buf.allocator, self.state.plan, operation, .{ .custom = value }) catch value,
         };
+    }
+
+    fn customResultInput(self: *View, input: []const u8) ![]const u8 {
+        const operation = self.selectedOperation() orelse return input;
+        if (operation.kind == .prefab_override) {
+            if (self.editor_semantic_value) return input;
+            return extractOverrideValue(input);
+        }
+        if (operation.kind == .field) {
+            return dictionaryCustom(self.property_memory.allocator(), self.state.plan, operation, input);
+        }
+        return input;
     }
 
     fn resultIsRemoval(self: *const View) bool {
@@ -1317,20 +1636,155 @@ fn displaySide(
     value: ?core.merge.SideValue,
 ) []const u8 {
     if (documentPreview(plan, operation, side)) |bytes| return bytes;
+    if (operation.kind == .prefab_override) {
+        if (prefabOverrideRaw(plan, operation, side)) |bytes| return bytes;
+    }
     return sideText(value);
 }
 
+fn prefabOverrideRaw(
+    plan: *const core.merge.MergePlan,
+    operation: *const core.merge.Operation,
+    side: core.merge.Side,
+) ?[]const u8 {
+    const file = plan.file(side);
+    const target_id = if (operation.identity.item_ref) |reference| reference.file_id else 0;
+    for (file.documents) |*document| {
+        if (document.file_id != operation.identity.document.file_id) continue;
+        const modification = document.body.get("m_Modification") orelse continue;
+        if (modification.* != .map) continue;
+        const list = modification.get("m_Modifications") orelse continue;
+        if (list.* != .seq) continue;
+        for (list.seq) |item| {
+            const path = core.model.Node.asScalar(item.get("propertyPath")) orelse continue;
+            if (!std.mem.eql(u8, path, operation.identity.property_path)) continue;
+            if (core.model.Node.asRef(item.get("target"))) |target| {
+                if (target.file_id != target_id) continue;
+            }
+            const raw = file.sequenceItemBytes(item) orelse continue;
+            return std.mem.trim(u8, raw, "\r\n");
+        }
+    }
+    return null;
+}
+
 fn displayResolution(
+    arena: std.mem.Allocator,
     plan: *const core.merge.MergePlan,
     operation: *const core.merge.Operation,
     resolution: core.merge.Resolution,
-) []const u8 {
+) std.mem.Allocator.Error![]const u8 {
     return switch (resolution) {
         .unresolved => "",
         .take => |side| displaySide(plan, operation, side, operation.values.get(side)),
         .remove => "<removed>",
-        .custom => |value| if (value.len == 0) "<empty>" else value,
+        .custom => |value| if (value.len == 0) "<empty>" else try customResultDisplay(arena, plan, operation, value),
     };
+}
+
+fn customResultDisplay(
+    arena: std.mem.Allocator,
+    plan: *const core.merge.MergePlan,
+    operation: *const core.merge.Operation,
+    value: []const u8,
+) std.mem.Allocator.Error![]const u8 {
+    const scalar = customScalarText(value) orelse return value;
+    if (operation.kind == .prefab_override) {
+        if (try patchedPrefabOverrideDisplay(arena, plan, operation, scalar)) |bytes| return bytes;
+    }
+    if (operation.kind == .field) {
+        if (try patchedDictionaryItemDisplay(arena, plan, operation, scalar)) |bytes| return bytes;
+    }
+    return value;
+}
+
+fn customScalarText(value: []const u8) ?[]const u8 {
+    const trimmed = std.mem.trim(u8, value, " \r\n");
+    if (trimmed.len == 0) return null;
+    if (std.mem.indexOfAny(u8, trimmed, "\r\n") == null and
+        !std.mem.startsWith(u8, std.mem.trimStart(u8, trimmed, " "), "- ") and
+        !std.mem.startsWith(u8, trimmed, "{"))
+    {
+        return trimmed;
+    }
+    var lines = std.mem.splitScalar(u8, trimmed, '\n');
+    var found: ?[]const u8 = null;
+    while (lines.next()) |raw| {
+        const line = std.mem.trimEnd(u8, raw, "\r");
+        const content = std.mem.trimStart(u8, line, " ");
+        if (std.mem.startsWith(u8, content, "value:")) {
+            found = std.mem.trim(u8, content["value:".len..], " ");
+        }
+    }
+    return found;
+}
+
+fn templateSide(operation: *const core.merge.Operation) ?core.merge.Side {
+    if (operation.values.theirs != null) return .theirs;
+    if (operation.values.ours != null) return .ours;
+    if (operation.values.base != null) return .base;
+    return null;
+}
+
+fn patchedDictionaryItemDisplay(
+    arena: std.mem.Allocator,
+    plan: *const core.merge.MergePlan,
+    operation: *const core.merge.Operation,
+    scalar: []const u8,
+) std.mem.Allocator.Error!?[]const u8 {
+    const side = templateSide(operation) orelse return null;
+    const pair = operation.values.get(side) orelse return null;
+    const node = pair.node orelse return null;
+    if (node.* != .map) return null;
+    const value_node = node.get("value") orelse node.get("second") orelse return null;
+    return patchedSequenceItemDisplay(arena, plan.file(side), node, value_node, scalar);
+}
+
+fn patchedPrefabOverrideDisplay(
+    arena: std.mem.Allocator,
+    plan: *const core.merge.MergePlan,
+    operation: *const core.merge.Operation,
+    scalar: []const u8,
+) std.mem.Allocator.Error!?[]const u8 {
+    const side = templateSide(operation) orelse return null;
+    const value = operation.values.get(side) orelse return null;
+    const value_node = value.node orelse return null;
+    const file = plan.file(side);
+    const target_id = if (operation.identity.item_ref) |reference| reference.file_id else 0;
+    for (file.documents) |*document| {
+        if (document.file_id != operation.identity.document.file_id) continue;
+        const modification = document.body.get("m_Modification") orelse continue;
+        if (modification.* != .map) continue;
+        const list = modification.get("m_Modifications") orelse continue;
+        if (list.* != .seq) continue;
+        for (list.seq) |item| {
+            const path = core.model.Node.asScalar(item.get("propertyPath")) orelse continue;
+            if (!std.mem.eql(u8, path, operation.identity.property_path)) continue;
+            if (core.model.Node.asRef(item.get("target"))) |target| {
+                if (target.file_id != target_id) continue;
+            }
+            return patchedSequenceItemDisplay(arena, file, item, value_node, scalar);
+        }
+    }
+    return null;
+}
+
+fn patchedSequenceItemDisplay(
+    arena: std.mem.Allocator,
+    file: core.source.ParsedFile,
+    item: *const core.model.Node,
+    value_node: *const core.model.Node,
+    scalar: []const u8,
+) std.mem.Allocator.Error!?[]const u8 {
+    const item_span = file.sequence_item_spans.get(item) orelse return null;
+    const value_span = file.node_spans.get(value_node) orelse return null;
+    if (value_span.start < item_span.start or value_span.end > item_span.end) return null;
+    const patched = try std.mem.concat(arena, u8, &.{
+        file.bytes[item_span.start..value_span.start],
+        scalar,
+        file.bytes[value_span.end..item_span.end],
+    });
+    return std.mem.trim(u8, patched, "\r\n");
 }
 
 fn documentPreview(
@@ -1596,7 +2050,7 @@ fn draw(
             .{ geometry.theirs, try self.columnText(ctx.arena, operation, .theirs), ValueColumn.theirs },
             .{ geometry.result, try self.columnText(ctx.arena, operation, .result), ValueColumn.result },
         };
-        const indent = commonIndent(&.{ columns[0][1], columns[1][1], columns[2][1], columns[3][1] });
+        const indent = commonIndent(&.{ columns[0][1], columns[1][1], columns[2][1] });
         var painted_end = [_]u16{body.inspector_rows.start} ** 4;
         inline for (columns, 0..) |column, index| {
             const text = if (column[2] == self.selected_value)
@@ -1729,7 +2183,7 @@ fn draw(
             self.editor.style = .{ .bg = Palette.focus_bg };
             const editor_size: vxfw.Size = .{
                 .width = geometry.result.end - geometry.result.start -| 2,
-                .height = if (self.editor_property != null) 1 else body.inspector_rows.end - editor_row,
+                .height = if (self.editsPropertyCell()) 1 else body.inspector_rows.end - editor_row,
             };
             const child_surface = try result_text.draw(&self.editor, &self.editor_top, self.editorSelection(), ctx.withConstraints(
                 editor_size,
@@ -1798,8 +2252,9 @@ fn submitCustom(
     if (!self.editor_changed and self.resultIsRemoval()) return self.applyPendingResult(ctx, self.eventSize());
     if (input.len == 0 and !started_empty) return self.openDialog(ctx, .empty);
     if (self.editor_property != null) return self.submitProperty(ctx, input);
-    if (self.editor_changed or input.len == 0) {
-        try self.state.handle(.{ .edit_result = input });
+    const payload = try self.customResultInput(input);
+    if (self.editor_changed or payload.len == 0) {
+        try self.state.handle(.{ .edit_result = payload });
     } else {
         self.state.pending = self.editor_start_resolution;
     }
@@ -1817,10 +2272,130 @@ fn markEditorChanged(
 ) !void {
     const self: *View = @ptrCast(@alignCast(userdata.?));
     self.editor_changed = true;
-    if (value.len == 0 and self.editor_property == null) {
+    if (value.len == 0 and !self.editsPropertyCell()) {
         try self.state.handle(.reopen_result);
         self.editor_reopened = true;
     }
+}
+
+fn hasParsedDocuments(model: inspector.Model) bool {
+    for (model.documents) |document| {
+        if (document != null) return true;
+    }
+    return false;
+}
+
+fn selectEditableProperty(property_row: *usize, model: inspector.Model) bool {
+    if (model.editable(property_row.*)) return true;
+    for (model.rows, 0..) |_, i| {
+        if (model.editable(i)) {
+            property_row.* = i;
+            return true;
+        }
+    }
+    return false;
+}
+
+fn dictionaryCustom(
+    arena: std.mem.Allocator,
+    plan: *const core.merge.MergePlan,
+    operation: *const core.merge.Operation,
+    input: []const u8,
+) ![]const u8 {
+    const template = operation.values.ours orelse operation.values.theirs orelse operation.values.base orelse return input;
+    const node = template.node orelse return input;
+    if (node.* != .map) return input;
+    // Keep the sequence-item indent. Trimming it leaves `value:` nested under `key:`.
+    const trimmed = std.mem.trim(u8, input, "\r\n");
+    const content = std.mem.trimStart(u8, trimmed, " ");
+    if (std.mem.startsWith(u8, content, "- ")) {
+        return stripSequenceItemDash(arena, trimmed);
+    }
+    if (std.mem.indexOfAny(u8, trimmed, "\r\n") != null or std.mem.startsWith(u8, trimmed, "{")) {
+        return trimmed;
+    }
+    return dictionaryValueCustom(arena, plan, node, trimmed);
+}
+
+fn dictionaryValueCustom(
+    arena: std.mem.Allocator,
+    plan: *const core.merge.MergePlan,
+    node: *const core.model.Node,
+    input: []const u8,
+) ![]const u8 {
+    var output: std.ArrayList(u8) = .empty;
+    for (node.map, 0..) |entry, i| {
+        if (i != 0) try output.append(arena, '\n');
+        try output.appendSlice(arena, entry.key);
+        try output.appendSlice(arena, ": ");
+        const field = if (std.mem.eql(u8, entry.key, "value") or std.mem.eql(u8, entry.key, "second"))
+            input
+        else
+            fieldSourceBytes(plan, entry.value) orelse return input;
+        try output.appendSlice(arena, field);
+    }
+    return output.toOwnedSlice(arena);
+}
+
+fn fieldSourceBytes(plan: *const core.merge.MergePlan, node: *const core.model.Node) ?[]const u8 {
+    inline for (.{ core.merge.Side.ours, .theirs, .base }) |side| {
+        if (plan.file(side).nodeBytes(node)) |bytes| return bytes;
+    }
+    return switch (node.*) {
+        .scalar => |text| text,
+        else => null,
+    };
+}
+
+fn stripSequenceItemDash(arena: std.mem.Allocator, input: []const u8) ![]const u8 {
+    var lines = std.mem.splitScalar(u8, input, '\n');
+    const first_raw = lines.next() orelse return input;
+    const first_line = std.mem.trimEnd(u8, first_raw, "\r");
+    const first_indent = lineIndent(first_line);
+    const rest = first_line[first_indent..];
+    if (!std.mem.startsWith(u8, rest, "- ")) return input;
+    var body_indent: ?usize = null;
+    var preview = lines;
+    while (preview.next()) |raw| {
+        const line = std.mem.trimEnd(u8, raw, "\r");
+        if (std.mem.trim(u8, line, " ").len == 0) continue;
+        const indent = lineIndent(line);
+        body_indent = if (body_indent) |current| @min(current, indent) else indent;
+    }
+    const strip = body_indent orelse first_indent + 2;
+    var output: std.ArrayList(u8) = .empty;
+    try output.appendSlice(arena, rest[2..]);
+    lines = std.mem.splitScalar(u8, input, '\n');
+    _ = lines.next();
+    while (lines.next()) |raw| {
+        const line = std.mem.trimEnd(u8, raw, "\r");
+        if (std.mem.trim(u8, line, " ").len == 0) continue;
+        try output.append(arena, '\n');
+        const indent = lineIndent(line);
+        if (indent >= strip) {
+            try output.appendSlice(arena, line[strip..]);
+        } else {
+            try output.appendSlice(arena, std.mem.trimStart(u8, line, " "));
+        }
+    }
+    return output.toOwnedSlice(arena);
+}
+
+fn extractOverrideValue(input: []const u8) []const u8 {
+    const trimmed = std.mem.trim(u8, input, " \r\n");
+    if (std.mem.indexOfAny(u8, trimmed, "\r\n") == null and !std.mem.startsWith(u8, std.mem.trimStart(u8, trimmed, " "), "- ")) {
+        return trimmed;
+    }
+    var lines = std.mem.splitScalar(u8, trimmed, '\n');
+    var found: ?[]const u8 = null;
+    while (lines.next()) |raw| {
+        const line = std.mem.trimEnd(u8, raw, "\r");
+        const content = std.mem.trimStart(u8, line, " ");
+        if (std.mem.startsWith(u8, content, "value:")) {
+            found = std.mem.trim(u8, content["value:".len..], " ");
+        }
+    }
+    return found orelse trimmed;
 }
 
 fn isPlaceholderValue(text: []const u8) bool {
@@ -2076,16 +2651,44 @@ pub fn run(
     path: []const u8,
     partial: []const u8,
 ) !void {
-    const tree = try merge_tree.buildForState(allocator, partial, state);
-    try state.handle(.{ .select_conflict = 0 });
     var tty_buffer: [4096]u8 = undefined;
-    var app = try vxfw.App.init(io, allocator, env_map, &tty_buffer);
-    defer app.deinit();
-    var view = View.init(allocator, state, path, tree);
-    defer view.deinit();
-    view.live_screen = &app.vx.screen;
-    try app.run(view.widget(), .{});
+    var session = try Session.init(io, allocator, env_map, &tty_buffer);
+    defer session.deinit();
+    try session.present(allocator, state, path, partial);
 }
+
+/// One terminal session covers every remaining content conflict in a merge.
+pub const Session = struct {
+    app: vxfw.App,
+
+    pub fn init(
+        io: std.Io,
+        allocator: std.mem.Allocator,
+        env_map: *std.process.Environ.Map,
+        buffer: []u8,
+    ) !Session {
+        return .{ .app = try vxfw.App.init(io, allocator, env_map, buffer) };
+    }
+
+    pub fn deinit(self: *Session) void {
+        self.app.deinit();
+    }
+
+    pub fn present(
+        self: *Session,
+        allocator: std.mem.Allocator,
+        state: *merge_ui_state.State,
+        path: []const u8,
+        partial: []const u8,
+    ) !void {
+        const tree = try merge_tree.buildForState(allocator, partial, state);
+        try state.handle(.{ .select_conflict = 0 });
+        var view = View.init(allocator, state, path, tree);
+        defer view.deinit();
+        view.live_screen = &self.app.vx.screen;
+        try self.app.run(view.widget(), .{});
+    }
+};
 
 fn screenPlan(arena: std.mem.Allocator) !core.merge.BuildResult {
     return core.merge.build(
@@ -2172,6 +2775,59 @@ fn deleteEditPlan(arena: std.mem.Allocator) !core.merge.BuildResult {
         "--- !u!114 &1\nMonoBehaviour:\n  m_Value: 1\n  m_After: keep\n",
         "--- !u!114 &1\nMonoBehaviour:\n  m_After: keep\n",
         "--- !u!114 &1\nMonoBehaviour:\n  m_Value: 2\n  m_After: keep\n",
+    );
+}
+
+fn prefabOverrideSpeedPlan(arena: std.mem.Allocator) !core.merge.BuildResult {
+    const prefix =
+        "--- !u!1001 &1\n" ++
+        "PrefabInstance:\n" ++
+        "  m_Modification:\n" ++
+        "    m_Modifications:\n" ++
+        "    - target: {fileID: 10, guid: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, type: 3}\n" ++
+        "      propertyPath: m_Name\n" ++
+        "      value: Enemy\n" ++
+        "    - target: {fileID: 40, guid: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, type: 3}\n" ++
+        "      propertyPath: items.Array.data[0].speed\n" ++
+        "      value: ";
+    const suffix =
+        "\n      objectReference: {fileID: 0}\n" ++
+        "  m_SourcePrefab: {fileID: 100100000, guid: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, type: 3}\n";
+    return core.merge.build(arena, prefix ++ "1" ++ suffix, prefix ++ "2" ++ suffix, prefix ++ "3" ++ suffix);
+}
+
+fn prefabOverrideOnlySpeedPlan(arena: std.mem.Allocator) !core.merge.BuildResult {
+    const prefix =
+        "--- !u!1001 &1\n" ++
+        "PrefabInstance:\n" ++
+        "  m_Modification:\n" ++
+        "    m_Modifications:\n" ++
+        "    - target: {fileID: 50, guid: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb, type: 3}\n" ++
+        "      propertyPath: items.Array.data[0].speed\n" ++
+        "      value: ";
+    const suffix =
+        "\n      objectReference: {fileID: 0}\n" ++
+        "  m_SourcePrefab: {fileID: 100100000, guid: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb, type: 3}\n";
+    return core.merge.build(arena, prefix ++ "1" ++ suffix, prefix ++ "2" ++ suffix, prefix ++ "3" ++ suffix);
+}
+
+fn dictionaryGoblinPlan(arena: std.mem.Allocator) !core.merge.BuildResult {
+    const prefix = "--- !u!114 &2\nMonoBehaviour:\n  m_Stats:\n";
+    return core.merge.build(
+        arena,
+        prefix ++ "  - key: Goblin\n    value: 1\n",
+        prefix ++ "  - key: Goblin\n    value: 2\n",
+        prefix ++ "  - key: Goblin\n    value: 3\n",
+    );
+}
+
+fn dictionaryUnionPlan(arena: std.mem.Allocator) !core.merge.BuildResult {
+    const prefix = "--- !u!114 &1\nMonoBehaviour:\n  m_Stats:\n";
+    return core.merge.build(
+        arena,
+        prefix ++ "  - key: Goblin\n    value: 1\n",
+        prefix ++ "  - key: Goblin\n    value: 2\n  - key: Dragon\n    value: 9\n",
+        prefix ++ "  - key: Goblin\n    value: 3\n  - key: Slime\n    value: 2\n",
     );
 }
 

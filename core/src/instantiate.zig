@@ -21,10 +21,11 @@ const Ctx = struct {
     guids: std.StringArrayHashMapUnmanaged(void) = .empty,
     // guids of the ancestor chain (cycle guard). Reusing the same source among siblings is allowed.
     chain: std.ArrayList([]const u8) = .empty,
+    fd: diffmod.FlatDiff = undefined,
 };
 
 pub fn expand(arena: std.mem.Allocator, res: *model.DiffResult, fd: diffmod.FlatDiff, assets: *const Assets) !void {
-    var ctx = Ctx{ .arena = arena, .assets = assets };
+    var ctx = Ctx{ .arena = arena, .assets = assets, .fd = fd };
     // Merge source-derived external references (scripts/materials etc.) into the
     // top-level unresolvedGuids so they too become subject to host resolution.
     for (res.unresolved_guids) |g| try ctx.guids.put(arena, g, {});
@@ -51,6 +52,10 @@ fn neededSlice(ctx: *Ctx) ![]model.NeededSource {
 fn expandNode(ctx: *Ctx, node: *model.ObjectDiff, docs: *std.AutoHashMap(i64, *model.Document), depth: usize) !void {
     for (node.children) |*child| try expandNode(ctx, child, docs, depth);
     if (node.kind != .prefab_instance) return;
+    if (node.status == .modified) {
+        try expandModified(ctx, node, depth);
+        return;
+    }
     if (node.status != .added and node.status != .removed) return;
     const guid = node.source_guid orelse return;
     if (depth >= model.max_prefab_nesting or inChain(ctx, guid)) return;
@@ -102,6 +107,57 @@ fn expandNode(ctx: *Ctx, node: *model.ObjectDiff, docs: *std.AutoHashMap(i64, *m
     // Keep unapplied mods as rows (don't drop them silently).
     const leftover = try diff_overrides.soleInstanceOverridesSkipping(ctx.arena, inst_doc, node.status, &applied);
     node.overrides = try concatOverrides(ctx.arena, leftover, inner_overrides);
+}
+
+fn expandModified(ctx: *Ctx, node: *model.ObjectDiff, depth: usize) !void {
+    const guid = node.source_guid orelse return;
+    if (depth >= model.max_prefab_nesting or inChain(ctx, guid)) return;
+    const bytes = ctx.assets.get(guid) orelse {
+        try ctx.needed.put(ctx.arena, guid, .after);
+        return;
+    };
+    const before_inst = documentById(ctx.fd.before, node.file_id) orelse return;
+    const after_inst = documentById(ctx.fd.after, node.file_id) orelse return;
+    const src_before = parser.parse(ctx.arena, bytes) catch |err| switch (err) {
+        error.NestingTooDeep => return,
+        error.OutOfMemory => return error.OutOfMemory,
+    };
+    const src_after = parser.parse(ctx.arena, bytes) catch |err| switch (err) {
+        error.NestingTooDeep => return,
+        error.OutOfMemory => return error.OutOfMemory,
+    };
+    applyRemovedComponents(before_inst, src_before);
+    applyRemovedComponents(after_inst, src_after);
+    var applied = try applyModifications(ctx.arena, after_inst, src_after, guid);
+    _ = try applyModifications(ctx.arena, before_inst, src_before, guid);
+    const sub_fd = try diffmod.computeParsed(ctx.arena, src_before, src_after);
+    for (sub_fd.unresolved_guids) |g| try ctx.guids.put(ctx.arena, g, {});
+    node.overrides = try overridesFromResolved(ctx.arena, sub_fd);
+    const leftover = try diff_overrides.soleInstanceOverridesSkipping(ctx.arena, after_inst, .added, &applied);
+    node.overrides = try concatOverrides(ctx.arena, node.overrides, leftover);
+}
+
+fn documentById(documents: []model.Document, file_id: i64) ?*model.Document {
+    for (documents) |*document| {
+        if (document.file_id == file_id) return document;
+    }
+    return null;
+}
+
+fn overridesFromResolved(arena: std.mem.Allocator, fd: diffmod.FlatDiff) ![]model.OverrideDiff {
+    var out: std.ArrayList(model.OverrideDiff) = .empty;
+    for (fd.docs) |doc| {
+        for (doc.component.fields) |field| {
+            try out.append(arena, .{
+                .group = doc.component.type_name,
+                .label = field.path,
+                .status = field.status,
+                .before = field.before,
+                .after = field.after,
+            });
+        }
+    }
+    return out.toOwnedSlice(arena);
 }
 
 fn concatOverrides(arena: std.mem.Allocator, a: []model.OverrideDiff, b: []model.OverrideDiff) ![]model.OverrideDiff {
@@ -156,30 +212,37 @@ const AppliedSet = std.StringHashMapUnmanaged(void);
 // Returns the key set of mods that were applied or pushed down (for the leftover degraded view).
 fn applyModifications(arena: std.mem.Allocator, inst_doc: *const model.Document, src_docs: []model.Document, source_guid: []const u8) !AppliedSet {
     var applied: AppliedSet = .empty;
+    var mods: std.ArrayList(prefab.Modification) = .empty;
     var iterator = prefab.modifications(inst_doc);
-    while (iterator.next()) |modification| {
-        const target = modification.target orelse continue;
-        const target_guid = target.guid orelse continue;
-        if (!std.mem.eql(u8, target_guid, source_guid)) continue;
-        const effective_value = modification.effectiveValue() orelse continue;
-        var handled = false;
-        for (src_docs) |*doc| {
-            if (doc.file_id != target.file_id) continue;
-            setByPropertyPath(doc.body, modification.property_path, effective_value);
-            handled = true;
-            break;
+    while (iterator.next()) |modification| try mods.append(arena, modification);
+    // Array.size must run before Array.data[i] so later indices exist.
+    for ([_]bool{ true, false }) |sizes_only| {
+        for (mods.items) |modification| {
+            const is_size = std.mem.endsWith(u8, modification.property_path, ".Array.size");
+            if (is_size != sizes_only) continue;
+            const target = modification.target orelse continue;
+            const target_guid = target.guid orelse continue;
+            if (!std.mem.eql(u8, target_guid, source_guid)) continue;
+            const effective_value = modification.effectiveValue() orelse continue;
+            var handled = false;
+            for (src_docs) |*doc| {
+                if (doc.file_id != target.file_id) continue;
+                try setByPropertyPath(arena, doc.body, modification.property_path, effective_value);
+                handled = true;
+                break;
+            }
+            if (!handled) {
+                handled = try pushDown(
+                    arena,
+                    src_docs,
+                    target.file_id,
+                    modification.property_path,
+                    modification.value,
+                    modification.object_reference,
+                );
+            }
+            if (handled) try applied.put(arena, try modification.key(arena), {});
         }
-        if (!handled) {
-            handled = try pushDown(
-                arena,
-                src_docs,
-                target.file_id,
-                modification.property_path,
-                modification.value,
-                modification.object_reference,
-            );
-        }
-        if (handled) try applied.put(arena, try modification.key(arena), {});
     }
     return applied;
 }
@@ -222,7 +285,7 @@ fn appendMod(arena: std.mem.Allocator, pi_doc: *model.Document, inner_id: i64, p
 
 // Replace a leaf via a path like "m_LocalScale.y" / "m_Materials.Array.data[0]".
 // Paths with a missing intermediate or a type mismatch are silently dropped (safe side, since this is display merging).
-fn setByPropertyPath(body: *model.Node, path: []const u8, value: *model.Node) void {
+fn setByPropertyPath(arena: std.mem.Allocator, body: *model.Node, path: []const u8, value: *model.Node) !void {
     var cur: *model.Node = body;
     var it = std.mem.splitScalar(u8, path, '.');
     var pending: ?[]const u8 = it.next();
@@ -231,6 +294,12 @@ fn setByPropertyPath(body: *model.Node, path: []const u8, value: *model.Node) vo
         if (std.mem.eql(u8, seg, "Array")) {
             pending = next;
             continue; // Unity's virtual segment
+        }
+        if (std.mem.eql(u8, seg, "size") and next == null) {
+            if (cur.* != .seq or value.* != .scalar) return;
+            const count = std.fmt.parseInt(usize, value.scalar, 10) catch return;
+            try resizeSequence(arena, cur, count);
+            return;
         }
         if (std.mem.startsWith(u8, seg, "data[")) {
             const close = std.mem.indexOfScalar(u8, seg, ']') orelse return;
@@ -245,20 +314,45 @@ fn setByPropertyPath(body: *model.Node, path: []const u8, value: *model.Node) vo
             continue;
         }
         if (cur.* != .map) return;
-        var advanced = false;
+        var found: ?*model.Node = null;
         for (cur.map) |*e| {
             if (!std.mem.eql(u8, e.key, seg)) continue;
-            if (next == null) {
-                e.value = value;
-                return;
-            }
-            cur = e.value;
-            advanced = true;
+            found = e.value;
             break;
         }
-        if (!advanced) return;
+        if (found == null) {
+            const created = try arena.create(model.Node);
+            created.* = if (next == null) value.* else .{ .map = &.{} };
+            const grown = try arena.alloc(model.Entry, cur.map.len + 1);
+            @memcpy(grown[0..cur.map.len], cur.map);
+            grown[cur.map.len] = .{ .key = seg, .value = created };
+            cur.map = grown;
+            if (next == null) return;
+            found = created;
+        } else if (next == null) {
+            found.?.* = value.*;
+            return;
+        }
+        cur = found.?;
         pending = next;
     }
+}
+
+fn resizeSequence(arena: std.mem.Allocator, sequence: *model.Node, count: usize) !void {
+    if (sequence.* != .seq) return;
+    if (count == sequence.seq.len) return;
+    if (count < sequence.seq.len) {
+        sequence.seq = sequence.seq[0..count];
+        return;
+    }
+    const grown = try arena.alloc(*model.Node, count);
+    @memcpy(grown[0..sequence.seq.len], sequence.seq);
+    for (grown[sequence.seq.len..]) |*item| {
+        const empty = try arena.create(model.Node);
+        empty.* = .{ .map = &.{} };
+        item.* = empty;
+    }
+    sequence.seq = grown;
 }
 
 const testing = std.testing;
@@ -558,16 +652,75 @@ test "instantiate: setByPropertyPath handles nested and array paths" {
     var value = model.Node{ .scalar = "9" };
 
     // Nested path.
-    setByPropertyPath(docs[0].body, "m_LocalScale.y", &value);
+    try setByPropertyPath(arena, docs[0].body, "m_LocalScale.y", &value);
     const scale = model.findValue(docs[0].body.map, "m_LocalScale").?;
     try testing.expectEqualStrings("9", scale.get("y").?.scalar);
 
     // Array.data[i] path (leaf replacement).
-    setByPropertyPath(docs[0].body, "m_Materials.Array.data[1]", &value);
+    try setByPropertyPath(arena, docs[0].body, "m_Materials.Array.data[1]", &value);
     const mats = model.findValue(docs[0].body.map, "m_Materials").?;
     try testing.expectEqualStrings("9", mats.seq[1].scalar);
 
     // A missing path and an out-of-range index are no-ops (no panic).
-    setByPropertyPath(docs[0].body, "m_Missing.x", &value);
-    setByPropertyPath(docs[0].body, "m_Materials.Array.data[99]", &value);
+    try setByPropertyPath(arena, docs[0].body, "m_Missing.x", &value);
+    try setByPropertyPath(arena, docs[0].body, "m_Materials.Array.data[99]", &value);
+
+    var size = model.Node{ .scalar = "3" };
+    try setByPropertyPath(arena, docs[0].body, "m_Materials.Array.size", &size);
+    try testing.expectEqual(@as(usize, 3), model.findValue(docs[0].body.map, "m_Materials").?.seq.len);
+
+    var speed = model.Node{ .scalar = "9" };
+    try setByPropertyPath(arena, docs[0].body, "m_Materials.Array.data[2].speed", &speed);
+    try testing.expectEqualStrings("9", model.findValue(docs[0].body.map, "m_Materials").?.seq[2].get("speed").?.scalar);
+}
+
+test "instantiate: modified variant collection overrides show resolved item paths" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const source =
+        \\--- !u!1 &10
+        \\GameObject:
+        \\  m_Name: Enemy
+        \\  m_Component:
+        \\  - component: {fileID: 50}
+        \\--- !u!114 &50
+        \\MonoBehaviour:
+        \\  m_GameObject: {fileID: 10}
+        \\  m_Script: {fileID: 11500000, guid: scriptguid, type: 3}
+        \\  items:
+        \\  - speed: 1
+        \\  - speed: 2
+    ;
+    const before =
+        \\--- !u!1001 &1001
+        \\PrefabInstance:
+        \\  m_Modification:
+        \\    m_Modifications: []
+        \\  m_SourcePrefab: {fileID: 100100000, guid: srcguid, type: 3}
+    ;
+    const after =
+        \\--- !u!1001 &1001
+        \\PrefabInstance:
+        \\  m_Modification:
+        \\    m_Modifications:
+        \\    - target: {fileID: 50, guid: srcguid, type: 3}
+        \\      propertyPath: items.Array.size
+        \\      value: 3
+        \\    - target: {fileID: 50, guid: srcguid, type: 3}
+        \\      propertyPath: items.Array.data[2].speed
+        \\      value: 9
+        \\  m_SourcePrefab: {fileID: 100100000, guid: srcguid, type: 3}
+    ;
+    var assets: Assets = .empty;
+    try assets.put(arena, "srcguid", source);
+    const res = try root.diffBytesWithAssets(arena, before, after, &assets);
+    var saw = false;
+    for (res.roots[0].overrides) |row| {
+        if (!std.mem.eql(u8, row.label, "Items[2].Speed")) continue;
+        saw = true;
+        try testing.expectEqual(model.Status.added, row.status);
+        try testing.expectEqualStrings("9", row.after.?.scalar);
+    }
+    try testing.expect(saw);
 }

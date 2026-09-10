@@ -65,10 +65,14 @@ const Builder = struct {
     ) !void {
         const key: NodeKey = .{ .object = object.file_id };
         if (!self.nodes.contains(key)) {
+            const name = display.objectName(object, null);
             try self.nodes.put(self.arena, key, .{
                 .key = key,
                 .parent = parent,
-                .name = display.objectName(object, null),
+                .name = if (object.kind == .prefab_instance)
+                    try std.fmt.allocPrint(self.arena, "{s} ‹Prefab›", .{name})
+                else
+                    name,
                 .kind = .game_object,
             });
             if (parent) |parent_key| {
@@ -158,9 +162,16 @@ const Builder = struct {
                         operation.identity.property_path
                     else
                         operation.property_path;
+                    const labeled_path = blk: {
+                        if (operation.kind == .prefab_override) break :blk property_path;
+                        const item = operation.item_path orelse break :blk property_path;
+                        if (item.len != 0 and item[0] == '[')
+                            break :blk try std.fmt.allocPrint(self.arena, "{s}{s}", .{ property_path, item });
+                        break :blk try std.fmt.allocPrint(self.arena, "{s}.{s}", .{ property_path, item });
+                    };
                     try entry.value_ptr.append(self.arena, .{
                         .ordinal = ordinal,
-                        .label = try core.displayPropertyPath(self.arena, property_path),
+                        .label = try core.displayPropertyPath(self.arena, labeled_path),
                     });
                 },
             }
@@ -571,4 +582,69 @@ test "merge TUI: conflict focus follows visual order across an edited component"
     try state.handle(.choose_theirs);
     try state.handle(.apply_result);
     try testing.expectEqual(merge_ui_state.Outcome.ready, state.outcome);
+}
+
+test "merge TUI: dictionary conflict label includes the key" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const prefix =
+        "--- !u!1 &1\n" ++
+        "GameObject:\n" ++
+        "  m_Name: Player\n" ++
+        "  m_Component:\n" ++
+        "  - component: {fileID: 4}\n" ++
+        "  - component: {fileID: 114}\n" ++
+        "--- !u!4 &4\n" ++
+        "Transform:\n" ++
+        "  m_GameObject: {fileID: 1}\n" ++
+        "  m_Father: {fileID: 0}\n" ++
+        "  m_Children: []\n" ++
+        "--- !u!114 &114\n" ++
+        "MonoBehaviour:\n" ++
+        "  m_GameObject: {fileID: 1}\n" ++
+        "  m_Stats:\n";
+    var built = try core.merge.build(
+        arena,
+        prefix ++ "  - key: Goblin\n    value: 1\n",
+        prefix ++ "  - key: Goblin\n    value: 2\n",
+        prefix ++ "  - key: Goblin\n    value: 3\n",
+    );
+    const state = try merge_ui_state.State.init(arena, &built.plan);
+    const tree = try build(arena, built.partial, &built.plan, state.conflict_indices);
+    const row = tree.rowForConflict(0).?;
+    // The tree only showed Stats, so Goblin vs Dragon conflicts were indistinguishable.
+    try testing.expectEqualStrings("Stats[Goblin]", tree.rows[row].label);
+}
+
+test "merge TUI: prefab override label collapses Array.data and marks Prefab" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const prefix =
+        "--- !u!1001 &1\n" ++
+        "PrefabInstance:\n" ++
+        "  m_Modification:\n" ++
+        "    m_Modifications:\n" ++
+        "    - target: {fileID: 10, guid: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, type: 3}\n" ++
+        "      propertyPath: m_Name\n" ++
+        "      value: Enemy\n" ++
+        "    - target: {fileID: 40, guid: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, type: 3}\n" ++
+        "      propertyPath: items.Array.data[0].speed\n" ++
+        "      value: ";
+    const suffix =
+        "\n      objectReference: {fileID: 0}\n" ++
+        "  m_SourcePrefab: {fileID: 100100000, guid: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, type: 3}\n";
+    var built = try core.merge.build(
+        arena,
+        prefix ++ "1" ++ suffix,
+        prefix ++ "2" ++ suffix,
+        prefix ++ "3" ++ suffix,
+    );
+    const state = try merge_ui_state.State.init(arena, &built.plan);
+    const tree = try build(arena, built.partial, &built.plan, state.conflict_indices);
+    const row = tree.rowForConflict(0).?;
+    // Concatenating the modification's value key produced speedvalue, and Array.data hid the item.
+    try testing.expectEqualStrings("Items[0].Speed", tree.rows[row].label);
+    try testing.expectEqualStrings("Enemy ‹Prefab›", tree.rows[0].label);
 }

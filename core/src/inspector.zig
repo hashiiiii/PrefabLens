@@ -23,6 +23,10 @@ test "inspector: displayPath maps table entries and nicifies the rest" {
     try testing.expectEqualStrings("Max Hp", try displayPath(arena, "maxHp"));
     try testing.expectEqualStrings("Constrain Proportions Scale", try displayPath(arena, "m_ConstrainProportionsScale"));
     try testing.expectEqualStrings("Materials[0]", try displayPath(arena, "m_Materials[0]"));
+    // Unity YAML stores list elements as Array.data[i]; the Inspector path is Items[0].Speed.
+    try testing.expectEqualStrings("Items[0].Speed", try displayPath(arena, "items.Array.data[0].speed"));
+    try testing.expectEqualStrings("Items.Size", try displayPath(arena, "items.Array.size"));
+    try testing.expectEqualStrings("Materials[0]", try displayPath(arena, "m_Materials.Array.data[0]"));
 }
 
 // Fields not shown in the Inspector (matched by the path's first segment).
@@ -69,13 +73,36 @@ pub fn isHidden(path: []const u8) bool {
 }
 
 pub fn displayPath(arena: std.mem.Allocator, path: []const u8) ![]const u8 {
+    const collapsed = try collapseSerializedArrayPath(arena, path);
     var out: std.ArrayList(u8) = .empty;
-    var it = std.mem.splitScalar(u8, path, '.');
+    var it = std.mem.splitScalar(u8, collapsed, '.');
     var first = true;
     while (it.next()) |seg| {
         if (!first) try out.append(arena, '.');
         first = false;
         try appendSegment(arena, &out, seg);
+    }
+    return out.toOwnedSlice(arena);
+}
+
+fn collapseSerializedArrayPath(arena: std.mem.Allocator, path: []const u8) ![]const u8 {
+    var out: std.ArrayList(u8) = .empty;
+    var rest = path;
+    while (rest.len != 0) {
+        if (std.mem.indexOf(u8, rest, ".Array.data[")) |index| {
+            try out.appendSlice(arena, rest[0..index]);
+            try out.append(arena, '[');
+            rest = rest[index + ".Array.data[".len ..];
+            continue;
+        }
+        if (std.mem.indexOf(u8, rest, ".Array.size")) |index| {
+            try out.appendSlice(arena, rest[0..index]);
+            try out.appendSlice(arena, ".size");
+            rest = rest[index + ".Array.size".len ..];
+            continue;
+        }
+        try out.appendSlice(arena, rest);
+        break;
     }
     return out.toOwnedSlice(arena);
 }

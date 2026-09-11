@@ -346,13 +346,15 @@ Maintainers publish the extension through the Release workflow on `main`.
 
 1. Run [`.github/workflows/release.yml`](../.github/workflows/release.yml)
    with `workflow_dispatch` and a version `X.Y.Z` (no `v` prefix).
-2. Verify that the `CWS_*` repository secrets are set before you rely on
+2. Leave `skip_chrome_extension` unchecked to submit the extension to the Chrome Web Store.
+   Check it to skip that submission. The GitHub Release still includes the extension ZIP.
+3. Verify that the `CWS_*` repository secrets are set before you rely on
    `publish-extension`.
 
 The workflow updates the versions.
 It builds the CLI ZIP files and `prefablens-extension-$VERSION.zip`.
 The workflow commits the changes, tags `v$VERSION`, and creates the GitHub Release.
-The `publish-extension` job then downloads that ZIP file.
+Unless `skip_chrome_extension` is set, the `publish-extension` job then downloads that ZIP file.
 The job uploads the ZIP file to the Chrome Web Store and submits it for review.
 The store publishes the extension after approval.
 

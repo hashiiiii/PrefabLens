@@ -2628,6 +2628,8 @@ pub const Session = struct {
         defer view.deinit();
         view.live_screen = &self.app.vx.screen;
         try self.app.run(view.widget(), .{});
+        // App.run pushes Kitty keyboard on every file. vaxis deinit pops once.
+        try self.app.vx.resetState(self.app.tty.writer());
     }
 };
 

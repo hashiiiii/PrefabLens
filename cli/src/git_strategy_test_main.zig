@@ -158,6 +158,21 @@ fn runPty(git: merge_git.Git, keys: []const u8) !std.process.RunResult {
     const command = try std.fmt.allocPrint(git.arena, "env PATH={s} git merge --no-edit remote", .{try t.shellQuote(git.arena, git.env.get("PATH").?)});
     return pty.runCommandInPty(git.io, git.arena, git.cwd, command, keys, 30);
 }
+
+fn runPtyBatches(git: merge_git.Git, first_keys: []const u8, second_keys: []const u8) !std.process.RunResult {
+    const command = try std.fmt.allocPrint(git.arena, "env PATH={s} git merge --no-edit remote", .{try t.shellQuote(git.arena, git.env.get("PATH").?)});
+    return pty.runCommandInPtyBatches(git.io, git.arena, git.cwd, command, first_keys, second_keys, 30);
+}
+
+fn countNeedle(haystack: []const u8, needle: []const u8) usize {
+    var count: usize = 0;
+    var start: usize = 0;
+    while (std.mem.indexOfPos(u8, haystack, start, needle)) |index| {
+        count += 1;
+        start = index + needle.len;
+    }
+    return count;
+}
 fn contentPty(ctx: Context) !void {
     const text = try ctx.repo("pty-text-only", &.{
         .{ .path = "Notes/A.txt", .base = "base\n", .ours = "ours\n", .theirs = "theirs\n" },
@@ -183,6 +198,23 @@ fn contentPty(ctx: Context) !void {
             try git.ok(&.{ "merge", "--abort" });
         }
     }
+    // A reused TUI session that pushes Kitty keyboard twice and pops once leaves
+    // press+release reporting on. Vim then inserts ::wwqq for :wq.
+    const stacked = try ctx.repo("pty-kitty-stack", &.{
+        .{ .path = "Assets/A.prefab", .base = base, .ours = ours, .theirs = conflict_theirs },
+        .{ .path = "Assets/B.prefab", .base = base, .ours = ours, .theirs = conflict_theirs },
+    });
+    const stacked_result = try runPtyBatches(stacked, "\x1b[C\r\r", "\x1b[C\r\r");
+    try t.expectCode(stacked_result, 0, "resolve two Unity files through plain merge");
+    try expectFile(stacked, "Assets/A.prefab", ours);
+    try expectFile(stacked, "Assets/B.prefab", ours);
+    try t.require((try stacked.output(&.{ "ls-files", "--unmerged" })).len == 0, "two-file merge left stages");
+    const capture = try std.mem.concat(stacked.arena, u8, &.{ stacked_result.stdout, stacked_result.stderr });
+    const pushes = countNeedle(capture, "\x1b[>31u");
+    const pops = countNeedle(capture, "\x1b[<u");
+    try t.require(pushes >= 2, "two-file merge did not enable Kitty keyboard twice");
+    try t.require(pops >= pushes, "Kitty keyboard pushes outnumbered pops");
+
     const git = try ctx.repo("pty-quit", &.{.{ .path = "Assets/A.prefab", .base = base, .ours = ours, .theirs = conflict_theirs }});
     try t.expectCode(try runPty(git, "\x1b[27uy"), 1, "quit plain merge");
     try markers(git, "Assets/A.prefab");

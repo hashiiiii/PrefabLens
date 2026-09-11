@@ -607,7 +607,7 @@ pub const View = struct {
 
     fn propertyModel(self: *const View, arena: std.mem.Allocator) !inspector.Model {
         const operation = self.selectedOperation().?;
-        return inspector.build(arena, operation, self.state.pending orelse operation.resolution);
+        return inspector.build(arena, operation, self.state.pending orelse operation.resolution, self.state.plan);
     }
 
     fn ensurePropertyVisible(self: *View, size: vxfw.Size, count: usize) void {

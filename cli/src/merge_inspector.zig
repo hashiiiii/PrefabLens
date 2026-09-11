@@ -25,7 +25,7 @@ test "merge TUI: semantic rows hide inspector-hidden ownership fields" {
         },
         .resolution = .unresolved,
     };
-    const model = try build(arena, &operation, .unresolved);
+    const model = try build(arena, &operation, .unresolved, null);
     try std.testing.expectEqual(@as(usize, 1), model.rows.len);
     try std.testing.expectEqualStrings("Mass", model.rows[0].label);
 }
@@ -52,7 +52,7 @@ test "merge TUI: property comparisons expose changed children when value shapes 
         },
         .resolution = .unresolved,
     };
-    const model = try build(arena, &operation, .{ .take = .theirs });
+    const model = try build(arena, &operation, .{ .take = .theirs }, null);
     // A type change must not hide the fields the retained component will contain.
     try std.testing.expectEqual(@as(usize, 3), model.rows.len);
     try std.testing.expectEqualStrings("Custom.Speed", model.rows[1].label);
@@ -72,7 +72,7 @@ test "merge TUI: dictionary field conflicts expose key and value rows" {
     );
     const operation = &fixture.plan.operations[0];
     try std.testing.expect(supports(operation));
-    const model = try build(arena, operation, .unresolved);
+    const model = try build(arena, operation, .unresolved, null);
     // SphereCollider already walks maps into named rows. A pair conflict must do the same
     // so Key stays visible next to the disagreed Value.
     try std.testing.expectEqual(@as(usize, 2), model.rows.len);
@@ -106,7 +106,7 @@ test "merge TUI: prefab override conflicts expose path and value rows" {
         if (op.resolution == .unresolved) break op;
     } else return error.TestUnexpectedResult;
     try std.testing.expect(supports(operation));
-    const model = try build(arena, operation, .unresolved);
+    const model = try build(arena, operation, .unresolved, null);
     // Variant overrides are a path plus a scalar. The tree label is not enough once ⇧R is available.
     try std.testing.expectEqual(@as(usize, 2), model.rows.len);
     try std.testing.expectEqualStrings("Path", model.rows[0].label);
@@ -152,7 +152,7 @@ test "merge TUI: sequence order rows follow each side's item order" {
         if (op.kind == .sequence_order and op.resolution == .unresolved) break op;
     } else return error.TestUnexpectedResult;
     try std.testing.expect(supports(operation));
-    const model = try build(arena, operation, .unresolved);
+    const model = try build(arena, operation, .unresolved, null);
     // A reorder is one list. Rows keep each side's YAML order instead of aligning by property.
     try std.testing.expectEqual(@as(usize, 3), model.rows.len);
     try std.testing.expectEqualStrings("[0]", model.rows[0].label);
@@ -170,6 +170,54 @@ test "merge TUI: sequence order rows follow each side's item order" {
     try std.testing.expect(!model.editable(0));
 }
 
+test "merge TUI: reparent rows show GameObject names" {
+    var memory = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer memory.deinit();
+    const arena = memory.allocator();
+    const fixture = try core.merge.build(arena, reparentBase, reparentOurs, reparentTheirs);
+    const operation = for (fixture.plan.operations) |*op| {
+        if (op.kind == .reparent and op.resolution == .unresolved) break op;
+    } else return error.TestUnexpectedResult;
+    try std.testing.expect(supports(operation));
+    const model = try build(arena, operation, .unresolved, &fixture.plan);
+    try std.testing.expectEqual(@as(usize, 1), model.rows.len);
+    try std.testing.expectEqualStrings("Father", model.rows[0].label);
+    try std.testing.expectEqualStrings("Root", try valueText(arena, model.rows[0].values[0]));
+    try std.testing.expectEqualStrings("Parent A", try valueText(arena, model.rows[0].values[1]));
+    try std.testing.expectEqualStrings("Parent B", try valueText(arena, model.rows[0].values[2]));
+    try std.testing.expect(!model.editable(0));
+}
+
+const reparentBase =
+    "--- !u!1 &1\nGameObject:\n  m_Component:\n  - component: {fileID: 4}\n  m_Name: Root\n" ++
+    "--- !u!4 &4\nTransform:\n  m_GameObject: {fileID: 1}\n  m_Children:\n  - {fileID: 40}\n  - {fileID: 41}\n  - {fileID: 42}\n  m_Father: {fileID: 0}\n" ++
+    "--- !u!1 &10\nGameObject:\n  m_Component:\n  - component: {fileID: 40}\n  m_Name: Parent A\n" ++
+    "--- !u!4 &40\nTransform:\n  m_GameObject: {fileID: 10}\n  m_Children: []\n  m_Father: {fileID: 4}\n" ++
+    "--- !u!1 &11\nGameObject:\n  m_Component:\n  - component: {fileID: 41}\n  m_Name: Parent B\n" ++
+    "--- !u!4 &41\nTransform:\n  m_GameObject: {fileID: 11}\n  m_Children: []\n  m_Father: {fileID: 4}\n" ++
+    "--- !u!1 &20\nGameObject:\n  m_Component:\n  - component: {fileID: 42}\n  m_Name: Child\n" ++
+    "--- !u!4 &42\nTransform:\n  m_GameObject: {fileID: 20}\n  m_Children: []\n  m_Father: {fileID: 4}\n";
+
+const reparentOurs =
+    "--- !u!1 &1\nGameObject:\n  m_Component:\n  - component: {fileID: 4}\n  m_Name: Root\n" ++
+    "--- !u!4 &4\nTransform:\n  m_GameObject: {fileID: 1}\n  m_Children:\n  - {fileID: 40}\n  - {fileID: 41}\n  m_Father: {fileID: 0}\n" ++
+    "--- !u!1 &10\nGameObject:\n  m_Component:\n  - component: {fileID: 40}\n  m_Name: Parent A\n" ++
+    "--- !u!4 &40\nTransform:\n  m_GameObject: {fileID: 10}\n  m_Children:\n  - {fileID: 42}\n  m_Father: {fileID: 4}\n" ++
+    "--- !u!1 &11\nGameObject:\n  m_Component:\n  - component: {fileID: 41}\n  m_Name: Parent B\n" ++
+    "--- !u!4 &41\nTransform:\n  m_GameObject: {fileID: 11}\n  m_Children: []\n  m_Father: {fileID: 4}\n" ++
+    "--- !u!1 &20\nGameObject:\n  m_Component:\n  - component: {fileID: 42}\n  m_Name: Child\n" ++
+    "--- !u!4 &42\nTransform:\n  m_GameObject: {fileID: 20}\n  m_Children: []\n  m_Father: {fileID: 40}\n";
+
+const reparentTheirs =
+    "--- !u!1 &1\nGameObject:\n  m_Component:\n  - component: {fileID: 4}\n  m_Name: Root\n" ++
+    "--- !u!4 &4\nTransform:\n  m_GameObject: {fileID: 1}\n  m_Children:\n  - {fileID: 40}\n  - {fileID: 41}\n  m_Father: {fileID: 0}\n" ++
+    "--- !u!1 &10\nGameObject:\n  m_Component:\n  - component: {fileID: 40}\n  m_Name: Parent A\n" ++
+    "--- !u!4 &40\nTransform:\n  m_GameObject: {fileID: 10}\n  m_Children: []\n  m_Father: {fileID: 4}\n" ++
+    "--- !u!1 &11\nGameObject:\n  m_Component:\n  - component: {fileID: 41}\n  m_Name: Parent B\n" ++
+    "--- !u!4 &41\nTransform:\n  m_GameObject: {fileID: 11}\n  m_Children:\n  - {fileID: 42}\n  m_Father: {fileID: 4}\n" ++
+    "--- !u!1 &20\nGameObject:\n  m_Component:\n  - component: {fileID: 42}\n  m_Name: Child\n" ++
+    "--- !u!4 &42\nTransform:\n  m_GameObject: {fileID: 20}\n  m_Children: []\n  m_Father: {fileID: 41}\n";
+
 test "merge TUI: literal property keys remain distinct from nested paths and array indices" {
     var memory = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer memory.deinit();
@@ -177,7 +225,7 @@ test "merge TUI: literal property keys remain distinct from nested paths and arr
     const base = "--- !u!114 &2\nMonoBehaviour:\n  custom.value: 1\n  custom: {value: 2}\n  items[0]: 3\n  items: [4]\n";
     const theirs = "--- !u!114 &2\nMonoBehaviour:\n  custom.value: 5\n  custom: {value: 6}\n  items[0]: 7\n  items: [8]\n";
     const fixture = try core.merge.build(arena, base, "", theirs);
-    const model = try build(arena, &fixture.plan.operations[0], .{ .take = .theirs });
+    const model = try build(arena, &fixture.plan.operations[0], .{ .take = .theirs }, null);
     // Display paths must identify the same fields as the source-preserving edit paths.
     try std.testing.expectEqual(@as(usize, 4), model.rows.len);
     for ([_][]const u8{ "[\"custom.value\"]", "Custom.Value", "[\"items[0]\"]", "Items[0]" }, model.rows) |expected, row| {
@@ -209,6 +257,8 @@ pub const Model = struct {
         if (std.mem.eql(u8, row.label, "Path") or std.mem.eql(u8, row.label, "Key")) return false;
         // Sequence order is one list choice. An index row is not a cell you can edit.
         if (row.path.len == 1 and row.path[0] == .index) return false;
+        // Reparent is one parent choice. The displayed name is not YAML to edit.
+        if (row.path.len == 1 and row.path[0] == .key and std.mem.eql(u8, row.path[0].key, "m_Father")) return false;
         for (row.values) |node| {
             if (node) |value| {
                 if (value.* != .scalar and value.* != .ref) return false;
@@ -228,6 +278,7 @@ pub const Model = struct {
 pub fn supports(operation: *const core.merge.Operation) bool {
     if (operation.kind == .prefab_override) return true;
     if (operation.kind == .sequence_order) return sequenceOrderSupported(operation);
+    if (operation.kind == .reparent) return true;
     if (operation.kind == .field) {
         var saw_map = false;
         for ([_]?core.merge.SideValue{ operation.values.base, operation.values.ours, operation.values.theirs }) |value| {
@@ -246,9 +297,15 @@ pub fn supports(operation: *const core.merge.Operation) bool {
     return true;
 }
 
-pub fn build(arena: std.mem.Allocator, operation: *const core.merge.Operation, resolution: core.merge.Resolution) !Model {
+pub fn build(
+    arena: std.mem.Allocator,
+    operation: *const core.merge.Operation,
+    resolution: core.merge.Resolution,
+    plan: ?*const core.merge.MergePlan,
+) !Model {
     if (operation.kind == .prefab_override) return buildPrefabOverride(arena, operation, resolution);
     if (operation.kind == .sequence_order) return buildSequenceOrder(arena, operation, resolution);
+    if (operation.kind == .reparent) return buildReparent(arena, operation, resolution, plan);
     if (operation.kind == .field) {
         const roots: [4]?*const Node = .{
             if (operation.values.base) |value| value.node else null,
@@ -413,6 +470,152 @@ fn sequenceItemLabel(arena: std.mem.Allocator, node: *const Node) ![]const u8 {
         if (Node.asScalar(node.get("propertyPath"))) |path| return core.displayPropertyPath(arena, path);
     }
     return valueText(arena, node);
+}
+
+fn buildReparent(
+    arena: std.mem.Allocator,
+    operation: *const core.merge.Operation,
+    resolution: core.merge.Resolution,
+    plan: ?*const core.merge.MergePlan,
+) !Model {
+    const present = plan orelse return .{ .documents = @splat(null), .rows = &.{} };
+    const values: [4]?*const Node = .{
+        try fatherLabelNode(arena, present, .base, operation.values.base),
+        try fatherLabelNode(arena, present, .ours, operation.values.ours),
+        try fatherLabelNode(arena, present, .theirs, operation.values.theirs),
+        try fatherResultNode(arena, present, operation, resolution),
+    };
+    var changed = false;
+    var first: ?*const Node = null;
+    for (values[0..3]) |node| {
+        if (first == null) {
+            first = node;
+        } else {
+            changed = changed or !equal(first, node);
+        }
+    }
+    const rows = try arena.alloc(Row, 1);
+    rows[0] = .{
+        .path = try arena.dupe(properties.Segment, &.{.{ .key = "m_Father" }}),
+        .label = try core.displayPropertyPath(arena, "m_Father"),
+        .values = values,
+        .changed = changed,
+    };
+    return .{ .documents = @splat(null), .rows = rows };
+}
+
+fn fatherResultNode(
+    arena: std.mem.Allocator,
+    plan: *const core.merge.MergePlan,
+    operation: *const core.merge.Operation,
+    resolution: core.merge.Resolution,
+) !?*const Node {
+    return switch (resolution) {
+        .take => |side| try fatherLabelNode(arena, plan, side, operation.values.get(side)),
+        .custom => |text| try fatherCustomNode(arena, plan, text),
+        .unresolved, .remove => null,
+    };
+}
+
+fn fatherCustomNode(
+    arena: std.mem.Allocator,
+    plan: *const core.merge.MergePlan,
+    text: []const u8,
+) !?*const Node {
+    const file = if (plan.ours.documents.len != 0) plan.ours else plan.theirs;
+    const wrapped = try std.fmt.allocPrint(arena, "father: {s}\n", .{text});
+    const document = properties.parse(arena, wrapped) catch return try scalarNode(arena, text);
+    const node = document.node(&.{.{ .key = "father" }}) orelse return try scalarNode(arena, text);
+    const ref = Node.asRef(node) orelse return try scalarNode(arena, text);
+    return try scalarNode(arena, try fatherDisplay(arena, file, ref));
+}
+
+fn fatherLabelNode(
+    arena: std.mem.Allocator,
+    plan: *const core.merge.MergePlan,
+    side: core.merge.Side,
+    value: ?core.merge.SideValue,
+) !?*const Node {
+    const present = value orelse return null;
+    const ref = Node.asRef(present.node) orelse {
+        if (present.node) |node| return try scalarNode(arena, try valueText(arena, node));
+        return try scalarNode(arena, present.bytes);
+    };
+    return try scalarNode(arena, try fatherDisplay(arena, plan.file(side), ref));
+}
+
+fn fatherDisplay(arena: std.mem.Allocator, file: core.source.ParsedFile, ref: core.model.Ref) ![]const u8 {
+    if (ref.file_id == 0) return "None";
+    const object = gameObjectForRef(file, ref) orelse
+        return try std.fmt.allocPrint(arena, "#{d}", .{ref.file_id});
+    const name = Node.asScalar(object.body.get("m_Name")) orelse "(GameObject)";
+    if (gameObjectNameCount(file, name) <= 1) return name;
+    return try objectPath(arena, file, object);
+}
+
+fn gameObjectForRef(file: core.source.ParsedFile, ref: core.model.Ref) ?*const core.model.Document {
+    const document = documentByFileId(file, ref.file_id) orelse return null;
+    if (document.class_id == 1) return document;
+    if (document.class_id != 4 and document.class_id != 224) return null;
+    const owner = Node.asRef(document.body.get("m_GameObject")) orelse return null;
+    const object = documentByFileId(file, owner.file_id) orelse return null;
+    return if (object.class_id == 1) object else null;
+}
+
+fn documentByFileId(file: core.source.ParsedFile, file_id: i64) ?*const core.model.Document {
+    for (file.documents) |*document| {
+        if (document.file_id == file_id) return document;
+    }
+    return null;
+}
+
+fn gameObjectNameCount(file: core.source.ParsedFile, name: []const u8) usize {
+    var count: usize = 0;
+    for (file.documents) |document| {
+        if (document.class_id != 1) continue;
+        const current = Node.asScalar(document.body.get("m_Name")) orelse continue;
+        if (std.mem.eql(u8, current, name)) count += 1;
+    }
+    return count;
+}
+
+fn objectPath(
+    arena: std.mem.Allocator,
+    file: core.source.ParsedFile,
+    object: *const core.model.Document,
+) ![]const u8 {
+    var names: std.ArrayList([]const u8) = .empty;
+    var current: ?*const core.model.Document = object;
+    var guard: usize = 0;
+    while (current) |present| : (guard += 1) {
+        if (guard > 64) break;
+        try names.append(arena, Node.asScalar(present.body.get("m_Name")) orelse "(GameObject)");
+        const transform = transformForGameObject(file, present.file_id) orelse break;
+        const father = Node.asRef(transform.body.get("m_Father")) orelse break;
+        if (father.file_id == 0) break;
+        current = gameObjectForRef(file, father);
+        if (current) |parent| {
+            if (parent.file_id == present.file_id) break;
+        }
+    }
+    if (names.items.len == 0) return "(GameObject)";
+    var i = names.items.len;
+    var out: std.ArrayList(u8) = .empty;
+    while (i > 0) {
+        i -= 1;
+        if (out.items.len != 0) try out.appendSlice(arena, " / ");
+        try out.appendSlice(arena, names.items[i]);
+    }
+    return out.toOwnedSlice(arena);
+}
+
+fn transformForGameObject(file: core.source.ParsedFile, object_id: i64) ?*const core.model.Document {
+    for (file.documents) |*document| {
+        if (document.class_id != 4 and document.class_id != 224) continue;
+        const owner = Node.asRef(document.body.get("m_GameObject")) orelse continue;
+        if (owner.file_id == object_id) return document;
+    }
+    return null;
 }
 
 fn customFieldRoot(

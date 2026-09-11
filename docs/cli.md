@@ -231,6 +231,7 @@ Ownership references are read-only in the property table.
 
 **Shift+R** switches between Semantic and Unified without changing the selected result.
 Semantic is a property table. Sequence order conflicts list each side's items in YAML order.
+Reparent conflicts show the parent GameObject name. Duplicate names include the path from the root.
 Unified is one inspector-wide Ours/Theirs diff of the same conflict.
 While editing, **Shift+R** inserts text.
 Unified Result editing accepts the complete component document.

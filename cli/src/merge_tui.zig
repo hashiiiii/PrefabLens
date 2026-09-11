@@ -933,6 +933,14 @@ pub const View = struct {
         ctx.consumeAndRedraw();
     }
 
+    fn focusResult(self: *View, ctx: *vxfw.EventContext) !void {
+        self.focus_area = .inspector;
+        self.selected_value = .result;
+        self.horizontal_offset = 0;
+        try self.state.handle(.pane_right);
+        ctx.consumeAndRedraw();
+    }
+
     fn editorCellAt(self: *View, mouse: vaxis.Mouse, size: vxfw.Size) !result_text.Selection {
         const geometry = self.valueGeometry(size.width);
         const body = BodyGeometry.init(size.height);
@@ -1304,7 +1312,7 @@ pub const View = struct {
         switch (self.focus_area) {
             .hierarchy => try self.dispatch(ctx, .move_up, size),
             .inspector => if (self.usesProperties()) try self.moveProperty(ctx, size, false) else ctx.consumeEvent(),
-            .complete => try self.focusHierarchy(ctx),
+            .complete => try self.focusResult(ctx),
         }
     }
 
@@ -3312,6 +3320,39 @@ test "merge TUI: the final choice focuses Complete before exit" {
 
     try pressKeyForTest(&view, &ctx, vaxis.Key.enter);
     try testing.expect(ctx.quit);
+}
+
+test "merge TUI: Up from Complete focuses Result" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var fixture = try screenPlan(arena);
+    var state = try merge_ui_state.State.init(arena, &fixture.plan);
+    var view = try viewForTest(arena, &state, "A.prefab", fixture.partial);
+    defer view.deinit();
+    _ = try drawForTest(arena, view.widget(), 100, 20);
+    var ctx = eventContext(arena);
+
+    try pressKeyForTest(&view, &ctx, vaxis.Key.right);
+    try pressKeyForTest(&view, &ctx, vaxis.Key.enter);
+    try pressKeyForTest(&view, &ctx, vaxis.Key.right);
+    try pressKeyForTest(&view, &ctx, vaxis.Key.right);
+    try pressKeyForTest(&view, &ctx, vaxis.Key.enter);
+    try testing.expect(view.focus_area == .complete);
+
+    // Complete sits under Result. Left and Escape still leave it for the hierarchy.
+    try pressKeyForTest(&view, &ctx, vaxis.Key.left);
+    try testing.expect(view.focus_area == .hierarchy);
+    try pressKeyForTest(&view, &ctx, vaxis.Key.down);
+    try testing.expect(view.focus_area == .complete);
+    try pressKeyForTest(&view, &ctx, vaxis.Key.escape);
+    try testing.expect(view.focus_area == .hierarchy);
+    try pressKeyForTest(&view, &ctx, vaxis.Key.down);
+    try testing.expect(view.focus_area == .complete);
+
+    try pressKeyForTest(&view, &ctx, vaxis.Key.up);
+    try testing.expect(view.focus_area == .inspector);
+    try testing.expectEqual(ValueColumn.result, view.selected_value);
 }
 
 test "merge TUI: unchanged removed Result stays removed" {

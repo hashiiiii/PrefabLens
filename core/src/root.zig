@@ -21,6 +21,7 @@ const prefab = @import("prefab.zig");
 
 pub const Assets = prefab.Assets;
 pub const displayPropertyPath = inspector.displayPath;
+pub const isHiddenPropertyPath = inspector.isHidden;
 pub const isUnityYaml = parser.isUnityYaml;
 pub const DiffError = parser.Error;
 pub const JsonError = DiffError || std.Io.Writer.Error;

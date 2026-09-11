@@ -4,6 +4,32 @@ const display = @import("display.zig");
 const properties = core.merge.properties;
 const Node = core.model.Node;
 
+test "merge TUI: semantic rows hide inspector-hidden ownership fields" {
+    var memory = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer memory.deinit();
+    const arena = memory.allocator();
+    const rigidbody =
+        "--- !u!54 &54\nRigidbody:\n  m_GameObject: {fileID: 1}\n  m_Mass: 2\n";
+    const document = try properties.parse(arena, rigidbody);
+    const operation = core.merge.Operation{
+        .id = 0,
+        .atomic_id = 0,
+        .kind = .document,
+        .identity = .{ .document = .{ .class_id = 54, .file_id = 54 }, .property_path = "" },
+        .property_path = "",
+        .hierarchy_path = "Rigidbody",
+        .values = .{
+            .base = .{ .bytes = rigidbody, .node = document.node(&.{}), .span = null },
+            .ours = .{ .bytes = rigidbody, .node = document.node(&.{}), .span = null },
+            .theirs = .{ .bytes = rigidbody, .node = document.node(&.{}), .span = null },
+        },
+        .resolution = .unresolved,
+    };
+    const model = try build(arena, &operation, .unresolved);
+    try std.testing.expectEqual(@as(usize, 1), model.rows.len);
+    try std.testing.expectEqualStrings("Mass", model.rows[0].label);
+}
+
 test "merge TUI: property comparisons expose changed children when value shapes differ" {
     var memory = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer memory.deinit();
@@ -307,6 +333,7 @@ const Builder = struct {
                 for (value.map) |entry| {
                     const found = try keys.getOrPut(self.arena, entry.key);
                     if (found.found_existing) continue;
+                    if (path.len == 0 and core.isHiddenPropertyPath(entry.key)) continue;
                     var children: [4]?*const Node = @splat(null);
                     for (nodes, 0..) |parent, i| if (parent) |present| {
                         if (present.* == .map) children[i] = present.get(entry.key);

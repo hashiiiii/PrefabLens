@@ -20,7 +20,6 @@ test "merge TUI: component property editing retains its document and owner refer
     _ = try drawForTest(arena, view.widget(), 160, 24);
     var ctx = eventContext(arena);
     try focusResultForTest(&view, &ctx);
-    try pressKeyForTest(&view, &ctx, vaxis.Key.down);
     try pressKeyForTest(&view, &ctx, vaxis.Key.enter);
     try testing.expectEqualStrings("2", try view.editor.buf.dupe());
     try pressKeyForTest(&view, &ctx, vaxis.Key.backspace);
@@ -44,7 +43,6 @@ test "merge TUI: cancelling an empty property edit retains the component choice"
     _ = try drawForTest(arena, view.widget(), 100, 20);
     var ctx = eventContext(arena);
     try focusResultForTest(&view, &ctx);
-    try pressKeyForTest(&view, &ctx, vaxis.Key.down);
     try pressKeyForTest(&view, &ctx, vaxis.Key.enter);
     try pressKeyForTest(&view, &ctx, vaxis.Key.backspace);
     try pressKeyForTest(&view, &ctx, vaxis.Key.escape);
@@ -67,7 +65,6 @@ test "merge TUI: confirming an empty property preserves the component and permit
     _ = try drawForTest(arena, view.widget(), 140, 24);
     var ctx = eventContext(arena);
     try focusResultForTest(&view, &ctx);
-    try pressKeyForTest(&view, &ctx, vaxis.Key.down);
     try pressKeyForTest(&view, &ctx, vaxis.Key.enter);
     try pressKeyForTest(&view, &ctx, vaxis.Key.backspace);
     try pressKeyForTest(&view, &ctx, vaxis.Key.enter);
@@ -80,7 +77,6 @@ test "merge TUI: confirming an empty property preserves the component and permit
     try testing.expect(std.mem.indexOf(u8, screen, "<empty>") != null);
     try pressKeyForTest(&view, &ctx, vaxis.Key.left);
     try focusResultForTest(&view, &ctx);
-    try pressKeyForTest(&view, &ctx, vaxis.Key.down);
     try pressKeyForTest(&view, &ctx, vaxis.Key.enter);
     try testing.expect(view.editing);
     try testing.expectEqualStrings("", try view.editor.buf.dupe());
@@ -101,7 +97,6 @@ test "merge TUI: a removed component cannot acquire an independently edited prop
     _ = try drawForTest(arena, view.widget(), 100, 20);
     var ctx = eventContext(arena);
     try focusResultForTest(&view, &ctx);
-    try pressKeyForTest(&view, &ctx, vaxis.Key.down);
     try pressKeyForTest(&view, &ctx, vaxis.Key.enter);
     try testing.expect(!view.editing);
     try testing.expect(state.status.len > 0);
@@ -119,7 +114,8 @@ test "merge TUI: property and raw views preserve the selected result across togg
     var view = try viewForTest(arena, &state, "A.prefab", fixture.partial);
     defer view.deinit();
     const before = try surfaceText(arena, try drawForTest(arena, view.widget(), 120, 24));
-    try testing.expect(std.mem.indexOf(u8, before, "Game Object") != null);
+    try testing.expect(std.mem.indexOf(u8, before, "Mass") != null);
+    try testing.expect(std.mem.indexOf(u8, before, "Game Object") == null);
     var ctx = eventContext(arena);
     const click_toggle: vxfw.Event = .{ .mouse = .{
         .col = 110,
@@ -278,7 +274,6 @@ test "merge TUI: Raw shortcut preserves typed letters in the Result editor" {
         try testing.expect(std.mem.indexOf(u8, raw, "Rigidbody:") != null);
         try view.widget().handleEvent(&ctx, .{ .key_press = raw_key });
         try focusResultForTest(&view, &ctx);
-        try pressKeyForTest(&view, &ctx, vaxis.Key.down);
         try pressKeyForTest(&view, &ctx, vaxis.Key.enter);
         try testing.expectEqualStrings("2", try view.editor.buf.dupe());
         // Mode shortcuts must become ordinary text once the Result editor owns focus.

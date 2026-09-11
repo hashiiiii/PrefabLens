@@ -133,6 +133,28 @@ test "merge TUI: property and raw views preserve the selected result across togg
     try testing.expectEqual(core.merge.Side.theirs, state.pending.?.take);
 }
 
+test "merge TUI: sequence order semantic view toggles to a unified diff" {
+    var memory = std.heap.ArenaAllocator.init(testing.allocator);
+    defer memory.deinit();
+    const arena = memory.allocator();
+    var fixture = try prefabOrderPlan(arena);
+    var state = try merge_ui_state.State.init(arena, &fixture.plan);
+    var view = try viewForTest(arena, &state, "PrefabOrder.prefab", fixture.partial);
+    defer view.deinit();
+    const semantic = try surfaceText(arena, try drawForTest(arena, view.widget(), 160, 24));
+    try testing.expect(std.mem.indexOf(u8, semantic, "⇧R Unified") != null);
+    try testing.expect(std.mem.indexOf(u8, semantic, "Name") != null);
+    try testing.expect(std.mem.indexOf(u8, semantic, "Tag") != null);
+    try testing.expect(std.mem.indexOf(u8, semantic, "--- Ours") == null);
+    var ctx = eventContext(arena);
+    try view.widget().handleEvent(&ctx, .{ .key_press = .{ .codepoint = 'r', .mods = .{ .shift = true }, .text = "R" } });
+    const unified = try surfaceText(arena, try drawForTest(arena, view.widget(), 160, 24));
+    // Unified is one inspector-wide Ours/Theirs diff, not the four wrapping YAML columns.
+    try testing.expect(std.mem.indexOf(u8, unified, "⇧R Semantic") != null);
+    try testing.expect(std.mem.indexOf(u8, unified, "--- Ours") != null);
+    try testing.expect(std.mem.indexOf(u8, unified, "+++ Theirs") != null);
+}
+
 test "merge TUI: prefab override raw edit keeps the displayed modification YAML" {
     var memory = std.heap.ArenaAllocator.init(testing.allocator);
     defer memory.deinit();
@@ -1776,7 +1798,7 @@ fn draw(
     );
     styleRange(surface, body.inspector_heading_row, geometry.inspector, .{ .fg = Palette.muted });
     if (heading.raw) |toggle| {
-        writeClipped(surface, toggle.start, body.inspector_heading_row, toggle.end - toggle.start, if (self.raw_view) "⇧R Semantic" else "⇧R Raw");
+        writeClipped(surface, toggle.start, body.inspector_heading_row, toggle.end - toggle.start, if (self.raw_view) "⇧R Semantic" else "⇧R Unified");
     }
     if (self.usesProperties()) {
         writeClipped(surface, geometry.inspector.start, body.inspector_labels_row, geometry.base.start - geometry.inspector.start, "Property");
@@ -1868,6 +1890,8 @@ fn draw(
 
     if (self.usesProperties()) {
         try paintProperties(self, ctx.arena, surface, size);
+    } else if (self.raw_view) {
+        try paintUnified(self, ctx.arena, surface, size);
     } else if (self.selectedOperation()) |operation| {
         const columns = .{
             .{ geometry.base, try self.columnText(ctx.arena, operation, .base), ValueColumn.base },
@@ -2030,6 +2054,28 @@ fn draw(
         }
     }
     return surface;
+}
+
+fn paintUnified(self: *View, arena: std.mem.Allocator, surface: vxfw.Surface, size: vxfw.Size) !void {
+    const operation = self.selectedOperation() orelse return;
+    const ours = try self.columnText(arena, operation, .ours);
+    const theirs = try self.columnText(arena, operation, .theirs);
+    const text = try unifiedDiff(arena, "Ours", ours, "Theirs", theirs);
+    const geometry = self.valueGeometry(size.width);
+    const body = BodyGeometry.init(size.height);
+    const visible = if (self.selected_value == .ours or self.selected_value == .theirs)
+        skipGraphemes(text, self.horizontal_offset)
+    else
+        text;
+    _ = paintColumnValue(
+        surface,
+        geometry.inspector,
+        body.inspector_rows.start,
+        body.inspector_rows.end,
+        visible,
+        0,
+        valueStyle(self.selected_value),
+    );
 }
 
 fn paintProperties(self: *View, arena: std.mem.Allocator, surface: vxfw.Surface, size: vxfw.Size) !void {
@@ -2294,6 +2340,84 @@ fn paintColumnValue(
     return row;
 }
 
+fn unifiedDiff(
+    arena: std.mem.Allocator,
+    left_name: []const u8,
+    left: []const u8,
+    right_name: []const u8,
+    right: []const u8,
+) ![]const u8 {
+    const a = try splitDiffLines(arena, left);
+    const b = try splitDiffLines(arena, right);
+    var out: std.ArrayList(u8) = .empty;
+    try out.appendSlice(arena, "--- ");
+    try out.appendSlice(arena, left_name);
+    try out.append(arena, '\n');
+    try out.appendSlice(arena, "+++ ");
+    try out.appendSlice(arena, right_name);
+    try out.append(arena, '\n');
+    try out.appendSlice(arena, try std.fmt.allocPrint(arena, "@@ -1,{d} +1,{d} @@\n", .{ a.len, b.len }));
+    const width = b.len + 1;
+    const dp = try arena.alloc(u32, (a.len + 1) * width);
+    @memset(dp, 0);
+    var i = a.len;
+    while (i > 0) {
+        i -= 1;
+        var j = b.len;
+        while (j > 0) {
+            j -= 1;
+            dp[i * width + j] = if (std.mem.eql(u8, a[i], b[j]))
+                dp[(i + 1) * width + (j + 1)] + 1
+            else
+                @max(dp[(i + 1) * width + j], dp[i * width + (j + 1)]);
+        }
+    }
+    i = 0;
+    var j: usize = 0;
+    while (i < a.len and j < b.len) {
+        if (std.mem.eql(u8, a[i], b[j])) {
+            try out.appendSlice(arena, " ");
+            try out.appendSlice(arena, a[i]);
+            try out.append(arena, '\n');
+            i += 1;
+            j += 1;
+        } else if (dp[(i + 1) * width + j] >= dp[i * width + (j + 1)]) {
+            try out.appendSlice(arena, "-");
+            try out.appendSlice(arena, a[i]);
+            try out.append(arena, '\n');
+            i += 1;
+        } else {
+            try out.appendSlice(arena, "+");
+            try out.appendSlice(arena, b[j]);
+            try out.append(arena, '\n');
+            j += 1;
+        }
+    }
+    while (i < a.len) : (i += 1) {
+        try out.appendSlice(arena, "-");
+        try out.appendSlice(arena, a[i]);
+        try out.append(arena, '\n');
+    }
+    while (j < b.len) : (j += 1) {
+        try out.appendSlice(arena, "+");
+        try out.appendSlice(arena, b[j]);
+        try out.append(arena, '\n');
+    }
+    return out.toOwnedSlice(arena);
+}
+
+fn splitDiffLines(arena: std.mem.Allocator, text: []const u8) ![]const []const u8 {
+    var lines: std.ArrayList([]const u8) = .empty;
+    var it = std.mem.splitScalar(u8, text, '\n');
+    while (it.next()) |line| {
+        try lines.append(arena, std.mem.trimEnd(u8, line, "\r"));
+    }
+    if (lines.items.len > 0 and lines.items[lines.items.len - 1].len == 0) {
+        _ = lines.pop();
+    }
+    return lines.toOwnedSlice(arena);
+}
+
 fn writeClipped(
     surface: vxfw.Surface,
     start: u16,
@@ -2432,21 +2556,13 @@ fn handleEvent(
             if (key.matches(vaxis.Key.up, .{})) return self.moveUp(ctx, size);
             if (key.matches(vaxis.Key.down, .{})) return self.moveDown(ctx, size);
             if (key.matches(vaxis.Key.enter, .{})) return self.activate(ctx, size);
-            if (self.hasProperties() and (key.matches('r', .{ .shift = true }) or key.matches(vaxis.Key.f3, .{}))) {
+            if (self.hasProperties() and key.matches('r', .{ .shift = true })) {
                 self.raw_view = !self.raw_view;
                 self.horizontal_offset = 0;
                 return ctx.consumeAndRedraw();
             }
             if (self.canCombine() and key.matches('t', .{ .shift = true }))
                 return self.toggleCombine(ctx);
-            if (key.matches(vaxis.Key.f2, .{})) {
-                if (self.selectedOperation() == null) return;
-                self.focus_area = .inspector;
-                self.selected_value = .result;
-                self.horizontal_offset = 0;
-                try self.state.handle(.pane_right);
-                return self.beginResultEdit(ctx, self.selectedResultInput());
-            }
             if (self.focus_area == .inspector and self.selected_value == .result) {
                 if (key.matches('j', .{ .ctrl = true }) or key.matches(vaxis.Key.enter, .{ .shift = true })) {
                     try self.beginResultEdit(ctx, self.selectedResultInput());
@@ -2600,6 +2716,37 @@ fn deleteEditPlan(arena: std.mem.Allocator) !core.merge.BuildResult {
         "--- !u!114 &1\nMonoBehaviour:\n  m_Value: 1\n  m_After: keep\n",
         "--- !u!114 &1\nMonoBehaviour:\n  m_After: keep\n",
         "--- !u!114 &1\nMonoBehaviour:\n  m_Value: 2\n  m_After: keep\n",
+    );
+}
+
+fn prefabOrderPlan(arena: std.mem.Allocator) !core.merge.BuildResult {
+    const prefix =
+        "--- !u!1001 &1\n" ++
+        "PrefabInstance:\n" ++
+        "  m_Modification:\n" ++
+        "    m_Modifications:\n";
+    const suffix =
+        "  m_SourcePrefab: {fileID: 100100000, guid: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, type: 3}\n";
+    const name =
+        "    - target: {fileID: 10, guid: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, type: 3}\n" ++
+        "      propertyPath: m_Name\n" ++
+        "      value: Root\n" ++
+        "      objectReference: {fileID: 0}\n";
+    const tag =
+        "    - target: {fileID: 10, guid: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, type: 3}\n" ++
+        "      propertyPath: m_TagString\n" ++
+        "      value: Untagged\n" ++
+        "      objectReference: {fileID: 0}\n";
+    const layer =
+        "    - target: {fileID: 10, guid: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, type: 3}\n" ++
+        "      propertyPath: m_Layer\n" ++
+        "      value: 0\n" ++
+        "      objectReference: {fileID: 0}\n";
+    return core.merge.build(
+        arena,
+        prefix ++ name ++ tag ++ layer ++ suffix,
+        prefix ++ tag ++ name ++ layer ++ suffix,
+        prefix ++ name ++ layer ++ tag ++ suffix,
     );
 }
 
@@ -2961,7 +3108,7 @@ test "merge TUI: TextField applies an arbitrary YAML value" {
     try testing.expect(!ctx.quit);
 }
 
-test "merge TUI: F2 edits an existing Result without replacing it" {
+test "merge TUI: Result Enter edits an existing value without replacing it" {
     var memory = std.heap.ArenaAllocator.init(testing.allocator);
     defer memory.deinit();
     const arena = memory.allocator();
@@ -2973,7 +3120,7 @@ test "merge TUI: F2 edits an existing Result without replacing it" {
     var ctx = eventContext(arena);
     try state.handle(.choose_ours);
     try focusResultForTest(&view, &ctx);
-    try pressKeyForTest(&view, &ctx, vaxis.Key.f2);
+    try pressKeyForTest(&view, &ctx, vaxis.Key.enter);
     try testing.expect(view.editing);
 
     // Cursor movement must edit the chosen value without applying it or replacing the other digit.

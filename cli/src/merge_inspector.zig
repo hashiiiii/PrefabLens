@@ -116,6 +116,60 @@ test "merge TUI: prefab override conflicts expose path and value rows" {
     try std.testing.expectEqualStrings("3", try valueText(arena, model.rows[1].values[2]));
 }
 
+test "merge TUI: sequence order rows follow each side's item order" {
+    var memory = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer memory.deinit();
+    const arena = memory.allocator();
+    const prefix =
+        "--- !u!1001 &1\n" ++
+        "PrefabInstance:\n" ++
+        "  m_Modification:\n" ++
+        "    m_Modifications:\n";
+    const suffix =
+        "  m_SourcePrefab: {fileID: 100100000, guid: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, type: 3}\n";
+    const name =
+        "    - target: {fileID: 10, guid: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, type: 3}\n" ++
+        "      propertyPath: m_Name\n" ++
+        "      value: Root\n" ++
+        "      objectReference: {fileID: 0}\n";
+    const tag =
+        "    - target: {fileID: 10, guid: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, type: 3}\n" ++
+        "      propertyPath: m_TagString\n" ++
+        "      value: Untagged\n" ++
+        "      objectReference: {fileID: 0}\n";
+    const layer =
+        "    - target: {fileID: 10, guid: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, type: 3}\n" ++
+        "      propertyPath: m_Layer\n" ++
+        "      value: 0\n" ++
+        "      objectReference: {fileID: 0}\n";
+    const fixture = try core.merge.build(
+        arena,
+        prefix ++ name ++ tag ++ layer ++ suffix,
+        prefix ++ tag ++ name ++ layer ++ suffix,
+        prefix ++ name ++ layer ++ tag ++ suffix,
+    );
+    const operation = for (fixture.plan.operations) |*op| {
+        if (op.kind == .sequence_order and op.resolution == .unresolved) break op;
+    } else return error.TestUnexpectedResult;
+    try std.testing.expect(supports(operation));
+    const model = try build(arena, operation, .unresolved);
+    // A reorder is one list. Rows keep each side's YAML order instead of aligning by property.
+    try std.testing.expectEqual(@as(usize, 3), model.rows.len);
+    try std.testing.expectEqualStrings("[0]", model.rows[0].label);
+    try std.testing.expectEqualStrings("[1]", model.rows[1].label);
+    try std.testing.expectEqualStrings("[2]", model.rows[2].label);
+    try std.testing.expectEqualStrings("Name", try valueText(arena, model.rows[0].values[0]));
+    try std.testing.expectEqualStrings("Tag", try valueText(arena, model.rows[0].values[1]));
+    try std.testing.expectEqualStrings("Name", try valueText(arena, model.rows[0].values[2]));
+    try std.testing.expectEqualStrings("Tag", try valueText(arena, model.rows[1].values[0]));
+    try std.testing.expectEqualStrings("Name", try valueText(arena, model.rows[1].values[1]));
+    try std.testing.expectEqualStrings("Layer", try valueText(arena, model.rows[1].values[2]));
+    try std.testing.expectEqualStrings("Layer", try valueText(arena, model.rows[2].values[0]));
+    try std.testing.expectEqualStrings("Layer", try valueText(arena, model.rows[2].values[1]));
+    try std.testing.expectEqualStrings("Tag", try valueText(arena, model.rows[2].values[2]));
+    try std.testing.expect(!model.editable(0));
+}
+
 test "merge TUI: literal property keys remain distinct from nested paths and array indices" {
     var memory = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer memory.deinit();
@@ -153,6 +207,8 @@ pub const Model = struct {
             if (document != null) return false;
         }
         if (std.mem.eql(u8, row.label, "Path") or std.mem.eql(u8, row.label, "Key")) return false;
+        // Sequence order is one list choice. An index row is not a cell you can edit.
+        if (row.path.len == 1 and row.path[0] == .index) return false;
         for (row.values) |node| {
             if (node) |value| {
                 if (value.* != .scalar and value.* != .ref) return false;
@@ -171,6 +227,7 @@ pub const Model = struct {
 
 pub fn supports(operation: *const core.merge.Operation) bool {
     if (operation.kind == .prefab_override) return true;
+    if (operation.kind == .sequence_order) return sequenceOrderSupported(operation);
     if (operation.kind == .field) {
         var saw_map = false;
         for ([_]?core.merge.SideValue{ operation.values.base, operation.values.ours, operation.values.theirs }) |value| {
@@ -191,6 +248,7 @@ pub fn supports(operation: *const core.merge.Operation) bool {
 
 pub fn build(arena: std.mem.Allocator, operation: *const core.merge.Operation, resolution: core.merge.Resolution) !Model {
     if (operation.kind == .prefab_override) return buildPrefabOverride(arena, operation, resolution);
+    if (operation.kind == .sequence_order) return buildSequenceOrder(arena, operation, resolution);
     if (operation.kind == .field) {
         const roots: [4]?*const Node = .{
             if (operation.values.base) |value| value.node else null,
@@ -262,6 +320,99 @@ fn buildPrefabOverride(
         .changed = true,
     };
     return .{ .documents = @splat(null), .rows = rows };
+}
+
+fn sequenceOrderSupported(operation: *const core.merge.Operation) bool {
+    var saw_seq = false;
+    for ([_]?core.merge.SideValue{ operation.values.base, operation.values.ours, operation.values.theirs }) |value| {
+        const present = value orelse continue;
+        const node = present.node orelse return false;
+        if (node.* != .seq) return false;
+        saw_seq = true;
+    }
+    return saw_seq;
+}
+
+fn buildSequenceOrder(
+    arena: std.mem.Allocator,
+    operation: *const core.merge.Operation,
+    resolution: core.merge.Resolution,
+) !Model {
+    const sides: [3]?*const Node = .{
+        if (operation.values.base) |value| value.node else null,
+        if (operation.values.ours) |value| value.node else null,
+        if (operation.values.theirs) |value| value.node else null,
+    };
+    const result = try sequenceResultNode(arena, operation, resolution);
+    var count: usize = 0;
+    for (sides) |node| if (node) |seq| {
+        if (seq.* == .seq) count = @max(count, seq.seq.len);
+    };
+    if (result) |seq| {
+        if (seq.* == .seq) count = @max(count, seq.seq.len);
+    }
+    const rows = try arena.alloc(Row, count);
+    for (rows, 0..) |*row, index| {
+        var values: [4]?*const Node = .{
+            try sequenceItemLabelNode(arena, sequenceItemAt(sides[0], index)),
+            try sequenceItemLabelNode(arena, sequenceItemAt(sides[1], index)),
+            try sequenceItemLabelNode(arena, sequenceItemAt(sides[2], index)),
+            try sequenceItemLabelNode(arena, sequenceItemAt(result, index)),
+        };
+        var changed = false;
+        var first: ?*const Node = null;
+        for (values[0..3]) |node| {
+            if (first == null) {
+                first = node;
+            } else {
+                changed = changed or !equal(first, node);
+            }
+        }
+        row.* = .{
+            .path = try arena.dupe(properties.Segment, &.{.{ .index = index }}),
+            .label = try std.fmt.allocPrint(arena, "[{d}]", .{index}),
+            .values = values,
+            .changed = changed,
+        };
+    }
+    return .{ .documents = @splat(null), .rows = rows };
+}
+
+fn sequenceResultNode(
+    arena: std.mem.Allocator,
+    operation: *const core.merge.Operation,
+    resolution: core.merge.Resolution,
+) !?*const Node {
+    return switch (resolution) {
+        .take => |side| if (operation.values.get(side)) |value| value.node else null,
+        .custom => |text| parseSequenceResult(arena, text),
+        .unresolved, .remove => null,
+    };
+}
+
+fn parseSequenceResult(arena: std.mem.Allocator, text: []const u8) ?*const Node {
+    const wrapped = std.fmt.allocPrint(arena, "items: {s}\n", .{text}) catch return null;
+    const document = properties.parse(arena, wrapped) catch return null;
+    const node = document.node(&.{.{ .key = "items" }}) orelse return null;
+    return if (node.* == .seq) node else null;
+}
+
+fn sequenceItemAt(node: ?*const Node, index: usize) ?*const Node {
+    const seq = node orelse return null;
+    if (seq.* != .seq or index >= seq.seq.len) return null;
+    return seq.seq[index];
+}
+
+fn sequenceItemLabelNode(arena: std.mem.Allocator, node: ?*const Node) !?*const Node {
+    const item = node orelse return null;
+    return try scalarNode(arena, try sequenceItemLabel(arena, item));
+}
+
+fn sequenceItemLabel(arena: std.mem.Allocator, node: *const Node) ![]const u8 {
+    if (node.* == .map) {
+        if (Node.asScalar(node.get("propertyPath"))) |path| return core.displayPropertyPath(arena, path);
+    }
+    return valueText(arena, node);
 }
 
 fn customFieldRoot(

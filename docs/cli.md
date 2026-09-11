@@ -196,7 +196,6 @@ The user can edit it with another tool and complete the normal Git workflow.
 Navigation and automatic selection of the next conflict follow the hierarchy's order from top to bottom.
 Click **Ours** or **Theirs** to preview a value.
 Click **Result**, or focus it and press **Enter**, to edit the existing value.
-**F2** also opens the Result editor directly from the selected conflict.
 Outside the property table, **Backspace** or **Delete** clears Result and reopens the conflict without starting the editor.
 While editing, typing and pasting insert at the cursor; **Backspace** and **Delete** remove a character or the selected range.
 
@@ -230,9 +229,11 @@ You can also focus Result, select a property with **Up** / **Down**, and press *
 The component and its GameObject membership are resolved together.
 Ownership references are read-only in the property table.
 
-**Shift+R** switches between Semantic and Raw YAML without changing the selected result; **F3** is an alias.
+**Shift+R** switches between Semantic and Unified without changing the selected result.
+Semantic is a property table. Sequence order conflicts list each side's items in YAML order.
+Unified is one inspector-wide Ours/Theirs diff of the same conflict.
 While editing, **Shift+R** inserts text.
-Raw Result editing accepts the complete component document.
+Unified Result editing accepts the complete component document.
 Keep its document header, type, and `m_GameObject` reference unchanged.
 
 #### Completion checks

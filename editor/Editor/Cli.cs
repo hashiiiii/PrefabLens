@@ -10,7 +10,7 @@ namespace PrefabLens
     public static partial class Cli
     {
         /// Version of the CLI to download (kept in sync with the GitHub Releases tag v{Version}).
-        public const string Version = "0.10.2";
+        public const string Version = "0.10.4";
         public const string CliPathPref = "PrefabLens.CliPath";
 
         public static string BinaryName =>

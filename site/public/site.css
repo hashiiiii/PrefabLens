@@ -212,6 +212,10 @@ h3 {
   height: auto;
 }
 
+video.window-shot {
+  background: #000000;
+}
+
 /* --- Simulated GitHub page (inside a .window) ---------------------------- */
 
 .gh-page {

@@ -5,6 +5,10 @@ on:
       version:
         description: 'Release version (X.Y.Z, no v prefix)'
         required: true
+      skip_chrome_extension:
+        description: 'Skip Chrome Web Store publish (GitHub Release still includes the extension zip)'
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -14,7 +18,105 @@ concurrency:
   group: release
 
 jobs:
+  # The CLI compiles its version out of build.zig.zon, so the bump must
+  # precede the builds. The commit/tag/push happens in the release job
+  # after every artifact exists, so a failed build leaves nothing on origin.
+  prepare:
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ inputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install tools
+        uses: jdx/mise-action@v4
+      - name: Validate input
+        run: |
+          set -euo pipefail
+          [ "$GITHUB_REF_NAME" = "main" ] || { echo "::error::run this workflow from main (got $GITHUB_REF_NAME)"; exit 1; }
+      - name: Bump version
+        run: |
+          set -euo pipefail
+          bump-my-version bump --new-version "$VERSION"
+          git add -u
+          git diff --cached --name-only -z | tar --null -T - -czf "$RUNNER_TEMP/version-bump.tar.gz"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: version-bump
+          path: ${{ runner.temp }}/version-bump.tar.gz
+          if-no-files-found: error
+          retention-days: 1
+
+  cli:
+    needs: prepare
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - target: aarch64-macos
+            asset: macos-arm64
+            binary: prefablens
+          - target: x86_64-macos
+            asset: macos-x64
+            binary: prefablens
+          - target: x86_64-linux-gnu
+            asset: linux-x64
+            binary: prefablens
+          - target: aarch64-linux-gnu
+            asset: linux-arm64
+            binary: prefablens
+          - target: x86_64-windows
+            asset: windows-x64
+            binary: prefablens.exe
+          - target: aarch64-windows
+            asset: windows-arm64
+            binary: prefablens.exe
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/apply-version-bump
+      - uses: jdx/mise-action@v4
+      - uses: ./.github/actions/setup-zig-cache
+      - name: Build CLI
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          zig build -Dtarget=${{ matrix.target }} -Doptimize=ReleaseSafe
+          (cd zig-out/bin && zip -j "../../dist/prefablens-${{ matrix.asset }}.zip" "${{ matrix.binary }}" git-merge-prefablens)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cli-${{ matrix.asset }}
+          path: dist/prefablens-${{ matrix.asset }}.zip
+          if-no-files-found: error
+          retention-days: 1
+
+  extension:
+    needs: prepare
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ inputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/apply-version-bump
+      - uses: jdx/mise-action@v4
+      - uses: ./.github/actions/setup-zig-cache
+      - uses: ./.github/actions/setup-pnpm-store
+      - name: Build and package extension
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          zig build wasm
+          pnpm -C extension install --frozen-lockfile
+          pnpm -C extension build
+          # Zip the dist contents (not the directory) so manifest.json sits at the zip root
+          (cd extension/dist && zip -r "../../dist/prefablens-extension-$VERSION.zip" .)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: extension
+          path: dist/prefablens-extension-${{ inputs.version }}.zip
+          if-no-files-found: error
+          retention-days: 1
+
   release:
+    needs: [cli, extension]
     runs-on: ubuntu-latest
     env:
       VERSION: ${{ inputs.version }}
@@ -27,43 +129,21 @@ jobs:
       - uses: actions/checkout@v7
         with:
           token: ${{ steps.app-token.outputs.token }}
-      - name: Install tools
-        uses: jdx/mise-action@v4
-      - name: Validate input
+      - uses: ./.github/actions/apply-version-bump
+      - name: Stage version bump
         run: |
           set -euo pipefail
-          [ "$GITHUB_REF_NAME" = "main" ] || { echo "::error::run this workflow from main (got $GITHUB_REF_NAME)"; exit 1; }
-      # The CLI compiles its version out of build.zig.zon, so the bump must
-      # precede the builds. The commit/tag/push happens after the builds so a
-      # failed build leaves nothing on origin and the workflow can be re-run.
-      - name: Bump version
-        run: |
-          set -euo pipefail
-          bump-my-version bump --new-version "$VERSION"
-          # Stage the bump now so build outputs cannot leak into the commit.
+          # Stage the bump now so downloaded zips cannot leak into the commit.
           git add -u
-      - name: Build CLI for all targets
-        run: |
-          set -euo pipefail
-          mkdir -p dist
-          build() {
-            zig build -Dtarget="$1" -Doptimize=ReleaseSafe
-            (cd zig-out/bin && zip -j "../../dist/prefablens-$2.zip" "$3" git-merge-prefablens)
-          }
-          build aarch64-macos      macos-arm64   prefablens
-          build x86_64-macos       macos-x64     prefablens
-          build x86_64-linux-gnu   linux-x64     prefablens
-          build aarch64-linux-gnu  linux-arm64   prefablens
-          build x86_64-windows     windows-x64   prefablens.exe
-          build aarch64-windows    windows-arm64 prefablens.exe
-      - name: Build and package extension
-        run: |
-          set -euo pipefail
-          zig build wasm
-          pnpm -C extension install --frozen-lockfile
-          pnpm -C extension build
-          # Zip the dist contents (not the directory) so manifest.json sits at the zip root
-          (cd extension/dist && zip -r "../../dist/prefablens-extension-$VERSION.zip" .)
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: cli-*
+          merge-multiple: true
+          path: dist
+      - uses: actions/download-artifact@v4
+        with:
+          name: extension
+          path: dist
       - name: Commit, tag, and push
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
@@ -138,7 +218,10 @@ jobs:
   # Store and submits it for review; the store publishes it automatically on
   # approval. Independent from the release: safe to re-run in isolation, but
   # fails while a previous submission is still pending review.
+  # Skipped when skip_chrome_extension is true. The release still attaches
+  # the zip, so this job can run later on its own.
   publish-extension:
+    if: ${{ !inputs.skip_chrome_extension }}
     needs: release
     runs-on: ubuntu-latest
     env:

@@ -1,0 +1,13 @@
+name: Apply version bump
+description: Overlay the bumped source files produced by the prepare job
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/download-artifact@v4
+      with:
+        name: version-bump
+        path: ${{ runner.temp }}
+    - name: Overlay bumped files
+      shell: bash
+      run: tar -xzf "${{ runner.temp }}/version-bump.tar.gz" -C "$GITHUB_WORKSPACE"

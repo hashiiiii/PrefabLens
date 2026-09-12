@@ -289,20 +289,20 @@ test "merge TUI: wheel scrolls only the focused inspector column" {
     var memory = std.heap.ArenaAllocator.init(testing.allocator);
     defer memory.deinit();
     const arena = memory.allocator();
-    var fixture = try componentDeletePlan(arena);
+    var fixture = try prefabOrderPlan(arena);
     var state = try merge_ui_state.State.init(arena, &fixture.plan);
-    var view = try viewForTest(arena, &state, "A.prefab", fixture.partial);
+    var view = try viewForTest(arena, &state, "PrefabOrder.prefab", fixture.partial);
     defer view.deinit();
     view.raw_view = true;
     view.focus_area = .inspector;
     view.selected_value = .theirs;
-    _ = try drawForTest(arena, view.widget(), 160, 24);
+    _ = try drawForTest(arena, view.widget(), 160, 16);
     var ctx = eventContext(arena);
     const geometry = Geometry.init(160);
-    const body = BodyGeometry.init(24);
+    const body = BodyGeometry.init(16);
     const ours_before = try rangeText(
         arena,
-        try drawForTest(arena, view.widget(), 160, 24),
+        try drawForTest(arena, view.widget(), 160, 16),
         geometry.ours,
         body.inspector_rows.start,
         body.inspector_rows.end,
@@ -318,7 +318,7 @@ test "merge TUI: wheel scrolls only the focused inspector column" {
     try testing.expectEqual(@as(usize, 0), view.column_v[@intFromEnum(ValueColumn.theirs)]);
     const ours_after = try rangeText(
         arena,
-        try drawForTest(arena, view.widget(), 160, 24),
+        try drawForTest(arena, view.widget(), 160, 16),
         geometry.ours,
         body.inspector_rows.start,
         body.inspector_rows.end,
@@ -333,6 +333,149 @@ test "merge TUI: wheel scrolls only the focused inspector column" {
     } });
     try testing.expectEqual(@as(usize, 1), view.column_v[@intFromEnum(ValueColumn.theirs)]);
     try testing.expectEqual(@as(usize, 0), view.column_v[@intFromEnum(ValueColumn.ours)]);
+}
+
+test "merge TUI: inspector column scroll stops at the last line" {
+    var memory = std.heap.ArenaAllocator.init(testing.allocator);
+    defer memory.deinit();
+    const arena = memory.allocator();
+    var fixture = try prefabOrderPlan(arena);
+    var state = try merge_ui_state.State.init(arena, &fixture.plan);
+    var view = try viewForTest(arena, &state, "PrefabOrder.prefab", fixture.partial);
+    defer view.deinit();
+    view.raw_view = true;
+    view.focus_area = .inspector;
+    view.selected_value = .theirs;
+    _ = try drawForTest(arena, view.widget(), 160, 16);
+    var ctx = eventContext(arena);
+    const geometry = Geometry.init(160);
+    const body = BodyGeometry.init(16);
+    for (0..400) |_| {
+        try view.widget().handleEvent(&ctx, .{ .mouse = .{
+            .col = @intCast(geometry.theirs.start + 2),
+            .row = @intCast(body.inspector_rows.start),
+            .button = .wheel_down,
+            .mods = .{},
+            .type = .press,
+        } });
+    }
+    const viewport = body.inspector_rows.end - body.inspector_rows.start;
+    const operation = view.selectedOperation().?;
+    const text = try unifiedDiff(
+        arena,
+        "Base",
+        try view.columnText(arena, operation, .base),
+        "Theirs",
+        try view.columnText(arena, operation, .theirs),
+    );
+    const rows = columnScrollMetrics(geometry.theirs, text, viewport, 0).rows;
+    try testing.expect(view.column_v[@intFromEnum(ValueColumn.theirs)] < 400);
+    try testing.expectEqual(rows -| viewport, view.column_v[@intFromEnum(ValueColumn.theirs)]);
+    const surface = try drawForTest(arena, view.widget(), 160, 16);
+    try testing.expect(hasScrollbarThumb(surface, geometry.theirs.end - 1, body.inspector_rows.start, body.inspector_rows.end));
+}
+
+test "merge TUI: wrapped inspector lines show a floating scrollbar only while scrolling" {
+    var memory = std.heap.ArenaAllocator.init(testing.allocator);
+    defer memory.deinit();
+    const arena = memory.allocator();
+    var fixture = try prefabOrderPlan(arena);
+    var state = try merge_ui_state.State.init(arena, &fixture.plan);
+    var view = try viewForTest(arena, &state, "PrefabOrder.prefab", fixture.partial);
+    defer view.deinit();
+    view.raw_view = true;
+    view.focus_area = .inspector;
+    view.selected_value = .theirs;
+    const idle = try drawForTest(arena, view.widget(), 160, 40);
+    const geometry = Geometry.init(160);
+    const body = BodyGeometry.init(40);
+    const viewport = body.inspector_rows.end - body.inspector_rows.start;
+    const operation = view.selectedOperation().?;
+    const text = try unifiedDiff(
+        arena,
+        "Base",
+        try view.columnText(arena, operation, .base),
+        "Theirs",
+        try view.columnText(arena, operation, .theirs),
+    );
+    try testing.expect(countContentLines(text) <= viewport);
+    try testing.expect(!hasScrollbarThumb(idle, geometry.theirs.end - 1, body.inspector_rows.start, body.inspector_rows.end));
+    var ctx = eventContext(arena);
+    try view.widget().handleEvent(&ctx, .{ .mouse = .{
+        .col = @intCast(geometry.theirs.start + 2),
+        .row = @intCast(body.inspector_rows.start),
+        .button = .wheel_down,
+        .mods = .{},
+        .type = .press,
+    } });
+    const scrolling = try drawForTest(arena, view.widget(), 160, 40);
+    try testing.expect(hasScrollbarThumb(scrolling, geometry.theirs.end - 1, body.inspector_rows.start, body.inspector_rows.end));
+    const thumb = scrollbarThumbCell(scrolling, geometry.theirs.end - 1, body.inspector_rows.start, body.inspector_rows.end) orelse
+        return error.TestUnexpectedResult;
+    try testing.expect(vaxis.Color.eql(thumb.style.bg, Palette.scrollbar));
+    try testing.expect(!isScrollbarGlyph(thumb.char.grapheme));
+    try testing.expect(!hasScrollbarThumb(scrolling, geometry.theirs.end - 2, body.inspector_rows.start, body.inspector_rows.end));
+    try view.widget().handleEvent(&ctx, .tick);
+    const hidden = try drawForTest(arena, view.widget(), 160, 40);
+    try testing.expect(!hasScrollbarThumb(hidden, geometry.theirs.end - 1, body.inspector_rows.start, body.inspector_rows.end));
+}
+
+test "merge TUI: unfocused inspector columns do not show a scrollbar" {
+    var memory = std.heap.ArenaAllocator.init(testing.allocator);
+    defer memory.deinit();
+    const arena = memory.allocator();
+    var fixture = try prefabOrderPlan(arena);
+    var state = try merge_ui_state.State.init(arena, &fixture.plan);
+    var view = try viewForTest(arena, &state, "PrefabOrder.prefab", fixture.partial);
+    defer view.deinit();
+    view.raw_view = true;
+    view.focus_area = .hierarchy;
+    view.selected_value = .theirs;
+    view.scrollbar_visible = true;
+    const surface = try drawForTest(arena, view.widget(), 160, 16);
+    const geometry = Geometry.init(160);
+    const body = BodyGeometry.init(16);
+    try testing.expect(!hasScrollbarThumb(surface, geometry.theirs.end - 1, body.inspector_rows.start, body.inspector_rows.end));
+}
+
+test "merge TUI: scrollbar thumb shrinks as the scroll range grows" {
+    try testing.expectEqual(@as(usize, 20), scrollbarThumbRows(21, 22));
+    try testing.expectEqual(@as(usize, 5), scrollbarThumbRows(21, 80));
+    try testing.expect(scrollbarThumbRows(21, 22) > scrollbarThumbRows(21, 80));
+}
+
+test "merge TUI: wheel right scrolls wrapped inspector lines vertically" {
+    var memory = std.heap.ArenaAllocator.init(testing.allocator);
+    defer memory.deinit();
+    const arena = memory.allocator();
+    var fixture = try prefabOrderPlan(arena);
+    var state = try merge_ui_state.State.init(arena, &fixture.plan);
+    var view = try viewForTest(arena, &state, "PrefabOrder.prefab", fixture.partial);
+    defer view.deinit();
+    view.raw_view = true;
+    view.focus_area = .inspector;
+    view.selected_value = .theirs;
+    _ = try drawForTest(arena, view.widget(), 160, 40);
+    var ctx = eventContext(arena);
+    const geometry = Geometry.init(160);
+    const body = BodyGeometry.init(40);
+    try view.widget().handleEvent(&ctx, .{ .mouse = .{
+        .col = @intCast(geometry.theirs.start + 2),
+        .row = @intCast(body.inspector_rows.start),
+        .button = .wheel_down,
+        .mods = .{},
+        .type = .press,
+    } });
+    try testing.expectEqual(@as(usize, 1), view.column_v[@intFromEnum(ValueColumn.theirs)]);
+    try view.widget().handleEvent(&ctx, .{ .mouse = .{
+        .col = @intCast(geometry.theirs.start + 2),
+        .row = @intCast(body.inspector_rows.start),
+        .button = .wheel_right,
+        .mods = .{},
+        .type = .press,
+    } });
+    try testing.expectEqual(@as(usize, 2), view.column_v[@intFromEnum(ValueColumn.theirs)]);
+    try testing.expectEqual(@as(usize, 0), view.column_h[@intFromEnum(ValueColumn.theirs)]);
 }
 
 test "merge TUI: game object delete edit uses a Base diff and keeps ⇧R" {
@@ -573,6 +716,8 @@ const horizontal_padding: u16 = 2;
 const vertical_padding: u16 = 1;
 
 const Palette = struct {
+    // Hallmark · component: scrollbar · genre: modern-minimal · theme: Terminal-adjacent
+    // states: hidden-idle · visible-scroll · hidden-unfocused · overlay-bg
     const accent: vaxis.Color = .{ .rgb = .{ 176, 169, 255 } };
     const ours: vaxis.Color = .{ .rgb = .{ 255, 112, 122 } };
     const theirs: vaxis.Color = .{ .rgb = .{ 91, 224, 135 } };
@@ -581,7 +726,16 @@ const Palette = struct {
     const error_text: vaxis.Color = .{ .rgb = .{ 245, 92, 92 } };
     const focus_bg: vaxis.Color = .{ .rgb = .{ 48, 46, 68 } };
     const result_bg: vaxis.Color = .{ .rgb = .{ 31, 32, 43 } };
+    const scrollbar: vaxis.Color = .{ .rgb = .{ 84, 85, 99 } };
 };
+
+const scrollbar_hide_ms: u32 = 900;
+const scrollbar_width: u16 = 1;
+
+fn scrollbarThumbRows(viewport: usize, content: usize) usize {
+    if (content <= viewport or viewport == 0) return 0;
+    return @max(@as(usize, 1), (viewport * viewport) / content);
+}
 
 fn isUsableSize(size: vxfw.Size) bool {
     return size.width >= minimum_size.width and size.height >= minimum_size.height;
@@ -749,6 +903,13 @@ fn valueRange(geometry: Geometry, column: ValueColumn) Range {
     };
 }
 
+fn isWheelButton(button: vaxis.Mouse.Button) bool {
+    return switch (button) {
+        .wheel_up, .wheel_down, .wheel_left, .wheel_right => true,
+        else => false,
+    };
+}
+
 fn columnAt(geometry: Geometry, col: i16) ?ValueColumn {
     if (col < 0) return null;
     const x: u16 = @intCast(col);
@@ -756,6 +917,139 @@ fn columnAt(geometry: Geometry, col: i16) ?ValueColumn {
         if (inRange(x, valueRange(geometry, column))) return column;
     }
     return null;
+}
+
+fn countContentLines(text: []const u8) usize {
+    var count: usize = 0;
+    var lines = std.mem.splitScalar(u8, text, '\n');
+    var remaining = std.mem.splitScalar(u8, text, '\n');
+    _ = remaining.next();
+    while (lines.next()) |raw_line| {
+        const more = remaining.next() != null;
+        const line = std.mem.trimEnd(u8, raw_line, "\r");
+        if (!more and line.len == 0) break;
+        count += 1;
+    }
+    return count;
+}
+
+fn consumeDisplayWidth(text: []const u8, width: usize) usize {
+    var col: usize = 0;
+    var graphemes = vaxis.unicode.graphemeIterator(text);
+    var consumed: usize = 0;
+    while (graphemes.next()) |grapheme| {
+        const bytes = grapheme.bytes(text);
+        const cell_width = vaxis.gwidth.gwidth(bytes, .unicode);
+        if (cell_width == 0) {
+            consumed = grapheme.start + grapheme.len;
+            continue;
+        }
+        if (col + cell_width > width) break;
+        col += cell_width;
+        consumed = grapheme.start + grapheme.len;
+    }
+    return consumed;
+}
+
+fn countLineVisualRows(line: []const u8, width: usize) usize {
+    if (line.len == 0 or width == 0) return 1;
+    var rest = line;
+    var rows: usize = 0;
+    while (rest.len != 0) {
+        const consumed = consumeDisplayWidth(rest, width);
+        if (consumed == 0) return rows + 1;
+        rest = rest[consumed..];
+        rows += 1;
+    }
+    return rows;
+}
+
+fn visiblePaintLine(text: []const u8, line: []const u8, indent: usize) []const u8 {
+    return if (isPlaceholderValue(text)) line else skipLineIndent(line, indent);
+}
+
+fn countVisualRows(text: []const u8, inner_width: usize, indent: usize) usize {
+    var count: usize = 0;
+    var lines = std.mem.splitScalar(u8, text, '\n');
+    var remaining = std.mem.splitScalar(u8, text, '\n');
+    _ = remaining.next();
+    while (lines.next()) |raw_line| {
+        const more = remaining.next() != null;
+        const line = std.mem.trimEnd(u8, raw_line, "\r");
+        if (!more and line.len == 0) break;
+        count += countLineVisualRows(visiblePaintLine(text, line, indent), inner_width);
+    }
+    return count;
+}
+
+fn skipWrappedPrefix(line: []const u8, width: usize, skip: *usize) []const u8 {
+    var rest = line;
+    while (skip.* > 0) {
+        if (rest.len == 0) {
+            skip.* -= 1;
+            return "";
+        }
+        const consumed = consumeDisplayWidth(rest, width);
+        if (consumed == 0) {
+            skip.* -= 1;
+            return rest;
+        }
+        rest = rest[consumed..];
+        skip.* -= 1;
+        if (rest.len == 0) return "";
+    }
+    return rest;
+}
+
+const ColumnScrollMetrics = struct {
+    width: usize,
+    rows: usize,
+    bar: bool,
+};
+
+fn columnScrollMetrics(range: Range, text: []const u8, viewport: usize, indent: usize) ColumnScrollMetrics {
+    const width = range.end - range.start -| 2;
+    const rows = countVisualRows(text, width, indent);
+    return .{ .width = width, .rows = rows, .bar = rows > viewport };
+}
+
+fn maxScrollOffset(content: usize, viewport: usize) usize {
+    return content -| viewport;
+}
+
+fn reservedScrollRange(range: Range, content: usize, viewport: usize) Range {
+    _ = content;
+    _ = viewport;
+    return range;
+}
+
+fn paintScrollbar(
+    surface: vxfw.Surface,
+    right_col: u16,
+    start_row: u16,
+    end_row: u16,
+    offset: usize,
+    content: usize,
+) void {
+    const viewport: usize = end_row - start_row;
+    const thumb_h = scrollbarThumbRows(viewport, content);
+    if (thumb_h == 0) return;
+    const travel = viewport -| thumb_h;
+    const max_off = content -| viewport;
+    const thumb_start = if (max_off == 0) 0 else (offset * travel) / max_off;
+    const left_col = right_col -| (scrollbar_width - 1);
+    var row = start_row;
+    while (row < end_row) : (row += 1) {
+        const i: usize = row - start_row;
+        if (i < thumb_start or i >= thumb_start + thumb_h) continue;
+        var col = left_col;
+        while (col <= right_col) : (col += 1) {
+            var cell = surface.readCell(col, row);
+            cell.style.bg = Palette.scrollbar;
+            cell.default = false;
+            surface.writeCell(col, row, cell);
+        }
+    }
 }
 
 fn skipLines(text: []const u8, count: usize) []const u8 {
@@ -793,6 +1087,9 @@ pub const View = struct {
     horizontal_offset: usize = 0,
     column_h: [4]usize = .{ 0, 0, 0, 0 },
     column_v: [4]usize = .{ 0, 0, 0, 0 },
+    column_lines: [4]usize = .{ 0, 0, 0, 0 },
+    scrollbar_visible: bool = false,
+    scrollbar_hide_ticks: u8 = 0,
     vertical_offset: usize = 0,
     focus_area: FocusArea = .hierarchy,
     selected_value: ValueColumn = .ours,
@@ -899,6 +1196,7 @@ pub const View = struct {
         self.property_row = if (down) @min(self.property_row + 1, model.rows.len -| 1) else self.property_row -| 1;
         self.ensurePropertyVisible(size, model.rows.len);
         self.horizontal_offset = 0;
+        self.revealScrollbar(ctx);
         ctx.consumeAndRedraw();
     }
 
@@ -950,8 +1248,8 @@ pub const View = struct {
         if (mouse.type != .press or mouse.col < 0) return false;
         if (!inRange(@intCast(mouse.col), self.valueGeometry(size.width).hierarchy)) return false;
         switch (mouse.button) {
-            .wheel_up => self.scrollUp(ctx, size),
-            .wheel_down => self.scrollDown(ctx, size),
+            .wheel_up, .wheel_left => self.scrollUp(ctx, size),
+            .wheel_down, .wheel_right => self.scrollDown(ctx, size),
             else => return false,
         }
         return true;
@@ -982,6 +1280,8 @@ pub const View = struct {
             self.property_top = 0;
             self.column_h = .{ 0, 0, 0, 0 };
             self.column_v = .{ 0, 0, 0, 0 };
+            self.column_lines = .{ 0, 0, 0, 0 };
+            self.hideScrollbar();
             self.horizontal_offset = 0;
         }
         self.ensureSelectionVisible(size);
@@ -1211,7 +1511,30 @@ pub const View = struct {
         ctx.consumeAndRedraw();
     }
 
+    fn hideScrollbar(self: *View) void {
+        self.scrollbar_visible = false;
+        self.scrollbar_hide_ticks = 0;
+    }
+
+    fn revealScrollbar(self: *View, ctx: *vxfw.EventContext) void {
+        self.scrollbar_visible = true;
+        self.scrollbar_hide_ticks +|= 1;
+        ctx.tick(scrollbar_hide_ms, self.widget()) catch {};
+    }
+
+    fn expireScrollbar(self: *View, ctx: *vxfw.EventContext) void {
+        if (self.scrollbar_hide_ticks > 0) self.scrollbar_hide_ticks -= 1;
+        if (self.scrollbar_hide_ticks != 0 or !self.scrollbar_visible) return;
+        self.scrollbar_visible = false;
+        ctx.consumeAndRedraw();
+    }
+
+    fn shouldPaintFloatingScrollbar(self: *const View) bool {
+        return self.focus_area == .inspector and self.scrollbar_visible;
+    }
+
     fn focusHierarchy(self: *View, ctx: *vxfw.EventContext) !void {
+        self.hideScrollbar();
         self.focus_area = .hierarchy;
         self.horizontal_offset = 0;
         try self.state.handle(.pane_left);
@@ -1219,6 +1542,7 @@ pub const View = struct {
     }
 
     fn focusInspector(self: *View, ctx: *vxfw.EventContext) !void {
+        self.hideScrollbar();
         self.focus_area = .inspector;
         self.selected_value = .ours;
         self.horizontal_offset = 0;
@@ -1227,6 +1551,7 @@ pub const View = struct {
     }
 
     fn focusResult(self: *View, ctx: *vxfw.EventContext) !void {
+        self.hideScrollbar();
         self.focus_area = .inspector;
         self.selected_value = .result;
         self.horizontal_offset = 0;
@@ -1563,9 +1888,50 @@ pub const View = struct {
         ctx.consumeAndRedraw();
     }
 
+    fn inspectorViewportRows(self: *const View) usize {
+        if (!isUsableSize(self.last_size)) return 0;
+        const rows = BodyGeometry.init(self.last_size.height).inspector_rows;
+        return rows.end - rows.start;
+    }
+
+    fn prepareColumnScroll(
+        self: *View,
+        index: usize,
+        text: []const u8,
+        viewport: usize,
+        range: Range,
+        indent: usize,
+    ) Range {
+        const metrics = columnScrollMetrics(range, text, viewport, indent);
+        self.column_lines[index] = metrics.rows;
+        self.column_v[index] = @min(self.column_v[index], maxScrollOffset(metrics.rows, viewport));
+        return reservedScrollRange(range, metrics.rows, viewport);
+    }
+
+    fn paintColumnScrollbars(
+        self: *const View,
+        surface: vxfw.Surface,
+        geometry: Geometry,
+        body: BodyGeometry,
+    ) void {
+        if (!self.shouldPaintFloatingScrollbar()) return;
+        const index = @intFromEnum(self.selected_value);
+        const range = valueRange(geometry, self.selected_value);
+        paintScrollbar(
+            surface,
+            range.end -| 1,
+            body.inspector_rows.start,
+            body.inspector_rows.end,
+            self.column_v[index],
+            self.column_lines[index],
+        );
+    }
+
     fn scrollColumnVertical(self: *View, ctx: *vxfw.EventContext, column: ValueColumn, down: bool) void {
         const index = @intFromEnum(column);
-        if (down) self.column_v[index] += 1 else self.column_v[index] -|= 1;
+        const max = maxScrollOffset(self.column_lines[index], self.inspectorViewportRows());
+        if (down) self.column_v[index] = @min(self.column_v[index] +| 1, max) else self.column_v[index] -|= 1;
+        self.revealScrollbar(ctx);
         ctx.consumeAndRedraw();
     }
 
@@ -1575,11 +1941,13 @@ pub const View = struct {
             .inspector => switch (self.selected_value) {
                 .base, .ours => try self.focusHierarchy(ctx),
                 .theirs => {
+                    self.hideScrollbar();
                     self.selected_value = .ours;
                     self.horizontal_offset = 0;
                     ctx.consumeAndRedraw();
                 },
                 .result => {
+                    self.hideScrollbar();
                     self.selected_value = .theirs;
                     self.horizontal_offset = 0;
                     ctx.consumeAndRedraw();
@@ -1593,6 +1961,7 @@ pub const View = struct {
         switch (self.focus_area) {
             .hierarchy => try self.focusInspector(ctx),
             .inspector => {
+                self.hideScrollbar();
                 self.selected_value = switch (self.selected_value) {
                     .base, .ours => .theirs,
                     .theirs, .result => .result,
@@ -1678,20 +2047,24 @@ pub const View = struct {
     ) !void {
         if (self.handleHierarchyWheel(ctx, mouse, size)) return;
         const geometry = self.valueGeometry(size.width);
-        if (mouse.button == .wheel_up or mouse.button == .wheel_down) {
+        if (isWheelButton(mouse.button)) {
+            if (mouse.mods.shift) {
+                if (mouse.button == .wheel_left or mouse.button == .wheel_up) return self.scrollLeft(ctx);
+                if (mouse.button == .wheel_right or mouse.button == .wheel_down) return self.scrollRight(ctx, size);
+                return;
+            }
+            const down = mouse.button == .wheel_down or mouse.button == .wheel_right;
             if (self.usesProperties() and mouse.col >= geometry.inspector.start) {
-                return self.moveProperty(ctx, size, mouse.button == .wheel_down);
+                return self.moveProperty(ctx, size, down);
             }
             if (columnAt(geometry, mouse.col)) |column| {
                 if (self.focus_area == .inspector and column == self.selected_value) {
-                    return self.scrollColumnVertical(ctx, column, mouse.button == .wheel_down);
+                    return self.scrollColumnVertical(ctx, column, down);
                 }
                 return;
             }
         }
         if (mouse.type != .press) return;
-        if (mouse.button == .wheel_left) return self.scrollLeft(ctx);
-        if (mouse.button == .wheel_right) return self.scrollRight(ctx, size);
         if (mouse.button != .left or mouse.col < 0 or mouse.row < 0) return;
         const col: u16 = @intCast(mouse.col);
         const row: u16 = @intCast(mouse.row);
@@ -2203,17 +2576,20 @@ fn draw(
             .{ geometry.result, try self.columnText(ctx.arena, operation, .result), ValueColumn.result },
         };
         const indent = commonIndent(&.{ columns[0][1], columns[1][1], columns[2][1] });
+        const viewport = body.inspector_rows.end - body.inspector_rows.start;
         var painted_end = [_]u16{body.inspector_rows.start} ** 4;
         inline for (columns, 0..) |column, index| {
-            const scrolled = skipLines(skipGraphemes(column[1], self.column_h[index]), self.column_v[index]);
+            const paint_range = self.prepareColumnScroll(index, column[1], viewport, column[0], indent);
             painted_end[index] = paintColumnValue(
                 surface,
-                column[0],
+                paint_range,
                 body.inspector_rows.start,
                 body.inspector_rows.end,
-                scrolled,
+                column[1],
                 indent,
                 valueStyle(column[2]),
+                self.column_v[index],
+                self.column_h[index],
             );
         }
         if (self.focus_area == .inspector) {
@@ -2230,6 +2606,7 @@ fn draw(
                 });
             }
         }
+        self.paintColumnScrollbars(surface, geometry, body);
     }
 
     if (self.state.outcome == .ready) {
@@ -2365,16 +2742,20 @@ fn paintUnified(self: *View, arena: std.mem.Allocator, surface: vxfw.Surface, si
         .{ ValueColumn.theirs, try unifiedDiff(arena, "Base", base, "Theirs", try self.columnText(arena, operation, .theirs)) },
         .{ ValueColumn.result, try self.columnText(arena, operation, .result) },
     };
+    const viewport = body.inspector_rows.end - body.inspector_rows.start;
     var painted_end = [_]u16{body.inspector_rows.start} ** 4;
     inline for (columns, 0..) |column, index| {
-        const text = skipLines(skipGraphemes(column[1], self.column_h[index]), self.column_v[index]);
+        const range = valueRange(geometry, column[0]);
+        const paint_range = self.prepareColumnScroll(index, column[1], viewport, range, 0);
         painted_end[index] = paintDiffColumn(
             surface,
-            valueRange(geometry, column[0]),
+            paint_range,
             body.inspector_rows.start,
             body.inspector_rows.end,
-            text,
+            column[1],
             column[0],
+            self.column_v[index],
+            self.column_h[index],
         );
     }
     if (self.focus_area == .inspector) {
@@ -2392,6 +2773,7 @@ fn paintUnified(self: *View, arena: std.mem.Allocator, surface: vxfw.Surface, si
             });
         }
     }
+    self.paintColumnScrollbars(surface, geometry, body);
 }
 
 fn diffLineStyle(column: ValueColumn, line: []const u8) vaxis.Style {
@@ -2422,10 +2804,13 @@ fn paintDiffColumn(
     end_row: u16,
     text: []const u8,
     column: ValueColumn,
+    visual_skip: usize,
+    horizontal: usize,
 ) u16 {
     const inner_start = range.start + 2;
     const inner_width = range.end - range.start -| 2;
     var row = start_row;
+    var skip = visual_skip;
     var lines = std.mem.splitScalar(u8, text, '\n');
     var remaining_lines = std.mem.splitScalar(u8, text, '\n');
     _ = remaining_lines.next();
@@ -2434,7 +2819,8 @@ fn paintDiffColumn(
         const line = std.mem.trimEnd(u8, raw_line, "\r");
         if (!more and line.len == 0) break;
         const style = diffLineStyle(column, line);
-        var rest = line;
+        var rest = skipWrappedPrefix(skipGraphemes(line, horizontal), inner_width, &skip);
+        if (skip > 0) continue;
         while (row < end_row) {
             if (rest.len == 0) {
                 styleRange(surface, row, range, style);
@@ -2476,6 +2862,16 @@ fn paintProperties(self: *View, arena: std.mem.Allocator, surface: vxfw.Surface,
                 surface.writeCell(range.start, row, .{ .char = .{ .grapheme = "▌", .width = 1 }, .style = .{ .fg = Palette.accent, .bg = Palette.focus_bg } });
             }
         }
+    }
+    if (self.shouldPaintFloatingScrollbar()) {
+        paintScrollbar(
+            surface,
+            geometry.result.end -| 1,
+            body.inspector_rows.start,
+            body.inspector_rows.end,
+            self.property_top,
+            model.rows.len,
+        );
     }
 }
 
@@ -2684,10 +3080,13 @@ fn paintColumnValue(
     text: []const u8,
     indent: usize,
     style: vaxis.Style,
+    visual_skip: usize,
+    horizontal: usize,
 ) u16 {
     const inner_start = range.start + 2;
     const inner_width = range.end - range.start -| 2;
     var row = start_row;
+    var skip = visual_skip;
     var lines = std.mem.splitScalar(u8, text, '\n');
     var remaining_lines = std.mem.splitScalar(u8, text, '\n');
     _ = remaining_lines.next();
@@ -2695,8 +3094,9 @@ fn paintColumnValue(
         const more = remaining_lines.next() != null;
         const line = std.mem.trimEnd(u8, raw_line, "\r");
         if (!more and line.len == 0) break;
-        const visible = if (isPlaceholderValue(text)) line else skipLineIndent(line, indent);
-        var rest = visible;
+        const visible = skipGraphemes(visiblePaintLine(text, line, indent), horizontal);
+        var rest = skipWrappedPrefix(visible, inner_width, &skip);
+        if (skip > 0) continue;
         while (row < end_row) {
             if (rest.len == 0) {
                 styleRange(surface, row, range, style);
@@ -2882,6 +3282,7 @@ fn handleEvent(
     if (ctx.phase == .at_target and try self.handlePaste(ctx, event)) return;
     const size = self.eventSize();
     switch (event) {
+        .tick => return self.expireScrollbar(ctx),
         .winsize => return ctx.consumeAndRedraw(),
         .key_press, .mouse => {
             if (!isUsableSize(size)) return ctx.consumeEvent();
@@ -3335,6 +3736,23 @@ fn surfaceText(arena: std.mem.Allocator, surface: vxfw.Surface) ![]const u8 {
         try out.append(arena, '\n');
     }
     return out.toOwnedSlice(arena);
+}
+
+fn isScrollbarGlyph(grapheme: []const u8) bool {
+    return std.mem.eql(u8, grapheme, "▎") or std.mem.eql(u8, grapheme, "█") or std.mem.eql(u8, grapheme, "│");
+}
+
+fn scrollbarThumbCell(surface: vxfw.Surface, col: u16, start_row: u16, end_row: u16) ?vaxis.Cell {
+    var row = start_row;
+    while (row < end_row) : (row += 1) {
+        const cell = surface.readCell(col, row);
+        if (vaxis.Color.eql(cell.style.bg, Palette.scrollbar)) return cell;
+    }
+    return null;
+}
+
+fn hasScrollbarThumb(surface: vxfw.Surface, col: u16, start_row: u16, end_row: u16) bool {
+    return scrollbarThumbCell(surface, col, start_row, end_row) != null;
 }
 
 fn eventContext(arena: std.mem.Allocator) vxfw.EventContext {

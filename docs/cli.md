@@ -224,7 +224,7 @@ Keyed pair sequences show each item's `key` or `first` value. Result shows the v
 Reparent conflicts show the parent GameObject name. Duplicate names include the path from the root.
 Raw keeps the four columns. Ours and Theirs are unified diffs against Base. Deletions are red. Additions are green. YAML document headers stay uncolored.
 Result is the Unity YAML that will be applied, not a deletion diff. Unresolved Result stays empty.
-Missing sides stay empty. Each inspector column scrolls on its own.
+Missing sides stay empty. Each inspector column scrolls on its own and stops at the last wrapped line. A thin floating scrollbar appears on the focused column while it scrolls, then hides. Mouse wheel and trackpad two-finger scroll move vertically. Shift plus wheel scrolls a line horizontally.
 While editing, **Shift+R** inserts text.
 
 #### Completion checks

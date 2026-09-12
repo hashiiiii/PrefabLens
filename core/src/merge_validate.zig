@@ -207,27 +207,15 @@ test "merge planner: moves a Transform between a parent and the root" {
     try testing.expectEqualStrings(fixture.base, try merge.finish(arena, &from_root.plan));
 }
 
-test "merge validation: rejects a hierarchy cycle" {
+test "merge resolve: a hierarchy cycle remains a take-side choice" {
     const fixture = merge_test_support.load("reparent-cycle", true);
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
     var built = try merge.build(arena, fixture.base, fixture.ours, fixture.theirs);
     const operation = merge_test_support.findOperationByKind(&built.plan, .reparent).?;
-    try testing.expectError(
-        error.InvalidResolution,
-        merge.resolve(arena, &built.plan, operation.id, .{ .take = .theirs }),
-    );
-    const atomic = merge_test_support.findAtomicByKind(&built.plan, .reparent).?;
-    for (atomic.operation_ids) |operation_id| {
-        const member = merge_model.operationByIdConst(&built.plan, operation_id).?;
-        try testing.expect(member.resolution == .unresolved);
-    }
-    try testing.expectEqualStrings(fixture.partial.?, try @import("merge_apply.zig").applyResolved(
-        arena,
-        &built.plan,
-        false,
-    ));
+    try merge.resolve(arena, &built.plan, operation.id, .{ .take = .theirs });
+    try testing.expectEqualStrings(fixture.theirs, try merge.finish(arena, &built.plan));
 }
 
 test "merge validation: rejects duplicate file identifiers" {

@@ -30,6 +30,31 @@ test "merge TUI: semantic rows hide inspector-hidden ownership fields" {
     try std.testing.expectEqualStrings("Mass", model.rows[0].label);
 }
 
+test "merge TUI: unresolved semantic Result stays empty" {
+    var memory = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer memory.deinit();
+    const arena = memory.allocator();
+    const rigidbody =
+        "--- !u!54 &54\nRigidbody:\n  m_GameObject: {fileID: 1}\n  m_Mass: 2\n";
+    const document = try properties.parse(arena, rigidbody);
+    const operation = core.merge.Operation{
+        .id = 0,
+        .atomic_id = 0,
+        .kind = .document,
+        .identity = .{ .document = .{ .class_id = 54, .file_id = 54 }, .property_path = "" },
+        .property_path = "",
+        .hierarchy_path = "Rigidbody",
+        .values = .{
+            .base = .{ .bytes = rigidbody, .node = document.node(&.{}), .span = null },
+            .ours = .{ .bytes = rigidbody, .node = document.node(&.{}), .span = null },
+            .theirs = .{ .bytes = rigidbody, .node = document.node(&.{}), .span = null },
+        },
+        .resolution = .unresolved,
+    };
+    const model = try build(arena, &operation, .unresolved, null);
+    try std.testing.expectEqualStrings("", try model.text(arena, 0, 3));
+}
+
 test "merge TUI: property comparisons expose changed children when value shapes differ" {
     var memory = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer memory.deinit();
@@ -168,6 +193,120 @@ test "merge TUI: sequence order rows follow each side's item order" {
     try std.testing.expectEqualStrings("Layer", try valueText(arena, model.rows[2].values[1]));
     try std.testing.expectEqualStrings("Tag", try valueText(arena, model.rows[2].values[2]));
     try std.testing.expect(!model.editable(0));
+    const custom = try build(arena, operation, .{ .custom = tag ++ name ++ layer }, null);
+    try std.testing.expectEqualStrings("Tag", try valueText(arena, custom.rows[0].values[3]));
+    try std.testing.expectEqualStrings("Name", try valueText(arena, custom.rows[1].values[3]));
+    try std.testing.expectEqualStrings("Layer", try valueText(arena, custom.rows[2].values[3]));
+}
+
+test "merge TUI: keyed reorder rows show pair keys" {
+    var memory = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer memory.deinit();
+    const arena = memory.allocator();
+    const prefix = "--- !u!114 &1\nMonoBehaviour:\n  m_Stats:\n";
+    const fixture = try core.merge.build(
+        arena,
+        prefix ++ "  - key: a\n    value: 1\n  - key: b\n    value: 2\n  - key: c\n    value: 3\n",
+        prefix ++ "  - key: c\n    value: 3\n  - key: b\n    value: 2\n  - key: a\n    value: 1\n",
+        prefix ++ "  - key: b\n    value: 2\n  - key: a\n    value: 1\n  - key: c\n    value: 3\n",
+    );
+    const operation = for (fixture.plan.operations) |*op| {
+        if (op.resolution == .unresolved) break op;
+    } else return error.TestUnexpectedResult;
+    try std.testing.expect(supports(operation));
+    const model = try build(arena, operation, .unresolved, null);
+    try std.testing.expectEqual(@as(usize, 3), model.rows.len);
+    try std.testing.expectEqualStrings("a", try valueText(arena, model.rows[0].values[0]));
+    try std.testing.expectEqualStrings("c", try valueText(arena, model.rows[0].values[1]));
+    try std.testing.expectEqualStrings("b", try valueText(arena, model.rows[0].values[2]));
+    try std.testing.expectEqualStrings("b", try valueText(arena, model.rows[1].values[0]));
+    try std.testing.expectEqualStrings("b", try valueText(arena, model.rows[1].values[1]));
+    try std.testing.expectEqualStrings("a", try valueText(arena, model.rows[1].values[2]));
+    try std.testing.expectEqualStrings("c", try valueText(arena, model.rows[2].values[0]));
+    try std.testing.expectEqualStrings("a", try valueText(arena, model.rows[2].values[1]));
+    try std.testing.expectEqualStrings("c", try valueText(arena, model.rows[2].values[2]));
+}
+
+test "merge TUI: keyed first/second reorder rows show first values" {
+    var memory = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer memory.deinit();
+    const arena = memory.allocator();
+    const prefix = "--- !u!114 &1\nMonoBehaviour:\n  m_Stats:\n";
+    const fixture = try core.merge.build(
+        arena,
+        prefix ++ "  - first: a\n    second: 1\n  - first: b\n    second: 2\n  - first: c\n    second: 3\n",
+        prefix ++ "  - first: c\n    second: 3\n  - first: b\n    second: 2\n  - first: a\n    second: 1\n",
+        prefix ++ "  - first: b\n    second: 2\n  - first: a\n    second: 1\n  - first: c\n    second: 3\n",
+    );
+    const operation = for (fixture.plan.operations) |*op| {
+        if (op.resolution == .unresolved) break op;
+    } else return error.TestUnexpectedResult;
+    try std.testing.expect(supports(operation));
+    const model = try build(arena, operation, .unresolved, null);
+    try std.testing.expectEqual(@as(usize, 3), model.rows.len);
+    try std.testing.expectEqualStrings("a", try valueText(arena, model.rows[0].values[0]));
+    try std.testing.expectEqualStrings("c", try valueText(arena, model.rows[0].values[1]));
+    try std.testing.expectEqualStrings("b", try valueText(arena, model.rows[0].values[2]));
+}
+
+test "merge TUI: custom keyed sequence result shows pair keys" {
+    var memory = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer memory.deinit();
+    const arena = memory.allocator();
+    const prefix = "--- !u!114 &1\nMonoBehaviour:\n  m_Stats:\n";
+    const fixture = try core.merge.build(
+        arena,
+        prefix ++ "  - key: a\n    value: 1\n  - key: b\n    value: 2\n  - key: c\n    value: 3\n",
+        prefix ++ "  - key: c\n    value: 3\n  - key: b\n    value: 2\n  - key: a\n    value: 1\n",
+        prefix ++ "  - key: b\n    value: 2\n  - key: a\n    value: 1\n  - key: c\n    value: 3\n",
+    );
+    const operation = for (fixture.plan.operations) |*op| {
+        if (op.resolution == .unresolved) break op;
+    } else return error.TestUnexpectedResult;
+    try std.testing.expect(supports(operation));
+    const custom = "  - key: b\n    value: 2\n  - key: a\n    value: 1\n  - key: d\n    value: 4\n";
+    const model = try build(arena, operation, .{ .custom = custom }, null);
+    try std.testing.expectEqual(@as(usize, 3), model.rows.len);
+    try std.testing.expectEqualStrings("[0]", model.rows[0].label);
+    try std.testing.expectEqualStrings("b", try valueText(arena, model.rows[0].values[3]));
+    try std.testing.expectEqualStrings("a", try valueText(arena, model.rows[1].values[3]));
+    try std.testing.expectEqualStrings("d", try valueText(arena, model.rows[2].values[3]));
+}
+
+test "merge TUI: game object rows show the edited name" {
+    var memory = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer memory.deinit();
+    const arena = memory.allocator();
+    const fixture = try core.merge.build(
+        arena,
+        "--- !u!1 &1\nGameObject:\n  m_Component:\n  - component: {fileID: 4}\n  m_Name: Root\n" ++
+            "--- !u!4 &4\nTransform:\n  m_GameObject: {fileID: 1}\n  m_Children:\n  - {fileID: 42}\n  m_Father: {fileID: 0}\n" ++
+            "--- !u!1 &20\nGameObject:\n  m_Component:\n  - component: {fileID: 42}\n  - component: {fileID: 54}\n  m_Name: Child\n" ++
+            "--- !u!4 &42\nTransform:\n  m_GameObject: {fileID: 20}\n  m_Children: []\n  m_Father: {fileID: 4}\n" ++
+            "--- !u!54 &54\nRigidbody:\n  m_GameObject: {fileID: 20}\n  m_Mass: 1\n",
+        "--- !u!1 &1\nGameObject:\n  m_Component:\n  - component: {fileID: 4}\n  m_Name: Root\n" ++
+            "--- !u!4 &4\nTransform:\n  m_GameObject: {fileID: 1}\n  m_Children: []\n  m_Father: {fileID: 0}\n",
+        "--- !u!1 &1\nGameObject:\n  m_Component:\n  - component: {fileID: 4}\n  m_Name: Root\n" ++
+            "--- !u!4 &4\nTransform:\n  m_GameObject: {fileID: 1}\n  m_Children:\n  - {fileID: 42}\n  m_Father: {fileID: 0}\n" ++
+            "--- !u!1 &20\nGameObject:\n  m_Component:\n  - component: {fileID: 42}\n  - component: {fileID: 54}\n  m_Name: Edited Child\n" ++
+            "--- !u!4 &42\nTransform:\n  m_GameObject: {fileID: 20}\n  m_Children: []\n  m_Father: {fileID: 4}\n" ++
+            "--- !u!54 &54\nRigidbody:\n  m_GameObject: {fileID: 20}\n  m_Mass: 1\n",
+    );
+    const operation = for (fixture.plan.operations) |*op| {
+        if (op.kind == .game_object and op.identity.document.class_id == 1 and
+            op.values.ours == null and op.values.theirs != null) break op;
+    } else return error.TestUnexpectedResult;
+    try std.testing.expect(supports(operation));
+    const model = try build(arena, operation, .{ .take = .theirs }, null);
+    var name_row: ?usize = null;
+    for (model.rows, 0..) |row, index| {
+        if (std.mem.eql(u8, row.label, "Name")) name_row = index;
+    }
+    const index = name_row orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("Child", try valueText(arena, model.rows[index].values[0]));
+    try std.testing.expectEqualStrings("—", try valueText(arena, model.rows[index].values[1]));
+    try std.testing.expectEqualStrings("Edited Child", try valueText(arena, model.rows[index].values[2]));
+    try std.testing.expectEqualStrings("Edited Child", try valueText(arena, model.rows[index].values[3]));
 }
 
 test "merge TUI: reparent rows show GameObject names" {
@@ -271,13 +410,16 @@ pub const Model = struct {
         if (self.documents[column]) |document| {
             if (document.input(self.rows[index].path)) |input| if (input.len == 0) return "<empty>";
         }
-        return valueText(arena, self.rows[index].values[column]);
+        const rendered = try valueText(arena, self.rows[index].values[column]);
+        if (column == 3 and (std.mem.eql(u8, rendered, "—") or std.mem.eql(u8, rendered, "-"))) return "";
+        return rendered;
     }
 };
 
 pub fn supports(operation: *const core.merge.Operation) bool {
     if (operation.kind == .prefab_override) return true;
     if (operation.kind == .sequence_order) return sequenceOrderSupported(operation);
+    if (keyedPairSequenceSupported(operation)) return true;
     if (operation.kind == .reparent) return true;
     if (operation.kind == .field) {
         var saw_map = false;
@@ -289,7 +431,7 @@ pub fn supports(operation: *const core.merge.Operation) bool {
         }
         return saw_map;
     }
-    if (operation.kind != .component and operation.kind != .document) return false;
+    if (operation.kind != .component and operation.kind != .document and operation.kind != .game_object) return false;
     for ([_]?core.merge.SideValue{ operation.values.base, operation.values.ours, operation.values.theirs }) |value| if (value) |present| {
         const node = present.node orelse return false;
         if (node.* != .map) return false;
@@ -304,7 +446,7 @@ pub fn build(
     plan: ?*const core.merge.MergePlan,
 ) !Model {
     if (operation.kind == .prefab_override) return buildPrefabOverride(arena, operation, resolution);
-    if (operation.kind == .sequence_order) return buildSequenceOrder(arena, operation, resolution);
+    if (operation.kind == .sequence_order or keyedPairSequenceSupported(operation)) return buildSequenceOrder(arena, operation, resolution);
     if (operation.kind == .reparent) return buildReparent(arena, operation, resolution, plan);
     if (operation.kind == .field) {
         const roots: [4]?*const Node = .{
@@ -390,6 +532,21 @@ fn sequenceOrderSupported(operation: *const core.merge.Operation) bool {
     return saw_seq;
 }
 
+fn keyedPairSequenceSupported(operation: *const core.merge.Operation) bool {
+    if (operation.kind != .field) return false;
+    if (!sequenceOrderSupported(operation)) return false;
+    for ([_]?core.merge.SideValue{ operation.values.base, operation.values.ours, operation.values.theirs }) |value| {
+        const present = value orelse continue;
+        const node = present.node orelse continue;
+        if (node.* != .seq) continue;
+        for (node.seq) |item| {
+            if (item.* != .map) continue;
+            if (Node.asScalar(item.get("key")) != null or Node.asScalar(item.get("first")) != null) return true;
+        }
+    }
+    return false;
+}
+
 fn buildSequenceOrder(
     arena: std.mem.Allocator,
     operation: *const core.merge.Operation,
@@ -448,10 +605,44 @@ fn sequenceResultNode(
 }
 
 fn parseSequenceResult(arena: std.mem.Allocator, text: []const u8) ?*const Node {
-    const wrapped = std.fmt.allocPrint(arena, "items: {s}\n", .{text}) catch return null;
+    const trimmed = std.mem.trimEnd(u8, text, " \r\n");
+    if (trimmed.len == 0) return null;
+    const body = indentBlock(arena, trimmed, 4) catch return null;
+    if (sequenceFromWrapped(arena, std.fmt.allocPrint(arena, "--- !u!114 &1\nMonoBehaviour:\n  items:\n{s}", .{body}) catch return null)) |node| return node;
+    if (sequenceFromWrapped(arena, std.fmt.allocPrint(arena, "--- !u!114 &1\nMonoBehaviour:\n  items: {s}\n", .{trimmed}) catch return null)) |node| return node;
+    return null;
+}
+
+fn indentBlock(arena: std.mem.Allocator, text: []const u8, spaces: usize) ![]const u8 {
+    var min_indent: usize = std.math.maxInt(usize);
+    var probe = std.mem.splitScalar(u8, text, '\n');
+    while (probe.next()) |raw| {
+        const line = std.mem.trimEnd(u8, raw, "\r");
+        if (std.mem.trimStart(u8, line, " ").len == 0) continue;
+        var indent: usize = 0;
+        while (indent < line.len and line[indent] == ' ') indent += 1;
+        min_indent = @min(min_indent, indent);
+    }
+    if (min_indent == std.math.maxInt(usize)) min_indent = 0;
+    var out: std.ArrayList(u8) = .empty;
+    var lines = std.mem.splitScalar(u8, text, '\n');
+    while (lines.next()) |raw| {
+        const line = std.mem.trimEnd(u8, raw, "\r");
+        if (std.mem.trimStart(u8, line, " ").len == 0) continue;
+        try out.appendNTimes(arena, ' ', spaces);
+        try out.appendSlice(arena, line[@min(min_indent, line.len)..]);
+        try out.append(arena, '\n');
+    }
+    return out.toOwnedSlice(arena);
+}
+
+fn sequenceFromWrapped(arena: std.mem.Allocator, wrapped: []const u8) ?*const Node {
     const document = properties.parse(arena, wrapped) catch return null;
     const node = document.node(&.{.{ .key = "items" }}) orelse return null;
-    return if (node.* == .seq) node else null;
+    return switch (node.*) {
+        .seq => |items| if (items.len == 0) null else node,
+        else => null,
+    };
 }
 
 fn sequenceItemAt(node: ?*const Node, index: usize) ?*const Node {
@@ -468,6 +659,8 @@ fn sequenceItemLabelNode(arena: std.mem.Allocator, node: ?*const Node) !?*const 
 fn sequenceItemLabel(arena: std.mem.Allocator, node: *const Node) ![]const u8 {
     if (node.* == .map) {
         if (Node.asScalar(node.get("propertyPath"))) |path| return core.displayPropertyPath(arena, path);
+        if (Node.asScalar(node.get("key"))) |key| return key;
+        if (Node.asScalar(node.get("first"))) |first| return first;
     }
     return valueText(arena, node);
 }

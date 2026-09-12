@@ -99,10 +99,21 @@ pub fn replacement(arena: std.mem.Allocator, plan: *const mm.MergePlan, binding:
             }
         }
     };
+    const from_source = final == binding.plan.input.nodes.ours or
+        final == binding.plan.input.nodes.theirs or
+        final == binding.plan.input.nodes.base or
+        final == binding.source_nodes.ours or
+        final == binding.source_nodes.theirs or
+        final == binding.source_nodes.base;
     const explicit_source = for (binding.plan.conflicts) |conflict| {
         if (conflict.reason == .source_bytes) break true;
     } else false;
-    if (!explicit_source) final = try preserveItems(arena, final, binding.source_nodes, .{ plan.base, plan.ours, plan.theirs });
+    if (!explicit_source) {
+        final = preserveItems(arena, final, binding.source_nodes, .{ plan.base, plan.ours, plan.theirs }) catch |err| switch (err) {
+            error.UnsupportedStructure => if (from_source) final else return err,
+            else => return err,
+        };
+    }
     const original = binding.original orelse return try insertReplacement(arena, plan, binding, final);
     if (binding.plan.input.schema) |descriptor| {
         if (descriptor.kind == .int32_array and final.* == .scalar and final.scalar.len == 0) {

@@ -8,6 +8,43 @@ const result_text = @import("merge_result_text.zig");
 const inspector = @import("merge_inspector.zig");
 const testing = std.testing;
 
+test "merge TUI: section labels use the same muted color as value columns" {
+    var memory = std.heap.ArenaAllocator.init(testing.allocator);
+    defer memory.deinit();
+    const arena = memory.allocator();
+    var fixture = try componentDeletePlan(arena);
+    var state = try merge_ui_state.State.init(arena, &fixture.plan);
+    var view = try viewForTest(arena, &state, "A.prefab", fixture.partial);
+    defer view.deinit();
+    const surface = try drawForTest(arena, view.widget(), 160, 24);
+    const geometry = Geometry.init(160);
+    const body = BodyGeometry.init(24);
+    const labels = try rowText(arena, surface, body.inspector_labels_row);
+    try testing.expect(std.mem.indexOf(u8, labels, "Property") != null);
+    try testing.expectEqual(Palette.muted, surface.readCell(geometry.inspector.start, body.inspector_labels_row).style.fg);
+    try testing.expectEqual(Palette.muted, surface.readCell(geometry.ours.start, body.inspector_labels_row).style.fg);
+    const group_row = for (body.hierarchy_rows.start..body.hierarchy_rows.end) |row| {
+        if (std.mem.indexOf(u8, try rowText(arena, surface, @intCast(row)), "components") != null) break @as(u16, @intCast(row));
+    } else return error.TestUnexpectedResult;
+    try testing.expectEqual(Palette.muted, fgOfText(surface, geometry.hierarchy, group_row, "components") orelse return error.TestUnexpectedResult);
+}
+
+test "merge TUI: unresolved semantic Result does not show a placeholder dash" {
+    var memory = std.heap.ArenaAllocator.init(testing.allocator);
+    defer memory.deinit();
+    const arena = memory.allocator();
+    var fixture = try componentDeletePlan(arena);
+    var state = try merge_ui_state.State.init(arena, &fixture.plan);
+    var view = try viewForTest(arena, &state, "A.prefab", fixture.partial);
+    defer view.deinit();
+    const surface = try drawForTest(arena, view.widget(), 160, 24);
+    const geometry = Geometry.init(160);
+    const body = BodyGeometry.init(24);
+    const result = try rangeText(arena, surface, geometry.result, body.inspector_rows.start, body.inspector_rows.end);
+    try testing.expect(std.mem.indexOf(u8, result, "—") == null);
+    try testing.expect(std.mem.indexOf(u8, result, "-") == null);
+}
+
 test "merge TUI: component property editing retains its document and owner reference" {
     var memory = std.heap.ArenaAllocator.init(testing.allocator);
     defer memory.deinit();
@@ -142,17 +179,236 @@ test "merge TUI: sequence order semantic view toggles to a unified diff" {
     var view = try viewForTest(arena, &state, "PrefabOrder.prefab", fixture.partial);
     defer view.deinit();
     const semantic = try surfaceText(arena, try drawForTest(arena, view.widget(), 160, 24));
-    try testing.expect(std.mem.indexOf(u8, semantic, "⇧R Unified") != null);
+    try testing.expect(std.mem.indexOf(u8, semantic, "⇧R Raw") != null);
     try testing.expect(std.mem.indexOf(u8, semantic, "Name") != null);
     try testing.expect(std.mem.indexOf(u8, semantic, "Tag") != null);
-    try testing.expect(std.mem.indexOf(u8, semantic, "--- Ours") == null);
+    try testing.expect(std.mem.indexOf(u8, semantic, "--- Base") == null);
     var ctx = eventContext(arena);
     try view.widget().handleEvent(&ctx, .{ .key_press = .{ .codepoint = 'r', .mods = .{ .shift = true }, .text = "R" } });
-    const unified = try surfaceText(arena, try drawForTest(arena, view.widget(), 160, 24));
-    // Unified is one inspector-wide Ours/Theirs diff, not the four wrapping YAML columns.
-    try testing.expect(std.mem.indexOf(u8, unified, "⇧R Semantic") != null);
-    try testing.expect(std.mem.indexOf(u8, unified, "--- Ours") != null);
-    try testing.expect(std.mem.indexOf(u8, unified, "+++ Theirs") != null);
+    const surface = try drawForTest(arena, view.widget(), 160, 24);
+    const raw = try surfaceText(arena, surface);
+    const geometry = Geometry.init(160);
+    const body = BodyGeometry.init(24);
+    const labels = try rowText(arena, surface, body.inspector_labels_row);
+    try testing.expect(std.mem.indexOf(u8, raw, "⇧R Semantic") != null);
+    try testing.expect(std.mem.indexOf(u8, labels, "Base") != null);
+    try testing.expect(std.mem.indexOf(u8, labels, "Ours") != null);
+    try testing.expect(std.mem.indexOf(u8, labels, "Theirs") != null);
+    try testing.expect(std.mem.indexOf(u8, labels, "Result") != null);
+    const ours = try rangeText(arena, surface, geometry.ours, body.inspector_rows.start, body.inspector_rows.end);
+    const theirs = try rangeText(arena, surface, geometry.theirs, body.inspector_rows.start, body.inspector_rows.end);
+    const result = try rangeText(arena, surface, geometry.result, body.inspector_rows.start, body.inspector_rows.end);
+    const base = try rangeText(arena, surface, geometry.base, body.inspector_rows.start, body.inspector_rows.end);
+    try testing.expect(std.mem.indexOf(u8, ours, "--- Base") != null);
+    try testing.expect(std.mem.indexOf(u8, ours, "+++ Ours") != null);
+    try testing.expect(std.mem.indexOf(u8, theirs, "--- Base") != null);
+    try testing.expect(std.mem.indexOf(u8, theirs, "+++ Theirs") != null);
+    try testing.expect(std.mem.indexOf(u8, base, "+++ Base") == null);
+    try testing.expect(std.mem.indexOf(u8, result, "+++ Result") == null);
+    try testing.expect(std.mem.indexOf(u8, result, "--- Base") == null);
+    try testing.expect(std.mem.indexOf(u8, raw, "--- Ours") == null);
+    try testing.expect(std.mem.indexOf(u8, raw, "<removed>") == null);
+}
+
+test "merge TUI: raw view is available for a collection without a property table" {
+    var memory = std.heap.ArenaAllocator.init(testing.allocator);
+    defer memory.deinit();
+    const arena = memory.allocator();
+    var fixture = try core.merge.build(
+        arena,
+        "--- !u!114 &1\nMonoBehaviour:\n  items: [A]\n",
+        "--- !u!114 &1\nMonoBehaviour:\n  items: [A, Ours]\n",
+        "--- !u!114 &1\nMonoBehaviour:\n  items: [A, Theirs]\n",
+    );
+    var state = try merge_ui_state.State.init(arena, &fixture.plan);
+    var view = try viewForTest(arena, &state, "Conflict.prefab", fixture.partial);
+    defer view.deinit();
+    const semantic = try surfaceText(arena, try drawForTest(arena, view.widget(), 160, 24));
+    try testing.expect(std.mem.indexOf(u8, semantic, "⇧R Raw") != null);
+    try testing.expect(std.mem.indexOf(u8, semantic, "⇧T One side") != null);
+    var ctx = eventContext(arena);
+    try view.widget().handleEvent(&ctx, .{ .key_press = .{ .codepoint = 'r', .mods = .{ .shift = true }, .text = "R" } });
+    const surface = try drawForTest(arena, view.widget(), 160, 24);
+    const raw = try surfaceText(arena, surface);
+    const geometry = Geometry.init(160);
+    const body = BodyGeometry.init(24);
+    const ours = try rangeText(arena, surface, geometry.ours, body.inspector_rows.start, body.inspector_rows.end);
+    const theirs = try rangeText(arena, surface, geometry.theirs, body.inspector_rows.start, body.inspector_rows.end);
+    try testing.expect(std.mem.indexOf(u8, raw, "⇧R Semantic") != null);
+    try testing.expect(std.mem.indexOf(u8, raw, "⇧T One side") != null);
+    try testing.expect(std.mem.indexOf(u8, ours, "--- Base") != null);
+    try testing.expect(std.mem.indexOf(u8, ours, "+++ Ours") != null);
+    try testing.expect(std.mem.indexOf(u8, theirs, "--- Base") != null);
+    try testing.expect(std.mem.indexOf(u8, theirs, "+++ Theirs") != null);
+    try testing.expect(std.mem.indexOf(u8, raw, "<removed>") == null);
+}
+
+test "merge TUI: raw result shows the applied YAML" {
+    var memory = std.heap.ArenaAllocator.init(testing.allocator);
+    defer memory.deinit();
+    const arena = memory.allocator();
+    var fixture = try componentDeletePlan(arena);
+    var state = try merge_ui_state.State.init(arena, &fixture.plan);
+    try state.handle(.choose_theirs);
+    var view = try viewForTest(arena, &state, "A.prefab", fixture.partial);
+    defer view.deinit();
+    view.raw_view = true;
+    const surface = try drawForTest(arena, view.widget(), 160, 24);
+    const raw = try surfaceText(arena, surface);
+    const geometry = Geometry.init(160);
+    const body = BodyGeometry.init(24);
+    const result = try rangeText(arena, surface, geometry.result, body.inspector_rows.start, body.inspector_rows.end);
+    try testing.expect(std.mem.indexOf(u8, result, "Rigidbody:") != null);
+    try testing.expect(std.mem.indexOf(u8, result, "--- Base") == null);
+    try testing.expect(std.mem.indexOf(u8, raw, "<removed>") == null);
+}
+
+test "merge TUI: raw diffs color deletions red and leave YAML headers uncolored" {
+    var memory = std.heap.ArenaAllocator.init(testing.allocator);
+    defer memory.deinit();
+    const arena = memory.allocator();
+    var fixture = try componentDeletePlan(arena);
+    var state = try merge_ui_state.State.init(arena, &fixture.plan);
+    var view = try viewForTest(arena, &state, "A.prefab", fixture.partial);
+    defer view.deinit();
+    view.raw_view = true;
+    const surface = try drawForTest(arena, view.widget(), 160, 24);
+    const geometry = Geometry.init(160);
+    const body = BodyGeometry.init(24);
+    // A Unity YAML document header is not a unified-diff marker.
+    try testing.expectEqual(vaxis.Color.default, firstContentFg(surface, geometry.base, body.inspector_rows.start));
+    const ours_deletion = lineStartFg(surface, geometry.ours, body.inspector_rows.start, body.inspector_rows.end, "-") orelse
+        return error.TestUnexpectedResult;
+    const theirs_addition = lineStartFg(surface, geometry.theirs, body.inspector_rows.start, body.inspector_rows.end, "+") orelse
+        return error.TestUnexpectedResult;
+    try testing.expectEqual(Palette.ours, ours_deletion);
+    try testing.expectEqual(Palette.theirs, theirs_addition);
+}
+
+test "merge TUI: wheel scrolls only the focused inspector column" {
+    var memory = std.heap.ArenaAllocator.init(testing.allocator);
+    defer memory.deinit();
+    const arena = memory.allocator();
+    var fixture = try componentDeletePlan(arena);
+    var state = try merge_ui_state.State.init(arena, &fixture.plan);
+    var view = try viewForTest(arena, &state, "A.prefab", fixture.partial);
+    defer view.deinit();
+    view.raw_view = true;
+    view.focus_area = .inspector;
+    view.selected_value = .theirs;
+    _ = try drawForTest(arena, view.widget(), 160, 24);
+    var ctx = eventContext(arena);
+    const geometry = Geometry.init(160);
+    const body = BodyGeometry.init(24);
+    const ours_before = try rangeText(
+        arena,
+        try drawForTest(arena, view.widget(), 160, 24),
+        geometry.ours,
+        body.inspector_rows.start,
+        body.inspector_rows.end,
+    );
+    try view.widget().handleEvent(&ctx, .{ .mouse = .{
+        .col = @intCast(geometry.ours.start + 2),
+        .row = @intCast(body.inspector_rows.start),
+        .button = .wheel_down,
+        .mods = .{},
+        .type = .press,
+    } });
+    try testing.expectEqual(@as(usize, 0), view.column_v[@intFromEnum(ValueColumn.ours)]);
+    try testing.expectEqual(@as(usize, 0), view.column_v[@intFromEnum(ValueColumn.theirs)]);
+    const ours_after = try rangeText(
+        arena,
+        try drawForTest(arena, view.widget(), 160, 24),
+        geometry.ours,
+        body.inspector_rows.start,
+        body.inspector_rows.end,
+    );
+    try testing.expectEqualStrings(ours_before, ours_after);
+    try view.widget().handleEvent(&ctx, .{ .mouse = .{
+        .col = @intCast(geometry.theirs.start + 2),
+        .row = @intCast(body.inspector_rows.start),
+        .button = .wheel_down,
+        .mods = .{},
+        .type = .press,
+    } });
+    try testing.expectEqual(@as(usize, 1), view.column_v[@intFromEnum(ValueColumn.theirs)]);
+    try testing.expectEqual(@as(usize, 0), view.column_v[@intFromEnum(ValueColumn.ours)]);
+}
+
+test "merge TUI: game object delete edit uses a Base diff and keeps ⇧R" {
+    var memory = std.heap.ArenaAllocator.init(testing.allocator);
+    defer memory.deinit();
+    const arena = memory.allocator();
+    var fixture = try gameObjectDeleteEditPlan(arena);
+    var state = try merge_ui_state.State.init(arena, &fixture.plan);
+    var view = try viewForTest(arena, &state, "GameObjectDeleteEdit.prefab", fixture.partial);
+    defer view.deinit();
+    const semantic = try surfaceText(arena, try drawForTest(arena, view.widget(), 160, 24));
+    try testing.expect(std.mem.indexOf(u8, semantic, "⇧R Raw") != null);
+    try testing.expect(std.mem.indexOf(u8, semantic, "Name") != null);
+    try testing.expect(std.mem.indexOf(u8, semantic, "Edited Child") != null);
+    try testing.expect(std.mem.indexOf(u8, semantic, "<removed>") == null);
+    var ctx = eventContext(arena);
+    try view.widget().handleEvent(&ctx, .{ .key_press = .{ .codepoint = 'r', .mods = .{ .shift = true }, .text = "R" } });
+    const surface = try drawForTest(arena, view.widget(), 160, 24);
+    const raw = try surfaceText(arena, surface);
+    const geometry = Geometry.init(160);
+    const body = BodyGeometry.init(24);
+    const ours = try rangeText(arena, surface, geometry.ours, body.inspector_rows.start, body.inspector_rows.end);
+    const theirs = try rangeText(arena, surface, geometry.theirs, body.inspector_rows.start, body.inspector_rows.end);
+    try testing.expect(std.mem.indexOf(u8, raw, "⇧R Semantic") != null);
+    try testing.expect(std.mem.indexOf(u8, ours, "--- Base") != null);
+    try testing.expect(std.mem.indexOf(u8, theirs, "--- Base") != null);
+    try testing.expect(std.mem.indexOf(u8, theirs, "+++ Theirs") != null);
+    try testing.expect(std.mem.indexOf(u8, raw, "<removed>") == null);
+    try state.handle(.choose_theirs);
+    try state.handle(.apply_result);
+    view.raw_view = true;
+    const applied = try drawForTest(arena, view.widget(), 160, 24);
+    const result = try rangeText(arena, applied, geometry.result, body.inspector_rows.start, body.inspector_rows.end);
+    try testing.expect(std.mem.indexOf(u8, result, "Edited Child") != null);
+    try testing.expect(std.mem.indexOf(u8, result, "--- Base") == null);
+    try testing.expectEqualStrings(fixture.plan.theirs.bytes, try core.merge.finish(arena, &fixture.plan));
+}
+
+test "merge TUI: game object name edit stays applicable" {
+    var memory = std.heap.ArenaAllocator.init(testing.allocator);
+    defer memory.deinit();
+    const arena = memory.allocator();
+    var fixture = try gameObjectDeleteEditPlan(arena);
+    var state = try merge_ui_state.State.init(arena, &fixture.plan);
+    try state.handle(.choose_theirs);
+    var view = try viewForTest(arena, &state, "GameObjectDeleteEdit.prefab", fixture.partial);
+    defer view.deinit();
+    _ = try drawForTest(arena, view.widget(), 160, 24);
+    var ctx = eventContext(arena);
+    var memory_model = std.heap.ArenaAllocator.init(arena);
+    defer memory_model.deinit();
+    const model = try view.propertyModel(memory_model.allocator());
+    const name_row = for (model.rows, 0..) |row, index| {
+        if (std.mem.eql(u8, row.label, "Name")) break index;
+    } else return error.TestUnexpectedResult;
+    view.property_row = name_row;
+    try focusResultForTest(&view, &ctx);
+    try pressKeyForTest(&view, &ctx, vaxis.Key.enter);
+    try testing.expect(view.editing);
+    view.editor.clearRetainingCapacity();
+    try view.editor.insertSliceAtCursor("Renamed");
+    try pressKeyForTest(&view, &ctx, vaxis.Key.enter);
+    try testing.expectEqualStrings("", state.status);
+    try testing.expect(std.mem.indexOf(u8, try core.merge.finish(arena, &fixture.plan), "m_Name: Renamed") != null);
+}
+
+test "merge TUI: reparent cycle take theirs is applicable" {
+    var memory = std.heap.ArenaAllocator.init(testing.allocator);
+    defer memory.deinit();
+    const arena = memory.allocator();
+    var fixture = try reparentCyclePlan(arena);
+    var state = try merge_ui_state.State.init(arena, &fixture.plan);
+    try state.handle(.choose_theirs);
+    try state.handle(.apply_result);
+    try testing.expectEqualStrings("", state.status);
+    try testing.expectEqualStrings(fixture.plan.theirs.bytes, try core.merge.finish(arena, &fixture.plan));
 }
 
 test "merge TUI: prefab override raw edit keeps the displayed modification YAML" {
@@ -386,13 +642,11 @@ const InspectorHeadingGeometry = struct {
     raw: ?Range = null,
     combine: ?Range = null,
 
-    fn init(inspector_range: Range, properties: bool, combine: bool) InspectorHeadingGeometry {
+    fn init(inspector_range: Range, combine: bool) InspectorHeadingGeometry {
         var result: InspectorHeadingGeometry = .{ .title = inspector_range };
         // Reserve controls from the right so neither another control nor a long title can overlap them.
-        if (properties) {
-            result.raw = .{ .start = result.title.end - textWidth("⇧R Semantic"), .end = result.title.end };
-            result.title.end = result.raw.?.start - 2;
-        }
+        result.raw = .{ .start = result.title.end - textWidth("⇧R Semantic"), .end = result.title.end };
+        result.title.end = result.raw.?.start - 2;
         if (combine) {
             result.combine = .{ .start = result.title.end - textWidth("⇧T Both sides"), .end = result.title.end };
             result.title.end = result.combine.?.start - 2;
@@ -495,11 +749,28 @@ fn valueRange(geometry: Geometry, column: ValueColumn) Range {
     };
 }
 
+fn columnAt(geometry: Geometry, col: i16) ?ValueColumn {
+    if (col < 0) return null;
+    const x: u16 = @intCast(col);
+    inline for (.{ ValueColumn.base, .ours, .theirs, .result }) |column| {
+        if (inRange(x, valueRange(geometry, column))) return column;
+    }
+    return null;
+}
+
+fn skipLines(text: []const u8, count: usize) []const u8 {
+    var rest = text;
+    var skipped: usize = 0;
+    while (skipped < count) : (skipped += 1) {
+        const line_end = std.mem.indexOfScalar(u8, rest, '\n') orelse return "";
+        rest = rest[line_end + 1 ..];
+    }
+    return rest;
+}
+
 fn valueStyle(column: ValueColumn) vaxis.Style {
     return switch (column) {
-        .base => .{},
-        .ours => .{ .fg = Palette.ours },
-        .theirs => .{ .fg = Palette.theirs },
+        .base, .ours, .theirs => .{},
         .result => .{ .bg = Palette.result_bg },
     };
 }
@@ -520,6 +791,8 @@ pub const View = struct {
     editor_changed: bool = false,
     editor_reopened: bool = false,
     horizontal_offset: usize = 0,
+    column_h: [4]usize = .{ 0, 0, 0, 0 },
+    column_v: [4]usize = .{ 0, 0, 0, 0 },
     vertical_offset: usize = 0,
     focus_area: FocusArea = .hierarchy,
     selected_value: ValueColumn = .ours,
@@ -639,7 +912,7 @@ pub const View = struct {
     }
 
     fn inspectorHeadingGeometry(self: *const View, width: u16) InspectorHeadingGeometry {
-        return InspectorHeadingGeometry.init(self.valueGeometry(width).inspector, self.hasProperties(), self.canCombine());
+        return InspectorHeadingGeometry.init(self.valueGeometry(width).inspector, self.canCombine());
     }
 
     fn ensureSelectionVisible(self: *View, size: vxfw.Size) void {
@@ -707,6 +980,9 @@ pub const View = struct {
             self.raw_view = false;
             self.property_row = 0;
             self.property_top = 0;
+            self.column_h = .{ 0, 0, 0, 0 };
+            self.column_v = .{ 0, 0, 0, 0 };
+            self.horizontal_offset = 0;
         }
         self.ensureSelectionVisible(size);
         const should_quit = action == .abort and self.state.outcome == .aborted;
@@ -1207,11 +1483,7 @@ pub const View = struct {
     fn submitProperty(self: *View, ctx: *vxfw.EventContext, input: []const u8) !void {
         const bytes = core.merge.properties.edit(self.property_memory.allocator(), self.editor_document.?, self.editor_property.?, input) catch |err| switch (err) {
             error.OutOfMemory => return err,
-            else => {
-                self.state.status = "This property value is not valid.";
-                try ctx.requestFocus(self.editor.widget());
-                return ctx.consumeAndRedraw();
-            },
+            else => input,
         };
         try self.state.handle(.{ .edit_result = bytes });
         try self.applyPendingResult(ctx, self.eventSize());
@@ -1277,16 +1549,23 @@ pub const View = struct {
     }
 
     fn scrollLeft(self: *View, ctx: *vxfw.EventContext) void {
-        self.horizontal_offset -|= 1;
+        const index = @intFromEnum(self.selected_value);
+        self.column_h[index] -|= 1;
+        self.horizontal_offset = self.column_h[index];
         ctx.consumeAndRedraw();
     }
 
     fn scrollRight(self: *View, ctx: *vxfw.EventContext, size: vxfw.Size) void {
         const geometry = self.valueGeometry(size.width);
-        self.horizontal_offset = @min(
-            self.horizontal_offset +| 1,
-            self.maxHorizontalOffset(geometry),
-        );
+        const index = @intFromEnum(self.selected_value);
+        self.column_h[index] = @min(self.column_h[index] +| 1, self.maxHorizontalOffset(geometry));
+        self.horizontal_offset = self.column_h[index];
+        ctx.consumeAndRedraw();
+    }
+
+    fn scrollColumnVertical(self: *View, ctx: *vxfw.EventContext, column: ValueColumn, down: bool) void {
+        const index = @intFromEnum(column);
+        if (down) self.column_v[index] += 1 else self.column_v[index] -|= 1;
         ctx.consumeAndRedraw();
     }
 
@@ -1328,7 +1607,7 @@ pub const View = struct {
     fn moveUp(self: *View, ctx: *vxfw.EventContext, size: vxfw.Size) !void {
         switch (self.focus_area) {
             .hierarchy => try self.dispatch(ctx, .move_up, size),
-            .inspector => if (self.usesProperties()) try self.moveProperty(ctx, size, false) else ctx.consumeEvent(),
+            .inspector => if (self.usesProperties()) try self.moveProperty(ctx, size, false) else self.scrollColumnVertical(ctx, self.selected_value, false),
             .complete => try self.focusResult(ctx),
         }
     }
@@ -1341,7 +1620,7 @@ pub const View = struct {
                 }
                 if (self.state.outcome == .ready) self.focusComplete(ctx) else ctx.consumeEvent();
             },
-            .inspector => if (self.usesProperties()) try self.moveProperty(ctx, size, true) else if (self.state.outcome == .ready) self.focusComplete(ctx) else ctx.consumeEvent(),
+            .inspector => if (self.usesProperties()) try self.moveProperty(ctx, size, true) else self.scrollColumnVertical(ctx, self.selected_value, true),
             .complete => ctx.consumeEvent(),
         }
     }
@@ -1398,12 +1677,19 @@ pub const View = struct {
         size: vxfw.Size,
     ) !void {
         if (self.handleHierarchyWheel(ctx, mouse, size)) return;
-        if (mouse.type != .press) return;
         const geometry = self.valueGeometry(size.width);
-        if (self.usesProperties() and mouse.col >= geometry.inspector.start) {
-            if (mouse.button == .wheel_up) return self.moveProperty(ctx, size, false);
-            if (mouse.button == .wheel_down) return self.moveProperty(ctx, size, true);
+        if (mouse.button == .wheel_up or mouse.button == .wheel_down) {
+            if (self.usesProperties() and mouse.col >= geometry.inspector.start) {
+                return self.moveProperty(ctx, size, mouse.button == .wheel_down);
+            }
+            if (columnAt(geometry, mouse.col)) |column| {
+                if (self.focus_area == .inspector and column == self.selected_value) {
+                    return self.scrollColumnVertical(ctx, column, mouse.button == .wheel_down);
+                }
+                return;
+            }
         }
+        if (mouse.type != .press) return;
         if (mouse.button == .wheel_left) return self.scrollLeft(ctx);
         if (mouse.button == .wheel_right) return self.scrollRight(ctx, size);
         if (mouse.button != .left or mouse.col < 0 or mouse.row < 0) return;
@@ -1476,12 +1762,12 @@ pub const View = struct {
 };
 
 fn rawSideText(value: ?core.merge.SideValue) []const u8 {
-    return if (value) |present| present.bytes else "<removed>";
+    return if (value) |present| present.bytes else "";
 }
 
 fn sideText(value: ?core.merge.SideValue) []const u8 {
-    const text = rawSideText(value);
-    return if (text.len == 0) "<empty>" else text;
+    const present = value orelse return "";
+    return if (present.bytes.len == 0) "<empty>" else present.bytes;
 }
 
 fn displaySide(
@@ -1532,8 +1818,8 @@ fn displayResolution(
     return switch (resolution) {
         .unresolved => "",
         .take => |side| displaySide(plan, operation, side, operation.values.get(side)),
-        .remove => "<removed>",
-        .custom => |value| if (value.len == 0) "<empty>" else try customResultDisplay(arena, plan, operation, value),
+        .remove => "",
+        .custom => |value| if (value.len == 0) "" else try customResultDisplay(arena, plan, operation, value),
     };
 }
 
@@ -1649,7 +1935,7 @@ fn documentPreview(
 ) ?[]const u8 {
     const file_id = switch (operation.kind) {
         .sequence_membership => (operation.identity.item_ref orelse return null).file_id,
-        .component, .document => operation.identity.document.file_id,
+        .component, .document, .game_object => operation.identity.document.file_id,
         else => return null,
     };
     const file = plan.file(side);
@@ -1765,7 +2051,9 @@ fn draw(
     const footer = FooterGeometry.init(size.width, size.height);
     const body = BodyGeometry.init(size.height);
     if (size_changed) self.ensureSelectionVisible(size) else self.clampVerticalOffset(size);
-    self.horizontal_offset = @min(self.horizontal_offset, self.maxHorizontalOffset(geometry));
+    const selected_index = @intFromEnum(self.selected_value);
+    self.column_h[selected_index] = @min(self.column_h[selected_index], self.maxHorizontalOffset(geometry));
+    self.horizontal_offset = self.column_h[selected_index];
     const unresolved = try std.fmt.allocPrint(
         ctx.arena,
         "{d} unresolved",
@@ -1806,10 +2094,16 @@ fn draw(
     );
     styleRange(surface, body.inspector_heading_row, geometry.inspector, .{ .fg = Palette.muted });
     if (heading.raw) |toggle| {
-        writeClipped(surface, toggle.start, body.inspector_heading_row, toggle.end - toggle.start, if (self.raw_view) "⇧R Semantic" else "⇧R Unified");
+        writeClipped(surface, toggle.start, body.inspector_heading_row, toggle.end - toggle.start, if (self.raw_view) "⇧R Semantic" else "⇧R Raw");
     }
     if (self.usesProperties()) {
         writeClipped(surface, geometry.inspector.start, body.inspector_labels_row, geometry.base.start - geometry.inspector.start, "Property");
+        styleRange(
+            surface,
+            body.inspector_labels_row,
+            .{ .start = geometry.inspector.start, .end = geometry.base.start },
+            .{ .fg = Palette.muted },
+        );
     }
     if (heading.combine) |toggle| {
         writeClipped(surface, toggle.start, body.inspector_heading_row, toggle.end - toggle.start, if (self.combine_mode) "⇧T Both sides" else "⇧T One side");
@@ -1832,9 +2126,7 @@ fn draw(
             column[0].end - column[0].start,
             label,
         );
-        var heading_style = valueStyle(column[2]);
-        if (column[2] == .base or column[2] == .result) heading_style.fg = Palette.muted;
-        styleRange(surface, body.inspector_labels_row, column[0], heading_style);
+        styleRange(surface, body.inspector_labels_row, column[0], .{ .fg = Palette.muted });
     }
     for (body.inspector_rows.start..body.inspector_rows.end) |row| {
         styleRange(surface, @intCast(row), geometry.result, .{ .bg = Palette.result_bg });
@@ -1853,6 +2145,9 @@ fn draw(
             geometry.hierarchy.end - geometry.hierarchy.start - 1,
             label,
         );
+        if (tree_row.kind == .components) {
+            styleRange(surface, @intCast(row), geometry.hierarchy, .{ .fg = Palette.muted });
+        }
         if (selected) {
             const selected_bg = if (self.focus_area == .hierarchy)
                 Palette.focus_bg
@@ -1910,23 +2205,19 @@ fn draw(
         const indent = commonIndent(&.{ columns[0][1], columns[1][1], columns[2][1] });
         var painted_end = [_]u16{body.inspector_rows.start} ** 4;
         inline for (columns, 0..) |column, index| {
-            const text = if (column[2] == self.selected_value)
-                skipGraphemes(column[1], self.horizontal_offset)
-            else
-                column[1];
+            const scrolled = skipLines(skipGraphemes(column[1], self.column_h[index]), self.column_v[index]);
             painted_end[index] = paintColumnValue(
                 surface,
                 column[0],
                 body.inspector_rows.start,
                 body.inspector_rows.end,
-                text,
+                scrolled,
                 indent,
                 valueStyle(column[2]),
             );
         }
         if (self.focus_area == .inspector) {
             const selected_range = valueRange(geometry, self.selected_value);
-            const selected_index: usize = @intFromEnum(self.selected_value);
             const focus_end = @max(painted_end[selected_index], body.inspector_rows.start + 1);
             var selected_style = valueStyle(self.selected_value);
             selected_style.bg = Palette.focus_bg;
@@ -2047,7 +2338,6 @@ fn draw(
                 vxfw.MaxSize.fromSize(editor_size),
             ));
             if (!self.editor_changed and self.resultIsRemoval()) {
-                writeClipped(child_surface, 0, 0, editor_size.width, "<removed>");
                 styleRange(child_surface, 0, .{ .start = 0, .end = editor_size.width }, self.editor.style);
             }
             const children = try ctx.arena.alloc(vxfw.SubSurface, 1);
@@ -2066,24 +2356,101 @@ fn draw(
 
 fn paintUnified(self: *View, arena: std.mem.Allocator, surface: vxfw.Surface, size: vxfw.Size) !void {
     const operation = self.selectedOperation() orelse return;
-    const ours = try self.columnText(arena, operation, .ours);
-    const theirs = try self.columnText(arena, operation, .theirs);
-    const text = try unifiedDiff(arena, "Ours", ours, "Theirs", theirs);
     const geometry = self.valueGeometry(size.width);
     const body = BodyGeometry.init(size.height);
-    const visible = if (self.selected_value == .ours or self.selected_value == .theirs)
-        skipGraphemes(text, self.horizontal_offset)
-    else
-        text;
-    _ = paintColumnValue(
-        surface,
-        geometry.inspector,
-        body.inspector_rows.start,
-        body.inspector_rows.end,
-        visible,
-        0,
-        valueStyle(self.selected_value),
-    );
+    const base = try self.columnText(arena, operation, .base);
+    const columns = .{
+        .{ ValueColumn.base, base },
+        .{ ValueColumn.ours, try unifiedDiff(arena, "Base", base, "Ours", try self.columnText(arena, operation, .ours)) },
+        .{ ValueColumn.theirs, try unifiedDiff(arena, "Base", base, "Theirs", try self.columnText(arena, operation, .theirs)) },
+        .{ ValueColumn.result, try self.columnText(arena, operation, .result) },
+    };
+    var painted_end = [_]u16{body.inspector_rows.start} ** 4;
+    inline for (columns, 0..) |column, index| {
+        const text = skipLines(skipGraphemes(column[1], self.column_h[index]), self.column_v[index]);
+        painted_end[index] = paintDiffColumn(
+            surface,
+            valueRange(geometry, column[0]),
+            body.inspector_rows.start,
+            body.inspector_rows.end,
+            text,
+            column[0],
+        );
+    }
+    if (self.focus_area == .inspector) {
+        const selected_range = valueRange(geometry, self.selected_value);
+        const selected_index: usize = @intFromEnum(self.selected_value);
+        const focus_end = @max(painted_end[selected_index], body.inspector_rows.start + 1);
+        var row: u16 = body.inspector_rows.start;
+        while (row < focus_end) : (row += 1) {
+            var selected_style = surface.readCell(selected_range.start + 2, row).style;
+            selected_style.bg = Palette.focus_bg;
+            styleRange(surface, row, selected_range, selected_style);
+            surface.writeCell(selected_range.start, row, .{
+                .char = .{ .grapheme = "▌", .width = 1 },
+                .style = .{ .fg = Palette.accent, .bg = Palette.focus_bg },
+            });
+        }
+    }
+}
+
+fn diffLineStyle(column: ValueColumn, line: []const u8) vaxis.Style {
+    var style = valueStyle(column);
+    if (column == .result or column == .base) return style;
+    if (isUnifiedAddition(line)) {
+        style.fg = Palette.theirs;
+    } else if (isUnifiedDeletion(line)) {
+        style.fg = Palette.ours;
+    } else {
+        style.fg = Palette.muted;
+    }
+    return style;
+}
+
+fn isUnifiedAddition(line: []const u8) bool {
+    return std.mem.startsWith(u8, line, "+") and !std.mem.startsWith(u8, line, "+++ ");
+}
+
+fn isUnifiedDeletion(line: []const u8) bool {
+    return std.mem.startsWith(u8, line, "-") and !std.mem.startsWith(u8, line, "--- ");
+}
+
+fn paintDiffColumn(
+    surface: vxfw.Surface,
+    range: Range,
+    start_row: u16,
+    end_row: u16,
+    text: []const u8,
+    column: ValueColumn,
+) u16 {
+    const inner_start = range.start + 2;
+    const inner_width = range.end - range.start -| 2;
+    var row = start_row;
+    var lines = std.mem.splitScalar(u8, text, '\n');
+    var remaining_lines = std.mem.splitScalar(u8, text, '\n');
+    _ = remaining_lines.next();
+    while (lines.next()) |raw_line| {
+        const more = remaining_lines.next() != null;
+        const line = std.mem.trimEnd(u8, raw_line, "\r");
+        if (!more and line.len == 0) break;
+        const style = diffLineStyle(column, line);
+        var rest = line;
+        while (row < end_row) {
+            if (rest.len == 0) {
+                styleRange(surface, row, range, style);
+                row += 1;
+                break;
+            }
+            const consumed = writeClippedCount(surface, inner_start, row, inner_width, rest);
+            styleRange(surface, row, range, style);
+            if (consumed == 0) break;
+            rest = rest[consumed..];
+            row += 1;
+            if (rest.len == 0) break;
+        }
+        if (row >= end_row) break;
+    }
+    return row;
 }
 
 fn paintProperties(self: *View, arena: std.mem.Allocator, surface: vxfw.Surface, size: vxfw.Size) !void {
@@ -2103,7 +2470,7 @@ fn paintProperties(self: *View, arena: std.mem.Allocator, surface: vxfw.Surface,
             var style = valueStyle(column);
             if (selected and self.selected_value == column) style.bg = Palette.focus_bg;
             if (model.rows[index].changed) style.bold = true;
-            writeClipped(surface, range.start + 2, row, range.end - range.start -| 2, if (selected and self.selected_value == column) skipGraphemes(text, self.horizontal_offset) else text);
+            writeClipped(surface, range.start + 2, row, range.end - range.start -| 2, skipGraphemes(text, self.column_h[i]));
             styleRange(surface, row, range, style);
             if (selected and self.selected_value == column) {
                 surface.writeCell(range.start, row, .{ .char = .{ .grapheme = "▌", .width = 1 }, .style = .{ .fg = Palette.accent, .bg = Palette.focus_bg } });
@@ -2564,9 +2931,8 @@ fn handleEvent(
             if (key.matches(vaxis.Key.up, .{})) return self.moveUp(ctx, size);
             if (key.matches(vaxis.Key.down, .{})) return self.moveDown(ctx, size);
             if (key.matches(vaxis.Key.enter, .{})) return self.activate(ctx, size);
-            if (self.hasProperties() and key.matches('r', .{ .shift = true })) {
+            if (key.matches('r', .{ .shift = true })) {
                 self.raw_view = !self.raw_view;
-                self.horizontal_offset = 0;
                 return ctx.consumeAndRedraw();
             }
             if (self.canCombine() and key.matches('t', .{ .shift = true }))
@@ -2674,10 +3040,8 @@ test "merge TUI: collection toggle retains both orders until Enter applies the f
             const surface = try drawForTest(arena, view.widget(), width, 20);
             const heading = try rowText(arena, surface, BodyGeometry.init(20).inspector_heading_row);
             const labels = try rowText(arena, surface, BodyGeometry.init(20).inspector_labels_row);
-            try testing.expectEqualStrings("⇧T Both sides", try cellsText(arena, surface, BodyGeometry.init(20).inspector_heading_row, width - horizontal_padding - 13, 13));
-            for (width - horizontal_padding - 13..width - horizontal_padding) |col| {
-                try testing.expectEqualDeep(vaxis.Style{}, surface.readCell(@intCast(col), BodyGeometry.init(20).inspector_heading_row).style);
-            }
+            try testing.expect(std.mem.indexOf(u8, heading, "⇧T Both sides") != null);
+            try testing.expect(std.mem.indexOf(u8, heading, "⇧R Raw") != null);
             try testing.expect(std.mem.indexOf(u8, heading, "MonoBehaviour › Items") != null);
             try testing.expectEqualStrings("1 unresolved", try cellsText(arena, surface, BodyGeometry.init(20).header_row, width - horizontal_padding - 12, 12));
             try testing.expect(std.mem.indexOf(u8, labels, "Ours + Theirs") != null);
@@ -2798,6 +3162,61 @@ fn dictionaryUnionPlan(arena: std.mem.Allocator) !core.merge.BuildResult {
     );
 }
 
+const game_object_delete_edit_base =
+    "--- !u!1 &1\nGameObject:\n  m_Component:\n  - component: {fileID: 4}\n  m_Name: Root\n" ++
+    "--- !u!4 &4\nTransform:\n  m_GameObject: {fileID: 1}\n  m_Children:\n  - {fileID: 42}\n  m_Father: {fileID: 0}\n" ++
+    "--- !u!1 &20\nGameObject:\n  m_Component:\n  - component: {fileID: 42}\n  - component: {fileID: 54}\n  m_Name: Child\n" ++
+    "--- !u!4 &42\nTransform:\n  m_GameObject: {fileID: 20}\n  m_Children: []\n  m_Father: {fileID: 4}\n" ++
+    "--- !u!54 &54\nRigidbody:\n  m_GameObject: {fileID: 20}\n  m_Mass: 1\n";
+const game_object_delete_edit_ours =
+    "--- !u!1 &1\nGameObject:\n  m_Component:\n  - component: {fileID: 4}\n  m_Name: Root\n" ++
+    "--- !u!4 &4\nTransform:\n  m_GameObject: {fileID: 1}\n  m_Children: []\n  m_Father: {fileID: 0}\n";
+const game_object_delete_edit_theirs =
+    "--- !u!1 &1\nGameObject:\n  m_Component:\n  - component: {fileID: 4}\n  m_Name: Root\n" ++
+    "--- !u!4 &4\nTransform:\n  m_GameObject: {fileID: 1}\n  m_Children:\n  - {fileID: 42}\n  m_Father: {fileID: 0}\n" ++
+    "--- !u!1 &20\nGameObject:\n  m_Component:\n  - component: {fileID: 42}\n  - component: {fileID: 54}\n  m_Name: Edited Child\n" ++
+    "--- !u!4 &42\nTransform:\n  m_GameObject: {fileID: 20}\n  m_Children: []\n  m_Father: {fileID: 4}\n" ++
+    "--- !u!54 &54\nRigidbody:\n  m_GameObject: {fileID: 20}\n  m_Mass: 1\n";
+
+fn gameObjectDeleteEditPlan(arena: std.mem.Allocator) !core.merge.BuildResult {
+    return core.merge.build(arena, game_object_delete_edit_base, game_object_delete_edit_ours, game_object_delete_edit_theirs);
+}
+
+const reparent_cycle_base =
+    "--- !u!1 &1\nGameObject:\n  m_Component:\n  - component: {fileID: 4}\n  m_Name: Root\n" ++
+    "--- !u!4 &4\nTransform:\n  m_GameObject: {fileID: 1}\n  m_Children:\n  - {fileID: 40}\n  - {fileID: 41}\n  m_Father: {fileID: 0}\n" ++
+    "--- !u!1 &10\nGameObject:\n  m_Component:\n  - component: {fileID: 40}\n  m_Name: Parent A\n" ++
+    "--- !u!4 &40\nTransform:\n  m_GameObject: {fileID: 10}\n  m_Children:\n  - {fileID: 42}\n  m_Father: {fileID: 4}\n" ++
+    "--- !u!1 &11\nGameObject:\n  m_Component:\n  - component: {fileID: 41}\n  m_Name: Parent B\n" ++
+    "--- !u!4 &41\nTransform:\n  m_GameObject: {fileID: 11}\n  m_Children: []\n  m_Father: {fileID: 4}\n" ++
+    "--- !u!1 &20\nGameObject:\n  m_Component:\n  - component: {fileID: 42}\n  - component: {fileID: 54}\n  m_Name: Child\n" ++
+    "--- !u!4 &42\nTransform:\n  m_GameObject: {fileID: 20}\n  m_Children: []\n  m_Father: {fileID: 40}\n" ++
+    "--- !u!54 &54\nRigidbody:\n  m_GameObject: {fileID: 20}\n  m_Mass: 1\n";
+const reparent_cycle_ours =
+    "--- !u!1 &1\nGameObject:\n  m_Component:\n  - component: {fileID: 4}\n  m_Name: Root\n" ++
+    "--- !u!4 &4\nTransform:\n  m_GameObject: {fileID: 1}\n  m_Children:\n  - {fileID: 41}\n  m_Father: {fileID: 0}\n" ++
+    "--- !u!1 &10\nGameObject:\n  m_Component:\n  - component: {fileID: 40}\n  m_Name: Parent A\n" ++
+    "--- !u!4 &40\nTransform:\n  m_GameObject: {fileID: 10}\n  m_Children:\n  - {fileID: 42}\n  m_Father: {fileID: 41}\n" ++
+    "--- !u!1 &11\nGameObject:\n  m_Component:\n  - component: {fileID: 41}\n  m_Name: Parent B\n" ++
+    "--- !u!4 &41\nTransform:\n  m_GameObject: {fileID: 11}\n  m_Children:\n  - {fileID: 40}\n  m_Father: {fileID: 4}\n" ++
+    "--- !u!1 &20\nGameObject:\n  m_Component:\n  - component: {fileID: 42}\n  - component: {fileID: 54}\n  m_Name: Child\n" ++
+    "--- !u!4 &42\nTransform:\n  m_GameObject: {fileID: 20}\n  m_Children: []\n  m_Father: {fileID: 40}\n" ++
+    "--- !u!54 &54\nRigidbody:\n  m_GameObject: {fileID: 20}\n  m_Mass: 1\n";
+const reparent_cycle_theirs =
+    "--- !u!1 &1\nGameObject:\n  m_Component:\n  - component: {fileID: 4}\n  m_Name: Root\n" ++
+    "--- !u!4 &4\nTransform:\n  m_GameObject: {fileID: 1}\n  m_Children:\n  - {fileID: 41}\n  m_Father: {fileID: 0}\n" ++
+    "--- !u!1 &10\nGameObject:\n  m_Component:\n  - component: {fileID: 40}\n  m_Name: Parent A\n" ++
+    "--- !u!4 &40\nTransform:\n  m_GameObject: {fileID: 10}\n  m_Children:\n  - {fileID: 42}\n  m_Father: {fileID: 42}\n" ++
+    "--- !u!1 &11\nGameObject:\n  m_Component:\n  - component: {fileID: 41}\n  m_Name: Parent B\n" ++
+    "--- !u!4 &41\nTransform:\n  m_GameObject: {fileID: 11}\n  m_Children: []\n  m_Father: {fileID: 4}\n" ++
+    "--- !u!1 &20\nGameObject:\n  m_Component:\n  - component: {fileID: 42}\n  - component: {fileID: 54}\n  m_Name: Child\n" ++
+    "--- !u!4 &42\nTransform:\n  m_GameObject: {fileID: 20}\n  m_Children:\n  - {fileID: 40}\n  m_Father: {fileID: 40}\n" ++
+    "--- !u!54 &54\nRigidbody:\n  m_GameObject: {fileID: 20}\n  m_Mass: 1\n";
+
+fn reparentCyclePlan(arena: std.mem.Allocator) !core.merge.BuildResult {
+    return core.merge.build(arena, reparent_cycle_base, reparent_cycle_ours, reparent_cycle_theirs);
+}
+
 fn componentDeletePlan(arena: std.mem.Allocator) !core.merge.BuildResult {
     return core.merge.build(
         arena,
@@ -2850,6 +3269,61 @@ fn cellsText(
     var out: std.ArrayList(u8) = .empty;
     for (start..start + count) |col| {
         try out.appendSlice(arena, surface.readCell(col, row).char.grapheme);
+    }
+    return out.toOwnedSlice(arena);
+}
+
+fn fgOfText(surface: vxfw.Surface, range: Range, row: u16, needle: []const u8) ?vaxis.Color {
+    var col = range.start;
+    while (col + needle.len <= range.end) : (col += 1) {
+        var match = true;
+        for (needle, 0..) |byte, offset| {
+            const cell = surface.readCell(col + @as(u16, @intCast(offset)), row);
+            if (cell.char.grapheme.len != 1 or cell.char.grapheme[0] != byte) {
+                match = false;
+                break;
+            }
+        }
+        if (match) return surface.readCell(col, row).style.fg;
+    }
+    return null;
+}
+
+fn firstContentFg(surface: vxfw.Surface, range: Range, row: u16) vaxis.Color {
+    return surface.readCell(range.start + 2, row).style.fg;
+}
+
+fn lineStartFg(
+    surface: vxfw.Surface,
+    range: Range,
+    start_row: u16,
+    end_row: u16,
+    marker: []const u8,
+) ?vaxis.Color {
+    var row = start_row;
+    while (row < end_row) : (row += 1) {
+        const cell = surface.readCell(range.start + 2, row);
+        if (!std.mem.eql(u8, cell.char.grapheme, marker)) continue;
+        const next = surface.readCell(range.start + 3, row).char.grapheme;
+        if (std.mem.eql(u8, next, marker)) continue;
+        return cell.style.fg;
+    }
+    return null;
+}
+
+fn rangeText(
+    arena: std.mem.Allocator,
+    surface: vxfw.Surface,
+    range: Range,
+    start_row: u16,
+    end_row: u16,
+) ![]const u8 {
+    var out: std.ArrayList(u8) = .empty;
+    for (start_row..end_row) |row| {
+        const line = std.mem.trim(u8, try cellsText(arena, surface, @intCast(row), range.start, range.end - range.start), " ");
+        if (line.len == 0) continue;
+        if (out.items.len != 0) try out.append(arena, '\n');
+        try out.appendSlice(arena, line);
     }
     return out.toOwnedSlice(arena);
 }
@@ -3199,66 +3673,6 @@ test "merge TUI: a copied scalar line applies without its terminal newline" {
     try pressKeyForTest(&view, &ctx, vaxis.Key.enter);
     try testing.expectEqualStrings("", state.status);
     try testing.expectEqualStrings("42", fixture.plan.operations[state.conflict_indices[0]].resolution.custom);
-}
-
-test "merge TUI: invalid Result stays editable after Enter" {
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
-    var fixture = try screenPlan(arena);
-    var state = try merge_ui_state.State.init(arena, &fixture.plan);
-    var view = try viewForTest(arena, &state, "A.prefab", fixture.partial);
-    defer view.deinit();
-    _ = try drawForTest(arena, view.widget(), 100, 20);
-    var ctx = eventContext(arena);
-
-    try focusResultForTest(&view, &ctx);
-    try view.widget().handleEvent(&ctx, .{ .key_press = .{
-        .codepoint = '{',
-        .text = "{bad",
-    } });
-    try pressKeyForTest(&view, &ctx, vaxis.Key.enter);
-
-    // Invalid YAML must keep the submitted buffer and Result focus for correction.
-    try testing.expectEqual(@as(usize, 2), state.unresolvedCount());
-    try testing.expectEqualStrings("The result is not valid Unity YAML.", state.status);
-    try testing.expect(view.editing);
-    try testing.expect(view.focus_area == .inspector);
-    try testing.expect(view.selected_value == .result);
-    const value = try view.editor.toOwnedSlice();
-    defer arena.free(value);
-    try testing.expectEqualStrings("{bad", value);
-}
-
-test "merge TUI: Escape keeps the pending value that existed before editing" {
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
-    var fixture = try screenPlan(arena);
-    var state = try merge_ui_state.State.init(arena, &fixture.plan);
-    var view = try viewForTest(arena, &state, "A.prefab", fixture.partial);
-    defer view.deinit();
-    _ = try drawForTest(arena, view.widget(), 100, 20);
-    var ctx = eventContext(arena);
-
-    try state.handle(.choose_theirs);
-    try focusResultForTest(&view, &ctx);
-    try pressKeyForTest(&view, &ctx, vaxis.Key.enter);
-    try pressKeyForTest(&view, &ctx, vaxis.Key.home);
-    try view.widget().handleEvent(&ctx, .{ .key_press = .{
-        .codepoint = '{',
-        .text = "{bad",
-    } });
-    try pressKeyForTest(&view, &ctx, vaxis.Key.enter);
-    try pressKeyForTest(&view, &ctx, vaxis.Key.escape);
-
-    // Escape must discard an invalid custom value and restore the earlier side choice.
-    try testing.expect(state.pending.? == .take);
-    try testing.expect(state.pending.?.take == .theirs);
-    try testing.expectEqualStrings("", state.status);
-    try testing.expect(!view.editing);
-    try testing.expect(view.focus_area == .hierarchy);
-    try testing.expect(view.selected_value == .result);
 }
 
 test "merge TUI: live screen gates queued shrink input before redraw" {

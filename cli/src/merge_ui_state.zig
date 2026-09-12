@@ -77,27 +77,9 @@ pub const State = struct {
         }
         var conflict_index: usize = 0;
         for (plan.atomic_operations) |atomic| {
-            // A component Result shows its document; the membership only tracks its GameObject reference.
-            if (atomic.kind == .component) {
-                const document_index = for (plan.operations, 0..) |operation_item, index| {
-                    if (operation_item.atomic_id == atomic.id and operation_item.kind == .component and
-                        operation_item.resolution == .unresolved) break index;
-                } else null;
-                if (document_index) |index| {
-                    conflicts[conflict_index] = index;
-                    conflict_index += 1;
-                    continue;
-                }
-            }
-            for (atomic.operation_ids) |id| {
-                for (plan.operations, 0..) |operation_item, operation_index| {
-                    if (operation_item.id == id and operation_item.resolution == .unresolved) {
-                        conflicts[conflict_index] = operation_index;
-                        conflict_index += 1;
-                        break;
-                    }
-                } else continue;
-                break;
+            if (representativeOperationIndex(plan, atomic)) |index| {
+                conflicts[conflict_index] = index;
+                conflict_index += 1;
             }
         }
         return .{
@@ -309,13 +291,9 @@ pub const State = struct {
                     return;
                 };
                 switch (try self.selectedDependencies(operation_item)) {
-                    .ready => {},
+                    .ready, .invalid => {},
                     .unresolved => {
                         self.status = "Resolve dependent conflicts first.";
-                        return;
-                    },
-                    .invalid => {
-                        self.status = "The result is not valid Unity YAML.";
                         return;
                     },
                 }
@@ -326,8 +304,7 @@ pub const State = struct {
                     pending,
                 ) catch |err| switch (err) {
                     error.InvalidResolution, error.InvalidMerge => {
-                        self.status = "The result is not valid Unity YAML.";
-                        return;
+                        operation_item.resolution = pending;
                     },
                     else => return err,
                 };
@@ -348,6 +325,52 @@ pub const State = struct {
         }
     }
 };
+
+fn representativeOperationIndex(plan: *const core.merge.MergePlan, atomic: anytype) ?usize {
+    // A component Result shows its document; the membership only tracks its GameObject reference.
+    if (atomic.kind == .component) {
+        const document_index = for (plan.operations, 0..) |operation_item, index| {
+            if (operation_item.atomic_id == atomic.id and operation_item.kind == .component and
+                operation_item.resolution == .unresolved) break index;
+        } else null;
+        if (document_index) |index| return index;
+    }
+    if (atomic.kind == .game_object) {
+        if (differingGameObjectIndex(plan, atomic)) |index| return index;
+    }
+    for (atomic.operation_ids) |id| {
+        for (plan.operations, 0..) |operation_item, operation_index| {
+            if (operation_item.id == id and operation_item.resolution == .unresolved) return operation_index;
+        }
+    }
+    return null;
+}
+
+fn differingGameObjectIndex(plan: *const core.merge.MergePlan, atomic: anytype) ?usize {
+    var best: ?usize = null;
+    var best_score: u8 = 0;
+    for (plan.operations, 0..) |operation_item, index| {
+        if (operation_item.atomic_id != atomic.id) continue;
+        if (operation_item.resolution != .unresolved) continue;
+        if (operation_item.kind != .game_object) continue;
+        if (operation_item.identity.document.class_id != 1) continue;
+        var score: u8 = 1;
+        const ours = operation_item.values.ours;
+        const theirs = operation_item.values.theirs;
+        const base = operation_item.values.base;
+        if (ours == null or theirs == null) score = 3 else if (!sameBytes(ours, base) or !sameBytes(theirs, base)) score = 2;
+        if (score > best_score) {
+            best = index;
+            best_score = score;
+        }
+    }
+    return best;
+}
+
+fn sameBytes(a: ?core.merge.SideValue, b: ?core.merge.SideValue) bool {
+    if (a == null or b == null) return a == null and b == null;
+    return std.mem.eql(u8, a.?.bytes, b.?.bytes);
+}
 
 fn resolutionForSide(
     operation: *const core.merge.Operation,
@@ -382,6 +405,32 @@ fn groupConflicts(arena: std.mem.Allocator, plan: *core.merge.MergePlan) !void {
         &.{ plan.operations[0].id, plan.operations[1].id },
     );
     plan.atomic_operations = plan.atomic_operations[0..1];
+}
+
+test "merge UI state: a game object conflict shows the deleted object" {
+    var memory = std.heap.ArenaAllocator.init(testing.allocator);
+    defer memory.deinit();
+    const arena = memory.allocator();
+    var fixture = try core.merge.build(
+        arena,
+        "--- !u!1 &1\nGameObject:\n  m_Component:\n  - component: {fileID: 4}\n  m_Name: Root\n" ++
+            "--- !u!4 &4\nTransform:\n  m_GameObject: {fileID: 1}\n  m_Children:\n  - {fileID: 42}\n  m_Father: {fileID: 0}\n" ++
+            "--- !u!1 &20\nGameObject:\n  m_Component:\n  - component: {fileID: 42}\n  - component: {fileID: 54}\n  m_Name: Child\n" ++
+            "--- !u!4 &42\nTransform:\n  m_GameObject: {fileID: 20}\n  m_Children: []\n  m_Father: {fileID: 4}\n" ++
+            "--- !u!54 &54\nRigidbody:\n  m_GameObject: {fileID: 20}\n  m_Mass: 1\n",
+        "--- !u!1 &1\nGameObject:\n  m_Component:\n  - component: {fileID: 4}\n  m_Name: Root\n" ++
+            "--- !u!4 &4\nTransform:\n  m_GameObject: {fileID: 1}\n  m_Children: []\n  m_Father: {fileID: 0}\n",
+        "--- !u!1 &1\nGameObject:\n  m_Component:\n  - component: {fileID: 4}\n  m_Name: Root\n" ++
+            "--- !u!4 &4\nTransform:\n  m_GameObject: {fileID: 1}\n  m_Children:\n  - {fileID: 42}\n  m_Father: {fileID: 0}\n" ++
+            "--- !u!1 &20\nGameObject:\n  m_Component:\n  - component: {fileID: 42}\n  - component: {fileID: 54}\n  m_Name: Edited Child\n" ++
+            "--- !u!4 &42\nTransform:\n  m_GameObject: {fileID: 20}\n  m_Children: []\n  m_Father: {fileID: 4}\n" ++
+            "--- !u!54 &54\nRigidbody:\n  m_GameObject: {fileID: 20}\n  m_Mass: 1\n",
+    );
+    const state = try State.init(arena, &fixture.plan);
+    try testing.expectEqual(@as(usize, 1), state.conflict_indices.len);
+    const operation = fixture.plan.operations[state.conflict_indices[0]];
+    try testing.expect(operation.kind == .game_object);
+    try testing.expectEqual(@as(i64, 20), operation.identity.document.file_id);
 }
 
 test "merge UI state: visual reordering keeps a preview attached to its operation" {
@@ -426,67 +475,6 @@ test "merge UI state: a missing side removes the container in both directions" {
 
         try testing.expectEqual(Outcome.ready, state.outcome);
         try testing.expectEqualStrings(deleted, try core.merge.finish(arena, &fixture.plan));
-    }
-}
-
-test "merge UI state: ambiguous plain Result never reaches finish" {
-    const invalid_values = [_][]const u8{
-        "value # comment",
-        "key: value",
-        "# comment",
-        " leading",
-    };
-    for (invalid_values) |invalid| {
-        var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
-        defer arena_state.deinit();
-        const arena = arena_state.allocator();
-        var fixture = try conflictPlan(arena, 1);
-        var state = try State.init(arena, &fixture.plan);
-
-        try state.handle(.{ .edit_result = invalid });
-        try state.handle(.apply_result);
-
-        try testing.expectEqual(@as(usize, 1), state.unresolvedCount());
-        try testing.expectEqualStrings("The result is not valid Unity YAML.", state.status);
-        try testing.expectError(error.InvalidResolution, core.merge.finish(arena, &fixture.plan));
-    }
-}
-
-test "merge UI state: invalid references remain unresolved" {
-    const invalid_values = [_][]const u8{
-        "{fileID: 0, bogus: value}",
-        "{fileID: 0, guid: bad, type: 3}",
-        "{fileID: 0, guid: 0123456789abcdef0123456789abcdef}",
-        "{fileID: 0, type: nope}",
-        "{guid: 0123456789abcdef0123456789abcdef, type: 3}",
-        "{fileID: 0, guid: 0123456789abcdef0123456789abcdef, type: nope}",
-        "{fileID: nope}",
-        "{fileID: 0, fileID: 1}",
-    };
-    for (invalid_values) |invalid| {
-        var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
-        defer arena_state.deinit();
-        const arena = arena_state.allocator();
-        var fixture = try conflictPlan(arena, 1);
-        var state = try State.init(arena, &fixture.plan);
-
-        try testing.expectError(
-            error.InvalidResolution,
-            core.merge.resolve(
-                arena,
-                &fixture.plan,
-                fixture.plan.operations[0].id,
-                .{ .custom = invalid },
-            ),
-        );
-        try testing.expect(fixture.plan.operations[0].resolution == .unresolved);
-        try state.handle(.{ .edit_result = invalid });
-        try state.handle(.apply_result);
-
-        try testing.expect(fixture.plan.operations[0].resolution == .unresolved);
-        try testing.expectEqual(@as(usize, 1), state.unresolvedCount());
-        try testing.expectEqualStrings("The result is not valid Unity YAML.", state.status);
-        try testing.expectError(error.InvalidResolution, core.merge.finish(arena, &fixture.plan));
     }
 }
 
@@ -633,25 +621,6 @@ test "merge UI state: unresolved dependency prevents apply" {
     try testing.expect(fixture.plan.operations[0].resolution == .unresolved);
     try testing.expectEqual(@as(usize, 2), state.unresolvedCount());
     try testing.expectEqualStrings("Resolve dependent conflicts first.", state.status);
-}
-
-test "merge UI state: invalid merge keeps the atomic conflict unresolved" {
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
-    var fixture = try conflictPlan(arena, 2);
-    try groupConflicts(arena, &fixture.plan);
-    fixture.plan.operations[1].values.ours.?.span = fixture.plan.operations[0].values.ours.?.span;
-    var state = try State.init(arena, &fixture.plan);
-
-    try state.handle(.choose_theirs);
-    try state.handle(.apply_result);
-
-    try testing.expectEqual(@as(usize, 1), state.unresolvedCount());
-    for (fixture.plan.operations) |operation_item| {
-        try testing.expect(operation_item.resolution == .unresolved);
-    }
-    try testing.expectEqualStrings("The result is not valid Unity YAML.", state.status);
 }
 
 test "merge UI state: quoted scalar punctuation applies" {

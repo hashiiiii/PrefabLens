@@ -1243,7 +1243,7 @@ fn appendDocumentPatch(
     operation: *const merge_model.Operation,
 ) merge_model.Error!void {
     const custom = switch (operation.resolution) {
-        .custom => |value| if (operation.kind == .component) value else return error.InvalidResolution,
+        .custom => |value| if (operation.kind == .component or operation.kind == .game_object) value else return error.InvalidResolution,
         else => null,
     };
     const custom_bytes = if (custom) |value|

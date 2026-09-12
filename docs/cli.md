@@ -217,7 +217,7 @@ Bracketed paste keeps indentation and line breaks and waits for **Enter** before
 Collection values accept block YAML and flow YAML split across lines.
 Keep each scalar token on one line; folded scalar input remains unsupported.
 PrefabLens keeps the existing collection shape checks and output formatting rules.
-Conflicts show Base, Ours, Theirs, and Result. Column headings are uncolored.
+Conflicts show Ours, Base, Theirs, and Result. Column headings are uncolored. Base uses a darker paper than Ours, Theirs, and Result so it reads as the ancestor, not the focused column.
 **Shift+R** switches Semantic and Raw on every conflict. **Shift+T** still toggles Both sides when both orders exist.
 Semantic is a property table when the conflict has named fields or keyed items.
 Keyed pair sequences show each item's `key` or `first` value. Result shows the value that will be written.
@@ -225,6 +225,7 @@ Reparent conflicts show the parent GameObject name. Duplicate names include the 
 Raw keeps the four columns. Ours and Theirs are unified diffs against Base. Deletions are red. Additions are green. YAML document headers stay uncolored.
 Result is the Unity YAML that will be applied, not a deletion diff. Unresolved Result stays empty.
 Missing sides stay empty. Each inspector column scrolls on its own and stops at the last wrapped line. A thin floating scrollbar appears on the focused column while it scrolls, then hides. Mouse wheel and trackpad two-finger scroll move vertically. Shift plus wheel scrolls a line horizontally.
+Base is not selectable. Wheel over Base still scrolls that column, so long ancestor YAML stays readable.
 While editing, **Shift+R** inserts text.
 
 #### Completion checks

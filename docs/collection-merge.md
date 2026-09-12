@@ -10,10 +10,10 @@ PrefabLens compares each side with the common base.
 It combines independent insertions, removals, and item edits.
 It preserves repeated elements and does not use a field name as an element identity.
 
-| Base | Ours | Theirs | Result |
+| Ours | Base | Theirs | Result |
 | --- | --- | --- | --- |
-| `[1, 2, 3]` | `[2, 3]` | `[1, 20, 3]` | `[20, 3]` |
-| `[1, 2, 3]` | `[1]` | `[1, 2, 30]` | Choose whether to retain `30`. The result keeps `2` removed. |
+| `[2, 3]` | `[1, 2, 3]` | `[1, 20, 3]` | `[20, 3]` |
+| `[1]` | `[1, 2, 3]` | `[1, 2, 30]` | Choose whether to retain `30`. The result keeps `2` removed. |
 
 When both sides insert into the same gap, the field heading offers **One side** and **Both sides** modes.
 Press **Shift+T** (shown as `⇧T`) from either pane to switch modes.

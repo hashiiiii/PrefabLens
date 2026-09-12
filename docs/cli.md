@@ -196,7 +196,6 @@ The user can edit it with another tool and complete the normal Git workflow.
 Navigation and automatic selection of the next conflict follow the hierarchy's order from top to bottom.
 Click **Ours** or **Theirs** to preview a value.
 Click **Result**, or focus it and press **Enter**, to edit the existing value.
-**F2** also opens the Result editor directly from the selected conflict.
 Outside the property table, **Backspace** or **Delete** clears Result and reopens the conflict without starting the editor.
 While editing, typing and pasting insert at the cursor; **Backspace** and **Delete** remove a character or the selected range.
 
@@ -218,35 +217,21 @@ Bracketed paste keeps indentation and line breaks and waits for **Enter** before
 Collection values accept block YAML and flow YAML split across lines.
 Keep each scalar token on one line; folded scalar input remains unsupported.
 PrefabLens keeps the existing collection shape checks and output formatting rules.
-Component conflicts show a Semantic property table for Base, Ours, Theirs, and Result.
-All properties are visible, with changed values in bold.
-Ours is red and Theirs is green in both views.
-Nested maps and arrays show their individual values, including fields from custom components.
-
-Choose **Ours** or **Theirs** to preview the entire component.
-To edit a retained component, click a property in **Result**.
-You can also focus Result, select a property with **Up** / **Down**, and press **Enter**.
-**Enter** applies the component with the edited value; **Escape** cancels the cell edit.
-The component and its GameObject membership are resolved together.
-Ownership references are read-only in the property table.
-
-**Shift+R** switches between Semantic and Raw YAML without changing the selected result; **F3** is an alias.
-While editing, **Shift+R** inserts text.
-Raw Result editing accepts the complete component document.
-Keep its document header, type, and `m_GameObject` reference unchanged.
+Conflicts show Ours, Base, Theirs, and Result. Column headings are uncolored. Base uses a darker paper than Ours, Theirs, and Result so it reads as the ancestor, not the focused column.
+**Shift+R** switches Semantic and Raw on every conflict. **Shift+T** still toggles Both sides when both orders exist.
+Semantic is a property table when the conflict has named fields or keyed items.
+Keyed pair sequences show each item's `key` or `first` value. Result shows the value that will be written.
+Reparent conflicts show the parent GameObject name. Duplicate names include the path from the root.
+Raw keeps the four columns. Ours and Theirs are unified diffs against Base. Deletions are red. Additions are green. YAML document headers stay uncolored.
+Result is the Unity YAML that will be applied, not a deletion diff. Unresolved Result stays empty.
+Missing sides stay empty. Each inspector column scrolls on its own and stops at the last wrapped line. A thin floating scrollbar appears on the focused column while it scrolls, then hides. Mouse wheel and trackpad two-finger scroll move vertically. Shift plus wheel scrolls a line horizontally.
+Base is not selectable. Wheel over Base still scrolls that column, so long ancestor YAML stays readable.
+**Shift+E** shows the `$MERGED` snapshot from startup, including conflict markers, in a panel over the bottom 40% of the panes. The footer keeps the **⇧E File** control. Click it, or press **Shift+E**, to show or hide the panel. Drag the top edge to resize it. The panel scrolls like an inspector column: it stops at the last wrapped line, and a thin floating scrollbar appears while it scrolls.
+While editing, **Shift+R** and **Shift+E** insert text.
 
 #### Completion checks
 
-Before PrefabLens writes a completed semantic resolution, it verifies these conditions:
-
-1. Every atomic operation has a result.
-2. Every `fileID` is unique.
-3. Every Component document has a matching `m_Component` reference.
-4. Every Transform `m_Father` matches the parent `m_Children` reference.
-5. The hierarchy has no cycle.
-6. Every internal reference points to an existing document.
-7. The complete output parses as UnityYAML.
-8. The current output file matches its snapshot from UI startup.
+Complete writes the applied YAML. It does not reject cycles or invalid YAML.
 
 Original input files have a 64 MiB limit. Working conflict output has a separate 256 MiB limit.
 The mergetool requires both standard input and standard output to be TTYs.

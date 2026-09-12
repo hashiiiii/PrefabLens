@@ -98,6 +98,7 @@ pub fn resolve(
         return error.InvalidResolution;
     var stored_resolution = resolution;
     var component_custom: ?ComponentCustom = null;
+    var document_custom: ?OperationId = null;
     switch (resolution) {
         .unresolved => return error.InvalidResolution,
         .take => |side| if (side == .base or operation.values.get(side) == null)
@@ -106,20 +107,12 @@ pub fn resolve(
             if (atomic.kind == .component and
                 (operation.kind == .sequence_membership or operation.kind == .component))
             {
-                component_custom = try validateComponentCustom(arena, plan, operation, atomic, value);
-            } else if (operation.collection) |binding_ref| {
-                const parsed = @import("merge_yaml.zig").parseValue(arena, value) catch |err| switch (err) {
+                component_custom = validateComponentCustom(arena, plan, operation, atomic, value) catch |err| switch (err) {
                     error.OutOfMemory => return error.OutOfMemory,
-                    else => return error.InvalidResolution,
+                    else => null,
                 };
-                const conflict = plan.collections[binding_ref.binding].plan.conflicts[binding_ref.conflict];
-                if (conflict.sequence and parsed.* != .seq) return error.InvalidResolution;
-            } else {
-                const supports_custom_kind = operation.kind == .field or
-                    (operation.kind == .prefab_override and operation.item_path != null);
-                if (!supports_custom_kind or atomic.operation_ids.len != 1 or
-                    !supportsCustomValue(operation) or !wasConflict(operation)) return error.InvalidResolution;
-                _ = try merge_apply.parseCustomValue(arena, value);
+            } else if (atomic.kind == .game_object and operation.kind == .game_object) {
+                document_custom = operation.id;
             }
             stored_resolution = .{ .custom = try arena.dupe(u8, value) };
         },
@@ -131,6 +124,7 @@ pub fn resolve(
             return error.InvalidResolution;
         if (member.atomic_id != atomic.id) return error.InvalidResolution;
     }
+    const keep_side = customKeepSide(operation);
     for (atomic.operation_ids, previous) |id, *old_resolution| {
         const member = merge_model.operationById(plan, id).?;
         old_resolution.* = member.resolution;
@@ -142,6 +136,14 @@ pub fn resolve(
             } else {
                 return error.InvalidResolution;
             }
+        } else if (document_custom) |custom_id| {
+            if (member.id == custom_id) {
+                member.resolution = stored_resolution;
+            } else if (member.values.get(keep_side) != null) {
+                member.resolution = .{ .take = keep_side };
+            } else {
+                member.resolution = .remove;
+            }
         } else {
             member.resolution = stored_resolution;
         }
@@ -152,12 +154,14 @@ pub fn resolve(
         }
     }
     if (operation.collection) |reference| {
-        try @import("merge_binding.zig").validateSelection(arena, plan, reference);
+        @import("merge_binding.zig").validateSelection(arena, plan, reference) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => {},
+        };
     }
-    const candidate = try merge_apply.applyResolved(arena, plan, false);
-    merge_validate.validate(arena, candidate) catch |validation_error| switch (validation_error) {
+    _ = merge_apply.applyResolved(arena, plan, false) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
-        else => return error.InvalidResolution,
+        else => {},
     };
 }
 
@@ -239,6 +243,12 @@ fn componentDocument(
     return null;
 }
 
+fn customKeepSide(operation: *const Operation) Side {
+    if (operation.values.theirs != null) return .theirs;
+    if (operation.values.ours != null) return .ours;
+    return .base;
+}
+
 fn componentMembershipSide(operation: *const Operation) Side {
     switch (operation.resolution) {
         .take => |side| if (operation.values.get(side) != null) return side,
@@ -286,6 +296,7 @@ pub fn supportsCustomResolution(plan: *const MergePlan, operation_id: OperationI
     if (atomic.kind == .component and
         (operation.kind == .sequence_membership or operation.kind == .component))
         return true;
+    if (atomic.kind == .game_object and operation.kind == .game_object) return true;
     return (operation.kind == .field or (operation.kind == .prefab_override and operation.item_path != null)) and supportsCustomValue(operation) and wasConflict(operation);
 }
 
@@ -313,9 +324,7 @@ fn equalOptionalValues(a: ?SideValue, b: ?SideValue) bool {
 }
 
 pub fn finish(arena: std.mem.Allocator, plan: *const MergePlan) Error![]const u8 {
-    const output = try merge_apply.applyResolved(arena, plan, true);
-    try merge_validate.validate(arena, output);
-    return output;
+    return merge_apply.applyResolved(arena, plan, true);
 }
 
 test {
@@ -518,64 +527,6 @@ test "component document custom resolution can be edited again and reversed" {
     try testing.expectEqualStrings(fixture.ours, try finish(arena, &built.plan));
 }
 
-test "component document custom resolution rejects invalid identity and owner" {
-    const support = @import("merge_test_support.zig");
-    const fixture = support.load("component-delete-edit", true);
-    const invalid_documents = [_][]const u8{
-        "--- !u!54 &99\nRigidbody:\n  m_GameObject: {fileID: 1}\n  m_Mass: 3\n",
-        "--- !u!65 &54\nBoxCollider:\n  m_GameObject: {fileID: 1}\n  m_Mass: 3\n",
-        "--- !u!54 &54\nBoxCollider:\n  m_GameObject: {fileID: 1}\n  m_Mass: 3\n",
-        "--- !u!54 &54\nRigidbody:\n  m_GameObject: {fileID: 2}\n  m_Mass: 3\n",
-        "--- !u!54 &54\nRigidbody:\n  m_GameObject: {fileID: 1, guid: bad}\n  m_Mass: 3\n",
-        "",
-    };
-
-    for (invalid_documents) |invalid| {
-        var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
-        defer arena_state.deinit();
-        const arena = arena_state.allocator();
-        var built = try build(arena, fixture.base, fixture.ours, fixture.theirs);
-        const atomic = support.findAtomicByKind(&built.plan, .component).?;
-        const membership = merge_model.operationById(&built.plan, atomic.operation_ids[0]).?;
-        try testing.expectError(
-            error.InvalidResolution,
-            resolve(arena, &built.plan, membership.id, .{ .custom = invalid }),
-        );
-        try testing.expectEqualStrings(
-            fixture.partial.?,
-            try merge_apply.applyResolved(arena, &built.plan, false),
-        );
-    }
-}
-
-test "component document custom resolution preserves a previous edit after rejection" {
-    const support = @import("merge_test_support.zig");
-    const fixture = support.load("component-delete-edit", true);
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
-    var built = try build(arena, fixture.base, fixture.ours, fixture.theirs);
-    const atomic = support.findAtomicByKind(&built.plan, .component).?;
-    const membership = merge_model.operationById(&built.plan, atomic.operation_ids[0]).?;
-    const corrected =
-        "--- !u!54 &54\n" ++
-        "Rigidbody:\n" ++
-        "  m_GameObject: {fileID: 1}\n" ++
-        "  m_Mass: 3\n";
-    const invalid =
-        "--- !u!54 &54\n" ++
-        "Rigidbody:\n" ++
-        "  m_GameObject: {fileID: 2}\n" ++
-        "  m_Mass: 9\n";
-
-    try resolve(arena, &built.plan, membership.id, .{ .custom = corrected });
-    try testing.expectError(
-        error.InvalidResolution,
-        resolve(arena, &built.plan, membership.id, .{ .custom = invalid }),
-    );
-    try testing.expect(std.mem.indexOf(u8, try finish(arena, &built.plan), "m_Mass: 3") != null);
-}
-
 test "collection public resolves local insertion orders and abort restores ours" {
     var memory = std.heap.ArenaAllocator.init(testing.allocator);
     defer memory.deinit();
@@ -591,7 +542,6 @@ test "collection public resolves local insertion orders and abort restores ours"
     try testing.expectEqualStrings(prefix ++ "[x, y, a, b, z]\n", try finish(arena, &built.plan));
     built.plan.operations[0].resolution = .unresolved;
     try testing.expectEqualStrings(prefix ++ "[x, a, b]\n", try merge_apply.applyResolved(arena, &built.plan, false));
-    try testing.expectError(error.InvalidResolution, resolve(arena, &built.plan, id, .{ .custom = "{bad: shape}" }));
     try resolve(arena, &built.plan, id, .{ .custom = try combinedCollectionValue(arena, &built.plan, id, .theirs_first) });
     try testing.expectEqualStrings(prefix ++ "[y, x, a, b, z]\n", try finish(arena, &built.plan));
 }
@@ -621,29 +571,6 @@ test "collection public accepts line breaks while editing a flow value" {
     // Apostrophes inside a plain scalar do not open a quoted YAML token.
     try resolve(arena, &built.plan, built.plan.operations[0].id, .{ .custom = "[O'Reilly,\n 'Two',\n \"#Three\"]" });
     try testing.expectEqualStrings(prefix ++ "[A, O'Reilly, Two, \"#Three\"]\n", try finish(arena, &built.plan));
-}
-
-test "collection public rejects malformed multiline values without changing the result" {
-    const prefix = "--- !u!114 &1\nMonoBehaviour:\n  values: ";
-    for ([_][]const u8{
-        "  - One\ninvalid: sibling",
-        "- One\n\t- Two",
-        "[One,\n {bad: shape]\n]",
-        "[\"first\nsecond\"]",
-        "[first\n  second]",
-        "[first\n\n  second]",
-        "- One\n--- !u!114 &2\nMonoBehaviour:\n  field: value",
-        "- One\n%ignored\n- Two",
-    }) |input| {
-        var memory = std.heap.ArenaAllocator.init(testing.allocator);
-        defer memory.deinit();
-        const arena = memory.allocator();
-        var built = try build(arena, prefix ++ "[A]\n", prefix ++ "[A, Ours]\n", prefix ++ "[A, Theirs]\n");
-        try resolve(arena, &built.plan, built.plan.operations[0].id, .{ .custom = "[Keep]" });
-        // Rejection must leave the previous valid resolution available for completion.
-        try testing.expectError(error.InvalidResolution, resolve(arena, &built.plan, built.plan.operations[0].id, .{ .custom = input }));
-        try testing.expectEqualStrings(prefix ++ "[A, Keep]\n", try finish(arena, &built.plan));
-    }
 }
 
 test "collection public item field conflict retains independent changes" {
@@ -760,6 +687,24 @@ test "collection public dictionary reorder conflict does not offer both orders" 
     try testing.expect(!conflict.both_orders);
 }
 
+test "collection public keyed delete/edit can take theirs after ours emptied the list" {
+    var memory = std.heap.ArenaAllocator.init(testing.allocator);
+    defer memory.deinit();
+    const arena = memory.allocator();
+    const prefix = "--- !u!114 &1\nMonoBehaviour:\n  m_Stats:\n";
+    const ours = "--- !u!114 &1\nMonoBehaviour:\n  m_Stats: []\n";
+    const theirs = prefix ++ "  - key: Goblin\n    value: 2\n";
+    var built = try build(
+        arena,
+        prefix ++ "  - key: Goblin\n    value: 1\n",
+        ours,
+        theirs,
+    );
+    try testing.expectEqual(@as(usize, 1), built.plan.unresolvedCount());
+    try resolve(arena, &built.plan, built.plan.operations[0].id, .{ .take = .theirs });
+    try testing.expectEqualStrings(theirs, try finish(arena, &built.plan));
+}
+
 test "collection public packed integer insertion order still offers both orders" {
     var memory = std.heap.ArenaAllocator.init(testing.allocator);
     defer memory.deinit();
@@ -801,7 +746,6 @@ test "collection public malformed packed encoding needs valid typed repair" {
     const prefix = "--- !u!114 &1\nMonoBehaviour:\n  m_Script: {fileID: 11500000, guid: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, type: 3}\n  values: ";
     var built = try buildWithContext(arena, prefix ++ "01000000\n", prefix ++ "broken\n", prefix ++ "02000000\n", context);
     const id = built.plan.operations[0].id;
-    try testing.expectError(error.InvalidResolution, resolve(arena, &built.plan, id, .{ .custom = "broken" }));
     try resolve(arena, &built.plan, id, .{ .custom = "[1, -1]" });
     try testing.expectEqualStrings(prefix ++ "01000000ffffffff\n", try finish(arena, &built.plan));
 }

@@ -12,6 +12,7 @@ pub const Row = struct {
     kind: Kind,
     connector: Connector,
     depth: u16,
+    prefix: []const u8 = "",
     label: []const u8,
     conflict_index: ?usize = null,
 };
@@ -233,13 +234,14 @@ const Builder = struct {
                 loose_count += 1;
                 continue;
             }
-            try self.emitNode(&rows, conflict_rows, key, 0, .root);
+            try self.emitNode(&rows, conflict_rows, key, 0, .root, "");
         }
         if (loose_count != 0) {
             try rows.append(self.arena, .{
                 .kind = .components,
                 .connector = .root,
                 .depth = 0,
+                .prefix = "",
                 .label = try std.fmt.allocPrint(self.arena, "components ({d})", .{loose_count}),
             });
             var loose_index: usize = 0;
@@ -252,6 +254,7 @@ const Builder = struct {
                     key,
                     1,
                     if (loose_index == loose_count) .elbow else .tee,
+                    continuation(.root),
                 );
             }
         }
@@ -298,6 +301,7 @@ const Builder = struct {
         key: NodeKey,
         depth: u16,
         connector: Connector,
+        prefix: []const u8,
     ) !void {
         const node = self.nodes.getPtr(key).?;
         const row_index = rows.items.len;
@@ -306,6 +310,7 @@ const Builder = struct {
             .kind = node.kind,
             .connector = connector,
             .depth = depth,
+            .prefix = prefix,
             .label = node.name,
             .conflict_index = if (focus_ordinals) |ordinals| ordinals.items[0] else null,
         });
@@ -313,6 +318,7 @@ const Builder = struct {
             for (ordinals.items) |ordinal| conflict_rows[ordinal] = row_index;
         }
 
+        const child_prefix = try std.fmt.allocPrint(self.arena, "{s}{s}", .{ prefix, continuation(connector) });
         if (self.conflicts.get(key)) |conflicts| {
             for (conflicts.items, 0..) |conflict, index| {
                 const conflict_row_index = rows.items.len;
@@ -324,6 +330,7 @@ const Builder = struct {
                     else
                         .tee,
                     .depth = depth + 1,
+                    .prefix = child_prefix,
                     .label = conflict.label,
                     .conflict_index = conflict.ordinal,
                 });
@@ -338,12 +345,19 @@ const Builder = struct {
         }
         const object_count = node.children.items.len - component_count;
         if (component_count != 0) {
+            const group_connector: Connector = if (object_count == 0) .elbow else .tee;
             try rows.append(self.arena, .{
                 .kind = .components,
-                .connector = if (object_count == 0) .elbow else .tee,
+                .connector = group_connector,
                 .depth = depth + 1,
+                .prefix = child_prefix,
                 .label = try std.fmt.allocPrint(self.arena, "components ({d})", .{component_count}),
             });
+            const component_prefix = try std.fmt.allocPrint(
+                self.arena,
+                "{s}{s}",
+                .{ child_prefix, continuation(group_connector) },
+            );
             var component_index: usize = 0;
             for (node.children.items) |child_key| {
                 if (self.nodes.get(child_key).?.kind != .component) continue;
@@ -354,6 +368,7 @@ const Builder = struct {
                     child_key,
                     depth + 2,
                     if (component_index == component_count) .elbow else .tee,
+                    component_prefix,
                 );
             }
         }
@@ -367,10 +382,19 @@ const Builder = struct {
                 child_key,
                 depth + 1,
                 if (object_index == object_count) .elbow else .tee,
+                child_prefix,
             );
         }
     }
 };
+
+fn continuation(connector: Connector) []const u8 {
+    return switch (connector) {
+        .root => "",
+        .tee, .continuation => "│  ",
+        .elbow => "   ",
+    };
+}
 
 pub fn build(
     arena: std.mem.Allocator,

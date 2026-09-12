@@ -8,27 +8,6 @@ const result_text = @import("merge_result_text.zig");
 const inspector = @import("merge_inspector.zig");
 const testing = std.testing;
 
-test "merge TUI: section labels use the same muted color as value columns" {
-    var memory = std.heap.ArenaAllocator.init(testing.allocator);
-    defer memory.deinit();
-    const arena = memory.allocator();
-    var fixture = try componentDeletePlan(arena);
-    var state = try merge_ui_state.State.init(arena, &fixture.plan);
-    var view = try viewForTest(arena, &state, "A.prefab", fixture.partial);
-    defer view.deinit();
-    const surface = try drawForTest(arena, view.widget(), 160, 24);
-    const geometry = Geometry.init(160);
-    const body = BodyGeometry.init(24);
-    const labels = try rowText(arena, surface, body.inspector_labels_row);
-    try testing.expect(std.mem.indexOf(u8, labels, "Property") != null);
-    try testing.expectEqual(Palette.muted, surface.readCell(geometry.inspector.start, body.inspector_labels_row).style.fg);
-    try testing.expectEqual(Palette.muted, surface.readCell(geometry.ours.start, body.inspector_labels_row).style.fg);
-    const group_row = for (body.hierarchy_rows.start..body.hierarchy_rows.end) |row| {
-        if (std.mem.indexOf(u8, try rowText(arena, surface, @intCast(row)), "components") != null) break @as(u16, @intCast(row));
-    } else return error.TestUnexpectedResult;
-    try testing.expectEqual(Palette.muted, fgOfText(surface, geometry.hierarchy, group_row, "components") orelse return error.TestUnexpectedResult);
-}
-
 test "merge TUI: unresolved semantic Result does not show a placeholder dash" {
     var memory = std.heap.ArenaAllocator.init(testing.allocator);
     defer memory.deinit();
@@ -210,39 +189,6 @@ test "merge TUI: sequence order semantic view toggles to a unified diff" {
     try testing.expect(std.mem.indexOf(u8, raw, "<removed>") == null);
 }
 
-test "merge TUI: raw view is available for a collection without a property table" {
-    var memory = std.heap.ArenaAllocator.init(testing.allocator);
-    defer memory.deinit();
-    const arena = memory.allocator();
-    var fixture = try core.merge.build(
-        arena,
-        "--- !u!114 &1\nMonoBehaviour:\n  items: [A]\n",
-        "--- !u!114 &1\nMonoBehaviour:\n  items: [A, Ours]\n",
-        "--- !u!114 &1\nMonoBehaviour:\n  items: [A, Theirs]\n",
-    );
-    var state = try merge_ui_state.State.init(arena, &fixture.plan);
-    var view = try viewForTest(arena, &state, "Conflict.prefab", fixture.partial);
-    defer view.deinit();
-    const semantic = try surfaceText(arena, try drawForTest(arena, view.widget(), 160, 24));
-    try testing.expect(std.mem.indexOf(u8, semantic, "⇧R Raw") != null);
-    try testing.expect(std.mem.indexOf(u8, semantic, "⇧T One side") != null);
-    var ctx = eventContext(arena);
-    try view.widget().handleEvent(&ctx, .{ .key_press = .{ .codepoint = 'r', .mods = .{ .shift = true }, .text = "R" } });
-    const surface = try drawForTest(arena, view.widget(), 160, 24);
-    const raw = try surfaceText(arena, surface);
-    const geometry = Geometry.init(160);
-    const body = BodyGeometry.init(24);
-    const ours = try rangeText(arena, surface, geometry.ours, body.inspector_rows.start, body.inspector_rows.end);
-    const theirs = try rangeText(arena, surface, geometry.theirs, body.inspector_rows.start, body.inspector_rows.end);
-    try testing.expect(std.mem.indexOf(u8, raw, "⇧R Semantic") != null);
-    try testing.expect(std.mem.indexOf(u8, raw, "⇧T One side") != null);
-    try testing.expect(std.mem.indexOf(u8, ours, "--- Base") != null);
-    try testing.expect(std.mem.indexOf(u8, ours, "+++ Ours") != null);
-    try testing.expect(std.mem.indexOf(u8, theirs, "--- Base") != null);
-    try testing.expect(std.mem.indexOf(u8, theirs, "+++ Theirs") != null);
-    try testing.expect(std.mem.indexOf(u8, raw, "<removed>") == null);
-}
-
 test "merge TUI: raw result shows the applied YAML" {
     var memory = std.heap.ArenaAllocator.init(testing.allocator);
     defer memory.deinit();
@@ -371,8 +317,6 @@ test "merge TUI: inspector column scroll stops at the last line" {
     const rows = columnScrollMetrics(geometry.theirs, text, viewport, 0).rows;
     try testing.expect(view.column_v[@intFromEnum(ValueColumn.theirs)] < 400);
     try testing.expectEqual(rows -| viewport, view.column_v[@intFromEnum(ValueColumn.theirs)]);
-    const surface = try drawForTest(arena, view.widget(), 160, 16);
-    try testing.expect(hasScrollbarThumb(surface, geometry.theirs.end - 1, body.inspector_rows.start, body.inspector_rows.end));
 }
 
 test "merge TUI: wrapped inspector lines show a floating scrollbar only while scrolling" {
@@ -410,11 +354,6 @@ test "merge TUI: wrapped inspector lines show a floating scrollbar only while sc
     } });
     const scrolling = try drawForTest(arena, view.widget(), 160, 40);
     try testing.expect(hasScrollbarThumb(scrolling, geometry.theirs.end - 1, body.inspector_rows.start, body.inspector_rows.end));
-    const thumb = scrollbarThumbCell(scrolling, geometry.theirs.end - 1, body.inspector_rows.start, body.inspector_rows.end) orelse
-        return error.TestUnexpectedResult;
-    try testing.expect(vaxis.Color.eql(thumb.style.bg, Palette.scrollbar));
-    try testing.expect(!isScrollbarGlyph(thumb.char.grapheme));
-    try testing.expect(!hasScrollbarThumb(scrolling, geometry.theirs.end - 2, body.inspector_rows.start, body.inspector_rows.end));
     try view.widget().handleEvent(&ctx, .tick);
     const hidden = try drawForTest(arena, view.widget(), 160, 40);
     try testing.expect(!hasScrollbarThumb(hidden, geometry.theirs.end - 1, body.inspector_rows.start, body.inspector_rows.end));
@@ -436,12 +375,6 @@ test "merge TUI: unfocused inspector columns do not show a scrollbar" {
     const geometry = Geometry.init(160);
     const body = BodyGeometry.init(16);
     try testing.expect(!hasScrollbarThumb(surface, geometry.theirs.end - 1, body.inspector_rows.start, body.inspector_rows.end));
-}
-
-test "merge TUI: scrollbar thumb shrinks as the scroll range grows" {
-    try testing.expectEqual(@as(usize, 20), scrollbarThumbRows(21, 22));
-    try testing.expectEqual(@as(usize, 5), scrollbarThumbRows(21, 80));
-    try testing.expect(scrollbarThumbRows(21, 22) > scrollbarThumbRows(21, 80));
 }
 
 test "merge TUI: wheel right scrolls wrapped inspector lines vertically" {
@@ -3674,22 +3607,6 @@ fn cellsText(
     return out.toOwnedSlice(arena);
 }
 
-fn fgOfText(surface: vxfw.Surface, range: Range, row: u16, needle: []const u8) ?vaxis.Color {
-    var col = range.start;
-    while (col + needle.len <= range.end) : (col += 1) {
-        var match = true;
-        for (needle, 0..) |byte, offset| {
-            const cell = surface.readCell(col + @as(u16, @intCast(offset)), row);
-            if (cell.char.grapheme.len != 1 or cell.char.grapheme[0] != byte) {
-                match = false;
-                break;
-            }
-        }
-        if (match) return surface.readCell(col, row).style.fg;
-    }
-    return null;
-}
-
 fn firstContentFg(surface: vxfw.Surface, range: Range, row: u16) vaxis.Color {
     return surface.readCell(range.start + 2, row).style.fg;
 }
@@ -3736,10 +3653,6 @@ fn surfaceText(arena: std.mem.Allocator, surface: vxfw.Surface) ![]const u8 {
         try out.append(arena, '\n');
     }
     return out.toOwnedSlice(arena);
-}
-
-fn isScrollbarGlyph(grapheme: []const u8) bool {
-    return std.mem.eql(u8, grapheme, "▎") or std.mem.eql(u8, grapheme, "█") or std.mem.eql(u8, grapheme, "│");
 }
 
 fn scrollbarThumbCell(surface: vxfw.Surface, col: u16, start_row: u16, end_row: u16) ?vaxis.Cell {

@@ -150,7 +150,7 @@ pub fn run(
     var state = merge_ui_state.State.init(arena, &prepared.built.plan) catch
         return merge_io.reportFailure(stderr, args.merged);
     if (state.outcome != .ready) {
-        merge_tui.run(io, arena, env_map, &state, args.merged, prepared.built.partial) catch
+        merge_tui.run(io, arena, env_map, &state, args.merged, prepared.built.partial, prepared.original_merged) catch
             return merge_io.reportFailure(stderr, args.merged);
     }
     return finish(io, arena, &prepared, &state, stderr);

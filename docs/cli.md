@@ -226,7 +226,8 @@ Raw keeps the four columns. Ours and Theirs are unified diffs against Base. Dele
 Result is the Unity YAML that will be applied, not a deletion diff. Unresolved Result stays empty.
 Missing sides stay empty. Each inspector column scrolls on its own and stops at the last wrapped line. A thin floating scrollbar appears on the focused column while it scrolls, then hides. Mouse wheel and trackpad two-finger scroll move vertically. Shift plus wheel scrolls a line horizontally.
 Base is not selectable. Wheel over Base still scrolls that column, so long ancestor YAML stays readable.
-While editing, **Shift+R** inserts text.
+**Shift+E** shows the `$MERGED` snapshot from startup, including conflict markers, in a panel over the bottom 40% of the panes. The footer keeps the **⇧E File** control. Click it, or press **Shift+E**, to show or hide the panel. Drag the top edge to resize it. The panel scrolls like an inspector column: it stops at the last wrapped line, and a thin floating scrollbar appears while it scrolls.
+While editing, **Shift+R** and **Shift+E** insert text.
 
 #### Completion checks
 

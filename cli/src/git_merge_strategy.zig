@@ -4,6 +4,7 @@ const merge_git = @import("merge_git.zig");
 const atomic_file = @import("atomic_file.zig");
 const merge_ui_state = @import("merge_ui_state.zig");
 const merge_tui = @import("merge_tui.zig");
+const merge_io = @import("merge_io.zig");
 const file_conflict = @import("merge_file_conflict.zig");
 const installation = @import("installation.zig");
 const strategy_revisions = @import("merge_strategy_revisions.zig");
@@ -262,7 +263,8 @@ fn resolveContent(
     if (state.outcome != .ready) {
         if (session.* == null) session.* = try merge_tui.Session.init(git.io, git.arena, env, tty_buffer);
         if (session.*) |*open| {
-            try open.present(git.arena, &state, path, built.partial);
+            const working_file = merge_io.readOutputLimited(git.io, git.arena, path) catch "";
+            try open.present(git.arena, &state, path, built.partial, working_file);
         } else unreachable;
     }
     if (state.outcome == .aborted) return .aborted;

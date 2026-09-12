@@ -125,7 +125,10 @@ pub fn resolveWithContext(git: Git, result: strategy.Result, conflict: strategy.
         };
         const bytes = if (built) |*merge| blk: {
             var state = try merge_ui_state.State.init(git.arena, &merge.plan);
-            if (state.outcome != .ready) try merge_tui.run(git.io, git.arena, env, &state, final_path, merge.partial);
+            if (state.outcome != .ready) {
+                const working_file = merge_io.readOutputLimited(git.io, git.arena, final_path) catch "";
+                try merge_tui.run(git.io, git.arena, env, &state, final_path, merge.partial, working_file);
+            }
             if (state.outcome != .ready) return .aborted;
             break :blk core.merge.finish(git.arena, &merge.plan) catch return .unresolved;
         } else if (layout.ours != null) ours else theirs;

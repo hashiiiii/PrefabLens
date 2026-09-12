@@ -327,6 +327,183 @@ test "merge TUI: wheel over Base scrolls Base without selecting it" {
     try testing.expect(!hasScrollbarThumb(surface, geometry.theirs.end - 1, body.inspector_rows.start, body.inspector_rows.end));
 }
 
+const working_file_markers =
+    "<<<<<<< ours\n" ++
+    "ours line\n" ++
+    "=======\n" ++
+    "theirs line\n" ++
+    ">>>>>>> theirs\n";
+
+test "merge TUI: Shift+E toggles the working file overlay" {
+    var memory = std.heap.ArenaAllocator.init(testing.allocator);
+    defer memory.deinit();
+    const arena = memory.allocator();
+    var fixture = try prefabOrderPlan(arena);
+    var state = try merge_ui_state.State.init(arena, &fixture.plan);
+    var view = try viewForTest(arena, &state, "PrefabOrder.prefab", fixture.partial);
+    defer view.deinit();
+    view.working_file = working_file_markers;
+    const hidden = try surfaceText(arena, try drawForTest(arena, view.widget(), 100, 20));
+    try testing.expect(std.mem.indexOf(u8, hidden, "<<<<<<<") == null);
+    var ctx = eventContext(arena);
+    try view.widget().handleEvent(&ctx, .{ .key_press = .{ .codepoint = 'e', .mods = .{ .shift = true }, .text = "E" } });
+    const shown = try surfaceText(arena, try drawForTest(arena, view.widget(), 100, 20));
+    try testing.expect(std.mem.indexOf(u8, shown, "<<<<<<<") != null);
+    try testing.expect(std.mem.indexOf(u8, shown, "=======") != null);
+    try testing.expect(std.mem.indexOf(u8, shown, ">>>>>>>") != null);
+    try view.widget().handleEvent(&ctx, .{ .key_press = .{ .codepoint = 'e', .mods = .{ .shift = true }, .text = "E" } });
+    const closed = try surfaceText(arena, try drawForTest(arena, view.widget(), 100, 20));
+    try testing.expect(std.mem.indexOf(u8, closed, "<<<<<<<") == null);
+}
+
+test "merge TUI: footer shows the working file shortcut" {
+    var memory = std.heap.ArenaAllocator.init(testing.allocator);
+    defer memory.deinit();
+    const arena = memory.allocator();
+    var fixture = try prefabOrderPlan(arena);
+    var state = try merge_ui_state.State.init(arena, &fixture.plan);
+    var view = try viewForTest(arena, &state, "PrefabOrder.prefab", fixture.partial);
+    defer view.deinit();
+    view.working_file = working_file_markers;
+    const footer = FooterGeometry.init(100, 20);
+    const hidden = try drawForTest(arena, view.widget(), 100, 20);
+    try testing.expect(std.mem.indexOf(u8, try rowText(arena, hidden, footer.row), "⇧E File") != null);
+    var ctx = eventContext(arena);
+    try view.widget().handleEvent(&ctx, .{ .mouse = .{
+        .col = @intCast(footer.file.start + 1),
+        .row = @intCast(footer.row),
+        .button = .left,
+        .mods = .{},
+        .type = .press,
+    } });
+    try testing.expect(view.file_view);
+}
+
+test "merge TUI: working file overlay covers the bottom 40 percent" {
+    var memory = std.heap.ArenaAllocator.init(testing.allocator);
+    defer memory.deinit();
+    const arena = memory.allocator();
+    var fixture = try prefabOrderPlan(arena);
+    var state = try merge_ui_state.State.init(arena, &fixture.plan);
+    var view = try viewForTest(arena, &state, "PrefabOrder.prefab", fixture.partial);
+    defer view.deinit();
+    view.working_file = working_file_markers;
+    view.file_view = true;
+    const surface = try drawForTest(arena, view.widget(), 100, 20);
+    const overlay = fileOverlayGeometry(20, null);
+    try testing.expectEqual(@as(u16, 10), overlay.start);
+    try testing.expectEqual(@as(u16, 18), overlay.end);
+    try testing.expectEqual(Palette.file_handle_bg, surface.readCell(2, overlay.start).style.bg);
+    try testing.expectEqual(Palette.file_bg, surface.readCell(2, overlay.start + 1).style.bg);
+    try testing.expect(!vaxis.Color.eql(surface.readCell(2, overlay.start - 1).style.bg, Palette.file_bg));
+}
+
+test "merge TUI: dragging the file overlay handle changes its height" {
+    var memory = std.heap.ArenaAllocator.init(testing.allocator);
+    defer memory.deinit();
+    const arena = memory.allocator();
+    var fixture = try prefabOrderPlan(arena);
+    var state = try merge_ui_state.State.init(arena, &fixture.plan);
+    var view = try viewForTest(arena, &state, "PrefabOrder.prefab", fixture.partial);
+    defer view.deinit();
+    view.working_file = working_file_markers;
+    view.file_view = true;
+    _ = try drawForTest(arena, view.widget(), 100, 20);
+    var ctx = eventContext(arena);
+    const overlay = fileOverlayGeometry(20, null);
+    try view.widget().handleEvent(&ctx, .{ .mouse = .{
+        .col = 4,
+        .row = @intCast(overlay.start),
+        .button = .left,
+        .mods = .{},
+        .type = .press,
+    } });
+    try view.widget().handleEvent(&ctx, .{ .mouse = .{
+        .col = 4,
+        .row = @intCast(overlay.start - 4),
+        .button = .left,
+        .mods = .{},
+        .type = .drag,
+    } });
+    const resized = fileOverlayGeometry(20, view.file_height);
+    try testing.expectEqual(@as(u16, overlay.start - 4), resized.start);
+}
+
+test "merge TUI: wheel over the file overlay scrolls it" {
+    var memory = std.heap.ArenaAllocator.init(testing.allocator);
+    defer memory.deinit();
+    const arena = memory.allocator();
+    var fixture = try prefabOrderPlan(arena);
+    var state = try merge_ui_state.State.init(arena, &fixture.plan);
+    var view = try viewForTest(arena, &state, "PrefabOrder.prefab", fixture.partial);
+    defer view.deinit();
+    view.working_file = working_file_markers ++ "line 6\nline 7\nline 8\nline 9\nline 10\nline 11\nline 12\n";
+    view.file_view = true;
+    _ = try drawForTest(arena, view.widget(), 100, 20);
+    var ctx = eventContext(arena);
+    const overlay = fileOverlayGeometry(20, null);
+    try view.widget().handleEvent(&ctx, .{ .mouse = .{
+        .col = 4,
+        .row = @intCast(overlay.start + 2),
+        .button = .wheel_down,
+        .mods = .{},
+        .type = .press,
+    } });
+    try testing.expectEqual(@as(usize, 1), view.file_v);
+}
+
+test "merge TUI: file overlay shows a floating scrollbar only while scrolling" {
+    var memory = std.heap.ArenaAllocator.init(testing.allocator);
+    defer memory.deinit();
+    const arena = memory.allocator();
+    var fixture = try prefabOrderPlan(arena);
+    var state = try merge_ui_state.State.init(arena, &fixture.plan);
+    var view = try viewForTest(arena, &state, "PrefabOrder.prefab", fixture.partial);
+    defer view.deinit();
+    view.working_file = working_file_markers ++ "line 6\nline 7\nline 8\nline 9\nline 10\nline 11\nline 12\n";
+    view.file_view = true;
+    const idle = try drawForTest(arena, view.widget(), 100, 20);
+    var ctx = eventContext(arena);
+    ctx.redraw = false;
+    const overlay = fileOverlayGeometry(20, null);
+    const bar_col = @as(u16, 100) - horizontal_padding - 1;
+    try testing.expect(!hasScrollbarThumb(idle, bar_col, overlay.start + 1, overlay.end));
+    try view.widget().handleEvent(&ctx, .{ .mouse = .{
+        .col = 4,
+        .row = @intCast(overlay.start + 2),
+        .button = .wheel_down,
+        .mods = .{},
+        .type = .press,
+    } });
+    try testing.expect(ctx.redraw);
+    const scrolling = try drawForTest(arena, view.widget(), 100, 20);
+    try testing.expect(hasScrollbarThumb(scrolling, bar_col, overlay.start + 1, overlay.end));
+    try view.widget().handleEvent(&ctx, .tick);
+    const hidden = try drawForTest(arena, view.widget(), 100, 20);
+    try testing.expect(!hasScrollbarThumb(hidden, bar_col, overlay.start + 1, overlay.end));
+}
+
+test "merge TUI: Shift+E inserts while editing Result" {
+    var memory = std.heap.ArenaAllocator.init(testing.allocator);
+    defer memory.deinit();
+    const arena = memory.allocator();
+    var fixture = try componentDeletePlan(arena);
+    var state = try merge_ui_state.State.init(arena, &fixture.plan);
+    try state.handle(.choose_theirs);
+    var view = try viewForTest(arena, &state, "A.prefab", fixture.partial);
+    defer view.deinit();
+    view.working_file = working_file_markers;
+    _ = try drawForTest(arena, view.widget(), 120, 24);
+    var ctx = eventContext(arena);
+    try beginEditingForTest(&view, &ctx);
+    const surface = try drawForTest(arena, view.widget(), 120, 24);
+    try routeFocusedEventForTest(arena, surface, view.editor.widget(), &ctx, .{
+        .key_press = .{ .codepoint = 'e', .mods = .{ .shift = true }, .text = "E" },
+    });
+    try testing.expectEqualStrings("2E", try view.editor.buf.dupe());
+    try testing.expect(!view.file_view);
+}
+
 test "merge TUI: wheel scrolls only the focused inspector column" {
     var memory = std.heap.ArenaAllocator.init(testing.allocator);
     defer memory.deinit();
@@ -757,6 +934,8 @@ const Palette = struct {
     const focus_bg: vaxis.Color = .{ .rgb = .{ 48, 46, 68 } };
     const result_bg: vaxis.Color = .{ .rgb = .{ 31, 32, 43 } };
     const base_bg: vaxis.Color = .{ .rgb = .{ 20, 19, 28 } };
+    const file_bg: vaxis.Color = .{ .rgb = .{ 24, 24, 34 } };
+    const file_handle_bg: vaxis.Color = .{ .rgb = .{ 36, 35, 48 } };
     const scrollbar: vaxis.Color = .{ .rgb = .{ 84, 85, 99 } };
 };
 
@@ -806,14 +985,19 @@ const Geometry = struct {
     }
 };
 
+const file_overlay_label = "⇧E File";
+
 const FooterGeometry = struct {
     row: u16,
+    file: Range,
     complete: Range,
 
     fn init(width: u16, height: u16) FooterGeometry {
+        const start = horizontal_padding;
         const end = width - horizontal_padding;
         return .{
             .row = height - vertical_padding - 1,
+            .file = .{ .start = start, .end = start + textWidth(file_overlay_label) },
             .complete = .{ .start = end - 10, .end = end },
         };
     }
@@ -920,6 +1104,17 @@ const BodyGeometry = struct {
         return self.hierarchy_rows.end - self.hierarchy_rows.start;
     }
 };
+
+const file_overlay_min_rows: u16 = 3;
+
+fn fileOverlayGeometry(height: u16, requested: ?u16) Range {
+    const footer_row = height - vertical_padding - 1;
+    const top_min = BodyGeometry.init(height).header_row + 1;
+    const available = footer_row - top_min;
+    const default_rows = @max(file_overlay_min_rows, height * 2 / 5);
+    const rows = std.math.clamp(requested orelse default_rows, file_overlay_min_rows, available);
+    return .{ .start = footer_row - rows, .end = footer_row };
+}
 
 const ValueColumn = enum { base, ours, theirs, result };
 const FocusArea = enum { hierarchy, inspector, complete };
@@ -1132,6 +1327,15 @@ pub const View = struct {
     last_size: vxfw.Size = .{},
     live_screen: ?*const vaxis.Screen = null,
     raw_view: bool = false,
+    working_file: []const u8 = "",
+    file_view: bool = false,
+    file_height: ?u16 = null,
+    file_v: usize = 0,
+    file_h: usize = 0,
+    file_lines: usize = 0,
+    file_metrics_width: u16 = 0,
+    file_drag_origin: ?i16 = null,
+    scrollbar_on_file: bool = false,
     property_row: usize = 0,
     property_top: usize = 0,
     property_memory: std.heap.ArenaAllocator,
@@ -1558,6 +1762,7 @@ pub const View = struct {
     fn hideScrollbar(self: *View) void {
         self.scrollbar_visible = false;
         self.scrollbar_hide_ticks = 0;
+        self.scrollbar_on_file = false;
     }
 
     fn revealScrollbar(self: *View, ctx: *vxfw.EventContext) void {
@@ -1574,7 +1779,11 @@ pub const View = struct {
     }
 
     fn shouldPaintFloatingScrollbar(self: *const View) bool {
-        return self.scrollbar_visible and (self.focus_area == .inspector or self.scrollbar_column == .base);
+        return self.scrollbar_visible and !self.scrollbar_on_file and (self.focus_area == .inspector or self.scrollbar_column == .base);
+    }
+
+    fn shouldPaintFileScrollbar(self: *const View) bool {
+        return self.file_view and self.scrollbar_visible and self.scrollbar_on_file;
     }
 
     fn focusHierarchy(self: *View, ctx: *vxfw.EventContext) !void {
@@ -1641,6 +1850,7 @@ pub const View = struct {
                 return ctx.consumeAndRedraw();
             }
         }
+        if (self.handleFileOverlayMouse(ctx, mouse, size)) return;
         if (self.handleHierarchyWheel(ctx, mouse, size)) return;
         if (mouse.type != .press or mouse.button != .left or mouse.col < 0 or mouse.row < 0) return;
         const col: u16 = @intCast(mouse.col);
@@ -1925,6 +2135,19 @@ pub const View = struct {
         self.scrollColumnHorizontal(ctx, self.selected_value, size, true);
     }
 
+    fn maxFileHorizontalOffset(self: *const View, width: u16) usize {
+        const inner_width = width - horizontal_padding * 2 -| 2;
+        var total_width: usize = 0;
+        var grapheme_count: usize = 0;
+        var graphemes = vaxis.unicode.graphemeIterator(self.working_file);
+        while (graphemes.next()) |grapheme| {
+            total_width +|= vaxis.gwidth.gwidth(grapheme.bytes(self.working_file), .unicode);
+            grapheme_count += 1;
+        }
+        if (total_width <= inner_width or grapheme_count <= 1) return 0;
+        return grapheme_count - 1;
+    }
+
     fn scrollColumnHorizontal(self: *View, ctx: *vxfw.EventContext, column: ValueColumn, size: vxfw.Size, right: bool) void {
         const geometry = self.valueGeometry(size.width);
         const index = @intFromEnum(column);
@@ -1981,6 +2204,7 @@ pub const View = struct {
         const max = maxScrollOffset(self.column_lines[index], self.inspectorViewportRows());
         if (down) self.column_v[index] = @min(self.column_v[index] +| 1, max) else self.column_v[index] -|= 1;
         self.scrollbar_column = column;
+        self.scrollbar_on_file = false;
         self.revealScrollbar(ctx);
         ctx.consumeAndRedraw();
     }
@@ -2082,6 +2306,15 @@ pub const View = struct {
         return self.combine_mode and self.canCombine();
     }
 
+    fn toggleFileView(self: *View, ctx: *vxfw.EventContext) void {
+        self.file_view = !self.file_view;
+        if (!self.file_view) {
+            self.file_drag_origin = null;
+            self.hideScrollbar();
+        }
+        ctx.consumeAndRedraw();
+    }
+
     fn toggleCombine(self: *View, ctx: *vxfw.EventContext) void {
         self.combine_mode = !self.combine_mode;
         self.horizontal_offset = 0;
@@ -2096,12 +2329,60 @@ pub const View = struct {
         };
     }
 
+    fn fileOverlay(self: *const View, height: u16) Range {
+        return fileOverlayGeometry(height, self.file_height);
+    }
+
+    fn handleFileOverlayMouse(self: *View, ctx: *vxfw.EventContext, mouse: vaxis.Mouse, size: vxfw.Size) bool {
+        if (!self.file_view) return false;
+        const overlay = self.fileOverlay(size.height);
+        if (self.file_drag_origin != null) {
+            if (mouse.type == .drag or mouse.type == .release) {
+                const top_min = BodyGeometry.init(size.height).header_row + 1;
+                const max_rows = overlay.end - top_min;
+                const next = @as(i32, overlay.end) - mouse.row;
+                self.file_height = @intCast(std.math.clamp(next, @as(i32, file_overlay_min_rows), @as(i32, max_rows)));
+                if (mouse.type == .release) self.file_drag_origin = null;
+                ctx.consumeAndRedraw();
+                return true;
+            }
+        }
+        if (mouse.row < overlay.start or mouse.row >= overlay.end) return false;
+        if (isWheelButton(mouse.button)) {
+            if (mouse.mods.shift) {
+                if (mouse.button == .wheel_left or mouse.button == .wheel_up) self.file_h -|= 1 else self.file_h +|= 1;
+                self.file_h = @min(self.file_h, self.maxFileHorizontalOffset(size.width));
+                ctx.consumeAndRedraw();
+                return true;
+            }
+            const down = mouse.button == .wheel_down or mouse.button == .wheel_right;
+            const viewport = overlay.end - overlay.start -| 1;
+            const max = maxScrollOffset(self.file_lines, viewport);
+            if (down) self.file_v = @min(self.file_v +| 1, max) else self.file_v -|= 1;
+            self.scrollbar_on_file = true;
+            self.revealScrollbar(ctx);
+            ctx.consumeAndRedraw();
+            return true;
+        }
+        if (mouse.type == .press and mouse.button == .left and mouse.row == overlay.start) {
+            self.file_drag_origin = mouse.row;
+            ctx.consumeAndRedraw();
+            return true;
+        }
+        if (mouse.type == .press) {
+            ctx.consumeEvent();
+            return true;
+        }
+        return false;
+    }
+
     fn handleMouse(
         self: *View,
         ctx: *vxfw.EventContext,
         mouse: vaxis.Mouse,
         size: vxfw.Size,
     ) !void {
+        if (self.handleFileOverlayMouse(ctx, mouse, size)) return;
         if (self.handleHierarchyWheel(ctx, mouse, size)) return;
         const geometry = self.valueGeometry(size.width);
         if (isWheelButton(mouse.button)) {
@@ -2142,6 +2423,9 @@ pub const View = struct {
             if (heading.combine) |toggle| if (inRange(col, toggle)) {
                 return self.toggleCombine(ctx);
             };
+        }
+        if (row == footer.row and inRange(col, footer.file)) {
+            return self.toggleFileView(ctx);
         }
         if (self.state.outcome == .ready and
             row == footer.row and inRange(col, footer.complete))
@@ -2675,6 +2959,8 @@ fn draw(
         self.paintColumnScrollbars(surface, geometry, body);
     }
 
+    writeClipped(surface, footer.file.start, footer.row, footer.file.end - footer.file.start, file_overlay_label);
+    styleRange(surface, footer.row, footer.file, .{ .fg = Palette.muted });
     if (self.state.outcome == .ready) {
         writeClipped(
             surface,
@@ -2702,6 +2988,8 @@ fn draw(
             .{ .fg = Palette.error_text },
         );
     }
+
+    if (self.file_view) paintFileOverlay(self, surface, size);
 
     if (self.dialog) |kind| {
         const dialog = DialogGeometry.init(size.width, size.height, kind);
@@ -2795,6 +3083,80 @@ fn draw(
         }
     }
     return surface;
+}
+
+fn fileLineStyle(line: []const u8) vaxis.Style {
+    var style: vaxis.Style = .{ .bg = Palette.file_bg };
+    if (std.mem.startsWith(u8, line, "<<<<<<<")) {
+        style.fg = Palette.ours;
+    } else if (std.mem.startsWith(u8, line, ">>>>>>>")) {
+        style.fg = Palette.theirs;
+    } else if (std.mem.startsWith(u8, line, "=======") or std.mem.startsWith(u8, line, "|||||||")) {
+        style.fg = Palette.conflict;
+    }
+    return style;
+}
+
+fn paintFileOverlay(self: *View, surface: vxfw.Surface, size: vxfw.Size) void {
+    const overlay = self.fileOverlay(size.height);
+    const content_start = horizontal_padding;
+    const content_end = size.width - horizontal_padding;
+    const span: Range = .{ .start = content_start, .end = content_end };
+    const inner_width = content_end - content_start -| 2;
+    const viewport = overlay.end - overlay.start -| 1;
+    if (self.file_metrics_width != inner_width) {
+        self.file_metrics_width = @intCast(inner_width);
+        self.file_lines = countVisualRows(self.working_file, inner_width, 0);
+    }
+    self.file_v = @min(self.file_v, maxScrollOffset(self.file_lines, viewport));
+    if (self.file_h != 0) self.file_h = @min(self.file_h, self.maxFileHorizontalOffset(size.width));
+    for (overlay.start..overlay.end) |row| {
+        for (content_start..content_end) |col| {
+            surface.writeCell(@intCast(col), @intCast(row), .{
+                .char = .{ .grapheme = " ", .width = 1 },
+                .style = .{ .bg = if (row == overlay.start) Palette.file_handle_bg else Palette.file_bg },
+            });
+        }
+    }
+    writeClipped(surface, content_start + 1, overlay.start, inner_width, file_overlay_label);
+    styleRange(surface, overlay.start, span, .{ .fg = Palette.muted, .bg = Palette.file_handle_bg });
+    var row = overlay.start + 1;
+    var skip = self.file_v;
+    var lines = std.mem.splitScalar(u8, self.working_file, '\n');
+    var remaining_lines = std.mem.splitScalar(u8, self.working_file, '\n');
+    _ = remaining_lines.next();
+    while (lines.next()) |raw_line| {
+        const more = remaining_lines.next() != null;
+        const line = std.mem.trimEnd(u8, raw_line, "\r");
+        if (!more and line.len == 0) break;
+        const style = fileLineStyle(line);
+        var rest = skipWrappedPrefix(skipGraphemes(line, self.file_h), inner_width, &skip);
+        if (skip > 0) continue;
+        while (row < overlay.end) {
+            if (rest.len == 0) {
+                styleRange(surface, row, span, style);
+                row += 1;
+                break;
+            }
+            const consumed = writeClippedCount(surface, content_start + 1, row, inner_width, rest);
+            styleRange(surface, row, span, style);
+            if (consumed == 0) break;
+            rest = rest[consumed..];
+            row += 1;
+            if (rest.len == 0) break;
+        }
+        if (row >= overlay.end) break;
+    }
+    if (self.shouldPaintFileScrollbar()) {
+        paintScrollbar(
+            surface,
+            content_end -| 1,
+            overlay.start + 1,
+            overlay.end,
+            self.file_v,
+            self.file_lines,
+        );
+    }
 }
 
 fn paintUnified(self: *View, arena: std.mem.Allocator, surface: vxfw.Surface, size: vxfw.Size) !void {
@@ -3402,6 +3764,9 @@ fn handleEvent(
                 self.raw_view = !self.raw_view;
                 return ctx.consumeAndRedraw();
             }
+            if (key.matches('e', .{ .shift = true }) or key.matches('E', .{})) {
+                return self.toggleFileView(ctx);
+            }
             if (self.canCombine() and key.matches('t', .{ .shift = true }))
                 return self.toggleCombine(ctx);
             if (self.focus_area == .inspector and self.selected_value == .result) {
@@ -3432,11 +3797,12 @@ pub fn run(
     state: *merge_ui_state.State,
     path: []const u8,
     partial: []const u8,
+    working_file: []const u8,
 ) !void {
     var tty_buffer: [4096]u8 = undefined;
     var session = try Session.init(io, allocator, env_map, &tty_buffer);
     defer session.deinit();
-    try session.present(allocator, state, path, partial);
+    try session.present(allocator, state, path, partial, working_file);
 }
 
 /// One terminal session covers every remaining content conflict in a merge.
@@ -3462,11 +3828,13 @@ pub const Session = struct {
         state: *merge_ui_state.State,
         path: []const u8,
         partial: []const u8,
+        working_file: []const u8,
     ) !void {
         const tree = try merge_tree.buildForState(allocator, partial, state);
         try state.handle(.{ .select_conflict = 0 });
         var view = View.init(allocator, state, path, tree);
         defer view.deinit();
+        view.working_file = working_file;
         view.live_screen = &self.app.vx.screen;
         try self.app.run(view.widget(), .{});
         // App.run pushes Kitty keyboard on every file. vaxis deinit pops once.

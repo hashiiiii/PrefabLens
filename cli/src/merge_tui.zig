@@ -379,6 +379,28 @@ test "merge TUI: footer shows the working file shortcut" {
     try testing.expect(view.file_view);
 }
 
+test "merge TUI: status stays visible when the file overlay is open" {
+    var memory = std.heap.ArenaAllocator.init(testing.allocator);
+    defer memory.deinit();
+    const arena = memory.allocator();
+    var fixture = try prefabOrderPlan(arena);
+    var state = try merge_ui_state.State.init(arena, &fixture.plan);
+    var view = try viewForTest(arena, &state, "PrefabOrder.prefab", fixture.partial);
+    defer view.deinit();
+    view.working_file = working_file_markers;
+    view.file_view = true;
+    state.status = "This component supports side selection only.";
+    const surface = try drawForTest(arena, view.widget(), 100, 20);
+    const body = BodyGeometry.init(20);
+    const overlay = fileOverlayGeometry(20, null);
+    try testing.expect(overlay.end <= body.status_row);
+    try testing.expect(std.mem.indexOf(
+        u8,
+        try rowText(arena, surface, body.status_row),
+        "This component supports side selection only.",
+    ) != null);
+}
+
 test "merge TUI: working file overlay covers the bottom 40 percent" {
     var memory = std.heap.ArenaAllocator.init(testing.allocator);
     defer memory.deinit();
@@ -391,8 +413,8 @@ test "merge TUI: working file overlay covers the bottom 40 percent" {
     view.file_view = true;
     const surface = try drawForTest(arena, view.widget(), 100, 20);
     const overlay = fileOverlayGeometry(20, null);
-    try testing.expectEqual(@as(u16, 10), overlay.start);
-    try testing.expectEqual(@as(u16, 18), overlay.end);
+    try testing.expectEqual(@as(u16, 9), overlay.start);
+    try testing.expectEqual(@as(u16, 17), overlay.end);
     try testing.expectEqual(Palette.file_handle_bg, surface.readCell(2, overlay.start).style.bg);
     try testing.expectEqual(Palette.file_bg, surface.readCell(2, overlay.start + 1).style.bg);
     try testing.expect(!vaxis.Color.eql(surface.readCell(2, overlay.start - 1).style.bg, Palette.file_bg));
@@ -1108,12 +1130,12 @@ const BodyGeometry = struct {
 const file_overlay_min_rows: u16 = 3;
 
 fn fileOverlayGeometry(height: u16, requested: ?u16) Range {
-    const footer_row = height - vertical_padding - 1;
-    const top_min = BodyGeometry.init(height).header_row + 1;
-    const available = footer_row - top_min;
+    const body = BodyGeometry.init(height);
+    const top_min = body.header_row + 1;
+    const available = body.status_row - top_min;
     const default_rows = @max(file_overlay_min_rows, height * 2 / 5);
     const rows = std.math.clamp(requested orelse default_rows, file_overlay_min_rows, available);
-    return .{ .start = footer_row - rows, .end = footer_row };
+    return .{ .start = body.status_row - rows, .end = body.status_row };
 }
 
 const ValueColumn = enum { base, ours, theirs, result };
@@ -3029,6 +3051,7 @@ fn draw(
         complete_style.reverse = self.focus_area == .complete;
         styleRange(surface, footer.row, footer.complete, complete_style);
     }
+    if (self.file_view) paintFileOverlay(self, surface, size);
     writeClipped(
         surface,
         content_start,
@@ -3044,8 +3067,6 @@ fn draw(
             .{ .fg = Palette.error_text },
         );
     }
-
-    if (self.file_view) paintFileOverlay(self, surface, size);
 
     if (self.dialog) |kind| {
         const dialog = DialogGeometry.init(size.width, size.height, kind);

@@ -2667,6 +2667,58 @@ fn documentPreview(
     return null;
 }
 
+test "merge TUI: hierarchy guides follow the CLI tree spine" {
+    var memory = std.heap.ArenaAllocator.init(testing.allocator);
+    defer memory.deinit();
+    const arena = memory.allocator();
+    const yaml =
+        "--- !u!1 &1\n" ++
+        "GameObject:\n" ++
+        "  m_Name: Player\n" ++
+        "  m_Component:\n" ++
+        "  - component: {fileID: 4}\n" ++
+        "  - component: {fileID: 114}\n" ++
+        "--- !u!4 &4\n" ++
+        "Transform:\n" ++
+        "  m_GameObject: {fileID: 1}\n" ++
+        "  m_Father: {fileID: 0}\n" ++
+        "  m_Children:\n" ++
+        "  - {fileID: 5}\n" ++
+        "--- !u!114 &114\n" ++
+        "MonoBehaviour:\n" ++
+        "  m_GameObject: {fileID: 1}\n" ++
+        "  maxHp: 100\n" ++
+        "--- !u!1 &2\n" ++
+        "GameObject:\n" ++
+        "  m_Name: Child\n" ++
+        "  m_Component:\n" ++
+        "  - component: {fileID: 5}\n" ++
+        "--- !u!4 &5\n" ++
+        "Transform:\n" ++
+        "  m_GameObject: {fileID: 2}\n" ++
+        "  m_Father: {fileID: 4}\n" ++
+        "  m_Children: []\n";
+    const ours_bytes = try std.mem.replaceOwned(u8, arena, yaml, "maxHp: 100", "maxHp: 150");
+    const theirs_bytes = try std.mem.replaceOwned(u8, arena, yaml, "maxHp: 100", "maxHp: 200");
+    var built = try core.merge.build(arena, yaml, ours_bytes, theirs_bytes);
+    const state = try merge_ui_state.State.init(arena, &built.plan);
+    const tree = try merge_tree.build(arena, built.partial, &built.plan, state.conflict_indices);
+    const expected = [_][]const u8{
+        "◆ Player",
+        "├─ components (2)",
+        "│  ├─ Transform",
+        "│  └─ MonoBehaviour",
+        "│     └─ ! Max Hp",
+        "└─ ◆ Child",
+        "   └─ components (1)",
+        "      └─ Transform",
+    };
+    try testing.expectEqual(expected.len, tree.rows.len);
+    for (expected, tree.rows) |line, row| {
+        try testing.expectEqualStrings(line, try treeRowText(arena, row, false));
+    }
+}
+
 fn connectorText(connector: merge_tree.Connector) []const u8 {
     return switch (connector) {
         .root => "",
@@ -2682,7 +2734,7 @@ fn treeRowText(
     resolved: bool,
 ) ![]const u8 {
     var text: std.ArrayList(u8) = .empty;
-    try text.appendNTimes(arena, ' ', @as(usize, row.depth) * 2);
+    try text.appendSlice(arena, row.prefix);
     try text.appendSlice(arena, connectorText(row.connector));
     if (row.connector != .root) try text.append(arena, ' ');
     if (row.kind == .game_object) try text.appendSlice(arena, "◆ ");
@@ -2884,10 +2936,14 @@ fn draw(
                 });
             }
         }
+        const guide_width = textWidth(tree_row.prefix) +
+            if (tree_row.connector == .root)
+                0
+            else
+                textWidth(connectorText(tree_row.connector)) + 1;
         const connector_end = @min(
             geometry.hierarchy.end,
-            geometry.hierarchy.start + 1 + tree_row.depth * 2 +
-                @as(u16, if (tree_row.connector == .root) 0 else 3),
+            geometry.hierarchy.start + 1 + guide_width,
         );
         if (connector_end > geometry.hierarchy.start + 1) {
             styleRange(surface, @intCast(row), .{

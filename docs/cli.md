@@ -194,17 +194,17 @@ The user can edit it with another tool and complete the normal Git workflow.
 #### Edit Result
 
 The hierarchy includes unresolved groups and automatic changes. Navigation follows its order from top to bottom.
-Click an **Ours** or **Theirs** value, or focus it and press **Space**, to preview that choice.
-**Enter** confirms the selected group and advances to the next group that needs attention.
-Click **Result** to focus it, then type or press **F2** to edit the existing value.
-**Enter** in the editor saves a draft; press **Enter** again to confirm the group.
-**Ctrl+Z** outside text entry undoes the last edit, choice, or confirmation in the selected group. It preserves choices in other groups.
+Click an **Ours** or **Theirs** value to preview that choice.
+Press **Enter** on **Ours** or **Theirs** to select that value.
+Click **Result**, or focus it and press **Enter**, to edit the existing value.
+**Enter** in the editor applies the value. The group advances when all required fields have choices.
+Choices already made remain pending while another field in the group is unresolved.
 
 For a matched collection item, the property table includes **Entire item** and all of its fields, including automatic values.
 Choose **Entire item** or a source column heading to take the original item from that side.
 Choose a field cell to replace only that field. Result shows its value and source; `?` marks fields that still need a choice.
 Editing an automatic field does not resolve another field's conflict.
-Branch values omitted from Result remain visible and are highlighted. The status line identifies omitted edits even when Result matches Ours.
+Branch values omitted from Result remain visible and are highlighted, even when Result matches Ours.
 
 For example, with Base `{left: 1, right: 1}`, Ours `{left: 2, right: 1}`, and Theirs `{left: 3, right: 4}`:
 
@@ -227,7 +227,7 @@ If your terminal intercepts **Cmd+C**, configure it to forward the shortcut or u
 **Home** / **Ctrl+A** and **End** / **Ctrl+E** move to the start and end of the current line.
 **Shift+Enter** inserts a newline with the current indentation.
 If your terminal sends the same key code for Enter and Shift+Enter, use **Ctrl+J** or configure Shift+Enter to send a newline (`\n`).
-**Enter** saves the draft; **Escape** cancels editing and returns to the hierarchy.
+**Enter** applies the value; **Escape** cancels editing and returns to the hierarchy.
 Clearing the value and leaving **Result** reopens the conflict.
 Applying an empty value still requires confirmation.
 
@@ -246,12 +246,12 @@ Result shows the Unity YAML preview. Required fields remain marked until selecte
 Missing sides stay empty. Each inspector column scrolls on its own and stops at the last wrapped line. A thin floating scrollbar appears on the focused column while it scrolls, then hides. Mouse wheel and trackpad two-finger scroll move vertically. Shift plus wheel scrolls a line horizontally.
 Base is not selectable. Wheel over Base still scrolls that column, so long ancestor YAML stays readable.
 **Shift+E** shows the `$MERGED` snapshot from startup, including conflict markers, in a panel over the bottom 40% of the panes. The footer keeps the **⇧E File** control. Click it, or press **Shift+E**, to show or hide the panel. Drag the top edge to resize it. The panel scrolls like an inspector column: it stops at the last wrapped line, and a thin floating scrollbar appears while it scrolls.
-**Shift+V** or **Preview** shows the complete Result after required fields and drafts have been confirmed. This includes accepted insertions, removals, and ordering outside the selected item. The preview is read-only and closes when a choice is changed, so it cannot show an older result as the current one. **Shift+E** returns to the original working file snapshot.
+**Shift+V** or **Preview** shows the complete Result after all required choices and edits have been applied. This includes accepted insertions, removals, and ordering outside the selected item. The preview is read-only and closes when a choice is changed, so it cannot show an older result as the current one. **Shift+E** returns to the original working file snapshot.
 While editing, **Shift+R**, **Shift+E**, and **Shift+V** insert text.
 
 #### Completion checks
 
-**Complete** becomes available after all required fields and edited drafts have been confirmed.
+**Complete** becomes available after all required choices and edits have been applied.
 It checks the composed YAML for parse errors, duplicate fileIDs, component ownership, parent/child consistency, hierarchy cycles, and missing internal references.
 A failed check keeps the TUI open and identifies the affected document or property so it can be repaired in the same session.
 These checks cover serialized structure; they cannot verify game behavior or every constraint imposed by a custom C# component.

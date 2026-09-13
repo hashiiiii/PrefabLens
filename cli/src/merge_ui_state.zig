@@ -20,7 +20,6 @@ pub const Action = union(enum) {
     edit_result: []const u8,
     apply_result,
     reopen_result,
-    undo,
     abort,
 };
 
@@ -61,14 +60,6 @@ const Draft = struct {
     pending: ?core.merge.Resolution = null,
     chosen: []bool,
     dirty: bool = false,
-    history: std.ArrayList(Snapshot) = .empty,
-};
-
-const Snapshot = struct {
-    pending: ?core.merge.Resolution,
-    chosen: []bool,
-    dirty: bool,
-    resolutions: []core.merge.Resolution,
 };
 
 pub const State = struct {
@@ -157,22 +148,7 @@ pub const State = struct {
         return false;
     }
 
-    fn save(self: *State) !void {
-        if (!self.plan.review or self.operation() == null) return;
-        const current = self.selectedDraft();
-        const atomic = self.plan.atomic_operations[self.atomicIndexById(self.operation().?.atomic_id) orelse return];
-        const resolutions = try self.allocator.alloc(core.merge.Resolution, atomic.operation_ids.len);
-        for (atomic.operation_ids, resolutions) |id, *resolution| resolution.* = self.operationById(id).?.resolution;
-        try current.history.append(self.allocator, .{
-            .pending = self.pending,
-            .chosen = try self.allocator.dupe(bool, current.chosen),
-            .dirty = current.dirty,
-            .resolutions = resolutions,
-        });
-    }
-
-    pub fn setFieldResult(self: *State, resolution: core.merge.Resolution, path: []const core.merge.properties.Segment) !void {
-        try self.save();
+    pub fn setFieldResult(self: *State, resolution: core.merge.Resolution, path: []const core.merge.properties.Segment) void {
         self.pending = resolution;
         const current = self.selectedDraft();
         if (self.operation().?.review) |metadata| for (metadata.required_paths, current.chosen) |required, *chosen| {
@@ -185,7 +161,7 @@ pub const State = struct {
         self.status = "";
     }
 
-    fn setWholeResult(self: *State, resolution: core.merge.Resolution) !void {
+    fn setWholeResult(self: *State, resolution: core.merge.Resolution) void {
         if (!self.plan.review) {
             self.pending = resolution;
             return;
@@ -199,7 +175,7 @@ pub const State = struct {
             };
             if (same and !self.fieldUnresolved(&.{})) return;
         }
-        try self.setFieldResult(resolution, &.{});
+        self.setFieldResult(resolution, &.{});
         @memset(self.selectedDraft().chosen, true);
     }
 
@@ -211,21 +187,6 @@ pub const State = struct {
         if (self.plan.unresolvedCount() != 0) return false;
         for (self.drafts) |current| if (self.plan.review and current.dirty) return false;
         return true;
-    }
-
-    fn undo(self: *State) !void {
-        const operation_item = self.operation() orelse return;
-        const current = self.selectedDraft();
-        const previous = current.history.pop() orelse return;
-        const atomic = self.plan.atomic_operations[self.atomicIndexById(operation_item.atomic_id) orelse return];
-        // Undo is local to the selected atomic group; other accepted choices stay intact.
-        for (atomic.operation_ids, previous.resolutions) |id, resolution| self.operationById(id).?.resolution = resolution;
-        self.pending = previous.pending;
-        current.pending = previous.pending;
-        current.chosen = previous.chosen;
-        current.dirty = previous.dirty;
-        self.outcome = if (self.canComplete()) .ready else .active;
-        self.status = "";
     }
 
     pub fn reorderConflicts(self: *State, visual_order: []const usize) !void {
@@ -383,10 +344,10 @@ pub const State = struct {
             },
             .select_conflict => |index| self.selectConflict(index),
             .choose_ours => if (self.operation()) |operation_item| {
-                try self.setWholeResult(resolutionForSide(operation_item, .ours));
+                self.setWholeResult(resolutionForSide(operation_item, .ours));
             },
             .choose_theirs => if (self.operation()) |operation_item| {
-                try self.setWholeResult(resolutionForSide(operation_item, .theirs));
+                self.setWholeResult(resolutionForSide(operation_item, .theirs));
             },
             .combine_ours_first, .combine_theirs_first => if (self.operation()) |operation_item| {
                 const value = core.merge.combinedCollectionValue(
@@ -402,11 +363,11 @@ pub const State = struct {
                     },
                 };
                 if (!self.plan.review and operation_item.resolution != .unresolved) try self.handle(.reopen_result);
-                try self.setWholeResult(.{ .custom = value });
+                self.setWholeResult(.{ .custom = value });
                 self.status = "";
             },
             .edit_result => |value| if (self.operation() != null) {
-                try self.setWholeResult(.{ .custom = try self.allocator.dupe(u8, value) });
+                self.setWholeResult(.{ .custom = try self.allocator.dupe(u8, value) });
             },
             .apply_result => {
                 const operation_item = self.operation() orelse return;
@@ -430,7 +391,6 @@ pub const State = struct {
                         return;
                     },
                 }
-                try self.save();
                 core.merge.resolve(
                     self.allocator,
                     self.plan,
@@ -447,9 +407,7 @@ pub const State = struct {
                 self.status = "";
                 self.advance();
             },
-            .undo => try self.undo(),
             .reopen_result => if (self.operation()) |operation_item| {
-                try self.save();
                 const atomic_index = self.atomicIndexById(operation_item.atomic_id) orelse return;
                 for (self.plan.atomic_operations[atomic_index].operation_ids) |operation_id| {
                     const member = self.operationById(operation_id) orelse continue;
@@ -835,7 +793,7 @@ test "merge UI state: an empty plan is ready and handles every action safely" {
     try testing.expectEqual(Outcome.aborted, state.outcome);
 }
 
-test "merge UI state: review automatic field edits do not settle required fields and can be undone" {
+test "merge UI state: review automatic field edits preserve required and unrelated fields" {
     var memory = std.heap.ArenaAllocator.init(testing.allocator);
     defer memory.deinit();
     const arena = memory.allocator();
@@ -851,7 +809,7 @@ test "merge UI state: review automatic field edits do not settle required fields
     const left: []const core.merge.properties.Segment = &.{.{ .key = "left" }};
     const preview = item.review.?.preview.?.node.?;
     const edited = try review.edit(arena, preview, right, review.at(preview, right).?, "5");
-    try state.setFieldResult(.{ .custom = edited }, right);
+    state.setFieldResult(.{ .custom = edited }, right);
     try state.handle(.apply_result);
     // An automatic field is editable without implicitly approving the conflicting Left value.
     try testing.expectEqual(@as(usize, 1), state.unresolvedCount());
@@ -860,14 +818,12 @@ test "merge UI state: review automatic field edits do not settle required fields
 
     const root = try core.merge.properties.parseValue(arena, edited);
     const selected = try review.replace(arena, root, left, review.at(item.values.ours.?.node, left));
-    try state.setFieldResult(.{ .custom = try core.merge.properties.valueText(arena, selected) }, left);
+    state.setFieldResult(.{ .custom = try core.merge.properties.valueText(arena, selected) }, left);
     try state.handle(.apply_result);
     try testing.expect(state.canComplete());
     try testing.expectEqualStrings(prefix ++ "[{left: 2, right: 5}]\n  independent: 7\n", try core.merge.finish(arena, &built.plan));
 
     try state.handle(.{ .select_conflict = item_index });
-    try state.handle(.undo);
-    try testing.expect(!state.canComplete());
     try state.handle(.choose_ours);
     try state.handle(.apply_result);
     // Whole-item Ours restores Right, while the unrelated automatic change remains accepted.

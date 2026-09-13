@@ -75,6 +75,7 @@ pub fn main(init: std.process.Init) !u8 {
     try testResultEditing(io, arena, scratch, prefablens);
     try testDeletionChoices(io, arena, scratch, prefablens);
     try testCollectionChoices(io, arena, scratch, prefablens);
+    try testItemReview(io, arena, scratch, prefablens);
     try testQuit(io, arena, scratch, prefablens);
     try testTimeout(io, arena, scratch, prefablens);
     try std.Io.File.stdout().writeStreamingAll(io, "pty mergetool smoke: passed\n");
@@ -101,7 +102,7 @@ fn testCollectionChoices(
         // Retaining the edited C must not restore the independently removed B.
         .{ .name = "collection-delete-edit", .base = "[A, B, C]", .ours = "[A]", .theirs = "[A, B, Edited]", .keys = "\x1b[C\x1b[C\r\r", .expected = "[A, Edited]" },
         // A custom interval replaces only the unresolved append gap.
-        .{ .name = "collection-custom", .base = "[A]", .ours = "[A, Ours]", .theirs = "[A, Theirs]", .keys = "\x1b[<0;83;5M[Custom]\r\r", .expected = "[A, Custom]" },
+        .{ .name = "collection-custom", .base = "[A]", .ours = "[A, Ours]", .theirs = "[A, Theirs]", .keys = "\x1b[<0;83;5M[Custom]\r\r\r", .expected = "[A, Custom]" },
     };
     for (cases) |case| {
         const repo = try prepareMergetoolRepositoryWithSides(io, arena, scratch, prefablens, case.name, .{
@@ -143,13 +144,13 @@ fn testResultEditing(io: std.Io, arena: std.mem.Allocator, scratch: []const u8, 
     const stationary = transform ++ "{x: 0, y: 0, z: 0}\n";
     const cases = [_]struct { name: []const u8, base: []const u8, ours: []const u8, theirs: []const u8, keys: []const u8, expected: []const u8 }{
         // Select Ours in the first column so Result retains its preview; editing one digit must preserve the rest.
-        .{ .name = "result-cursor", .base = scalar_prefix ++ "5\n", .ours = scalar_prefix ++ "12\n", .theirs = scalar_prefix ++ "8\n", .keys = "\x1b[<0;38;5M\x1b[C\x1b[C\r\x1b[D\x7f9\r\r", .expected = scalar_prefix ++ "92\n" },
-        // The Raw toggle and Enter edit Radius while retaining the component and its owner reference.
-        .{ .name = "result-component-property", .base = object ++ sphere_reference ++ stationary ++ sphere ++ "0.25\n", .ours = object ++ stationary, .theirs = object ++ sphere_reference ++ stationary ++ sphere ++ "0.4\n", .keys = "\x1b[<0;75;5MRR\x1b[C\r\x1b[F\x7f6\r\r", .expected = object ++ sphere_reference ++ stationary ++ sphere ++ "0.6\n" },
+        .{ .name = "result-cursor", .base = scalar_prefix ++ "5\n", .ours = scalar_prefix ++ "12\n", .theirs = scalar_prefix ++ "8\n", .keys = "\x1b[<0;38;5M\x1b[C\x1b[C\x1bOQ\x1b[D\x7f9\r\r\r", .expected = scalar_prefix ++ "92\n" },
+        // The Raw toggle and F2 edit Radius while retaining the component and its owner reference.
+        .{ .name = "result-component-property", .base = object ++ sphere_reference ++ stationary ++ sphere ++ "0.25\n", .ours = object ++ stationary, .theirs = object ++ sphere_reference ++ stationary ++ sphere ++ "0.4\n", .keys = "\x1b[<0;75;5MRR\x1b[C\x1bOQ\x1b[F\x7f6\r\r\r", .expected = object ++ sphere_reference ++ stationary ++ sphere ++ "0.6\n" },
         // Startup must focus Position.x before SphereCollider, then advance in that same visual order.
         .{ .name = "result-visual-order", .base = object ++ sphere_reference ++ transform ++ "{x: 0, y: 0, z: 0}\n" ++ sphere ++ "0.25\n", .ours = object ++ transform ++ "{x: 1, y: 0, z: 0}\n", .theirs = object ++ sphere_reference ++ transform ++ "{x: 2, y: 0, z: 0}\n" ++ sphere ++ "0.4\n", .keys = "\x1b[C\x1b[C\r\x1b[C\r\r", .expected = object ++ transform ++ "{x: 2, y: 0, z: 0}\n" },
         // CRLF inside bracketed paste must not accept a partial interval or trigger Complete.
-        .{ .name = "result-paste", .base = try collectionFile(arena, "[A]", 1, 1), .ours = try collectionFile(arena, "[A, Ours]", 2, 1), .theirs = try collectionFile(arena, "[A, Theirs]", 1, 3), .keys = "\x1b[<0;83;5M\x1b[200~  - One\r\n  - Two\r\n\x1b[201~\r\r", .expected = try collectionFile(arena, "[A, One, Two]", 2, 3) },
+        .{ .name = "result-paste", .base = try collectionFile(arena, "[A]", 1, 1), .ours = try collectionFile(arena, "[A, Ours]", 2, 1), .theirs = try collectionFile(arena, "[A, Theirs]", 1, 3), .keys = "\x1b[<0;83;5M\x1b[200~  - One\r\n  - Two\r\n\x1b[201~\r\r\r", .expected = try collectionFile(arena, "[A, One, Two]", 2, 3) },
     };
     for (cases) |case| {
         const repo = try prepareMergetoolRepositoryWithSides(io, arena, scratch, prefablens, case.name, .{
@@ -224,7 +225,7 @@ fn testDelayedTerminals(io: std.Io, arena: std.mem.Allocator, scratch: []const u
         "sleep 3; git mergetool --no-prompt --tool=prefablens -- Assets/Conflict.prefab && sleep 3 && git -C {s} mergetool --no-prompt --tool=prefablens -- Assets/Conflict.prefab",
         .{try integration.shellQuote(arena, second)},
     );
-    const result = try pty.runCommandInPtyBatches(io, arena, first, try std.fmt.allocPrint(arena, "sh -c {s}", .{try integration.shellQuote(arena, command)}), "\x1b[<0;83;5M4\r\r", "\x1b[<0;83;5M5\r\r", 15);
+    const result = try pty.runCommandInPtyBatches(io, arena, first, try std.fmt.allocPrint(arena, "sh -c {s}", .{try integration.shellQuote(arena, command)}), "\x1b[<0;83;5M4\r\r\r", "\x1b[<0;83;5M5\r\r\r", 15);
     try integration.expectCode(result, 0, "delayed terminal batches");
     const alternate_start = "\x1b[?1049h";
     var session_start = std.mem.indexOf(u8, result.stdout, alternate_start);
@@ -259,9 +260,9 @@ fn testCompletion(
     try integration.expectNonzero(merge, "prepare mergetool completion conflict");
     const markers = try integration.expectMarkers(io, arena, repo, "Assets/Conflict.prefab");
 
-    // Clicking the empty Result opens the editor so typing inserts a custom value.
-    // The first Enter applies Result. The second Enter confirms Complete.
-    const result = runMergetoolInPty(io, arena, repo, "\x1b[<0;83;5M4\r\r", 30) catch |err| {
+    // Typing into the focused Result starts an edit. Separate Enter presses save the draft,
+    // confirm the group, and complete the file so partial text cannot write the output.
+    const result = runMergetoolInPty(io, arena, repo, "\x1b[<0;83;5M4\r\r\r", 30) catch |err| {
         if (err == error.Timeout) {
             // A timed-out TUI must leave the original conflict markers available.
             try integration.expectFile(io, arena, repo, "Assets/Conflict.prefab", markers);
@@ -316,8 +317,8 @@ fn testBackspaceBeforeEditing(
     _ = try integration.expectMarkers(io, arena, repo, "Assets/Conflict.prefab");
 
     // A raw DEL byte is the macOS Delete key and must work before a Result click.
-    // The first Enter starts editing; the second asks before applying the cleared value.
-    const keys = "\x1b[C\r\x1b[A\x1b[C\x1b[C\x1b[C\x7f\r\r\x1b[C\r\r";
+    // F2 starts editing the accepted value; Enter asks before saving an empty value.
+    const keys = "\x1b[C\r\x1b[A\x1bOQ\x7f\r\x1b[C\r\r\r";
     const result = try runMergetoolInPty(io, arena, repo, keys, 30);
     try integration.expectCode(result, 0, "clear focused Result in PTY");
     try integration.expectFile(io, arena, repo, "Assets/Conflict.prefab", conflict_empty);
@@ -436,4 +437,26 @@ fn runMergetoolInPty(
     timeout_seconds: i64,
 ) !std.process.RunResult {
     return pty.runCommandInPty(io, arena, repository, "git mergetool --no-prompt --tool=prefablens -- Assets/Conflict.prefab", input_keys, timeout_seconds);
+}
+
+fn testItemReview(io: std.Io, arena: std.mem.Allocator, scratch: []const u8, prefablens: []const u8) !void {
+    const prefix = "--- !u!114 &1\nMonoBehaviour:\n  values: ";
+    const cases = [_]struct { name: []const u8, keys: []const u8, right: u8 }{
+        .{ .name = "item-whole-ours", .keys = "\x1b[C\r\r", .right = 1 },
+        .{ .name = "item-field-ours", .keys = "\x1b[C\x1b[B \r\r", .right = 4 },
+        // Editing Right first must keep Left unresolved until its source is selected.
+        .{ .name = "item-edit-automatic", .keys = "\x1b[C\x1b[B\x1b[B\x1b[C\x1b[C\x1bOQ\x7f5\r\x1b[A\x1b[D\x1b[D \r\r", .right = 5 },
+    };
+    for (cases) |case| {
+        const repo = try prepareMergetoolRepositoryWithSides(io, arena, scratch, prefablens, case.name, .{
+            .path = "Assets/Conflict.prefab",
+            .base = prefix ++ "[{left: 1, right: 1}]\n",
+            .ours = prefix ++ "[{left: 2, right: 1}]\n",
+            .theirs = prefix ++ "[{left: 3, right: 4}]\n",
+        });
+        try integration.expectNonzero(try integration.gitRun(io, arena, repo, &.{ "merge", "--no-edit", "remote" }), "prepare ItemField conflict");
+        const result = try runMergetoolInPty(io, arena, repo, case.keys, 30);
+        try integration.expectCode(result, 0, case.name);
+        try integration.expectFile(io, arena, repo, "Assets/Conflict.prefab", try std.fmt.allocPrint(arena, prefix ++ "[{{left: 2, right: {d}}}]\n", .{case.right}));
+    }
 }

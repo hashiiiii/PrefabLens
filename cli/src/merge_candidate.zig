@@ -206,7 +206,15 @@ pub const Candidate = struct {
         return session.maskUnresolved(try self.store.snapshot(self.result.tree), try self.pendingPaths());
     }
 
+    pub fn buildForReview(self: *Candidate, index: usize, output: core.merge_context.Snapshot) !?core.merge.BuildResult {
+        return self.buildWithMode(index, output, true);
+    }
+
     pub fn build(self: *Candidate, index: usize, output: core.merge_context.Snapshot) !?core.merge.BuildResult {
+        return self.buildWithMode(index, output, false);
+    }
+
+    fn buildWithMode(self: *Candidate, index: usize, output: core.merge_context.Snapshot, review: bool) !?core.merge.BuildResult {
         const item = self.items.items[index];
         if (item.paths.len != 1 or (item.conflict != null and !std.mem.eql(u8, item.conflict.?.kind, "CONFLICT (contents)"))) return null;
         const path = item.paths[0];
@@ -219,7 +227,7 @@ pub const Candidate = struct {
             context = (try session.bind(&self.store, known, paths, inputs)) orelse return null;
         } else return null;
         context.output = output;
-        return core.merge.buildWithContext(self.git.arena, inputs.base, inputs.ours, inputs.theirs, context) catch null;
+        return (if (review) core.merge.buildForReview(self.git.arena, inputs.base, inputs.ours, inputs.theirs, context) else core.merge.buildWithContext(self.git.arena, inputs.base, inputs.ours, inputs.theirs, context)) catch null;
     }
 
     fn inputPaths(self: *Candidate, path: []const u8) ?session.Paths {

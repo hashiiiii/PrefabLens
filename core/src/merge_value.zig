@@ -11,22 +11,58 @@ pub const Input = struct {
     nodes: Nodes,
     schema: ?context.Field = null,
     context_conflict: bool = false,
+    review: bool = false,
 };
 pub const Reason = enum { edit_edit, delete_edit, insertion_order, ambiguous_correspondence, context_required, source_bytes };
 pub const Conflict = struct { path: []const u8 = "", nodes: Nodes, reason: Reason, sequence: bool = false };
 pub const Choice = union(enum) { unresolved, take: Side, remove, custom: *const model.Node };
 pub const Order = enum { ours_first, theirs_first };
 pub const Error = A.Error || error{ InvalidResolution, UnresolvedConflict };
+pub const PathSegment = union(enum) { key: []const u8, index: usize };
+pub const ReviewScope = enum { item, collection };
+pub const ReviewGroup = struct {
+    conflict_id: usize,
+    path: []const u8,
+    nodes: Nodes,
+    preview: ?*const model.Node,
+    child_conflicts: []const usize,
+    required_paths: []const []const PathSegment,
+    scope: ReviewScope,
+    automatic: bool = false,
+};
 const Field = struct { key: []const u8, value: *const Value };
-const Piece = struct { value: *const Value, spread: bool };
-const Value = union(enum) { accepted: ?*const model.Node, conflict: usize, map: []const Field, sequence: []const Piece };
+const Piece = struct {
+    value: *const Value,
+    spread: bool,
+    // Ordered planning knows the exact source item represented by this piece.
+    // Review grouping consumes this evidence before any materialized sequence
+    // exists, so it never has to recover correspondence from an index.
+    review_nodes: ?Nodes = null,
+    review_path: ?[]const u8 = null,
+};
+const ReviewValue = struct { conflict_id: usize, inner: *const Value };
+const Value = union(enum) {
+    accepted: ?*const model.Node,
+    conflict: usize,
+    map: []const Field,
+    sequence: []const Piece,
+    review: ReviewValue,
+};
 // Plans borrow input nodes and own only arena-allocated plan data. Accepted leaves
 // retain input pointers so source-byte writers can reuse their original formatting.
-pub const Plan = struct { root: *const Value, conflicts: []const Conflict, input: Input, packed_layout: ?packed_int.Layout = null, logical_nodes: ?Nodes = null };
+pub const Plan = struct {
+    root: *const Value,
+    conflicts: []const Conflict,
+    input: Input,
+    review_groups: []const ReviewGroup = &.{},
+    packed_layout: ?packed_int.Layout = null,
+    logical_nodes: ?Nodes = null,
+};
 
 /// Build an immutable recursive plan. Conflict indexes address the choices slice.
 pub fn build(arena: A, input: Input) Error!Plan {
     var conflicts: std.ArrayList(Conflict) = .empty;
+    var review_groups: std.ArrayList(ReviewGroup) = .empty;
     var logical = input.nodes;
     var layout: ?packed_int.Layout = null;
     var root: *const Value = undefined;
@@ -54,7 +90,47 @@ pub fn build(arena: A, input: Input) Error!Plan {
     } else if (try planDictionary(arena, &conflicts, input.nodes)) |planned| {
         root = planned;
     } else root = try planValue(arena, &conflicts, logical, false);
-    return .{ .root = root, .conflicts = try conflicts.toOwnedSlice(arena), .input = input, .packed_layout = layout, .logical_nodes = if (layout != null) logical else null };
+    if (input.review) {
+        root = try wrapReviewGroups(arena, &conflicts, &review_groups, root, input.nodes);
+        // Packed arrays are represented by encoded scalar source nodes while
+        // the planner operates on their decoded logical sequence.  A review
+        // wrapper would therefore expose a sequence preview against scalar
+        // source nodes, which cannot be a valid custom resolution.  Their
+        // existing packed materialization path already preserves the logical
+        // collection choice, so leave them on that path.
+        const can_wrap_automatic = input.schema == null or input.schema.?.kind != .int32_array;
+        if (can_wrap_automatic and review_groups.items.len == 0 and conflicts.items.len == 0) {
+            const choices = try arena.alloc(Choice, conflicts.items.len);
+            const preview = try materializeValue(arena, root, conflicts.items, choices);
+            if (!eql(preview, input.nodes.ours)) {
+                const conflict_id = conflicts.items.len;
+                try conflicts.append(arena, .{
+                    .nodes = input.nodes,
+                    .reason = .edit_edit,
+                });
+                const group = try review_groups.addOne(arena);
+                group.* = .{
+                    .conflict_id = conflict_id,
+                    .path = "",
+                    .nodes = input.nodes,
+                    .preview = preview,
+                    .child_conflicts = &.{},
+                    .required_paths = &.{},
+                    .scope = .collection,
+                    .automatic = true,
+                };
+                root = try alloc(arena, .{ .review = .{ .conflict_id = conflict_id, .inner = root } });
+            }
+        }
+    }
+    return .{
+        .root = root,
+        .conflicts = try conflicts.toOwnedSlice(arena),
+        .input = input,
+        .review_groups = try review_groups.toOwnedSlice(arena),
+        .packed_layout = layout,
+        .logical_nodes = if (layout != null) logical else null,
+    };
 }
 pub fn conflicted(arena: A, input: Input, reason: Reason) Error!Plan {
     var conflicts: std.ArrayList(Conflict) = .empty;
@@ -214,15 +290,32 @@ fn planPairEntries(
     var pieces: std.ArrayList(Piece) = .empty;
     for (keys) |key| {
         const first_conflict = list.items.len;
+        const base_entry = dictionary.find(base_entries, key);
+        const ours_entry = dictionary.find(ours_entries, key);
+        const theirs_entry = dictionary.find(theirs_entries, key);
         const planned = try planDictionaryEntry(
             arena,
             list,
-            dictionary.find(base_entries, key),
-            dictionary.find(ours_entries, key),
-            dictionary.find(theirs_entries, key),
+            base_entry,
+            ours_entry,
+            theirs_entry,
             shape,
         );
-        if (planned) |value| try pieces.append(arena, .{ .spread = false, .value = value });
+        if (planned) |value| {
+            const review_nodes = if (base_entry) |base| if (ours_entry) |ours| if (theirs_entry) |theirs|
+                if (base.item.* == .map and ours.item.* == .map and theirs.item.* == .map)
+                    Nodes{ .base = base.item, .ours = ours.item, .theirs = theirs.item }
+                else
+                    null
+            else
+                null else null else null;
+            try pieces.append(arena, .{
+                .spread = false,
+                .value = value,
+                .review_nodes = review_nodes,
+                .review_path = try dictionaryKeyPath(arena, key),
+            });
+        }
         try prefixConflicts(arena, list, first_conflict, try dictionaryKeyPath(arena, key));
     }
     return alloc(arena, .{ .sequence = try pieces.toOwnedSlice(arena) });
@@ -409,9 +502,19 @@ fn planValue(arena: A, list: *std.ArrayList(Conflict), n: Nodes, ordered_schema:
             .conflict => |id| {
                 const c = plan.conflicts[id];
                 const first_conflict = list.items.len;
+                const path = if (c.base_end == c.base_start + 1) try std.fmt.allocPrint(arena, "[{d}]", .{c.base_start}) else try std.fmt.allocPrint(arena, "[{d}..{d}]", .{ c.base_start, c.base_end });
                 // A one-item replacement bounded by proven anchors permits recursive fields.
                 if (c.kind == .edit_edit and c.base.len == 1 and c.ours.len == 1 and c.theirs.len == 1 and referenced(input, c.base[0]).* == .map and referenced(input, c.ours[0]).* == .map and referenced(input, c.theirs[0]).* == .map) {
-                    try pieces.append(arena, .{ .spread = false, .value = try planValue(arena, list, .{ .base = referenced(input, c.base[0]), .ours = referenced(input, c.ours[0]), .theirs = referenced(input, c.theirs[0]) }, false) });
+                    try pieces.append(arena, .{
+                        .spread = false,
+                        .value = try planValue(arena, list, .{ .base = referenced(input, c.base[0]), .ours = referenced(input, c.ours[0]), .theirs = referenced(input, c.theirs[0]) }, false),
+                        .review_nodes = .{
+                            .base = referenced(input, c.base[0]),
+                            .ours = referenced(input, c.ours[0]),
+                            .theirs = referenced(input, c.theirs[0]),
+                        },
+                        .review_path = path,
+                    });
                 } else {
                     try pieces.append(arena, .{ .spread = true, .value = try conflict(arena, list, .{ .base = try refsNode(arena, input, c.base), .ours = try refsNode(arena, input, c.ours), .theirs = try refsNode(arena, input, c.theirs) }, switch (c.kind) {
                         .edit_edit => .edit_edit,
@@ -420,7 +523,6 @@ fn planValue(arena: A, list: *std.ArrayList(Conflict), n: Nodes, ordered_schema:
                         .ambiguous_correspondence => .ambiguous_correspondence,
                     }, true) });
                 }
-                const path = if (c.base_end == c.base_start + 1) try std.fmt.allocPrint(arena, "[{d}]", .{c.base_start}) else try std.fmt.allocPrint(arena, "[{d}..{d}]", .{ c.base_start, c.base_end });
                 try prefixConflicts(arena, list, first_conflict, path);
             },
         };
@@ -428,6 +530,140 @@ fn planValue(arena: A, list: *std.ArrayList(Conflict), n: Nodes, ordered_schema:
     }
     return conflict(arena, list, n, if (n.ours == null or n.theirs == null) .delete_edit else .edit_edit, anySequence(n));
 }
+
+fn wrapReviewGroups(
+    arena: A,
+    conflicts: *std.ArrayList(Conflict),
+    groups: *std.ArrayList(ReviewGroup),
+    root: *const Value,
+    source_nodes: Nodes,
+) Error!*const Value {
+    return wrapReviewValue(arena, conflicts, groups, root, source_nodes);
+}
+
+fn wrapReviewValue(
+    arena: A,
+    conflicts: *std.ArrayList(Conflict),
+    groups: *std.ArrayList(ReviewGroup),
+    value: *const Value,
+    source_nodes: Nodes,
+) Error!*const Value {
+    return switch (value.*) {
+        .accepted, .conflict => value,
+        .review => value,
+        .map => |fields| blk: {
+            var result: std.ArrayList(Field) = .empty;
+            for (fields) |field| {
+                try result.append(arena, .{
+                    .key = field.key,
+                    .value = try wrapReviewValue(arena, conflicts, groups, field.value, source_nodes),
+                });
+            }
+            break :blk alloc(arena, .{ .map = try result.toOwnedSlice(arena) });
+        },
+        .sequence => |pieces| blk: {
+            var result: std.ArrayList(Piece) = .empty;
+            for (pieces) |piece| {
+                var child = try wrapReviewValue(arena, conflicts, groups, piece.value, source_nodes);
+                if (piece.review_nodes) |nodes| {
+                    if (isSourceItem(source_nodes, nodes)) {
+                        var required: std.ArrayList([]const PathSegment) = .empty;
+                        var child_conflicts: std.ArrayList(usize) = .empty;
+                        var path: std.ArrayList(PathSegment) = .empty;
+                        const child_count = try collectRequired(
+                            arena,
+                            child,
+                            conflicts.items,
+                            &path,
+                            &required,
+                            &child_conflicts,
+                        );
+                        const choices = try arena.alloc(Choice, conflicts.items.len);
+                        @memset(choices, .{ .take = .ours });
+                        const preview = try materializeValue(arena, child, conflicts.items, choices);
+                        if (child_count != 0 or !eql(preview, nodes.ours)) {
+                            const conflict_id = conflicts.items.len;
+                            try conflicts.append(arena, .{
+                                .path = piece.review_path orelse "",
+                                .nodes = nodes,
+                                .reason = .edit_edit,
+                            });
+                            const group = try groups.addOne(arena);
+                            group.* = .{
+                                .conflict_id = conflict_id,
+                                .path = piece.review_path orelse "",
+                                .nodes = nodes,
+                                .preview = preview,
+                                .child_conflicts = try child_conflicts.toOwnedSlice(arena),
+                                .required_paths = try required.toOwnedSlice(arena),
+                                .scope = .item,
+                                .automatic = child_count == 0,
+                            };
+                            child = try alloc(arena, .{ .review = .{ .conflict_id = conflict_id, .inner = child } });
+                        }
+                    }
+                }
+                try result.append(arena, .{ .spread = piece.spread, .value = child });
+            }
+            break :blk alloc(arena, .{ .sequence = try result.toOwnedSlice(arena) });
+        },
+    };
+}
+
+fn isSourceItem(source_nodes: Nodes, candidate: Nodes) bool {
+    const base = candidate.base orelse return false;
+    const ours = candidate.ours orelse return false;
+    const theirs = candidate.theirs orelse return false;
+    if (base.* != .map or ours.* != .map or theirs.* != .map) return false;
+    return containsPointer(source_nodes.base, base) and
+        containsPointer(source_nodes.ours, ours) and
+        containsPointer(source_nodes.theirs, theirs);
+}
+
+fn containsPointer(root: ?*const model.Node, target: *const model.Node) bool {
+    const value = root orelse return false;
+    if (value.* != .seq) return false;
+    for (value.seq) |item| if (item == target) return true;
+    return false;
+}
+
+fn collectRequired(
+    arena: A,
+    value: *const Value,
+    conflicts: []const Conflict,
+    path: *std.ArrayList(PathSegment),
+    result: *std.ArrayList([]const PathSegment),
+    child_conflicts: *std.ArrayList(usize),
+) A.Error!usize {
+    return switch (value.*) {
+        .accepted => 0,
+        .conflict => |id| {
+            try result.append(arena, try arena.dupe(PathSegment, path.items));
+            try child_conflicts.append(arena, id);
+            return 1;
+        },
+        .review => |group| collectRequired(arena, group.inner, conflicts, path, result, child_conflicts),
+        .map => |fields| blk: {
+            var count: usize = 0;
+            for (fields) |field| {
+                try path.append(arena, .{ .key = field.key });
+                count += try collectRequired(arena, field.value, conflicts, path, result, child_conflicts);
+                _ = path.pop();
+            }
+            break :blk count;
+        },
+        .sequence => |pieces| blk: {
+            var count: usize = 0;
+            for (pieces, 0..) |piece, index| {
+                try path.append(arena, .{ .index = index });
+                count += try collectRequired(arena, piece.value, conflicts, path, result, child_conflicts);
+                _ = path.pop();
+            }
+            break :blk count;
+        },
+    };
+}
+
 fn acceptedNode(input: ordered.Input, ref: ordered.ItemRef) *const model.Node {
     const original = referenced(input, ref);
     if (ref.side != .base) return original;
@@ -530,6 +766,16 @@ fn materializeValue(arena: A, value: *const Value, conflicts: []const Conflict, 
             }
             break :blk selected;
         },
+        .review => |group| switch (choices[group.conflict_id]) {
+            .unresolved => materializeValue(arena, group.inner, conflicts, choices),
+            .remove => null,
+            .custom => |v| if (reviewShapeMatches(conflicts[group.conflict_id].nodes, v)) v else return error.InvalidResolution,
+            .take => |side| switch (side) {
+                .base => conflicts[group.conflict_id].nodes.base,
+                .ours => conflicts[group.conflict_id].nodes.ours,
+                .theirs => conflicts[group.conflict_id].nodes.theirs,
+            },
+        },
         .map => |fields| blk: {
             var entries: std.ArrayList(model.Entry) = .empty;
             for (fields) |f| {
@@ -549,6 +795,15 @@ fn materializeValue(arena: A, value: *const Value, conflicts: []const Conflict, 
             }
             break :blk try node(arena, .{ .seq = try items.toOwnedSlice(arena) });
         },
+    };
+}
+
+fn reviewShapeMatches(nodes: Nodes, selected: *const model.Node) bool {
+    const template = nodes.ours orelse nodes.theirs orelse nodes.base orelse return true;
+    return switch (template.*) {
+        .map => selected.* == .map,
+        .seq => selected.* == .seq,
+        .scalar, .ref => selected.* != .map and selected.* != .seq,
     };
 }
 pub fn combined(arena: A, c: Conflict, order: Order) Error!*const model.Node {

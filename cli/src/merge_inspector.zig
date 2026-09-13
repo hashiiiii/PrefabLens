@@ -382,10 +382,12 @@ pub const Row = struct {
 pub const Model = struct {
     documents: [4]?properties.Document,
     rows: []const Row,
+    roots: [4]?*const Node = @splat(null),
 
     pub fn editable(self: Model, index: usize) bool {
         if (index >= self.rows.len) return false;
         const row = self.rows[index];
+        if (row.path.len == 0) return false;
         if (self.documents[3]) |result| {
             return result.editable(row.path);
         }
@@ -456,12 +458,14 @@ pub fn build(
             switch (resolution) {
                 .take => |side| if (operation.values.get(side)) |value| value.node else null,
                 .custom => |text| try customFieldRoot(arena, operation, text),
-                else => null,
+                .unresolved => if (operation.review) |metadata| if (metadata.preview) |preview| preview.node else null else null,
+                .remove => null,
             },
         };
-        var builder: Builder = .{ .arena = arena, .documents = @splat(null) };
+        var builder: Builder = .{ .arena = arena, .documents = @splat(null), .atomic_sequences = operation.review != null };
+        if (operation.review != null) try builder.rows.append(arena, .{ .path = &.{}, .label = "Entire item", .values = roots, .changed = true });
         try builder.walk(&.{}, "", roots);
-        return .{ .documents = @splat(null), .rows = try builder.rows.toOwnedSlice(arena) };
+        return .{ .documents = @splat(null), .rows = try builder.rows.toOwnedSlice(arena), .roots = roots };
     }
     const result_bytes: ?[]const u8 = switch (resolution) {
         .take => |side| if (operation.values.get(side)) |value| value.bytes else null,
@@ -816,36 +820,11 @@ fn customFieldRoot(
     operation: *const core.merge.Operation,
     text: []const u8,
 ) !?*const Node {
-    const template = operation.values.theirs orelse operation.values.ours orelse operation.values.base orelse return null;
-    const node = template.node orelse return null;
-    if (node.* != .map) return null;
-    const scalar = customFieldScalar(text) orelse return null;
-    const entries = try arena.dupe(core.model.Entry, node.map);
-    for (entries) |*entry| {
-        if (std.mem.eql(u8, entry.key, "value") or std.mem.eql(u8, entry.key, "second")) {
-            const value_node = try arena.create(Node);
-            value_node.* = .{ .scalar = scalar };
-            entry.value = value_node;
-        }
-    }
-    const copy = try arena.create(Node);
-    copy.* = .{ .map = entries };
-    return copy;
-}
-
-fn customFieldScalar(text: []const u8) ?[]const u8 {
-    const trimmed = std.mem.trim(u8, text, " \r\n");
-    if (trimmed.len == 0) return null;
-    if (std.mem.indexOfAny(u8, trimmed, "\r\n") == null) return trimmed;
-    var lines = std.mem.splitScalar(u8, trimmed, '\n');
-    var found: ?[]const u8 = null;
-    while (lines.next()) |raw| {
-        const content = std.mem.trimStart(u8, std.mem.trimEnd(u8, raw, "\r"), " ");
-        if (std.mem.startsWith(u8, content, "value:")) {
-            found = std.mem.trim(u8, content["value:".len..], " ");
-        }
-    }
-    return found;
+    _ = operation;
+    return properties.parseValue(arena, text) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => null,
+    };
 }
 
 fn scalarNode(arena: std.mem.Allocator, text: []const u8) !*const Node {
@@ -857,6 +836,7 @@ fn scalarNode(arena: std.mem.Allocator, text: []const u8) !*const Node {
 const Builder = struct {
     arena: std.mem.Allocator,
     documents: [4]?properties.Document,
+    atomic_sequences: bool = false,
     rows: std.ArrayList(Row) = .empty,
 
     fn walk(self: *Builder, path: []const properties.Segment, label: []const u8, nodes: [4]?*const Node) std.mem.Allocator.Error!void {
@@ -870,6 +850,7 @@ const Builder = struct {
             has_map = has_map or value.* == .map;
             has_seq = has_seq or value.* == .seq;
         };
+        if (has_seq and self.atomic_sequences) return self.append(path, label, nodes);
         const mixed = !map_only and !seq_only and (has_map or has_seq);
         if (mixed) try self.append(path, label, nodes);
         var descendants = false;
@@ -965,4 +946,17 @@ pub fn valueText(arena: std.mem.Allocator, node: ?*const Node) ![]const u8 {
         .map => |entries| try std.fmt.allocPrint(arena, "{d} fields", .{entries.len}),
         .seq => |items| try std.fmt.allocPrint(arena, "{d} items", .{items.len}),
     };
+}
+
+test "merge TUI: custom item Result shows each edited field" {
+    var memory = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer memory.deinit();
+    const arena = memory.allocator();
+    const prefix = "--- !u!114 &1\nMonoBehaviour:\n  items: ";
+    const fixture = try core.merge.buildForReview(arena, prefix ++ "[{left: 1, right: 1}]\n", prefix ++ "[{left: 2, right: 1}]\n", prefix ++ "[{left: 3, right: 4}]\n", .{});
+    const operation = fixture.plan.operations[0];
+    const model = try build(arena, &operation, .{ .custom = "{left: 2, right: 5}" }, &fixture.plan);
+    // The table must reflect the full Result map, including its edited automatic field.
+    try std.testing.expectEqualStrings("2", try model.text(arena, 1, 3));
+    try std.testing.expectEqualStrings("5", try model.text(arena, 2, 3));
 }

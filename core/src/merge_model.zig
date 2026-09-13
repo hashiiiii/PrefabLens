@@ -46,6 +46,16 @@ pub const SideValue = struct {
     span: ?source.Span,
 };
 
+// Review paths are structural references within a collection item. Keeping
+// keys and indexes typed prevents consumers from recovering correspondence
+// from a rendered path string.
+pub const Segment = union(enum) { key: []const u8, index: usize };
+
+pub const ReviewMetadata = struct {
+    preview: ?SideValue = null,
+    required_paths: []const []const Segment = &.{},
+};
+
 pub const Values = struct {
     base: ?SideValue,
     ours: ?SideValue,
@@ -83,6 +93,7 @@ pub const Operation = struct {
     values: Values,
     resolution: Resolution,
     dependencies: []const AtomicId = &.{},
+    review: ?ReviewMetadata = null,
 };
 
 pub const AtomicOperation = struct {
@@ -99,6 +110,7 @@ pub const MergePlan = struct {
     operations: []Operation,
     atomic_operations: []AtomicOperation,
     collections: []const @import("merge_binding.zig").Binding = &.{},
+    review: bool = false,
 
     pub fn file(self: MergePlan, side: Side) source.ParsedFile {
         return switch (side) {

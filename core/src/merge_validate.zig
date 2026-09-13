@@ -8,10 +8,26 @@ const parser = @import("parser.zig");
 const merge_validate = @This();
 const testing = std.testing;
 
+pub const Diagnostic = struct {
+    message: []const u8 = "Result is not valid Unity YAML.",
+    file_id: ?i64 = null,
+    property_path: []const u8 = "",
+    related_id: ?i64 = null,
+
+    pub fn text(self: Diagnostic, arena: std.mem.Allocator) ![]const u8 {
+        const location = if (self.file_id) |id| try std.fmt.allocPrint(arena, "#{d}{s}{s}: ", .{
+            id, if (self.property_path.len == 0) "" else ".", self.property_path,
+        }) else "";
+        const target = if (self.related_id) |id| try std.fmt.allocPrint(arena, " (#{d})", .{id}) else "";
+        return std.fmt.allocPrint(arena, "{s}{s}{s}", .{ location, self.message, target });
+    }
+};
+
 const Index = struct {
     arena: std.mem.Allocator,
     documents: std.AutoHashMapUnmanaged(i64, *const model.Document),
     all_documents: []const model.Document,
+    diagnostic: ?*Diagnostic = null,
 
     fn init(
         arena: std.mem.Allocator,
@@ -22,29 +38,54 @@ const Index = struct {
         return .{ .arena = arena, .documents = by_file_id, .all_documents = documents };
     }
 
+    fn subject(self: *const Index, file_id: i64, path: []const u8) void {
+        if (self.diagnostic) |diagnostic| {
+            diagnostic.file_id = file_id;
+            diagnostic.property_path = path;
+            diagnostic.related_id = null;
+        }
+    }
+
+    fn invalid(self: *const Index, message: []const u8) merge_model.Error {
+        if (self.diagnostic) |diagnostic| diagnostic.message = message;
+        return error.InvalidMerge;
+    }
+
     fn requireUniqueFileIds(self: *const Index) merge_model.Error!void {
         var identifiers: std.AutoHashMapUnmanaged(i64, void) = .empty;
         for (self.all_documents) |document| {
+            self.subject(document.file_id, "");
             const entry = try identifiers.getOrPut(self.arena, document.file_id);
-            if (entry.found_existing) return error.InvalidMerge;
+            if (entry.found_existing) return self.invalid("Duplicate fileID.");
         }
     }
 
     fn requireInternalReferences(self: *const Index) merge_model.Error!void {
-        for (self.all_documents) |document| try self.requireNodeReferences(document.body);
+        for (self.all_documents) |document| {
+            self.subject(document.file_id, "");
+            try self.requireNodeReferences(document.body, "");
+        }
     }
 
     fn requireNodeReferences(
         self: *const Index,
         node: *const model.Node,
+        path: []const u8,
     ) merge_model.Error!void {
         switch (node.*) {
             .ref => |reference| {
                 if (reference.guid == null and reference.file_id != 0 and
-                    !self.documents.contains(reference.file_id)) return error.InvalidMerge;
+                    !self.documents.contains(reference.file_id))
+                {
+                    if (self.diagnostic) |diagnostic| {
+                        diagnostic.property_path = path;
+                        diagnostic.related_id = reference.file_id;
+                    }
+                    return self.invalid("Reference target is missing.");
+                }
             },
-            .map => |entries| for (entries) |entry| try self.requireNodeReferences(entry.value),
-            .seq => |items| for (items) |item| try self.requireNodeReferences(item),
+            .map => |entries| for (entries) |entry| try self.requireNodeReferences(entry.value, if (self.diagnostic == null) "" else try std.fmt.allocPrint(self.arena, "{s}{s}{s}", .{ path, if (path.len == 0) "" else ".", entry.key })),
+            .seq => |items| for (items, 0..) |item, index| try self.requireNodeReferences(item, if (self.diagnostic == null) "" else try std.fmt.allocPrint(self.arena, "{s}[{d}]", .{ path, index })),
             .scalar => {},
         }
     }
@@ -52,71 +93,75 @@ const Index = struct {
     fn requireComponentOwnership(self: *const Index) merge_model.Error!void {
         var owners: std.AutoHashMapUnmanaged(i64, i64) = .empty;
         for (self.all_documents) |document| {
+            self.subject(document.file_id, "");
             if (document.class_id != 1) continue;
             const components = document.body.get("m_Component") orelse
-                return error.InvalidMerge;
-            if (components.* != .seq) return error.InvalidMerge;
+                return self.invalid("Component membership and owner reference disagree.");
+            if (components.* != .seq) return self.invalid("Component membership and owner reference disagree.");
             var transform_count: usize = 0;
             for (components.seq) |item| {
-                if (item.* != .map) return error.InvalidMerge;
+                if (item.* != .map) return self.invalid("Component membership and owner reference disagree.");
                 const component_node = item.get("component") orelse
-                    return error.InvalidMerge;
+                    return self.invalid("Component membership and owner reference disagree.");
                 if (component_node.* != .ref or component_node.ref.guid != null or
-                    component_node.ref.file_id == 0) return error.InvalidMerge;
+                    component_node.ref.file_id == 0) return self.invalid("Component membership and owner reference disagree.");
                 const component = self.documents.get(component_node.ref.file_id) orelse
-                    return error.InvalidMerge;
+                    return self.invalid("Component membership and owner reference disagree.");
                 if (component.class_id == 4 or component.class_id == 224) transform_count += 1;
                 const owner = try owners.getOrPut(self.arena, component.file_id);
-                if (owner.found_existing) return error.InvalidMerge;
+                if (owner.found_existing) return self.invalid("Component membership and owner reference disagree.");
                 owner.value_ptr.* = document.file_id;
                 const back_reference = component.body.get("m_GameObject") orelse
-                    return error.InvalidMerge;
+                    return self.invalid("Component membership and owner reference disagree.");
                 if (back_reference.* != .ref or back_reference.ref.guid != null or
-                    back_reference.ref.file_id != document.file_id) return error.InvalidMerge;
+                    back_reference.ref.file_id != document.file_id) return self.invalid("Component membership and owner reference disagree.");
             }
-            if (transform_count != 1) return error.InvalidMerge;
+            if (transform_count != 1) return self.invalid("GameObject must contain exactly one Transform.");
         }
         for (self.all_documents) |document| {
+            self.subject(document.file_id, "");
             const game_object = document.body.get("m_GameObject") orelse {
-                if (document.class_id == 4 or document.class_id == 224) return error.InvalidMerge;
+                if (document.class_id == 4 or document.class_id == 224) return self.invalid("Component membership and owner reference disagree.");
                 continue;
             };
             if (game_object.* != .ref or game_object.ref.guid != null or
-                game_object.ref.file_id == 0) return error.InvalidMerge;
-            const owner = owners.get(document.file_id) orelse return error.InvalidMerge;
-            if (owner != game_object.ref.file_id) return error.InvalidMerge;
+                game_object.ref.file_id == 0) return self.invalid("Component membership and owner reference disagree.");
+            const owner = owners.get(document.file_id) orelse return self.invalid("Component membership and owner reference disagree.");
+            if (owner != game_object.ref.file_id) return self.invalid("Component membership and owner reference disagree.");
         }
     }
 
     fn requireBidirectionalHierarchy(self: *const Index) merge_model.Error!void {
         var parents: std.AutoHashMapUnmanaged(i64, i64) = .empty;
         for (self.all_documents) |document| {
+            self.subject(document.file_id, "");
             if (document.class_id != 4 and document.class_id != 224) continue;
             const children = document.body.get("m_Children") orelse
-                return error.InvalidMerge;
-            if (children.* != .seq) return error.InvalidMerge;
+                return self.invalid("Parent and child lists disagree or reference an invalid Transform.");
+            if (children.* != .seq) return self.invalid("Parent and child lists disagree or reference an invalid Transform.");
             for (children.seq) |item| {
                 if (item.* != .ref or item.ref.guid != null or item.ref.file_id == 0)
-                    return error.InvalidMerge;
-                const child = self.documents.get(item.ref.file_id) orelse return error.InvalidMerge;
-                if (child.class_id != 4 and child.class_id != 224) return error.InvalidMerge;
+                    return self.invalid("Parent and child lists disagree or reference an invalid Transform.");
+                const child = self.documents.get(item.ref.file_id) orelse return self.invalid("Parent and child lists disagree or reference an invalid Transform.");
+                if (child.class_id != 4 and child.class_id != 224) return self.invalid("Parent and child lists disagree or reference an invalid Transform.");
                 const parent = try parents.getOrPut(self.arena, child.file_id);
-                if (parent.found_existing) return error.InvalidMerge;
+                if (parent.found_existing) return self.invalid("Parent and child lists disagree or reference an invalid Transform.");
                 parent.value_ptr.* = document.file_id;
             }
         }
         for (self.all_documents) |document| {
+            self.subject(document.file_id, "");
             if (document.class_id != 4 and document.class_id != 224) continue;
             const father = document.body.get("m_Father") orelse
-                return error.InvalidMerge;
-            if (father.* != .ref or father.ref.guid != null) return error.InvalidMerge;
+                return self.invalid("Parent and child lists disagree or reference an invalid Transform.");
+            if (father.* != .ref or father.ref.guid != null) return self.invalid("Parent and child lists disagree or reference an invalid Transform.");
             if (father.ref.file_id == 0) {
-                if (parents.contains(document.file_id)) return error.InvalidMerge;
+                if (parents.contains(document.file_id)) return self.invalid("Parent and child lists disagree or reference an invalid Transform.");
                 continue;
             }
-            const parent = self.documents.get(father.ref.file_id) orelse return error.InvalidMerge;
-            if (parent.class_id != 4 and parent.class_id != 224) return error.InvalidMerge;
-            if (parents.get(document.file_id) != father.ref.file_id) return error.InvalidMerge;
+            const parent = self.documents.get(father.ref.file_id) orelse return self.invalid("Parent and child lists disagree or reference an invalid Transform.");
+            if (parent.class_id != 4 and parent.class_id != 224) return self.invalid("Parent and child lists disagree or reference an invalid Transform.");
+            if (parents.get(document.file_id) != father.ref.file_id) return self.invalid("Parent and child lists disagree or reference an invalid Transform.");
         }
     }
 
@@ -130,11 +175,12 @@ const Index = struct {
             var path: std.AutoHashMapUnmanaged(i64, void) = .empty;
             var current: ?*const model.Document = document;
             while (current) |transform| {
+                self.subject(transform.file_id, "m_Father");
                 if (complete.contains(transform.file_id)) break;
                 const visited = try path.getOrPut(self.arena, transform.file_id);
-                if (visited.found_existing) return error.InvalidMerge;
+                if (visited.found_existing) return self.invalid("Parent hierarchy contains a cycle.");
                 const father = transform.body.get("m_Father") orelse break;
-                if (father.* != .ref or father.ref.guid != null) return error.InvalidMerge;
+                if (father.* != .ref or father.ref.guid != null) return self.invalid("Invalid parent reference.");
                 if (father.ref.file_id == 0) break;
                 const parent = self.documents.get(father.ref.file_id) orelse break;
                 if (parent.class_id != 4 and parent.class_id != 224) break;
@@ -147,14 +193,40 @@ const Index = struct {
 };
 
 pub fn validate(arena: std.mem.Allocator, bytes: []const u8) merge_model.Error!void {
+    try check(arena, bytes, null);
+}
+
+pub fn diagnose(arena: std.mem.Allocator, bytes: []const u8) std.mem.Allocator.Error!?Diagnostic {
+    var diagnostic: Diagnostic = .{};
+    check(arena, bytes, &diagnostic) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return diagnostic,
+    };
+    return null;
+}
+
+fn check(arena: std.mem.Allocator, bytes: []const u8, diagnostic: ?*Diagnostic) merge_model.Error!void {
     const parsed = try parser.parseSpanned(arena, bytes);
     if (parsed.diagnostics.len != 0) return error.InvalidMerge;
     var index = try Index.init(arena, parsed.documents);
+    index.diagnostic = diagnostic;
     try index.requireUniqueFileIds();
     try index.requireComponentOwnership();
     try index.requireBidirectionalHierarchy();
     try index.requireAcyclicHierarchy();
     try index.requireInternalReferences();
+}
+
+test "merge validation: a missing reference identifies its editable property" {
+    var memory = std.heap.ArenaAllocator.init(testing.allocator);
+    defer memory.deinit();
+    const arena = memory.allocator();
+    // The TUI must point to the value that needs repair instead of closing on a generic failure.
+    const diagnostic = (try diagnose(arena, "--- !u!114 &1\nMonoBehaviour:\n  target: {fileID: 99}\n")).?;
+    try testing.expectEqual(@as(?i64, 1), diagnostic.file_id);
+    try testing.expectEqual(@as(?i64, 99), diagnostic.related_id);
+    try testing.expectEqualStrings("target", diagnostic.property_path);
+    try testing.expect(try diagnose(arena, "--- !u!114 &1\nMonoBehaviour:\n  target: {fileID: 0}\n") == null);
 }
 
 test "merge planner: groups both parent lists with the child father" {

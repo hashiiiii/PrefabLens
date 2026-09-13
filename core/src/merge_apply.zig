@@ -86,11 +86,14 @@ pub fn applyResolved(
         }
     }
     collection_loop: for (plan.collections) |collection| {
+        const review_preview = plan.review and reviewCollectionPreview(plan, collection);
         for (collection.operation_ids) |id| {
             const operation = merge_model.operationByIdConst(plan, id) orelse return error.InvalidMerge;
             const atomic = atomicByIdConst(plan, operation.atomic_id) orelse return error.InvalidMerge;
             dependency_path.clearRetainingCapacity();
             if (!try atomicIsReady(arena, plan, atomic.*, &dependency_path)) {
+                if (review_preview and operation.review != null and
+                    operation.dependencies.len == 0 and atomic.dependencies.len == 0) continue;
                 if (require_all) return error.InvalidResolution;
                 continue :collection_loop;
             }
@@ -100,6 +103,22 @@ pub fn applyResolved(
         }
     }
     return applyPatches(arena, plan.ours.bytes, patches.items);
+}
+
+fn reviewCollectionPreview(
+    plan: *const merge_model.MergePlan,
+    collection: @import("merge_binding.zig").Binding,
+) bool {
+    var saw_review_group = false;
+    for (collection.operation_ids) |operation_id| {
+        const operation = merge_model.operationByIdConst(plan, operation_id) orelse return false;
+        if (operation.review != null) {
+            saw_review_group = true;
+        } else if (operation.resolution == .unresolved) {
+            return false;
+        }
+    }
+    return saw_review_group;
 }
 
 fn atomicIsReady(

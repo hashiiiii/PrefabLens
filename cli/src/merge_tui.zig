@@ -6,6 +6,7 @@ const merge_tree = @import("merge_tree.zig");
 const merge_ui_state = @import("merge_ui_state.zig");
 const result_text = @import("merge_result_text.zig");
 const inspector = @import("merge_inspector.zig");
+const review = @import("merge_review.zig");
 const testing = std.testing;
 
 test "merge TUI: unresolved semantic Result does not show a placeholder dash" {
@@ -28,7 +29,8 @@ test "merge TUI: component property editing retains its document and owner refer
     var memory = std.heap.ArenaAllocator.init(testing.allocator);
     defer memory.deinit();
     const arena = memory.allocator();
-    var fixture = try componentDeletePlan(arena);
+    const original = try componentDeletePlan(arena);
+    var fixture = try core.merge.buildForReview(arena, original.plan.base.bytes, original.plan.ours.bytes, original.plan.theirs.bytes, .{});
     var state = try merge_ui_state.State.init(arena, &fixture.plan);
     try state.handle(.choose_theirs);
     var view = try viewForTest(arena, &state, "A.prefab", fixture.partial);
@@ -37,6 +39,7 @@ test "merge TUI: component property editing retains its document and owner refer
     var ctx = eventContext(arena);
     try focusResultForTest(&view, &ctx);
     try pressKeyForTest(&view, &ctx, vaxis.Key.enter);
+    try testing.expect(view.editing);
     try testing.expectEqualStrings("2", try view.editor.buf.dupe());
     try pressKeyForTest(&view, &ctx, vaxis.Key.backspace);
     try view.widget().handleEvent(&ctx, .{ .key_press = .{ .codepoint = '3', .text = "3" } });
@@ -354,6 +357,28 @@ test "merge TUI: Shift+E toggles the working file overlay" {
     try view.widget().handleEvent(&ctx, .{ .key_press = .{ .codepoint = 'e', .mods = .{ .shift = true }, .text = "E" } });
     const closed = try surfaceText(arena, try drawForTest(arena, view.widget(), 100, 20));
     try testing.expect(std.mem.indexOf(u8, closed, "<<<<<<<") == null);
+}
+
+test "merge TUI: Shift+E shows the closing marker of a component delete-edit file" {
+    var memory = std.heap.ArenaAllocator.init(testing.allocator);
+    defer memory.deinit();
+    const arena = memory.allocator();
+    var fixture = try componentDeletePlan(arena);
+    var state = try merge_ui_state.State.init(arena, &fixture.plan);
+    var view = try viewForTest(arena, &state, "ComponentDeleteEdit.prefab", fixture.partial);
+    defer view.deinit();
+    view.working_file =
+        "--- !u!1 &1\nGameObject:\n  m_Component:\n  - component: {fileID: 4}\n  m_Name: Root\n" ++
+        "--- !u!4 &4\nTransform:\n  m_GameObject: {fileID: 1}\n  m_Children: []\n  m_Father: {fileID: 0}\n" ++
+        "<<<<<<< ours\n=======\n--- !u!54 &54\nRigidbody:\n  m_GameObject: {fileID: 1}\n  m_Mass: 2\n>>>>>>> theirs\n";
+    _ = try drawForTest(arena, view.widget(), 100, 20);
+    var ctx = eventContext(arena);
+    try view.widget().handleEvent(&ctx, .{ .key_press = .{ .codepoint = 'e', .mods = .{ .shift = true }, .text = "E" } });
+    const surface = try drawForTest(arena, view.widget(), 100, 20);
+    const overlay = fileOverlayGeometry(20, null);
+    const shown = try rangeText(arena, surface, .{ .start = 0, .end = 100 }, overlay.start, overlay.end);
+    try testing.expect(std.mem.indexOf(u8, shown, "<<<<<<<") != null);
+    try testing.expect(std.mem.indexOf(u8, shown, ">>>>>>>") != null);
 }
 
 test "merge TUI: footer shows the working file shortcut" {
@@ -742,6 +767,33 @@ test "merge TUI: game object delete edit uses a Base diff and keeps ⇧R" {
     try testing.expectEqualStrings(fixture.plan.theirs.bytes, try core.merge.finish(arena, &fixture.plan));
 }
 
+test "merge TUI: review Children empty payload stays empty on both sides" {
+    var memory = std.heap.ArenaAllocator.init(testing.allocator);
+    defer memory.deinit();
+    const arena = memory.allocator();
+    var built = try core.merge.buildForReview(arena, game_object_delete_edit_base, game_object_delete_edit_ours, game_object_delete_edit_theirs, .{});
+    var state = try merge_ui_state.State.init(arena, &built.plan);
+    const children = for (state.conflict_indices, 0..) |operation_index, ordinal| {
+        const operation = built.plan.operations[operation_index];
+        if (std.mem.eql(u8, operation.property_path, "m_Children")) break ordinal;
+    } else return error.TestUnexpectedResult;
+    try state.handle(.{ .select_conflict = children });
+    var view = try viewForTest(arena, &state, "GameObjectDeleteEdit.prefab", built.partial);
+    defer view.deinit();
+    const surface = try drawForTest(arena, view.widget(), 180, 24);
+    const geometry = view.valueGeometry(180);
+    const body = BodyGeometry.init(24);
+    const ours = try rangeText(arena, surface, geometry.ours, body.inspector_rows.start, body.inspector_rows.end);
+    const base = try rangeText(arena, surface, geometry.base, body.inspector_rows.start, body.inspector_rows.end);
+    const theirs = try rangeText(arena, surface, geometry.theirs, body.inspector_rows.start, body.inspector_rows.end);
+    // Membership of Child is the GameObject conflict. This list payload is empty on both sides.
+    try testing.expect(std.mem.indexOf(u8, ours, "[]") != null);
+    try testing.expect(std.mem.indexOf(u8, theirs, "[]") != null);
+    try testing.expect(std.mem.indexOf(u8, theirs, "Edited Child") == null);
+    try testing.expect(std.mem.indexOf(u8, base, "Child") != null);
+    try testing.expect(std.mem.indexOf(u8, base, "#42") == null);
+}
+
 test "merge TUI: game object name edit stays applicable" {
     var memory = std.heap.ArenaAllocator.init(testing.allocator);
     defer memory.deinit();
@@ -904,6 +956,84 @@ test "merge TUI: dictionary semantic value can be edited to a custom result" {
     );
 }
 
+test "merge TUI: review dictionary fields are visible before choosing a source" {
+    const cases = [_]struct { first_second: bool, choose_source: bool }{
+        .{ .first_second = false, .choose_source = true },
+        .{ .first_second = true, .choose_source = true },
+        .{ .first_second = false, .choose_source = false },
+        .{ .first_second = true, .choose_source = false },
+    };
+    for (cases) |case| {
+        const first_second = case.first_second;
+        var memory = std.heap.ArenaAllocator.init(testing.allocator);
+        defer memory.deinit();
+        const arena = memory.allocator();
+        const original = try dictionaryUnionPlan(arena);
+        var sides = [_][]const u8{ original.plan.base.bytes, original.plan.ours.bytes, original.plan.theirs.bytes };
+        if (first_second) for (&sides) |*side| {
+            side.* = try std.mem.replaceOwned(u8, arena, try std.mem.replaceOwned(u8, arena, side.*, "key:", "first:"), "value:", "second:");
+        };
+        var built = try core.merge.buildForReview(arena, sides[0], sides[1], sides[2], .{});
+        var state = try merge_ui_state.State.init(arena, &built.plan);
+        var view = try viewForTest(arena, &state, "Dictionary.prefab", built.partial);
+        defer view.deinit();
+        _ = try drawForTest(arena, view.widget(), 180, 24);
+        const model = try view.propertyModel(arena);
+        // A source-preserved block item must expose the same fields before and after selection.
+        try testing.expectEqual(@as(usize, 3), model.rows.len);
+        try testing.expectEqualStrings(if (first_second) "First" else "Key", model.rows[1].label);
+        try testing.expectEqualStrings(if (first_second) "Second" else "Value", model.rows[2].label);
+        try testing.expectEqualStrings("Goblin", try model.text(arena, 1, 1));
+        try testing.expectEqualStrings("2", try model.text(arena, 2, 1));
+        try testing.expectEqualStrings("3", try model.text(arena, 2, 2));
+        var ctx = eventContext(arena);
+        view.property_row = 2;
+        view.focus_area = .inspector;
+        if (case.choose_source) {
+            view.selected_value = .ours;
+            try pressKeyForTest(&view, &ctx, vaxis.Key.enter);
+            // Choosing the pair's value must retain the existing single-choice resolution flow.
+            try testing.expect(state.canComplete());
+        }
+        view.property_row = 2;
+        try view.focusResult(&ctx);
+        try pressKeyForTest(&view, &ctx, vaxis.Key.enter);
+        try testing.expectEqualStrings(if (case.choose_source) "2" else "", try view.editor.buf.dupe());
+        if (case.choose_source) try pressKeyForTest(&view, &ctx, vaxis.Key.backspace);
+        try view.widget().handleEvent(&ctx, .{ .key_press = .{ .codepoint = '4', .text = "4" } });
+        try pressKeyForTest(&view, &ctx, vaxis.Key.enter);
+        try testing.expect(state.canComplete());
+        const expected = if (first_second)
+            "--- !u!114 &1\nMonoBehaviour:\n  m_Stats:\n  - first: Goblin\n    second: 4\n  - first: Dragon\n    second: 9\n  - first: Slime\n    second: 2\n"
+        else
+            "--- !u!114 &1\nMonoBehaviour:\n  m_Stats:\n  - key: Goblin\n    value: 4\n  - key: Dragon\n    value: 9\n  - key: Slime\n    value: 2\n";
+        try testing.expectEqualStrings(expected, try core.merge.finish(arena, &built.plan));
+    }
+}
+
+test "merge TUI: unresolved review raw Result stays empty until a choice" {
+    var memory = std.heap.ArenaAllocator.init(testing.allocator);
+    defer memory.deinit();
+    const arena = memory.allocator();
+    const original = try dictionaryUnionPlan(arena);
+    var sides = [_][]const u8{ original.plan.base.bytes, original.plan.ours.bytes, original.plan.theirs.bytes };
+    for (&sides) |*side| {
+        side.* = try std.mem.replaceOwned(u8, arena, try std.mem.replaceOwned(u8, arena, side.*, "key:", "first:"), "value:", "second:");
+    }
+    var built = try core.merge.buildForReview(arena, sides[0], sides[1], sides[2], .{});
+    var state = try merge_ui_state.State.init(arena, &built.plan);
+    var view = try viewForTest(arena, &state, "DictionaryFirstSecond.prefab", built.partial);
+    defer view.deinit();
+    view.raw_view = true;
+    _ = try drawForTest(arena, view.widget(), 180, 24);
+    const operation = view.selectedOperation().?;
+    try testing.expectEqualStrings("", try view.columnText(arena, operation, .result));
+    try state.handle(.choose_ours);
+    const result = try view.columnText(arena, operation, .result);
+    try testing.expect(std.mem.indexOf(u8, result, "Goblin") != null);
+    try testing.expect(std.mem.indexOf(u8, result, "second: 2") != null);
+}
+
 test "merge TUI: Raw shortcut preserves typed letters in the Result editor" {
     // Terminals can report Shift as a modifier or as an uppercase character.
     for ([_]bool{ false, true }) |explicit_shift| {
@@ -1013,6 +1143,7 @@ const FooterGeometry = struct {
     row: u16,
     file: Range,
     complete: Range,
+    preview: Range,
 
     fn init(width: u16, height: u16) FooterGeometry {
         const start = horizontal_padding;
@@ -1021,6 +1152,7 @@ const FooterGeometry = struct {
             .row = height - vertical_padding - 1,
             .file = .{ .start = start, .end = start + textWidth(file_overlay_label) },
             .complete = .{ .start = end - 10, .end = end },
+            .preview = .{ .start = end - 22, .end = end - 11 },
         };
     }
 };
@@ -1249,6 +1381,45 @@ fn skipWrappedPrefix(line: []const u8, width: usize, skip: *usize) []const u8 {
     return rest;
 }
 
+fn unskippedLine(line: []const u8, width: usize, skip: *usize) ?[]const u8 {
+    const skip_before = skip.*;
+    const rest = skipWrappedPrefix(line, width, skip);
+    if (skip.* > 0) return null;
+    // A line consumed exactly by the remaining skip is not an empty row to paint.
+    if (rest.len == 0 and skip_before > 0) return null;
+    return rest;
+}
+
+fn isConflictMarkerLine(line: []const u8) bool {
+    return std.mem.startsWith(u8, line, "<<<<<<<") or
+        std.mem.startsWith(u8, line, ">>>>>>>") or
+        std.mem.startsWith(u8, line, "=======") or
+        std.mem.startsWith(u8, line, "|||||||");
+}
+
+fn lastConflictMarkerVisualRow(text: []const u8, width: usize) ?usize {
+    var row: usize = 0;
+    var last: ?usize = null;
+    var last_close: ?usize = null;
+    var lines = std.mem.splitScalar(u8, text, '\n');
+    var remaining = std.mem.splitScalar(u8, text, '\n');
+    _ = remaining.next();
+    while (lines.next()) |raw_line| {
+        const more = remaining.next() != null;
+        const line = std.mem.trimEnd(u8, raw_line, "\r");
+        if (!more and line.len == 0) break;
+        if (std.mem.startsWith(u8, line, ">>>>>>>")) last_close = row;
+        if (isConflictMarkerLine(line)) last = row;
+        row += countLineVisualRows(line, width);
+    }
+    return last_close orelse last;
+}
+
+fn conflictMarkerScroll(text: []const u8, width: usize, viewport: usize) usize {
+    const last = lastConflictMarkerVisualRow(text, width) orelse return 0;
+    return (last + 1) -| viewport;
+}
+
 const ColumnScrollMetrics = struct {
     width: usize,
     rows: usize,
@@ -1318,6 +1489,10 @@ fn valueStyle(column: ValueColumn) vaxis.Style {
     };
 }
 
+fn markChangedFromBase(style: *vaxis.Style, column: ValueColumn, matches_base: bool) void {
+    if ((column == .ours or column == .theirs) and !matches_base) style.fg = Palette.conflict;
+}
+
 pub const View = struct {
     state: *merge_ui_state.State,
     path: []const u8,
@@ -1350,7 +1525,9 @@ pub const View = struct {
     live_screen: ?*const vaxis.Screen = null,
     raw_view: bool = false,
     working_file: []const u8 = "",
+    result_file: ?[]const u8 = null,
     file_view: bool = false,
+    file_reveal_markers: bool = false,
     file_height: ?u16 = null,
     file_v: usize = 0,
     file_h: usize = 0,
@@ -1364,6 +1541,9 @@ pub const View = struct {
     editor_document: ?core.merge.properties.Document = null,
     editor_property: ?[]const core.merge.properties.Segment = null,
     editor_semantic_value: bool = false,
+    editor_review_path: ?[]const core.merge.properties.Segment = null,
+    editor_review_root: ?*const core.model.Node = null,
+    editor_review_template: ?*const core.model.Node = null,
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -1450,6 +1630,14 @@ pub const View = struct {
         return inspector.build(arena, operation, self.state.pending orelse operation.resolution, self.state.plan);
     }
 
+    fn hasWholeItemConflict(self: *const View) bool {
+        const metadata = (self.selectedOperation() orelse return false).review orelse return false;
+        for (metadata.required_paths) |path| {
+            if (path.len == 0) return true;
+        }
+        return false;
+    }
+
     fn ensurePropertyVisible(self: *View, size: vxfw.Size, count: usize) void {
         self.property_row = @min(self.property_row, count -| 1);
         const body = BodyGeometry.init(size.height);
@@ -1471,7 +1659,7 @@ pub const View = struct {
     }
 
     fn editsPropertyCell(self: *const View) bool {
-        return self.editor_property != null or self.editor_semantic_value;
+        return self.editor_property != null or self.editor_semantic_value or self.editor_review_path != null;
     }
 
     fn editorRow(self: *const View, size: vxfw.Size) u16 {
@@ -1542,6 +1730,7 @@ pub const View = struct {
             else => {},
         }
         const previous_conflict = self.state.selected_conflict;
+        if (action == .reopen_result) self.invalidateResultPreview();
         try self.state.handle(action);
         if (self.state.selected_conflict != previous_conflict) {
             self.combine_mode = false;
@@ -1565,6 +1754,7 @@ pub const View = struct {
         ctx: *vxfw.EventContext,
         initial: []const u8,
     ) !void {
+        self.invalidateResultPreview();
         var input = initial;
         if (self.usesProperties()) {
             if (!core.merge.supportsCustomResolution(self.state.plan, self.selectedOperation().?.id)) {
@@ -1573,7 +1763,21 @@ pub const View = struct {
             }
             _ = self.property_memory.reset(.retain_capacity);
             const model = try self.propertyModel(self.property_memory.allocator());
-            if (model.documents[3]) |document| {
+            if (self.selectedOperation().?.review != null and model.roots[3] != null) {
+                if (!model.editable(self.property_row)) {
+                    self.state.status = "Select a field to edit. Entire item chooses a source.";
+                    return ctx.consumeAndRedraw();
+                }
+                self.editor_review_root = model.roots[3];
+                self.editor_review_path = model.rows[self.property_row].path;
+                const node = review.at(model.roots[3], self.editor_review_path.?);
+                const values = model.rows[self.property_row].values;
+                self.editor_review_template = node orelse values[1] orelse values[2] orelse values[0] orelse return error.InvalidResolution;
+                input = if (self.state.fieldUnresolved(self.editor_review_path.?)) "" else if (node) |value|
+                    try core.merge.properties.valueText(self.property_memory.allocator(), value)
+                else
+                    "";
+            } else if (model.documents[3]) |document| {
                 if (!model.editable(self.property_row)) {
                     self.state.status = "This property cannot be edited.";
                     return ctx.consumeAndRedraw();
@@ -1758,6 +1962,9 @@ pub const View = struct {
         size: vxfw.Size,
     ) !void {
         if (self.state.selected_conflict >= self.state.conflict_indices.len) return;
+        // Each Enter settles one field; the group stays pending until its other fields are chosen.
+        if (self.state.fieldUnresolved(&.{})) return ctx.consumeAndRedraw();
+        self.invalidateResultPreview();
         const operation_index = self.state.conflict_indices[self.state.selected_conflict];
         const previous_conflict = self.state.selected_conflict;
         try self.state.handle(.apply_result);
@@ -1770,7 +1977,7 @@ pub const View = struct {
             self.property_row = 0;
             self.property_top = 0;
             if (self.state.selected_conflict != previous_conflict) self.raw_view = false;
-            if (self.state.outcome == .ready) {
+            if (self.state.canComplete()) {
                 self.focus_area = .complete;
             } else {
                 self.focus_area = .hierarchy;
@@ -1904,6 +2111,9 @@ pub const View = struct {
         self.editor_document = null;
         self.editor_property = null;
         self.editor_semantic_value = false;
+        self.editor_review_path = null;
+        self.editor_review_root = null;
+        self.editor_review_template = null;
         _ = self.property_memory.reset(.retain_capacity);
     }
 
@@ -1986,6 +2196,7 @@ pub const View = struct {
         switch (kind) {
             .quit => try self.dispatch(ctx, .abort, size),
             .empty => {
+                if (self.editor_review_path != null) return self.submitReviewProperty(ctx, "\"\"");
                 if (self.editor_property != null) return self.submitProperty(ctx, "");
                 const payload = try self.customResultInput("");
                 try self.state.handle(.{ .edit_result = payload });
@@ -2067,8 +2278,20 @@ pub const View = struct {
             .base => displaySide(self.state.plan, operation, .base, operation.values.base),
             .ours => displaySide(self.state.plan, operation, .ours, operation.values.ours),
             .theirs => displaySide(self.state.plan, operation, .theirs, operation.values.theirs),
-            .result => try displayResolution(arena, self.state.plan, operation, pending),
+            .result => if (self.hidesDefaultReviewPreview(operation, pending)) "" else try displayResolution(arena, self.state.plan, operation, pending),
         };
+    }
+
+    fn hidesDefaultReviewPreview(self: *const View, operation: *const core.merge.Operation, pending: core.merge.Resolution) bool {
+        if (!self.state.plan.review or operation.resolution != .unresolved) return false;
+        const preview = (operation.review orelse return false).preview orelse return false;
+        const pending_bytes = switch (pending) {
+            .custom => |bytes| bytes,
+            else => return false,
+        };
+        if (!std.mem.eql(u8, pending_bytes, preview.bytes)) return false;
+        if (self.state.selected_conflict >= self.state.conflict_indices.len) return false;
+        return !self.state.dirty(self.state.conflict_indices[self.state.selected_conflict]);
     }
 
     fn selectedText(self: *const View, arena: std.mem.Allocator, column: ValueColumn) std.mem.Allocator.Error![]const u8 {
@@ -2081,13 +2304,59 @@ pub const View = struct {
         return self.columnText(arena, operation, column);
     }
 
+    fn submitReviewProperty(self: *View, ctx: *vxfw.EventContext, input: []const u8) !void {
+        const bytes = review.edit(self.state.allocator, self.editor_review_root.?, self.editor_review_path.?, self.editor_review_template.?, input) catch |err| switch (err) {
+            error.OutOfMemory => return err,
+            else => {
+                self.state.status = "Invalid field value. Keep the value within this field.";
+                return ctx.consumeAndRedraw();
+            },
+        };
+        // An atomic pair edit resolves the item; independent fields retain their own required paths.
+        self.state.setFieldResult(.{ .custom = bytes }, if (self.hasWholeItemConflict()) &.{} else self.editor_review_path.?);
+        self.resetEditor();
+        self.focus_area = .inspector;
+        self.selected_value = .result;
+        try ctx.requestFocus(self.widget());
+        try self.applyPendingResult(ctx, self.eventSize());
+    }
+
     fn submitProperty(self: *View, ctx: *vxfw.EventContext, input: []const u8) !void {
         const bytes = core.merge.properties.edit(self.property_memory.allocator(), self.editor_document.?, self.editor_property.?, input) catch |err| switch (err) {
             error.OutOfMemory => return err,
-            else => input,
+            else => {
+                self.state.status = "Invalid field value. Keep the value within this field.";
+                return ctx.consumeAndRedraw();
+            },
         };
         try self.state.handle(.{ .edit_result = bytes });
         try self.applyPendingResult(ctx, self.eventSize());
+    }
+
+    fn chooseSource(self: *View, ctx: *vxfw.EventContext, side: core.merge.Side, whole: bool) !void {
+        self.state.status = "";
+        self.invalidateResultPreview();
+        if (self.state.plan.review and !whole and self.usesProperties() and self.selectedOperation().?.review != null and !self.hasWholeItemConflict()) {
+            var memory = std.heap.ArenaAllocator.init(self.state.allocator);
+            defer memory.deinit();
+            const model = try self.propertyModel(memory.allocator());
+            if (self.property_row < model.rows.len and model.rows[self.property_row].path.len != 0 and model.rows[self.property_row].path[0] == .key) {
+                const row = model.rows[self.property_row];
+                const root = model.roots[3] orelse model.roots[1] orelse model.roots[2] orelse return;
+                const node = review.replace(self.state.allocator, root, row.path, row.values[if (side == .ours) 1 else 2]) catch |err| switch (err) {
+                    error.OutOfMemory => return err,
+                    else => {
+                        self.state.status = "Choose the entire item for this structural change.";
+                        return ctx.consumeAndRedraw();
+                    },
+                };
+                if (review.equal(root, node) and !self.state.fieldUnresolved(row.path)) return ctx.consumeAndRedraw();
+                // The inspector arena is temporary; retain the materialized YAML in session memory.
+                self.state.setFieldResult(.{ .custom = try core.merge.properties.valueText(self.state.allocator, node) }, row.path);
+                return ctx.consumeAndRedraw();
+            }
+        }
+        try self.dispatch(ctx, self.choiceAction(if (side == .ours) .ours else .theirs), self.eventSize());
     }
 
     fn selectedResultInput(self: *const View) []const u8 {
@@ -2161,9 +2430,9 @@ pub const View = struct {
         const inner_width = width - horizontal_padding * 2 -| 2;
         var total_width: usize = 0;
         var grapheme_count: usize = 0;
-        var graphemes = vaxis.unicode.graphemeIterator(self.working_file);
+        var graphemes = vaxis.unicode.graphemeIterator(self.fileContents());
         while (graphemes.next()) |grapheme| {
-            total_width +|= vaxis.gwidth.gwidth(grapheme.bytes(self.working_file), .unicode);
+            total_width +|= vaxis.gwidth.gwidth(grapheme.bytes(self.fileContents()), .unicode);
             grapheme_count += 1;
         }
         if (total_width <= inner_width or grapheme_count <= 1) return 0;
@@ -2289,32 +2558,69 @@ pub const View = struct {
                 if (self.state.selected_conflict + 1 < self.state.conflict_indices.len) {
                     return self.dispatch(ctx, .move_down, size);
                 }
-                if (self.state.outcome == .ready) self.focusComplete(ctx) else ctx.consumeEvent();
+                if (self.state.canComplete()) self.focusComplete(ctx) else ctx.consumeEvent();
             },
-            .inspector => if (self.usesProperties()) try self.moveProperty(ctx, size, true) else self.scrollColumnVertical(ctx, self.selected_value, true),
+            .inspector => {
+                if (self.usesProperties()) {
+                    var memory = std.heap.ArenaAllocator.init(self.editor.buf.allocator);
+                    defer memory.deinit();
+                    const model = try self.propertyModel(memory.allocator());
+                    if (self.property_row + 1 < model.rows.len) return self.moveProperty(ctx, size, true);
+                } else {
+                    const index = @intFromEnum(self.selected_value);
+                    const max = maxScrollOffset(self.column_lines[index], self.inspectorViewportRows());
+                    if (self.column_v[index] < max) {
+                        self.scrollColumnVertical(ctx, self.selected_value, true);
+                        return;
+                    }
+                }
+                if (self.state.canComplete()) self.focusComplete(ctx) else ctx.consumeEvent();
+            },
             .complete => ctx.consumeEvent(),
         }
+    }
+
+    fn complete(self: *View, ctx: *vxfw.EventContext) !void {
+        if (!self.state.canComplete()) return ctx.consumeEvent();
+        const bytes = core.merge.finish(self.state.allocator, self.state.plan) catch |err| switch (err) {
+            error.OutOfMemory => return err,
+            else => {
+                self.state.status = "Result could not be composed. Review the edited values and atomic choices.";
+                self.focus_area = .hierarchy;
+                return ctx.consumeAndRedraw();
+            },
+        };
+        if (try core.merge.validation.diagnose(self.state.allocator, bytes)) |diagnostic| {
+            const message = try diagnostic.text(self.state.allocator);
+            if (diagnostic.file_id) |id| for (self.state.conflict_indices, 0..) |operation_index, index| {
+                if (self.state.plan.operations[operation_index].identity.document.file_id == id) {
+                    try self.state.handle(.{ .select_conflict = index });
+                    break;
+                }
+            };
+            self.state.status = message;
+            self.focus_area = .inspector;
+            self.selected_value = .result;
+            self.ensureSelectionVisible(self.eventSize());
+            return ctx.consumeAndRedraw();
+        }
+        ctx.quit = true;
+        ctx.consumeEvent();
     }
 
     fn activate(self: *View, ctx: *vxfw.EventContext, size: vxfw.Size) !void {
         switch (self.focus_area) {
             .hierarchy => try self.focusInspector(ctx),
             .inspector => switch (self.selected_value) {
-                .ours => {
-                    try self.state.handle(self.choiceAction(.ours));
-                    try self.applyPendingResult(ctx, size);
-                },
-                .theirs => {
-                    try self.state.handle(self.choiceAction(.theirs));
+                .ours, .theirs => {
+                    try self.chooseSource(ctx, if (self.selected_value == .ours) .ours else .theirs, false);
+                    if (self.state.status.len != 0) return ctx.consumeAndRedraw();
                     try self.applyPendingResult(ctx, size);
                 },
                 .base => ctx.consumeEvent(),
                 .result => try self.beginResultEdit(ctx, self.selectedResultInput()),
             },
-            .complete => {
-                if (self.state.outcome == .ready) ctx.quit = true;
-                ctx.consumeEvent();
-            },
+            .complete => try self.complete(ctx),
         }
     }
 
@@ -2328,9 +2634,51 @@ pub const View = struct {
         return self.combine_mode and self.canCombine();
     }
 
+    fn fileContents(self: *const View) []const u8 {
+        return self.result_file orelse self.working_file;
+    }
+
+    fn invalidateResultPreview(self: *View) void {
+        if (self.result_file == null) return;
+        self.result_file = null;
+        self.file_view = false;
+        self.file_metrics_width = 0;
+    }
+
+    fn toggleResultPreview(self: *View, ctx: *vxfw.EventContext) !void {
+        if (self.result_file != null and self.file_view) {
+            self.invalidateResultPreview();
+            return ctx.consumeAndRedraw();
+        }
+        if (!self.state.canComplete()) {
+            self.state.status = "Confirm required fields and drafts to preview the full result.";
+            return ctx.consumeAndRedraw();
+        }
+        self.result_file = core.merge.finish(self.state.allocator, self.state.plan) catch |err| switch (err) {
+            error.OutOfMemory => return err,
+            else => {
+                self.state.status = "Result could not be composed. Review the edited values.";
+                return ctx.consumeAndRedraw();
+            },
+        };
+        self.file_view = true;
+        self.file_v = 0;
+        self.file_h = 0;
+        self.file_metrics_width = 0;
+        self.state.status = "";
+        ctx.consumeAndRedraw();
+    }
+
     fn toggleFileView(self: *View, ctx: *vxfw.EventContext) void {
-        self.file_view = !self.file_view;
-        if (!self.file_view) {
+        self.file_view = self.result_file != null or !self.file_view;
+        self.result_file = null;
+        self.file_metrics_width = 0;
+        if (self.file_view) {
+            self.file_v = 0;
+            self.file_h = 0;
+            self.file_reveal_markers = true;
+        } else {
+            self.file_reveal_markers = false;
             self.file_drag_origin = null;
             self.hideScrollbar();
         }
@@ -2446,15 +2794,15 @@ pub const View = struct {
                 return self.toggleCombine(ctx);
             };
         }
+        if (self.state.plan.review and row == footer.row and inRange(col, footer.preview)) return self.toggleResultPreview(ctx);
         if (row == footer.row and inRange(col, footer.file)) {
             return self.toggleFileView(ctx);
         }
-        if (self.state.outcome == .ready and
+        if (self.state.canComplete() and
             row == footer.row and inRange(col, footer.complete))
         {
             self.focus_area = .complete;
-            ctx.quit = true;
-            return ctx.consumeEvent();
+            return self.complete(ctx);
         }
         if (inRange(col, geometry.hierarchy) and
             row >= body.hierarchy_rows.start and row < body.hierarchy_rows.end)
@@ -2465,6 +2813,18 @@ pub const View = struct {
             self.focus_area = .hierarchy;
             try self.state.handle(.pane_left);
             return self.dispatch(ctx, .{ .select_conflict = conflict_index }, size);
+        }
+        if (self.state.plan.review and row == body.inspector_labels_row and self.selectedOperation() != null) {
+            self.focus_area = .inspector;
+            self.property_row = 0;
+            if (inRange(col, geometry.ours)) {
+                self.selected_value = .ours;
+                return self.chooseSource(ctx, .ours, true);
+            }
+            if (inRange(col, geometry.theirs)) {
+                self.selected_value = .theirs;
+                return self.chooseSource(ctx, .theirs, true);
+            }
         }
         if (row < body.inspector_rows.start or row >= body.inspector_rows.end or self.selectedOperation() == null) return;
         if (self.usesProperties()) {
@@ -2483,14 +2843,14 @@ pub const View = struct {
             self.selected_value = .ours;
             self.horizontal_offset = 0;
             try self.state.handle(.pane_right);
-            return self.dispatch(ctx, self.choiceAction(.ours), size);
+            return self.chooseSource(ctx, .ours, false);
         }
         if (inRange(col, geometry.theirs)) {
             self.focus_area = .inspector;
             self.selected_value = .theirs;
             self.horizontal_offset = 0;
             try self.state.handle(.pane_right);
-            return self.dispatch(ctx, self.choiceAction(.theirs), size);
+            return self.chooseSource(ctx, .theirs, false);
         }
         if (inRange(col, geometry.result)) {
             self.focus_area = .inspector;
@@ -2771,7 +3131,7 @@ fn treeRowResolved(self: *const View, row: merge_tree.Row) bool {
     const conflict_index = row.conflict_index orelse return false;
     if (conflict_index >= self.state.conflict_indices.len) return false;
     const operation_index = self.state.conflict_indices[conflict_index];
-    return self.state.plan.operations[operation_index].resolution != .unresolved;
+    return self.state.plan.operations[operation_index].resolution != .unresolved and !self.state.dirty(operation_index);
 }
 
 fn selectedComponentName(self: *const View) []const u8 {
@@ -3003,10 +3363,13 @@ fn draw(
             .{ geometry.theirs, try self.columnText(ctx.arena, operation, .theirs), ValueColumn.theirs },
             .{ geometry.result, try self.columnText(ctx.arena, operation, .result), ValueColumn.result },
         };
+        const base_text = columns[0][1];
         const indent = commonIndent(&.{ columns[0][1], columns[1][1], columns[2][1] });
         const viewport = body.inspector_rows.end - body.inspector_rows.start;
         var painted_end = [_]u16{body.inspector_rows.start} ** 4;
         inline for (columns, 0..) |column, index| {
+            var style = valueStyle(column[2]);
+            markChangedFromBase(&style, column[2], std.mem.eql(u8, column[1], base_text));
             const paint_range = self.prepareColumnScroll(index, column[1], viewport, column[0], indent);
             painted_end[index] = paintColumnValue(
                 surface,
@@ -3015,7 +3378,7 @@ fn draw(
                 body.inspector_rows.end,
                 column[1],
                 indent,
-                valueStyle(column[2]),
+                style,
                 self.column_v[index],
                 self.column_h[index],
             );
@@ -3025,6 +3388,13 @@ fn draw(
             const focus_end = @max(painted_end[selected_index], body.inspector_rows.start + 1);
             var selected_style = valueStyle(self.selected_value);
             selected_style.bg = Palette.focus_bg;
+            const selected_text = switch (self.selected_value) {
+                .base => columns[0][1],
+                .ours => columns[1][1],
+                .theirs => columns[2][1],
+                .result => columns[3][1],
+            };
+            markChangedFromBase(&selected_style, self.selected_value, std.mem.eql(u8, selected_text, base_text));
             var row: u16 = body.inspector_rows.start;
             while (row < focus_end) : (row += 1) {
                 styleRange(surface, row, selected_range, selected_style);
@@ -3039,7 +3409,7 @@ fn draw(
 
     writeClipped(surface, footer.file.start, footer.row, footer.file.end - footer.file.start, file_overlay_label);
     styleRange(surface, footer.row, footer.file, .{ .fg = Palette.muted });
-    if (self.state.outcome == .ready) {
+    if (self.state.canComplete()) {
         writeClipped(
             surface,
             footer.complete.start,
@@ -3183,7 +3553,11 @@ fn paintFileOverlay(self: *View, surface: vxfw.Surface, size: vxfw.Size) void {
     const viewport = overlay.end - overlay.start -| 1;
     if (self.file_metrics_width != inner_width) {
         self.file_metrics_width = @intCast(inner_width);
-        self.file_lines = countVisualRows(self.working_file, inner_width, 0);
+        self.file_lines = countVisualRows(self.fileContents(), inner_width, 0);
+    }
+    if (self.file_reveal_markers) {
+        self.file_v = conflictMarkerScroll(self.fileContents(), inner_width, viewport);
+        self.file_reveal_markers = false;
     }
     self.file_v = @min(self.file_v, maxScrollOffset(self.file_lines, viewport));
     if (self.file_h != 0) self.file_h = @min(self.file_h, self.maxFileHorizontalOffset(size.width));
@@ -3195,20 +3569,19 @@ fn paintFileOverlay(self: *View, surface: vxfw.Surface, size: vxfw.Size) void {
             });
         }
     }
-    writeClipped(surface, content_start + 1, overlay.start, inner_width, file_overlay_label);
+    writeClipped(surface, content_start + 1, overlay.start, inner_width, if (self.result_file != null) "⇧V Full Result preview" else file_overlay_label);
     styleRange(surface, overlay.start, span, .{ .fg = Palette.muted, .bg = Palette.file_handle_bg });
     var row = overlay.start + 1;
     var skip = self.file_v;
-    var lines = std.mem.splitScalar(u8, self.working_file, '\n');
-    var remaining_lines = std.mem.splitScalar(u8, self.working_file, '\n');
+    var lines = std.mem.splitScalar(u8, self.fileContents(), '\n');
+    var remaining_lines = std.mem.splitScalar(u8, self.fileContents(), '\n');
     _ = remaining_lines.next();
     while (lines.next()) |raw_line| {
         const more = remaining_lines.next() != null;
         const line = std.mem.trimEnd(u8, raw_line, "\r");
         if (!more and line.len == 0) break;
         const style = fileLineStyle(line);
-        var rest = skipWrappedPrefix(skipGraphemes(line, self.file_h), inner_width, &skip);
-        if (skip > 0) continue;
+        var rest = unskippedLine(skipGraphemes(line, self.file_h), inner_width, &skip) orelse continue;
         while (row < overlay.end) {
             if (rest.len == 0) {
                 styleRange(surface, row, span, style);
@@ -3324,8 +3697,7 @@ fn paintDiffColumn(
         const line = std.mem.trimEnd(u8, raw_line, "\r");
         if (!more and line.len == 0) break;
         const style = diffLineStyle(column, line);
-        var rest = skipWrappedPrefix(skipGraphemes(line, horizontal), inner_width, &skip);
-        if (skip > 0) continue;
+        var rest = unskippedLine(skipGraphemes(line, horizontal), inner_width, &skip) orelse continue;
         while (row < end_row) {
             if (rest.len == 0) {
                 styleRange(surface, row, range, style);
@@ -3357,10 +3729,16 @@ fn paintProperties(self: *View, arena: std.mem.Allocator, surface: vxfw.Surface,
         if (selected) styleRange(surface, row, .{ .start = geometry.inspector.start, .end = geometry.ours.start }, .{ .bg = Palette.focus_bg, .bold = true });
         inline for (.{ ValueColumn.base, ValueColumn.ours, ValueColumn.theirs, ValueColumn.result }, 0..) |column, i| {
             const range = valueRange(geometry, column);
-            const text = try model.text(arena, index, i);
+            const unresolved = self.state.fieldUnresolved(model.rows[index].path);
+            const cell = if (column == .result and unresolved) "" else try model.text(arena, index, i);
+            const text = if (self.selectedOperation().?.review != null and column == .result and !unresolved and model.rows[index].path.len != 0)
+                try std.fmt.allocPrint(arena, "{s} [{s}]", .{ cell, review.origin(model.rows[index].values).label() })
+            else
+                cell;
             var style = valueStyle(column);
             if (selected and self.selected_value == column) style.bg = Palette.focus_bg;
             if (model.rows[index].changed) style.bold = true;
+            markChangedFromBase(&style, column, review.equal(model.rows[index].values[0], model.rows[index].values[i]));
             writeClipped(surface, range.start + 2, row, range.end - range.start -| 2, skipGraphemes(text, self.column_h[i]));
             styleRange(surface, row, range, style);
             if (selected and self.selected_value == column) {
@@ -3398,6 +3776,7 @@ fn submitCustom(
     } else false;
     if (!self.editor_changed and self.resultIsRemoval()) return self.applyPendingResult(ctx, self.eventSize());
     if (input.len == 0 and !started_empty) return self.openDialog(ctx, .empty);
+    if (self.editor_review_path != null) return self.submitReviewProperty(ctx, input);
     if (self.editor_property != null) return self.submitProperty(ctx, input);
     const payload = try self.customResultInput(input);
     if (self.editor_changed or payload.len == 0) {
@@ -3600,8 +3979,7 @@ fn paintColumnValue(
         const line = std.mem.trimEnd(u8, raw_line, "\r");
         if (!more and line.len == 0) break;
         const visible = skipGraphemes(visiblePaintLine(text, line, indent), horizontal);
-        var rest = skipWrappedPrefix(visible, inner_width, &skip);
-        if (skip > 0) continue;
+        var rest = unskippedLine(visible, inner_width, &skip) orelse continue;
         while (row < end_row) {
             if (rest.len == 0) {
                 styleRange(surface, row, range, style);
@@ -3836,6 +4214,7 @@ fn handleEvent(
             if (key.matches(vaxis.Key.right, .{})) return self.moveRight(ctx);
             if (key.matches(vaxis.Key.up, .{})) return self.moveUp(ctx, size);
             if (key.matches(vaxis.Key.down, .{})) return self.moveDown(ctx, size);
+            if (self.state.plan.review and (key.matches('v', .{ .shift = true }) or key.matches('V', .{}))) return self.toggleResultPreview(ctx);
             if (key.matches(vaxis.Key.enter, .{})) return self.activate(ctx, size);
             if (key.matches('r', .{ .shift = true })) {
                 self.raw_view = !self.raw_view;
@@ -3908,7 +4287,14 @@ pub const Session = struct {
         working_file: []const u8,
     ) !void {
         const tree = try merge_tree.buildForState(allocator, partial, state);
-        try state.handle(.{ .select_conflict = 0 });
+        var first: usize = 0;
+        if (state.plan.review) for (state.conflict_indices, 0..) |operation_index, index| {
+            if (state.plan.operations[operation_index].resolution == .unresolved) {
+                first = index;
+                break;
+            }
+        };
+        try state.handle(.{ .select_conflict = first });
         var view = View.init(allocator, state, path, tree);
         defer view.deinit();
         view.working_file = working_file;
@@ -4192,6 +4578,14 @@ fn cellsText(
 
 fn firstContentFg(surface: vxfw.Surface, range: Range, row: u16) vaxis.Color {
     return surface.readCell(range.start + 2, row).style.fg;
+}
+
+fn columnHasFg(surface: vxfw.Surface, range: Range, start_row: u16, end_row: u16, color: vaxis.Color) bool {
+    var row = start_row;
+    while (row < end_row) : (row += 1) {
+        if (std.meta.eql(firstContentFg(surface, range, row), color)) return true;
+    }
+    return false;
 }
 
 fn colorLuma(color: vaxis.Color) u32 {
@@ -4835,6 +5229,57 @@ test "merge TUI: Up from Complete focuses Result" {
     try testing.expectEqual(ValueColumn.result, view.selected_value);
 }
 
+test "merge TUI: Down from the last inspector value focuses Complete" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var fixture = try screenPlan(arena);
+    var state = try merge_ui_state.State.init(arena, &fixture.plan);
+    var view = try viewForTest(arena, &state, "A.prefab", fixture.partial);
+    defer view.deinit();
+    _ = try drawForTest(arena, view.widget(), 100, 20);
+    var ctx = eventContext(arena);
+
+    try pressKeyForTest(&view, &ctx, vaxis.Key.right);
+    try pressKeyForTest(&view, &ctx, vaxis.Key.enter);
+    try pressKeyForTest(&view, &ctx, vaxis.Key.right);
+    try pressKeyForTest(&view, &ctx, vaxis.Key.right);
+    try pressKeyForTest(&view, &ctx, vaxis.Key.enter);
+    try testing.expect(view.focus_area == .complete);
+
+    try pressKeyForTest(&view, &ctx, vaxis.Key.up);
+    try testing.expect(view.focus_area == .inspector);
+    try testing.expectEqual(ValueColumn.result, view.selected_value);
+    try pressKeyForTest(&view, &ctx, vaxis.Key.down);
+    try testing.expect(view.focus_area == .complete);
+}
+
+test "merge TUI: Down from the last property row focuses Complete" {
+    var memory = std.heap.ArenaAllocator.init(testing.allocator);
+    defer memory.deinit();
+    const arena = memory.allocator();
+    const prefix = "--- !u!114 &1\nMonoBehaviour:\n  values: ";
+    var built = try core.merge.buildForReview(arena, prefix ++ "[{left: 1, right: 1}]\n", prefix ++ "[{left: 2, right: 1}]\n", prefix ++ "[{left: 3, right: 4}]\n", .{});
+    var state = try merge_ui_state.State.init(arena, &built.plan);
+    var view = try viewForTest(arena, &state, "ItemField.prefab", built.partial);
+    defer view.deinit();
+    _ = try drawForTest(arena, view.widget(), 160, 24);
+    var ctx = eventContext(arena);
+    try view.chooseSource(&ctx, .ours, true);
+    try view.applyPendingResult(&ctx, view.eventSize());
+    try testing.expect(state.canComplete());
+    const model = try view.propertyModel(arena);
+    try testing.expect(model.rows.len > 1);
+    view.focus_area = .inspector;
+    view.selected_value = .result;
+    view.property_row = 0;
+    try pressKeyForTest(&view, &ctx, vaxis.Key.down);
+    try testing.expect(view.focus_area == .inspector);
+    view.property_row = model.rows.len - 1;
+    try pressKeyForTest(&view, &ctx, vaxis.Key.down);
+    try testing.expect(view.focus_area == .complete);
+}
+
 test "merge TUI: unchanged removed Result stays removed" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
@@ -5204,4 +5649,187 @@ test "merge TUI: a CRLF component stays multiline while editing and keeps CRLF o
     }
     try testing.expectEqualStrings("", state.status);
     try testing.expectEqualStrings(try std.mem.replaceOwned(u8, arena, fixture.plan.theirs.bytes, "m_Mass: 2", "m_Mass: 3"), try core.merge.finish(arena, &fixture.plan));
+}
+
+test "merge TUI: review field selection keeps automatic values and whole-item selection exposes omitted edits" {
+    for ([_]enum { field, whole, next_field }{ .field, .whole, .next_field }) |choice| {
+        const whole = choice == .whole;
+        const restores_right = choice != .field;
+        var memory = std.heap.ArenaAllocator.init(testing.allocator);
+        defer memory.deinit();
+        const arena = memory.allocator();
+        const prefix = "--- !u!114 &1\nMonoBehaviour:\n  values: ";
+        var built = try core.merge.buildForReview(arena, prefix ++ "[{left: 1, right: 1}]\n", prefix ++ "[{left: 2, right: 1}]\n", prefix ++ "[{left: 3, right: 4}]\n", .{});
+        var state = try merge_ui_state.State.init(arena, &built.plan);
+        var view = try viewForTest(arena, &state, "ItemField.prefab", built.partial);
+        defer view.deinit();
+        const initial = try drawForTest(arena, view.widget(), 160, 24);
+        var ctx = eventContext(arena);
+        const geometry = view.valueGeometry(160);
+        const body = BodyGeometry.init(24);
+        // Unresolved values stay blank; branch colors always describe changes from Base.
+        const initial_result = try rangeText(arena, initial, geometry.result, body.inspector_rows.start, body.inspector_rows.end);
+        try testing.expect(std.mem.indexOf(u8, initial_result, "?") == null);
+        try testing.expectEqual(Palette.conflict, firstContentFg(initial, geometry.ours, body.inspector_rows.start + 1));
+        try testing.expectEqual(Palette.conflict, firstContentFg(initial, geometry.theirs, body.inspector_rows.start + 1));
+        try view.widget().handleEvent(&ctx, .{ .mouse = .{
+            .type = .press,
+            .button = .left,
+            .mods = .{},
+            .col = @intCast(geometry.ours.start + 2),
+            .row = @intCast(if (whole) body.inspector_labels_row else body.inspector_rows.start + 1),
+        } });
+        // Clicking a source changes the preview, and Enter is the explicit group confirmation.
+        try testing.expectEqual(@as(usize, 1), state.unresolvedCount());
+        // Enter must choose the currently focused field even after another field was previewed.
+        if (choice == .next_field) try pressKeyForTest(&view, &ctx, vaxis.Key.down);
+        try pressKeyForTest(&view, &ctx, vaxis.Key.enter);
+        try testing.expect(state.canComplete());
+        try testing.expectEqualStrings(if (restores_right) prefix ++ "[{left: 2, right: 1}]\n" else prefix ++ "[{left: 2, right: 4}]\n", try core.merge.finish(arena, &built.plan));
+        const selected = try drawForTest(arena, view.widget(), 160, 24);
+        try testing.expectEqual(Palette.conflict, firstContentFg(selected, geometry.ours, body.inspector_rows.start + 1));
+        try testing.expectEqual(Palette.conflict, firstContentFg(selected, geometry.theirs, body.inspector_rows.start + 1));
+        try testing.expectEqual(vaxis.Color.default, firstContentFg(selected, geometry.ours, body.inspector_rows.start + 2));
+        try testing.expectEqual(Palette.conflict, firstContentFg(selected, geometry.theirs, body.inspector_rows.start + 2));
+        try testing.expectEqual(vaxis.Color.default, firstContentFg(selected, geometry.result, body.inspector_rows.start + 1));
+        view.property_row = 2;
+        // The same Enter key edits Result and applies it without an extra draft confirmation.
+        try view.focusResult(&ctx);
+        try pressKeyForTest(&view, &ctx, vaxis.Key.enter);
+        try testing.expect(view.editing);
+        try testing.expectEqualStrings(if (restores_right) "1" else "4", try view.editor.buf.dupe());
+        try pressKeyForTest(&view, &ctx, vaxis.Key.backspace);
+        try view.widget().handleEvent(&ctx, .{ .key_press = .{ .codepoint = '5', .text = "5" } });
+        try pressKeyForTest(&view, &ctx, vaxis.Key.enter);
+        try testing.expect(state.canComplete());
+        try testing.expect(!view.editing);
+        try testing.expectEqualStrings(prefix ++ "[{left: 2, right: 5}]\n", try core.merge.finish(arena, &built.plan));
+        try pressKeyForTest(&view, &ctx, vaxis.Key.enter);
+        try testing.expect(ctx.quit);
+    }
+}
+
+test "merge TUI: semantic YAML values that differ from Base stay yellow" {
+    var memory = std.heap.ArenaAllocator.init(testing.allocator);
+    defer memory.deinit();
+    const arena = memory.allocator();
+    var built = try core.merge.buildForReview(
+        arena,
+        "--- !u!114 &1\nMonoBehaviour:\n  m_Items: [A]\n",
+        "--- !u!114 &1\nMonoBehaviour:\n  m_Items: [A, O1, O2]\n",
+        "--- !u!114 &1\nMonoBehaviour:\n  m_Items: [A, T1, T2]\n",
+        .{},
+    );
+    var state = try merge_ui_state.State.init(arena, &built.plan);
+    var view = try viewForTest(arena, &state, "Conflict.prefab", built.partial);
+    defer view.deinit();
+    const surface = try drawForTest(arena, view.widget(), 160, 24);
+    const geometry = view.valueGeometry(160);
+    const body = BodyGeometry.init(24);
+    try testing.expect(columnHasFg(surface, geometry.ours, body.inspector_rows.start, body.inspector_rows.end, Palette.conflict));
+    try testing.expect(columnHasFg(surface, geometry.theirs, body.inspector_rows.start, body.inspector_rows.end, Palette.conflict));
+    try testing.expect(!columnHasFg(surface, geometry.base, body.inspector_rows.start, body.inspector_rows.end, Palette.conflict));
+    try testing.expect(!columnHasFg(surface, geometry.result, body.inspector_rows.start, body.inspector_rows.end, Palette.conflict));
+}
+
+test "merge TUI: review Complete keeps an invalid reference editable" {
+    var memory = std.heap.ArenaAllocator.init(testing.allocator);
+    defer memory.deinit();
+    const arena = memory.allocator();
+    const prefix = "--- !u!114 &1\nMonoBehaviour:\n  target: ";
+    var built = try core.merge.buildForReview(arena, prefix ++ "{fileID: 0}\n", prefix ++ "{fileID: 0, guid: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, type: 3}\n", prefix ++ "{fileID: 0, guid: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb, type: 3}\n", .{});
+    var state = try merge_ui_state.State.init(arena, &built.plan);
+    var view = try viewForTest(arena, &state, "Reference.prefab", built.partial);
+    defer view.deinit();
+    _ = try drawForTest(arena, view.widget(), 160, 24);
+    var ctx = eventContext(arena);
+    try state.handle(.{ .edit_result = "{fileID: 99}" });
+    try state.handle(.apply_result);
+    view.focus_area = .complete;
+    try pressKeyForTest(&view, &ctx, vaxis.Key.enter);
+    try testing.expect(!ctx.quit);
+    try testing.expect(std.mem.indexOf(u8, state.status, "target") != null);
+    try testing.expect(std.mem.indexOf(u8, state.status, "99") != null);
+    // Repair happens in the same session, before any output file is written.
+    try state.handle(.{ .edit_result = "{fileID: 0}" });
+    try view.applyPendingResult(&ctx, view.eventSize());
+    try pressKeyForTest(&view, &ctx, vaxis.Key.enter);
+    try testing.expect(ctx.quit);
+    try testing.expectEqualStrings(prefix ++ "{fileID: 0}\n", try core.merge.finish(arena, &built.plan));
+}
+
+test "merge TUI: automatic matched items keep field choices local" {
+    var memory = std.heap.ArenaAllocator.init(testing.allocator);
+    defer memory.deinit();
+    const arena = memory.allocator();
+    const prefix = "--- !u!114 &1\nMonoBehaviour:\n  values: ";
+    var built = try core.merge.buildForReview(arena, prefix ++ "[{left: 1, right: 1}]\n", prefix ++ "[{left: 2, right: 1}]\n", prefix ++ "[{left: 1, right: 4}]\n", .{});
+    var state = try merge_ui_state.State.init(arena, &built.plan);
+    var view = try viewForTest(arena, &state, "ItemField.prefab", built.partial);
+    defer view.deinit();
+    _ = try drawForTest(arena, view.widget(), 160, 24);
+    var ctx = eventContext(arena);
+    const model = try view.propertyModel(arena);
+    view.property_row = for (model.rows, 0..) |row, index| {
+        if (std.mem.eql(u8, row.label, "Left")) break index;
+    } else return error.TestUnexpectedResult;
+    // Field scope must stay the same when no field needs a conflict decision.
+    try view.chooseSource(&ctx, .ours, false);
+    try view.applyPendingResult(&ctx, view.eventSize());
+    try testing.expect(state.canComplete());
+    try testing.expectEqualStrings(prefix ++ "[{left: 2, right: 4}]\n", try core.merge.finish(arena, &built.plan));
+}
+
+test "merge TUI: field edits preserve shape when Result omits the field" {
+    for ([_]bool{ false, true }) |deleted| {
+        var memory = std.heap.ArenaAllocator.init(testing.allocator);
+        defer memory.deinit();
+        const arena = memory.allocator();
+        const prefix = "--- !u!114 &1\nMonoBehaviour:\n  values: ";
+        var built = try core.merge.buildForReview(arena, prefix ++ "[{left: 1, right: 1}]\n", if (deleted) prefix ++ "[{left: 2}]\n" else prefix ++ "[{left: 2, right: 1}]\n", prefix ++ "[{left: 3, right: 4}]\n", .{});
+        var state = try merge_ui_state.State.init(arena, &built.plan);
+        var view = try viewForTest(arena, &state, "ItemField.prefab", built.partial);
+        defer view.deinit();
+        _ = try drawForTest(arena, view.widget(), 160, 24);
+        var ctx = eventContext(arena);
+        view.property_row = 2;
+        try view.beginResultEdit(&ctx, "");
+        try testing.expect(view.editing);
+        try view.submitReviewProperty(&ctx, "[5]");
+        // Deleting a field on one side must not remove the other side's shape constraint.
+        try testing.expect(view.editing);
+        try testing.expect(std.mem.indexOf(u8, state.status, "Invalid field value") != null);
+        try view.submitReviewProperty(&ctx, "5");
+        try testing.expect(!view.editing);
+        try testing.expect(state.fieldUnresolved(&.{.{ .key = "left" }}));
+        view.property_row = 1;
+        try view.chooseSource(&ctx, .ours, false);
+        try view.applyPendingResult(&ctx, view.eventSize());
+        try testing.expect(state.canComplete());
+        try testing.expectEqualStrings(prefix ++ "[{left: 2, right: 5}]\n", try core.merge.finish(arena, &built.plan));
+    }
+}
+
+test "merge TUI: full Result preview includes accepted collection siblings" {
+    var memory = std.heap.ArenaAllocator.init(testing.allocator);
+    defer memory.deinit();
+    const arena = memory.allocator();
+    const prefix = "--- !u!114 &1\nMonoBehaviour:\n  values: ";
+    var built = try core.merge.buildForReview(arena, prefix ++ "[{left: 1, right: 1}, Anchor]\n", prefix ++ "[{left: 2, right: 1}, Anchor]\n", prefix ++ "[{left: 3, right: 4}, Anchor, Added]\n", .{});
+    var state = try merge_ui_state.State.init(arena, &built.plan);
+    var view = try viewForTest(arena, &state, "ItemField.prefab", built.partial);
+    defer view.deinit();
+    view.working_file = working_file_markers;
+    _ = try drawForTest(arena, view.widget(), 160, 24);
+    var ctx = eventContext(arena);
+    try state.handle(.choose_ours);
+    try view.applyPendingResult(&ctx, view.eventSize());
+    try view.widget().handleEvent(&ctx, .{ .key_press = .{ .codepoint = 'v', .mods = .{ .shift = true } } });
+    // A sibling accepted by the collection merge must be inspectable before the final write.
+    try testing.expectEqualStrings(prefix ++ "[{left: 2, right: 1}, Anchor, Added]\n", view.fileContents());
+    try testing.expect(view.file_view and !ctx.quit);
+    try view.chooseSource(&ctx, .theirs, true);
+    try testing.expect(!view.file_view);
+    try testing.expect(view.result_file == null);
+    try testing.expectEqualStrings(working_file_markers, view.fileContents());
 }

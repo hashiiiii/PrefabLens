@@ -256,7 +256,7 @@ fn resolveContent(
         try file_conflict.finishContent(git, prepared, bytes);
         return .resolved;
     }
-    var built = (try candidate.build(index, captured.snapshot)) orelse return .unresolved;
+    var built = (try candidate.buildForReview(index, captured.snapshot)) orelse return .unresolved;
     const prepared = try file_conflict.prepareContent(git, candidate.result, path) orelse return .unresolved;
     if (!std.mem.eql(u8, captured.before, prepared.index_before)) return error.SourceChanged;
     var state = try merge_ui_state.State.init(git.arena, &built.plan);
@@ -270,6 +270,7 @@ fn resolveContent(
     if (state.outcome == .aborted) return .aborted;
     if (state.outcome != .ready) return .unresolved;
     const bytes = core.merge.finish(git.arena, &built.plan) catch return .unresolved;
+    core.merge.validation.validate(git.arena, bytes) catch return .unresolved;
     try file_conflict.finishContent(git, prepared, bytes);
     return .resolved;
 }

@@ -15,7 +15,9 @@ pub const OperationId = merge_model.OperationId;
 pub const Resolution = merge_model.Resolution;
 pub const Side = merge_model.Side;
 pub const SideValue = merge_model.SideValue;
+pub const ReviewMetadata = merge_model.ReviewMetadata;
 pub const properties = @import("merge_properties.zig");
+pub const validation = merge_validate;
 
 pub const BuildResult = struct {
     plan: MergePlan,
@@ -32,10 +34,34 @@ pub fn build(
 }
 
 pub fn buildWithContext(arena: std.mem.Allocator, base: []const u8, ours: []const u8, theirs: []const u8, context: @import("merge_context.zig").Context) Error!BuildResult {
+    return buildWithOptions(arena, base, ours, theirs, context, false);
+}
+
+pub fn buildForReview(
+    arena: std.mem.Allocator,
+    base: []const u8,
+    ours: []const u8,
+    theirs: []const u8,
+    context: @import("merge_context.zig").Context,
+) Error!BuildResult {
+    return buildWithOptions(arena, base, ours, theirs, context, true);
+}
+
+fn buildWithOptions(
+    arena: std.mem.Allocator,
+    base: []const u8,
+    ours: []const u8,
+    theirs: []const u8,
+    context: @import("merge_context.zig").Context,
+    review: bool,
+) Error!BuildResult {
     const parsed_base = try merge_planner.parseMergeSide(arena, base);
     const parsed_ours = try merge_planner.parseMergeSide(arena, ours);
     const parsed_theirs = try merge_planner.parseMergeSide(arena, theirs);
-    var plan = try merge_planner.buildSemanticWithContext(arena, parsed_base, parsed_ours, parsed_theirs, context);
+    var plan = if (review)
+        try merge_planner.buildSemanticForReview(arena, parsed_base, parsed_ours, parsed_theirs, context)
+    else
+        try merge_planner.buildSemanticWithContext(arena, parsed_base, parsed_ours, parsed_theirs, context);
     try verifyTheirsCoverage(arena, parsed_base, parsed_ours, parsed_theirs, context);
     try verifyOursDocumentCoverage(&plan);
     const partial = try merge_apply.applyResolved(arena, &plan, false);
@@ -297,7 +323,8 @@ pub fn supportsCustomResolution(plan: *const MergePlan, operation_id: OperationI
         (operation.kind == .sequence_membership or operation.kind == .component))
         return true;
     if (atomic.kind == .game_object and operation.kind == .game_object) return true;
-    return (operation.kind == .field or (operation.kind == .prefab_override and operation.item_path != null)) and supportsCustomValue(operation) and wasConflict(operation);
+    return (operation.kind == .field or (operation.kind == .prefab_override and operation.item_path != null)) and
+        supportsCustomValue(operation) and (plan.review or wasConflict(operation));
 }
 
 fn supportsCustomValue(operation: *const Operation) bool {
@@ -325,6 +352,224 @@ fn equalOptionalValues(a: ?SideValue, b: ?SideValue) bool {
 
 pub fn finish(arena: std.mem.Allocator, plan: *const MergePlan) Error![]const u8 {
     return merge_apply.applyResolved(arena, plan, true);
+}
+
+test "review collection group previews automatic fields and accepts whole item edits" {
+    var memory = std.heap.ArenaAllocator.init(testing.allocator);
+    defer memory.deinit();
+    const arena = memory.allocator();
+    const prefix = "--- !u!114 &1\nMonoBehaviour:\n  values: ";
+    var built = try buildForReview(
+        arena,
+        prefix ++ "[{left: 1, right: 1}]\n",
+        prefix ++ "[{left: 2, right: 1}]\n",
+        prefix ++ "[{left: 3, right: 4}]\n",
+        .{},
+    );
+
+    try testing.expect(built.plan.review);
+    try testing.expectEqualStrings(
+        prefix ++ "[{left: 2, right: 4}]\n",
+        built.partial,
+    );
+    const group = &built.plan.operations[0];
+    try testing.expect(group.review != null);
+    try testing.expectEqual(@as(usize, 1), group.review.?.required_paths.len);
+    try testing.expectEqual(@as(usize, 1), group.review.?.required_paths[0].len);
+    try testing.expectEqualStrings("left", group.review.?.required_paths[0][0].key);
+    try testing.expect(group.values.base.?.node.?.* == .map);
+    try testing.expect(group.values.ours.?.node.?.* == .map);
+    try testing.expect(group.values.theirs.?.node.?.* == .map);
+    try testing.expect(group.review.?.preview.?.node.?.* == .map);
+
+    try resolve(arena, &built.plan, group.id, .{ .take = .ours });
+    try testing.expectEqualStrings(
+        prefix ++ "[{left: 2, right: 1}]\n",
+        try finish(arena, &built.plan),
+    );
+
+    var custom = try buildForReview(
+        arena,
+        prefix ++ "[{left: 1, right: 1}]\n",
+        prefix ++ "[{left: 2, right: 1}]\n",
+        prefix ++ "[{left: 3, right: 4}]\n",
+        .{},
+    );
+    try resolve(arena, &custom.plan, custom.plan.operations[0].id, .{ .custom = "{left: 2, right: 5}" });
+    try testing.expectEqualStrings(
+        prefix ++ "[{left: 2, right: 5}]\n",
+        try finish(arena, &custom.plan),
+    );
+}
+
+test "review collection groups keep item identity across an independent insertion" {
+    var memory = std.heap.ArenaAllocator.init(testing.allocator);
+    defer memory.deinit();
+    const arena = memory.allocator();
+    const prefix = "--- !u!114 &1\nMonoBehaviour:\n  values: ";
+    const base = prefix ++ "[{name: anchor, left: 1, right: 1}, {name: target, left: 1, right: 1}]\n";
+    const ours = prefix ++ "[{name: anchor, left: 1, right: 1}, {name: target, left: 2, right: 1}]\n";
+    const theirs = prefix ++ "[{name: inserted, left: 9, right: 9}, {name: anchor, left: 1, right: 1}, {name: target, left: 3, right: 4}]\n";
+    var built = try buildForReview(arena, base, ours, theirs, .{});
+
+    var target_operation: ?*Operation = null;
+    for (built.plan.operations) |*operation| {
+        if (operation.review != null) {
+            target_operation = operation;
+            break;
+        }
+    }
+    const operation = target_operation orelse return error.TestExpectedEqual;
+    try testing.expectEqualStrings("[1]", operation.item_path.?);
+    try testing.expectEqualStrings(
+        "{name: target, left: 2, right: 4}",
+        operation.review.?.preview.?.bytes,
+    );
+
+    try resolve(arena, &built.plan, operation.id, .{ .custom = "{name: target, left: 2, right: 5}" });
+    try testing.expectEqualStrings(
+        prefix ++ "[{name: inserted, left: 9, right: 9}, {name: anchor, left: 1, right: 1}, {name: target, left: 2, right: 5}]\n",
+        try finish(arena, &built.plan),
+    );
+}
+
+test "review collection groups keep item identity after an independent deletion" {
+    var memory = std.heap.ArenaAllocator.init(testing.allocator);
+    defer memory.deinit();
+    const arena = memory.allocator();
+    const prefix = "--- !u!114 &1\nMonoBehaviour:\n  values: ";
+    const base = prefix ++ "[{name: removed, left: 8, right: 8}, {name: anchor, left: 1, right: 1}, {name: target, left: 1, right: 1}]\n";
+    const ours = prefix ++ "[{name: removed, left: 8, right: 8}, {name: anchor, left: 1, right: 1}, {name: target, left: 2, right: 1}]\n";
+    const theirs = prefix ++ "[{name: anchor, left: 1, right: 1}, {name: target, left: 3, right: 4}]\n";
+    var built = try buildForReview(arena, base, ours, theirs, .{});
+
+    var target_operation: ?*Operation = null;
+    for (built.plan.operations) |*operation| {
+        if (operation.review != null) {
+            target_operation = operation;
+            break;
+        }
+    }
+    const operation = target_operation orelse return error.TestExpectedEqual;
+    try testing.expectEqualStrings("[2]", operation.item_path.?);
+    try resolve(arena, &built.plan, operation.id, .{ .custom = "{name: target, left: 2, right: 5}" });
+    try testing.expectEqualStrings(
+        prefix ++ "[{name: anchor, left: 1, right: 1}, {name: target, left: 2, right: 5}]\n",
+        try finish(arena, &built.plan),
+    );
+}
+
+test "review required paths preserve literal map keys" {
+    var memory = std.heap.ArenaAllocator.init(testing.allocator);
+    defer memory.deinit();
+    const arena = memory.allocator();
+    const prefix = "--- !u!114 &1\nMonoBehaviour:\n  values: ";
+    const built = try buildForReview(
+        arena,
+        prefix ++ "[{left: 1, 'literal.a[0]': 1}]\n",
+        prefix ++ "[{left: 2, 'literal.a[0]': 2}]\n",
+        prefix ++ "[{left: 3, 'literal.a[0]': 4}]\n",
+        .{},
+    );
+    const operation = for (built.plan.operations) |*candidate| {
+        if (candidate.review != null) break candidate;
+    } else return error.TestExpectedEqual;
+    var found_literal = false;
+    for (operation.review.?.required_paths) |path| {
+        if (path.len == 1 and path[0] == .key and std.mem.eql(u8, path[0].key, "'literal.a[0]'")) found_literal = true;
+    }
+    try testing.expect(found_literal);
+}
+
+test "review keyed collection exposes the original item map" {
+    var memory = std.heap.ArenaAllocator.init(testing.allocator);
+    defer memory.deinit();
+    const arena = memory.allocator();
+    const prefix = "--- !u!114 &1\nMonoBehaviour:\n  values: ";
+    const base = prefix ++ "[{key: a, value: 1}, {key: b, value: 1}]\n";
+    const ours = prefix ++ "[{key: a, value: 2}, {key: b, value: 1}]\n";
+    const theirs = prefix ++ "[{key: a, value: 3}, {key: b, value: 4}]\n";
+    var built = try buildForReview(arena, base, ours, theirs, .{});
+    const operation = for (built.plan.operations) |*candidate| {
+        if (candidate.review != null) break candidate;
+    } else return error.TestExpectedEqual;
+    try testing.expectEqual(@as(usize, 2), built.plan.operations.len);
+    try testing.expectEqual(@as(usize, 1), for (built.plan.operations) |candidate| {
+        if (candidate.review != null and candidate.review.?.required_paths.len == 0) break @as(usize, 1);
+    } else 0);
+    try testing.expectEqualStrings("[a]", operation.item_path.?);
+    try testing.expectEqual(@as(usize, 1), operation.review.?.required_paths.len);
+    try testing.expectEqual(@as(usize, 0), operation.review.?.required_paths[0].len);
+    try testing.expectEqualStrings("{key: a, value: 2}", operation.review.?.preview.?.bytes);
+    try resolve(arena, &built.plan, operation.id, .{ .custom = "{key: a, value: 5}" });
+    try testing.expectEqualStrings(
+        prefix ++ "[{key: a, value: 5}, {key: b, value: 4}]\n",
+        try finish(arena, &built.plan),
+    );
+}
+
+test "review automatic matched items retain item metadata" {
+    var memory = std.heap.ArenaAllocator.init(testing.allocator);
+    defer memory.deinit();
+    const arena = memory.allocator();
+    const prefix = "--- !u!114 &1\nMonoBehaviour:\n  values: ";
+    var built = try buildForReview(
+        arena,
+        prefix ++ "[{left: 1, right: 1}]\n",
+        prefix ++ "[{left: 2, right: 1}]\n",
+        prefix ++ "[{left: 1, right: 4}]\n",
+        .{},
+    );
+    try testing.expectEqual(@as(usize, 1), built.plan.operations.len);
+    const operation = &built.plan.operations[0];
+    try testing.expectEqualStrings("[0]", operation.item_path.?);
+    try testing.expect(operation.review != null);
+    try testing.expectEqual(@as(usize, 0), operation.review.?.required_paths.len);
+    try testing.expectEqualStrings("{left: 2, right: 4}", operation.review.?.preview.?.bytes);
+    try resolve(arena, &built.plan, operation.id, .{ .custom = "{left: 2, right: 5}" });
+    try testing.expectEqualStrings(prefix ++ "[{left: 2, right: 5}]\n", try finish(arena, &built.plan));
+}
+
+test "review exposes an automatic collection change as a resolved operation" {
+    var memory = std.heap.ArenaAllocator.init(testing.allocator);
+    defer memory.deinit();
+    const arena = memory.allocator();
+    const prefix = "--- !u!114 &1\nMonoBehaviour:\n  values: ";
+    const base = prefix ++ "[{name: anchor}]\n";
+    const ours = base;
+    const theirs = prefix ++ "[{name: anchor}, {name: inserted}]\n";
+    var built = try buildForReview(arena, base, ours, theirs, .{});
+    try testing.expectEqual(@as(usize, 1), built.plan.operations.len);
+    const operation = &built.plan.operations[0];
+    try testing.expect(operation.review == null);
+    try testing.expect(operation.resolution == .custom);
+    try testing.expectEqualStrings(theirs, try finish(arena, &built.plan));
+    try resolve(arena, &built.plan, operation.id, .{ .take = .ours });
+    try testing.expectEqualStrings(ours, try finish(arena, &built.plan));
+}
+
+test "review automatic parallel dictionary stays collection scoped" {
+    var memory = std.heap.ArenaAllocator.init(testing.allocator);
+    defer memory.deinit();
+    const arena = memory.allocator();
+    const prefix =
+        "--- !u!114 &1\nMonoBehaviour:\n" ++
+        "  m_Script: {fileID: 11500000, guid: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, type: 3}\n" ++
+        "  values: ";
+    const context = try collectionTestContext(.{ .path = "values", .kind = .dictionary }, arena);
+    var built = try buildForReview(
+        arena,
+        prefix ++ "{m_Keys: [a], m_Values: [1]}\n",
+        prefix ++ "{m_Keys: [a], m_Values: [1]}\n",
+        prefix ++ "{m_Keys: [a, b], m_Values: [1, 2]}\n",
+        context,
+    );
+    try testing.expectEqual(@as(usize, 1), built.plan.operations.len);
+    const operation = &built.plan.operations[0];
+    try testing.expect(operation.review == null);
+    try testing.expect(operation.item_path == null);
+    try testing.expect(operation.values.ours.?.node.?.* == .map);
+    try testing.expectEqualStrings(prefix ++ "{m_Keys: [a, b], m_Values: [1, 2]}\n", try finish(arena, &built.plan));
 }
 
 test {

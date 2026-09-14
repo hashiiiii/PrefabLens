@@ -193,9 +193,32 @@ The user can edit it with another tool and complete the normal Git workflow.
 
 #### Edit Result
 
-Navigation and automatic selection of the next conflict follow the hierarchy's order from top to bottom.
-Click **Ours** or **Theirs** to preview a value.
-Click **Result**, or focus it and press **Enter**, to edit the existing value.
+The hierarchy includes unresolved groups and automatic changes. Navigation follows its order from top to bottom.
+Children list rows follow the same payload as Raw. Empty lists stay empty.
+Click an **Ours** or **Theirs** value to preview that choice.
+Press **Enter** on **Ours** or **Theirs** to select that value.
+Click **Result**, or focus it and press **Enter**, to edit Result.
+Until a source is chosen or Result is edited, Result stays empty.
+The editor still opens with a value to edit.
+**Enter** in the editor applies the value. The group advances when all required fields have choices.
+Choices already made remain pending while another field in the group is unresolved.
+
+For a matched collection item, the property table includes **Entire item** and all of its fields, including automatic values.
+Choose **Entire item** or a source column heading to take the original item from that side.
+Choose a field cell to replace only that field. Result shows its value and source; fields that still need a choice remain blank.
+For scalar Dictionary pairs, choosing or editing the value resolves the pair.
+Editing an automatic field does not resolve another field's conflict.
+In Semantic view, Ours and Theirs values that differ from Base stay yellow before and after selection, including YAML columns that are not a property table. Result uses the normal text color.
+
+For example, with Base `{left: 1, right: 1}`, Ours `{left: 2, right: 1}`, and Theirs `{left: 3, right: 4}`:
+
+| Choice | Result |
+| --- | --- |
+| Ours for Entire item | `{left: 2, right: 1}` |
+| Ours for Left | `{left: 2, right: 4}` |
+| Ours for Left, edit Right to 5 | `{left: 2, right: 5}` |
+
+Related structural operations stay atomic. Array ranges with ambiguous correspondence keep their original side order and are selected as a whole.
 Outside the property table, **Backspace** or **Delete** clears Result and reopens the conflict without starting the editor.
 While editing, typing and pasting insert at the cursor; **Backspace** and **Delete** remove a character or the selected range.
 
@@ -223,15 +246,22 @@ Semantic is a property table when the conflict has named fields or keyed items.
 Keyed pair sequences show each item's `key` or `first` value. Result shows the value that will be written.
 Reparent conflicts show the parent GameObject name. Duplicate names include the path from the root.
 Raw keeps the four columns. Ours and Theirs are unified diffs against Base. Deletions are red. Additions are green. YAML document headers stay uncolored.
-Result is the Unity YAML that will be applied, not a deletion diff. Unresolved Result stays empty.
+Result shows the Unity YAML preview. Required fields remain marked until selected, even when automatic fields have values.
 Missing sides stay empty. Each inspector column scrolls on its own and stops at the last wrapped line. A thin floating scrollbar appears on the focused column while it scrolls, then hides. Mouse wheel and trackpad two-finger scroll move vertically. Shift plus wheel scrolls a line horizontally.
 Base is not selectable. Wheel over Base still scrolls that column, so long ancestor YAML stays readable.
-**Shift+E** shows the `$MERGED` snapshot from startup, including conflict markers, in a panel over the bottom 40% of the panes. The footer keeps the **⇧E File** control. Click it, or press **Shift+E**, to show or hide the panel. Drag the top edge to resize it. The panel scrolls like an inspector column: it stops at the last wrapped line, and a thin floating scrollbar appears while it scrolls.
-While editing, **Shift+R** and **Shift+E** insert text.
+**Shift+E** shows the `$MERGED` snapshot from startup, including conflict markers, in a panel over the bottom 40% of the panes. The panel opens scrolled so the closing marker stays visible. The footer keeps the **⇧E File** control. Click it, or press **Shift+E**, to show or hide the panel. Drag the top edge to resize it. The panel scrolls like an inspector column: it stops at the last wrapped line, and a thin floating scrollbar appears while it scrolls.
+**Shift+V** or **Preview** shows the complete Result after all required choices and edits have been applied. This includes accepted insertions, removals, and ordering outside the selected item. The preview is read-only and closes when a choice is changed, so it cannot show an older result as the current one. **Shift+E** returns to the original working file snapshot.
+While editing, **Shift+R**, **Shift+E**, and **Shift+V** insert text.
 
 #### Completion checks
 
-Complete writes the applied YAML. It does not reject cycles or invalid YAML.
+**Complete** becomes available after all required choices and edits have been applied.
+Down from the last hierarchy row, or from the last Ours / Theirs / Result value, focuses **Complete**.
+It checks the composed YAML for parse errors, duplicate fileIDs, component ownership, parent/child consistency, hierarchy cycles, and missing internal references.
+A failed check keeps the TUI open and identifies the affected document or property so it can be repaired in the same session.
+These checks cover serialized structure; they cannot verify game behavior or every constraint imposed by a custom C# component.
+
+The final write rechecks the source/index snapshot and the working file snapshot. A concurrent change keeps the output untouched.
 
 Original input files have a 64 MiB limit. Working conflict output has a separate 256 MiB limit.
 The mergetool requires both standard input and standard output to be TTYs.

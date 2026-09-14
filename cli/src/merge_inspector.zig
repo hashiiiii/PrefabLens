@@ -309,6 +309,22 @@ test "merge TUI: game object rows show the edited name" {
     try std.testing.expectEqualStrings("Edited Child", try valueText(arena, model.rows[index].values[3]));
 }
 
+test "merge TUI: children reorder rows show GameObject names" {
+    var memory = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer memory.deinit();
+    const arena = memory.allocator();
+    const fixture = try core.merge.buildForReview(arena, childrenReorderBase, childrenReorderOurs, childrenReorderTheirs, .{});
+    const operation = for (fixture.plan.operations) |*op| {
+        if (std.mem.eql(u8, op.property_path, "m_Children") and op.kind == .sequence_order) break op;
+    } else return error.TestUnexpectedResult;
+    const model = try build(arena, operation, .unresolved, &fixture.plan);
+    try std.testing.expectEqual(@as(usize, 3), model.rows.len);
+    try std.testing.expectEqualStrings("A", try model.text(arena, 0, 0));
+    try std.testing.expectEqualStrings("B", try model.text(arena, 0, 1));
+    try std.testing.expectEqualStrings("A", try model.text(arena, 0, 2));
+    try std.testing.expect(std.mem.indexOf(u8, try model.text(arena, 0, 0), "#") == null);
+}
+
 test "merge TUI: reparent rows show GameObject names" {
     var memory = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer memory.deinit();
@@ -326,6 +342,21 @@ test "merge TUI: reparent rows show GameObject names" {
     try std.testing.expectEqualStrings("Parent B", try valueText(arena, model.rows[0].values[2]));
     try std.testing.expect(!model.editable(0));
 }
+
+const childrenReorderRoot =
+    "--- !u!1 &100\nGameObject:\n  m_Component:\n  - component: {fileID: 400}\n  m_Name: Root\n" ++
+    "--- !u!4 &400\nTransform:\n  m_GameObject: {fileID: 100}\n  m_Children:\n";
+const childrenReorderObjects =
+    "  m_Father: {fileID: 0}\n" ++
+    "--- !u!1 &110\nGameObject:\n  m_Component:\n  - component: {fileID: 410}\n  m_Name: A\n" ++
+    "--- !u!4 &410\nTransform:\n  m_GameObject: {fileID: 110}\n  m_Children: []\n  m_Father: {fileID: 400}\n" ++
+    "--- !u!1 &120\nGameObject:\n  m_Component:\n  - component: {fileID: 420}\n  m_Name: B\n" ++
+    "--- !u!4 &420\nTransform:\n  m_GameObject: {fileID: 120}\n  m_Children: []\n  m_Father: {fileID: 400}\n" ++
+    "--- !u!1 &130\nGameObject:\n  m_Component:\n  - component: {fileID: 430}\n  m_Name: C\n" ++
+    "--- !u!4 &430\nTransform:\n  m_GameObject: {fileID: 130}\n  m_Children: []\n  m_Father: {fileID: 400}\n";
+const childrenReorderBase = childrenReorderRoot ++ "  - {fileID: 410}\n  - {fileID: 420}\n  - {fileID: 430}\n" ++ childrenReorderObjects;
+const childrenReorderOurs = childrenReorderRoot ++ "  - {fileID: 420}\n  - {fileID: 410}\n  - {fileID: 430}\n" ++ childrenReorderObjects;
+const childrenReorderTheirs = childrenReorderRoot ++ "  - {fileID: 410}\n  - {fileID: 430}\n  - {fileID: 420}\n" ++ childrenReorderObjects;
 
 const reparentBase =
     "--- !u!1 &1\nGameObject:\n  m_Component:\n  - component: {fileID: 4}\n  m_Name: Root\n" ++
@@ -382,10 +413,12 @@ pub const Row = struct {
 pub const Model = struct {
     documents: [4]?properties.Document,
     rows: []const Row,
+    roots: [4]?*const Node = @splat(null),
 
     pub fn editable(self: Model, index: usize) bool {
         if (index >= self.rows.len) return false;
         const row = self.rows[index];
+        if (row.path.len == 0) return false;
         if (self.documents[3]) |result| {
             return result.editable(row.path);
         }
@@ -446,7 +479,7 @@ pub fn build(
     plan: ?*const core.merge.MergePlan,
 ) !Model {
     if (operation.kind == .prefab_override) return buildPrefabOverride(arena, operation, resolution);
-    if (operation.kind == .sequence_order or keyedPairSequenceSupported(operation)) return buildSequenceOrder(arena, operation, resolution);
+    if (operation.kind == .sequence_order or keyedPairSequenceSupported(operation)) return buildSequenceOrder(arena, operation, resolution, plan);
     if (operation.kind == .reparent) return buildReparent(arena, operation, resolution, plan);
     if (operation.kind == .field) {
         const roots: [4]?*const Node = .{
@@ -456,12 +489,14 @@ pub fn build(
             switch (resolution) {
                 .take => |side| if (operation.values.get(side)) |value| value.node else null,
                 .custom => |text| try customFieldRoot(arena, operation, text),
-                else => null,
+                .unresolved => if (operation.review) |metadata| if (metadata.preview) |preview| preview.node else null else null,
+                .remove => null,
             },
         };
-        var builder: Builder = .{ .arena = arena, .documents = @splat(null) };
+        var builder: Builder = .{ .arena = arena, .documents = @splat(null), .atomic_sequences = operation.review != null };
+        if (operation.review != null) try builder.rows.append(arena, .{ .path = &.{}, .label = "Entire item", .values = roots, .changed = true });
         try builder.walk(&.{}, "", roots);
-        return .{ .documents = @splat(null), .rows = try builder.rows.toOwnedSlice(arena) };
+        return .{ .documents = @splat(null), .rows = try builder.rows.toOwnedSlice(arena), .roots = roots };
     }
     const result_bytes: ?[]const u8 = switch (resolution) {
         .take => |side| if (operation.values.get(side)) |value| value.bytes else null,
@@ -551,13 +586,15 @@ fn buildSequenceOrder(
     arena: std.mem.Allocator,
     operation: *const core.merge.Operation,
     resolution: core.merge.Resolution,
+    plan: ?*const core.merge.MergePlan,
 ) !Model {
     const sides: [3]?*const Node = .{
-        if (operation.values.base) |value| value.node else null,
-        if (operation.values.ours) |value| value.node else null,
-        if (operation.values.theirs) |value| value.node else null,
+        try sequencePayloadNode(arena, operation.values.base),
+        try sequencePayloadNode(arena, operation.values.ours),
+        try sequencePayloadNode(arena, operation.values.theirs),
     };
     const result = try sequenceResultNode(arena, operation, resolution);
+    const result_side: core.merge.Side = if (resolution == .take) resolution.take else .ours;
     var count: usize = 0;
     for (sides) |node| if (node) |seq| {
         if (seq.* == .seq) count = @max(count, seq.seq.len);
@@ -568,10 +605,10 @@ fn buildSequenceOrder(
     const rows = try arena.alloc(Row, count);
     for (rows, 0..) |*row, index| {
         var values: [4]?*const Node = .{
-            try sequenceItemLabelNode(arena, sequenceItemAt(sides[0], index)),
-            try sequenceItemLabelNode(arena, sequenceItemAt(sides[1], index)),
-            try sequenceItemLabelNode(arena, sequenceItemAt(sides[2], index)),
-            try sequenceItemLabelNode(arena, sequenceItemAt(result, index)),
+            try sequenceItemLabelNode(arena, sides[0], index, if (plan) |p| p.base else null),
+            try sequenceItemLabelNode(arena, sides[1], index, if (plan) |p| p.ours else null),
+            try sequenceItemLabelNode(arena, sides[2], index, if (plan) |p| p.theirs else null),
+            try sequenceItemLabelNode(arena, result, index, if (plan) |p| p.file(result_side) else null),
         };
         var changed = false;
         var first: ?*const Node = null;
@@ -598,10 +635,22 @@ fn sequenceResultNode(
     resolution: core.merge.Resolution,
 ) !?*const Node {
     return switch (resolution) {
-        .take => |side| if (operation.values.get(side)) |value| value.node else null,
+        .take => |side| try sequencePayloadNode(arena, operation.values.get(side)),
         .custom => |text| parseSequenceResult(arena, text),
         .unresolved, .remove => null,
     };
+}
+
+fn sequencePayloadNode(arena: std.mem.Allocator, value: ?core.merge.SideValue) !?*const Node {
+    const present = value orelse return null;
+    const trimmed = std.mem.trim(u8, present.bytes, " \t\r\n");
+    if (trimmed.len == 0 or std.mem.eql(u8, trimmed, "[]")) {
+        const node = try arena.create(Node);
+        node.* = .{ .seq = &.{} };
+        return node;
+    }
+    if (parseSequenceResult(arena, present.bytes)) |node| return node;
+    return present.node;
 }
 
 fn parseSequenceResult(arena: std.mem.Allocator, text: []const u8) ?*const Node {
@@ -651,8 +700,17 @@ fn sequenceItemAt(node: ?*const Node, index: usize) ?*const Node {
     return seq.seq[index];
 }
 
-fn sequenceItemLabelNode(arena: std.mem.Allocator, node: ?*const Node) !?*const Node {
-    const item = node orelse return null;
+fn sequenceItemLabelNode(arena: std.mem.Allocator, sequence: ?*const Node, index: usize, file: ?core.source.ParsedFile) !?*const Node {
+    const item = sequenceItemAt(sequence, index) orelse {
+        if (index == 0) if (sequence) |node| {
+            if (node.* == .seq and node.seq.len == 0) return try scalarNode(arena, "[]");
+        };
+        return null;
+    };
+    if (Node.asRef(item)) |ref| if (ref.guid == null) if (file) |source_file| {
+        // File IDs belong to their source branch; a child may be renamed or absent elsewhere.
+        if (gameObjectForRef(source_file, ref) != null) return try scalarNode(arena, try fatherDisplay(arena, source_file, ref));
+    };
     return try scalarNode(arena, try sequenceItemLabel(arena, item));
 }
 
@@ -816,36 +874,11 @@ fn customFieldRoot(
     operation: *const core.merge.Operation,
     text: []const u8,
 ) !?*const Node {
-    const template = operation.values.theirs orelse operation.values.ours orelse operation.values.base orelse return null;
-    const node = template.node orelse return null;
-    if (node.* != .map) return null;
-    const scalar = customFieldScalar(text) orelse return null;
-    const entries = try arena.dupe(core.model.Entry, node.map);
-    for (entries) |*entry| {
-        if (std.mem.eql(u8, entry.key, "value") or std.mem.eql(u8, entry.key, "second")) {
-            const value_node = try arena.create(Node);
-            value_node.* = .{ .scalar = scalar };
-            entry.value = value_node;
-        }
-    }
-    const copy = try arena.create(Node);
-    copy.* = .{ .map = entries };
-    return copy;
-}
-
-fn customFieldScalar(text: []const u8) ?[]const u8 {
-    const trimmed = std.mem.trim(u8, text, " \r\n");
-    if (trimmed.len == 0) return null;
-    if (std.mem.indexOfAny(u8, trimmed, "\r\n") == null) return trimmed;
-    var lines = std.mem.splitScalar(u8, trimmed, '\n');
-    var found: ?[]const u8 = null;
-    while (lines.next()) |raw| {
-        const content = std.mem.trimStart(u8, std.mem.trimEnd(u8, raw, "\r"), " ");
-        if (std.mem.startsWith(u8, content, "value:")) {
-            found = std.mem.trim(u8, content["value:".len..], " ");
-        }
-    }
-    return found;
+    _ = operation;
+    return properties.parseValue(arena, text) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => null,
+    };
 }
 
 fn scalarNode(arena: std.mem.Allocator, text: []const u8) !*const Node {
@@ -857,6 +890,7 @@ fn scalarNode(arena: std.mem.Allocator, text: []const u8) !*const Node {
 const Builder = struct {
     arena: std.mem.Allocator,
     documents: [4]?properties.Document,
+    atomic_sequences: bool = false,
     rows: std.ArrayList(Row) = .empty,
 
     fn walk(self: *Builder, path: []const properties.Segment, label: []const u8, nodes: [4]?*const Node) std.mem.Allocator.Error!void {
@@ -870,6 +904,7 @@ const Builder = struct {
             has_map = has_map or value.* == .map;
             has_seq = has_seq or value.* == .seq;
         };
+        if (has_seq and self.atomic_sequences) return self.append(path, label, nodes);
         const mixed = !map_only and !seq_only and (has_map or has_seq);
         if (mixed) try self.append(path, label, nodes);
         var descendants = false;
@@ -965,4 +1000,17 @@ pub fn valueText(arena: std.mem.Allocator, node: ?*const Node) ![]const u8 {
         .map => |entries| try std.fmt.allocPrint(arena, "{d} fields", .{entries.len}),
         .seq => |items| try std.fmt.allocPrint(arena, "{d} items", .{items.len}),
     };
+}
+
+test "merge TUI: custom item Result shows each edited field" {
+    var memory = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer memory.deinit();
+    const arena = memory.allocator();
+    const prefix = "--- !u!114 &1\nMonoBehaviour:\n  items: ";
+    const fixture = try core.merge.buildForReview(arena, prefix ++ "[{left: 1, right: 1}]\n", prefix ++ "[{left: 2, right: 1}]\n", prefix ++ "[{left: 3, right: 4}]\n", .{});
+    const operation = fixture.plan.operations[0];
+    const model = try build(arena, &operation, .{ .custom = "{left: 2, right: 5}" }, &fixture.plan);
+    // The table must reflect the full Result map, including its edited automatic field.
+    try std.testing.expectEqualStrings("2", try model.text(arena, 1, 3));
+    try std.testing.expectEqualStrings("5", try model.text(arena, 2, 3));
 }

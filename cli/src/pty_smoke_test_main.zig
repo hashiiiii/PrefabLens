@@ -75,6 +75,7 @@ pub fn main(init: std.process.Init) !u8 {
     try testResultEditing(io, arena, scratch, prefablens);
     try testDeletionChoices(io, arena, scratch, prefablens);
     try testCollectionChoices(io, arena, scratch, prefablens);
+    try testItemReview(io, arena, scratch, prefablens);
     try testQuit(io, arena, scratch, prefablens);
     try testTimeout(io, arena, scratch, prefablens);
     try std.Io.File.stdout().writeStreamingAll(io, "pty mergetool smoke: passed\n");
@@ -436,4 +437,26 @@ fn runMergetoolInPty(
     timeout_seconds: i64,
 ) !std.process.RunResult {
     return pty.runCommandInPty(io, arena, repository, "git mergetool --no-prompt --tool=prefablens -- Assets/Conflict.prefab", input_keys, timeout_seconds);
+}
+
+fn testItemReview(io: std.Io, arena: std.mem.Allocator, scratch: []const u8, prefablens: []const u8) !void {
+    const prefix = "--- !u!114 &1\nMonoBehaviour:\n  values: ";
+    const cases = [_]struct { name: []const u8, keys: []const u8, right: u8 }{
+        .{ .name = "item-whole-ours", .keys = "\x1b[C\r\r", .right = 1 },
+        .{ .name = "item-field-ours", .keys = "\x1b[C\x1b[B\r\r", .right = 4 },
+        // Editing Right first must keep Left unresolved until its source is selected.
+        .{ .name = "item-edit-automatic", .keys = "\x1b[C\x1b[B\x1b[B\x1b[C\x1b[C\r\x7f5\r\x1b[A\x1b[D\x1b[D\r\r", .right = 5 },
+    };
+    for (cases) |case| {
+        const repo = try prepareMergetoolRepositoryWithSides(io, arena, scratch, prefablens, case.name, .{
+            .path = "Assets/Conflict.prefab",
+            .base = prefix ++ "[{left: 1, right: 1}]\n",
+            .ours = prefix ++ "[{left: 2, right: 1}]\n",
+            .theirs = prefix ++ "[{left: 3, right: 4}]\n",
+        });
+        try integration.expectNonzero(try integration.gitRun(io, arena, repo, &.{ "merge", "--no-edit", "remote" }), "prepare ItemField conflict");
+        const result = try runMergetoolInPty(io, arena, repo, case.keys, 30);
+        try integration.expectCode(result, 0, case.name);
+        try integration.expectFile(io, arena, repo, "Assets/Conflict.prefab", try std.fmt.allocPrint(arena, prefix ++ "[{{left: 2, right: {d}}}]\n", .{case.right}));
+    }
 }

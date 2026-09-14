@@ -87,7 +87,7 @@ pub fn resolveWithContext(git: Git, result: strategy.Result, conflict: strategy.
     }
     // Unsupported input must be refused before the first interactive decision.
     var built: ?core.merge.BuildResult = if (layout.ours != null and layout.theirs != null)
-        core.merge.buildWithContext(git.arena, base, ours, theirs, context) catch return .unresolved
+        core.merge.buildForReview(git.arena, base, ours, theirs, context) catch return .unresolved
     else
         null;
     const meta = metadata(git, result, layout) catch return .unresolved;
@@ -130,7 +130,9 @@ pub fn resolveWithContext(git: Git, result: strategy.Result, conflict: strategy.
                 try merge_tui.run(git.io, git.arena, env, &state, final_path, merge.partial, working_file);
             }
             if (state.outcome != .ready) return .aborted;
-            break :blk core.merge.finish(git.arena, &merge.plan) catch return .unresolved;
+            const resolved = core.merge.finish(git.arena, &merge.plan) catch return .unresolved;
+            core.merge.validation.validate(git.arena, resolved) catch return .unresolved;
+            break :blk resolved;
         } else if (layout.ours != null) ours else theirs;
         try replacements.append(git.arena, .{ .path = final_path, .bytes = bytes, .mode = mergeMode(layout.base, layout.ours, layout.theirs) });
         if (meta) |value| try replacements.append(git.arena, .{ .path = try std.fmt.allocPrint(git.arena, "{s}.meta", .{final_path}), .bytes = value.bytes, .mode = value.mode });

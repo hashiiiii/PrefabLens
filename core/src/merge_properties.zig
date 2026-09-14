@@ -3,7 +3,11 @@ const model = @import("model.zig");
 const source = @import("source.zig");
 const planner = @import("merge_planner.zig");
 const apply = @import("merge_apply.zig");
-const Error = @import("merge_model.zig").Error;
+const merge_model = @import("merge_model.zig");
+const Error = merge_model.Error;
+
+pub const parseValue = @import("merge_yaml.zig").parseValue;
+pub const valueText = @import("merge_yaml.zig").flow;
 
 test "merge properties: nested edits preserve comments quotes and CRLF" {
     var memory = std.heap.ArenaAllocator.init(std.testing.allocator);
@@ -55,7 +59,7 @@ test "merge properties: empty fields preserve their source and remain editable" 
     }
 }
 
-pub const Segment = union(enum) { key: []const u8, index: usize };
+pub const Segment = merge_model.Segment;
 
 pub const Document = struct {
     file: source.ParsedFile,

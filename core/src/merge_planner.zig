@@ -94,7 +94,22 @@ pub fn buildSemantic(
 }
 
 pub fn buildSemanticWithContext(arena: std.mem.Allocator, base: source.ParsedFile, ours: source.ParsedFile, theirs: source.ParsedFile, context: @import("merge_context.zig").Context) merge_model.Error!merge_model.MergePlan {
-    var collection_state: binding.State = .{ .context = context };
+    return buildSemanticWithOptions(arena, base, ours, theirs, context, false);
+}
+
+pub fn buildSemanticForReview(arena: std.mem.Allocator, base: source.ParsedFile, ours: source.ParsedFile, theirs: source.ParsedFile, context: @import("merge_context.zig").Context) merge_model.Error!merge_model.MergePlan {
+    return buildSemanticWithOptions(arena, base, ours, theirs, context, true);
+}
+
+fn buildSemanticWithOptions(
+    arena: std.mem.Allocator,
+    base: source.ParsedFile,
+    ours: source.ParsedFile,
+    theirs: source.ParsedFile,
+    context: @import("merge_context.zig").Context,
+    review: bool,
+) merge_model.Error!merge_model.MergePlan {
+    var collection_state: binding.State = .{ .context = context, .review = review };
     var operations: std.ArrayList(merge_model.Operation) = .empty;
     var atomic_operations: std.ArrayList(merge_model.AtomicOperation) = .empty;
     const component_owners = ComponentOwnerIndexes{
@@ -176,6 +191,7 @@ pub fn buildSemanticWithContext(arena: std.mem.Allocator, base: source.ParsedFil
         .operations = try operations.toOwnedSlice(arena),
         .atomic_operations = try atomic_operations.toOwnedSlice(arena),
         .collections = try collection_state.bindings.toOwnedSlice(arena),
+        .review = review,
     };
 }
 

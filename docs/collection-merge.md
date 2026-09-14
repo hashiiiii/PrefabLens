@@ -36,10 +36,12 @@ While editing, it inserts text.
 
 To preview a choice before applying it, click its value.
 Click **Result**, or focus it and press **Enter**, to edit the preview.
-The existing text stays in place; press **Enter** to apply it.
+The existing text stays in place. **Enter** applies the edit and advances when all required fields have choices.
 See [Edit Result](cli.md#edit-result) for multiline editing and paste controls.
-When all conflicts have a resolution, select **Complete**.
+When all conflicts are resolved, **Shift+V** previews the full result, including automatic changes outside the selected item. Select **Complete** to write it.
 A local choice retains independent accepted changes elsewhere in the collection.
+For a matched map item, **Entire item** selects the original item from a branch; a property cell selects only that field.
+Automatic fields remain visible and editable. Editing one does not settle another field's conflict.
 
 If repeated values or moves leave more than one possible correspondence, choose a local result.
 The result editor accepts YAML values and checks their shape before acceptance.

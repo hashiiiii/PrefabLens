@@ -5,16 +5,23 @@ const value = @import("merge_value.zig");
 const yaml = @import("merge_yaml.zig");
 const source = @import("source.zig");
 pub const Binding = struct { plan: value.Plan, source_nodes: value.Nodes, original: ?*const model.Node, identity: mm.SemanticId, operation_ids: []const mm.OperationId };
-pub const State = struct { bindings: std.ArrayList(Binding) = .empty, context: @import("merge_context.zig").Context = .{} };
+pub const State = struct {
+    bindings: std.ArrayList(Binding) = .empty,
+    context: @import("merge_context.zig").Context = .{},
+    review: bool = false,
+};
 pub fn collect(arena: std.mem.Allocator, state: *State, operations: *std.ArrayList(mm.Operation), atomics: *std.ArrayList(mm.AtomicOperation), document: mm.DocumentId, path: []const u8, hierarchy: []const u8, nodes: value.Nodes, files: [3]source.ParsedFile) mm.Error!void {
     const original = nodes.ours;
     const evidence = schema(state.context, document, path, files);
-    var plan = value.build(arena, .{ .nodes = nodes, .schema = evidence.field, .context_conflict = evidence.conflict }) catch |err| switch (err) {
+    var plan = value.build(arena, .{ .nodes = nodes, .schema = evidence.field, .context_conflict = evidence.conflict, .review = state.review }) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         else => return error.InvalidResolution,
     };
     const probe_choices = try arena.alloc(value.Choice, plan.conflicts.len);
     @memset(probe_choices, .{ .take = .ours });
+    if (state.review) {
+        for (plan.review_groups) |group| probe_choices[group.conflict_id] = .unresolved;
+    }
     const probe = value.materialize(arena, plan, probe_choices) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         else => null,
@@ -32,15 +39,74 @@ pub fn collect(arena: std.mem.Allocator, state: *State, operations: *std.ArrayLi
     }
     const binding_id = state.bindings.items.len;
     var ids: std.ArrayList(mm.OperationId) = .empty;
-    for (plan.conflicts, 0..) |c, i| {
+    for (plan.conflicts, 0..) |c, conflict_id| {
+        if (state.review and isReviewChild(plan.review_groups, conflict_id)) continue;
+        const review_group = if (state.review) reviewGroup(plan.review_groups, conflict_id) else null;
         const id: mm.OperationId = @intCast(operations.items.len);
         const atomic_id: mm.AtomicId = @intCast(atomics.items.len);
-        try operations.append(arena, .{ .id = id, .atomic_id = atomic_id, .kind = .field, .identity = .{ .document = document, .property_path = path }, .hierarchy_path = hierarchy, .property_path = path, .item_path = if (c.path.len > 0) c.path else null, .values = .{ .base = try side(arena, c.nodes.base, files), .ours = try side(arena, c.nodes.ours, files), .theirs = try side(arena, c.nodes.theirs, files) }, .resolution = .unresolved, .collection = .{ .binding = binding_id, .conflict = i } });
+        // A preview is a YAML value. Source item bytes may include a sequence dash.
+        const preview_value: ?mm.SideValue = if (review_group) |group| if (group.preview) |node|
+            .{ .node = node, .bytes = yaml.flow(arena, node) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => return error.InvalidResolution,
+            }, .span = null }
+        else
+            null else null;
+        const operation_review = if (review_group) |group| if (group.scope == .item) try makeReviewMetadata(arena, group, preview_value) else null else null;
+        const operation_path = if (review_group) |group| group.path else c.path;
+        const operation_nodes = if (review_group) |group| group.nodes else c.nodes;
+        const operation_resolution: mm.Resolution = if (review_group) |group| if (group.automatic)
+            .{ .custom = preview_value.?.bytes }
+        else
+            .unresolved else .unresolved;
+        try operations.append(arena, .{
+            .id = id,
+            .atomic_id = atomic_id,
+            .kind = .field,
+            .identity = .{ .document = document, .property_path = path },
+            .hierarchy_path = hierarchy,
+            .property_path = path,
+            .item_path = if (operation_path.len > 0) operation_path else null,
+            .values = .{
+                .base = try side(arena, operation_nodes.base, files),
+                .ours = try side(arena, operation_nodes.ours, files),
+                .theirs = try side(arena, operation_nodes.theirs, files),
+            },
+            .resolution = operation_resolution,
+            .collection = .{ .binding = binding_id, .conflict = conflict_id },
+            .review = operation_review,
+        });
         const members = try arena.dupe(mm.OperationId, &.{id});
         try atomics.append(arena, .{ .id = atomic_id, .kind = .field, .operation_ids = members });
         try ids.append(arena, id);
     }
     try state.bindings.append(arena, .{ .plan = plan, .source_nodes = nodes, .original = original, .identity = .{ .document = document, .property_path = path }, .operation_ids = try ids.toOwnedSlice(arena) });
+}
+
+fn reviewGroup(groups: []const value.ReviewGroup, conflict_id: usize) ?value.ReviewGroup {
+    for (groups) |group| if (group.conflict_id == conflict_id) return group;
+    return null;
+}
+
+fn isReviewChild(groups: []const value.ReviewGroup, conflict_id: usize) bool {
+    for (groups) |group| for (group.child_conflicts) |child| if (child == conflict_id) return true;
+    return false;
+}
+
+fn makeReviewMetadata(arena: std.mem.Allocator, group: value.ReviewGroup, preview: ?mm.SideValue) mm.Error!mm.ReviewMetadata {
+    const paths = try arena.alloc([]const mm.Segment, group.required_paths.len);
+    for (group.required_paths, paths) |source_path, *target_path| {
+        const target = try arena.alloc(mm.Segment, source_path.len);
+        for (source_path, target) |segment, *copy| copy.* = switch (segment) {
+            .key => |key| .{ .key = key },
+            .index => |index| .{ .index = index },
+        };
+        target_path.* = target;
+    }
+    return .{
+        .preview = preview,
+        .required_paths = paths,
+    };
 }
 fn side(arena: std.mem.Allocator, n: ?*const model.Node, files: [3]source.ParsedFile) mm.Error!?mm.SideValue {
     const v = n orelse return null;
@@ -56,10 +122,13 @@ fn side(arena: std.mem.Allocator, n: ?*const model.Node, files: [3]source.Parsed
     return .{ .node = v, .span = null, .bytes = bytes };
 }
 pub fn choices(arena: std.mem.Allocator, plan: *const mm.MergePlan, binding: Binding) mm.Error![]value.Choice {
-    const result = try arena.alloc(value.Choice, binding.operation_ids.len);
-    for (binding.operation_ids, result) |id, *choice| {
+    const result = try arena.alloc(value.Choice, binding.plan.conflicts.len);
+    @memset(result, .{ .take = .ours });
+    for (binding.operation_ids) |id| {
         const op = mm.operationByIdConst(plan, id) orelse return error.InvalidMerge;
-        choice.* = switch (op.resolution) {
+        const reference = op.collection orelse return error.InvalidMerge;
+        if (reference.binding >= plan.collections.len or reference.conflict >= result.len) return error.InvalidMerge;
+        result[reference.conflict] = switch (op.resolution) {
             .unresolved => .unresolved,
             .remove => .remove,
             .take => |s| .{ .take = @enumFromInt(@intFromEnum(s)) },
@@ -68,7 +137,6 @@ pub fn choices(arena: std.mem.Allocator, plan: *const mm.MergePlan, binding: Bin
                     error.OutOfMemory => return error.OutOfMemory,
                     else => return error.InvalidResolution,
                 };
-                const reference = op.collection orelse break :blk .{ .custom = parsed };
                 break :blk .{ .custom = try pairCustom(arena, binding.plan.conflicts[reference.conflict], parsed) };
             },
         };

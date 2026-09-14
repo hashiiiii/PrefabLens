@@ -61,7 +61,7 @@ pub fn prepareWithGit(
             }
         }
     }
-    const built = try core.merge.buildWithContext(arena, base, local, remote, context);
+    const built = try core.merge.buildForReview(arena, base, local, remote, context);
     return .{ .args = args, .original_merged = merged, .built = built, .source_index = source_index, .git = git };
 }
 
@@ -102,12 +102,13 @@ pub fn finish(
     stderr: *std.Io.Writer,
 ) !u8 {
     if (state.outcome == .aborted) return 1;
-    if (state.outcome != .ready) return merge_io.reportFailure(stderr, prepared.args.merged);
+    if (!state.canComplete()) return merge_io.reportFailure(stderr, prepared.args.merged);
     const source_lock = lockSources(io, arena, prepared) catch
         return merge_io.reportFailure(stderr, prepared.args.merged);
     defer if (source_lock) |lock| lock.deinit(io);
     const result = core.merge.finish(arena, &prepared.built.plan) catch
         return merge_io.reportFailure(stderr, prepared.args.merged);
+    core.merge.validation.validate(arena, result) catch return merge_io.reportFailure(stderr, prepared.args.merged);
     atomic_file.replace(
         io,
         arena,
@@ -149,7 +150,7 @@ pub fn run(
         return merge_io.reportFailure(stderr, args.merged);
     var state = merge_ui_state.State.init(arena, &prepared.built.plan) catch
         return merge_io.reportFailure(stderr, args.merged);
-    if (state.outcome != .ready) {
+    if (state.conflict_indices.len != 0) {
         merge_tui.run(io, arena, env_map, &state, args.merged, prepared.built.partial, prepared.original_merged) catch
             return merge_io.reportFailure(stderr, args.merged);
     }

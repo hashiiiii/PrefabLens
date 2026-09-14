@@ -1,5 +1,6 @@
 const std = @import("std");
 const core = @import("core");
+const review = @import("merge_review.zig");
 
 const testing = std.testing;
 
@@ -55,11 +56,18 @@ test "merge UI state: combined insertion orders keep both additions and support 
     }
 }
 
+const Draft = struct {
+    pending: ?core.merge.Resolution = null,
+    chosen: []bool,
+    dirty: bool = false,
+};
+
 pub const State = struct {
     allocator: std.mem.Allocator,
     plan: *core.merge.MergePlan,
     initial_resolutions: []core.merge.Resolution,
     conflict_indices: []usize,
+    drafts: []Draft,
     pane: Pane = .hierarchy,
     selected_conflict: usize = 0,
     pending: ?core.merge.Resolution = null,
@@ -71,7 +79,13 @@ pub const State = struct {
         plan: *core.merge.MergePlan,
     ) !State {
         const initial = try allocator.alloc(core.merge.Resolution, plan.operations.len);
-        const conflicts = try allocator.alloc(usize, plan.unresolvedCount());
+        const conflicts = try allocator.alloc(usize, plan.atomic_operations.len);
+        const drafts = try allocator.alloc(Draft, plan.operations.len);
+        for (plan.operations, drafts) |operation_item, *draft| {
+            const count = if (operation_item.review) |metadata| metadata.required_paths.len else 0;
+            draft.* = .{ .chosen = try allocator.alloc(bool, count) };
+            @memset(draft.chosen, operation_item.resolution != .unresolved);
+        }
         for (plan.operations, initial) |operation_item, *resolution| {
             resolution.* = operation_item.resolution;
         }
@@ -82,13 +96,21 @@ pub const State = struct {
                 conflict_index += 1;
             }
         }
-        return .{
+        var state: State = .{
             .allocator = allocator,
             .plan = plan,
             .initial_resolutions = initial,
-            .conflict_indices = conflicts,
-            .outcome = if (conflicts.len == 0) .ready else .active,
+            .conflict_indices = conflicts[0..conflict_index],
+            .drafts = drafts,
+            .outcome = if (plan.unresolvedCount() == 0) .ready else .active,
         };
+        if (plan.review and conflict_index != 0) {
+            const first = for (state.conflict_indices, 0..) |index, ordinal| {
+                if (plan.operations[index].resolution == .unresolved) break ordinal;
+            } else 0;
+            state.selectConflict(first);
+        }
+        return state;
     }
 
     fn operation(self: *State) ?*core.merge.Operation {
@@ -99,9 +121,72 @@ pub const State = struct {
 
     fn selectConflict(self: *State, index: usize) void {
         if (index >= self.conflict_indices.len) return;
+        if (self.plan.review and self.operation() != null) self.selectedDraft().pending = self.pending;
         self.selected_conflict = index;
         const resolution = self.operation().?.resolution;
-        self.pending = if (resolution == .unresolved) null else resolution;
+        self.pending = if (self.plan.review) self.selectedDraft().pending orelse if (resolution == .unresolved) self.defaultPreview() else resolution else if (resolution == .unresolved) null else resolution;
+        self.status = "";
+    }
+
+    fn selectedDraft(self: *State) *Draft {
+        return &self.drafts[self.conflict_indices[self.selected_conflict]];
+    }
+
+    fn defaultPreview(self: *State) ?core.merge.Resolution {
+        const metadata = (self.operation() orelse return null).review orelse return null;
+        return if (metadata.preview) |preview| .{ .custom = preview.bytes } else null;
+    }
+
+    pub fn fieldUnresolved(self: *State, path: []const core.merge.properties.Segment) bool {
+        const operation_item = self.operation() orelse return false;
+        const metadata = operation_item.review orelse return false;
+        for (metadata.required_paths, self.selectedDraft().chosen) |required, chosen| {
+            if (chosen) continue;
+            if (path.len == 0 or (required.len <= path.len and review.pathEqual(required, path[0..required.len])) or
+                (path.len <= required.len and review.pathEqual(path, required[0..path.len]))) return true;
+        }
+        return false;
+    }
+
+    pub fn setFieldResult(self: *State, resolution: core.merge.Resolution, path: []const core.merge.properties.Segment) void {
+        self.pending = resolution;
+        const current = self.selectedDraft();
+        if (self.operation().?.review) |metadata| for (metadata.required_paths, current.chosen) |required, *chosen| {
+            // Selecting a map or sequence field settles its descendants as one value.
+            if (path.len <= required.len and review.pathEqual(path, required[0..path.len])) chosen.* = true;
+        };
+        current.pending = self.pending;
+        current.dirty = true;
+        self.outcome = .active;
+        self.status = "";
+    }
+
+    fn setWholeResult(self: *State, resolution: core.merge.Resolution) void {
+        if (!self.plan.review) {
+            self.pending = resolution;
+            return;
+        }
+        if (self.pending) |pending| {
+            const same = switch (resolution) {
+                .take => |side| pending == .take and pending.take == side,
+                .remove => pending == .remove,
+                .custom => |bytes| pending == .custom and std.mem.eql(u8, pending.custom, bytes),
+                .unresolved => false,
+            };
+            if (same and !self.fieldUnresolved(&.{})) return;
+        }
+        self.setFieldResult(resolution, &.{});
+        @memset(self.selectedDraft().chosen, true);
+    }
+
+    pub fn dirty(self: *const State, operation_index: usize) bool {
+        return self.plan.review and self.drafts[operation_index].dirty;
+    }
+
+    pub fn canComplete(self: *const State) bool {
+        if (self.plan.unresolvedCount() != 0) return false;
+        for (self.drafts) |current| if (self.plan.review and current.dirty) return false;
+        return true;
     }
 
     pub fn reorderConflicts(self: *State, visual_order: []const usize) !void {
@@ -145,13 +230,13 @@ pub const State = struct {
         }
         for (1..self.conflict_indices.len + 1) |offset| {
             const index = (self.selected_conflict + offset) % self.conflict_indices.len;
-            if (self.plan.operations[self.conflict_indices[index]].resolution == .unresolved) {
+            if (self.plan.operations[self.conflict_indices[index]].resolution == .unresolved or self.dirty(self.conflict_indices[index])) {
                 self.selectConflict(index);
                 return;
             }
         }
-        self.outcome = .ready;
-        self.pending = null;
+        self.outcome = if (self.canComplete()) .ready else .active;
+        if (!self.plan.review) self.pending = null;
     }
 
     fn atomicIndexById(self: *const State, atomic_id: u32) ?usize {
@@ -259,10 +344,10 @@ pub const State = struct {
             },
             .select_conflict => |index| self.selectConflict(index),
             .choose_ours => if (self.operation()) |operation_item| {
-                self.pending = resolutionForSide(operation_item, .ours);
+                self.setWholeResult(resolutionForSide(operation_item, .ours));
             },
             .choose_theirs => if (self.operation()) |operation_item| {
-                self.pending = resolutionForSide(operation_item, .theirs);
+                self.setWholeResult(resolutionForSide(operation_item, .theirs));
             },
             .combine_ours_first, .combine_theirs_first => if (self.operation()) |operation_item| {
                 const value = core.merge.combinedCollectionValue(
@@ -277,12 +362,12 @@ pub const State = struct {
                         return;
                     },
                 };
-                if (operation_item.resolution != .unresolved) try self.handle(.reopen_result);
-                self.pending = .{ .custom = value };
+                if (!self.plan.review and operation_item.resolution != .unresolved) try self.handle(.reopen_result);
+                self.setWholeResult(.{ .custom = value });
                 self.status = "";
             },
             .edit_result => |value| if (self.operation() != null) {
-                self.pending = .{ .custom = try self.allocator.dupe(u8, value) };
+                self.setWholeResult(.{ .custom = try self.allocator.dupe(u8, value) });
             },
             .apply_result => {
                 const operation_item = self.operation() orelse return;
@@ -290,6 +375,15 @@ pub const State = struct {
                     self.status = "Select a result first.";
                     return;
                 };
+                if (self.plan.review and self.fieldUnresolved(&.{})) {
+                    self.status = "Choose every unresolved field, or choose the entire item.";
+                    return;
+                }
+                if (self.plan.review and operation_item.resolution != .unresolved and !self.selectedDraft().dirty) {
+                    self.status = "";
+                    self.advance();
+                    return;
+                }
                 switch (try self.selectedDependencies(operation_item)) {
                     .ready, .invalid => {},
                     .unresolved => {
@@ -308,6 +402,8 @@ pub const State = struct {
                     },
                     else => return err,
                 };
+                self.selectedDraft().dirty = false;
+                self.selectedDraft().pending = pending;
                 self.status = "";
                 self.advance();
             },
@@ -317,7 +413,10 @@ pub const State = struct {
                     const member = self.operationById(operation_id) orelse continue;
                     member.resolution = .unresolved;
                 }
-                self.pending = null;
+                self.pending = self.defaultPreview();
+                self.selectedDraft().pending = self.pending;
+                @memset(self.selectedDraft().chosen, false);
+                self.selectedDraft().dirty = false;
                 self.status = "";
                 self.outcome = .active;
             },
@@ -331,7 +430,7 @@ fn representativeOperationIndex(plan: *const core.merge.MergePlan, atomic: anyty
     if (atomic.kind == .component) {
         const document_index = for (plan.operations, 0..) |operation_item, index| {
             if (operation_item.atomic_id == atomic.id and operation_item.kind == .component and
-                operation_item.resolution == .unresolved) break index;
+                (plan.review or operation_item.resolution == .unresolved)) break index;
         } else null;
         if (document_index) |index| return index;
     }
@@ -340,7 +439,7 @@ fn representativeOperationIndex(plan: *const core.merge.MergePlan, atomic: anyty
     }
     for (atomic.operation_ids) |id| {
         for (plan.operations, 0..) |operation_item, operation_index| {
-            if (operation_item.id == id and operation_item.resolution == .unresolved) return operation_index;
+            if (operation_item.id == id and (plan.review or operation_item.resolution == .unresolved)) return operation_index;
         }
     }
     return null;
@@ -351,7 +450,7 @@ fn differingGameObjectIndex(plan: *const core.merge.MergePlan, atomic: anytype) 
     var best_score: u8 = 0;
     for (plan.operations, 0..) |operation_item, index| {
         if (operation_item.atomic_id != atomic.id) continue;
-        if (operation_item.resolution != .unresolved) continue;
+        if (!plan.review and operation_item.resolution != .unresolved) continue;
         if (operation_item.kind != .game_object) continue;
         if (operation_item.identity.document.class_id != 1) continue;
         var score: u8 = 1;
@@ -692,4 +791,42 @@ test "merge UI state: an empty plan is ready and handles every action safely" {
 
     try state.handle(.abort);
     try testing.expectEqual(Outcome.aborted, state.outcome);
+}
+
+test "merge UI state: review automatic field edits preserve required and unrelated fields" {
+    var memory = std.heap.ArenaAllocator.init(testing.allocator);
+    defer memory.deinit();
+    const arena = memory.allocator();
+    const prefix = "--- !u!114 &1\nMonoBehaviour:\n  values: ";
+    var built = try core.merge.buildForReview(arena, prefix ++ "[{left: 1, right: 1}]\n  independent: 0\n", prefix ++ "[{left: 2, right: 1}]\n  independent: 0\n", prefix ++ "[{left: 3, right: 4}]\n  independent: 7\n", .{});
+    var state = try State.init(arena, &built.plan);
+    const item_index = for (state.conflict_indices, 0..) |index, ordinal| {
+        if (built.plan.operations[index].review != null) break ordinal;
+    } else return error.TestUnexpectedResult;
+    try state.handle(.{ .select_conflict = item_index });
+    const item = state.operation().?;
+    const right: []const core.merge.properties.Segment = &.{.{ .key = "right" }};
+    const left: []const core.merge.properties.Segment = &.{.{ .key = "left" }};
+    const preview = item.review.?.preview.?.node.?;
+    const edited = try review.edit(arena, preview, right, review.at(preview, right).?, "5");
+    state.setFieldResult(.{ .custom = edited }, right);
+    try state.handle(.apply_result);
+    // An automatic field is editable without implicitly approving the conflicting Left value.
+    try testing.expectEqual(@as(usize, 1), state.unresolvedCount());
+    try testing.expect(!state.canComplete());
+    try testing.expectError(error.InvalidResolution, core.merge.finish(arena, &built.plan));
+
+    const root = try core.merge.properties.parseValue(arena, edited);
+    const selected = try review.replace(arena, root, left, review.at(item.values.ours.?.node, left));
+    state.setFieldResult(.{ .custom = try core.merge.properties.valueText(arena, selected) }, left);
+    try state.handle(.apply_result);
+    try testing.expect(state.canComplete());
+    try testing.expectEqualStrings(prefix ++ "[{left: 2, right: 5}]\n  independent: 7\n", try core.merge.finish(arena, &built.plan));
+
+    try state.handle(.{ .select_conflict = item_index });
+    try state.handle(.choose_ours);
+    try state.handle(.apply_result);
+    // Whole-item Ours restores Right, while the unrelated automatic change remains accepted.
+    try testing.expectEqualStrings(prefix ++ "[{left: 2, right: 1}]\n  independent: 7\n", try core.merge.finish(arena, &built.plan));
+    try testing.expect(state.conflict_indices.len >= 2);
 }

@@ -309,34 +309,20 @@ test "merge TUI: game object rows show the edited name" {
     try std.testing.expectEqualStrings("Edited Child", try valueText(arena, model.rows[index].values[3]));
 }
 
-test "merge TUI: children list rows follow sequence payload bytes" {
+test "merge TUI: children reorder rows show GameObject names" {
     var memory = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer memory.deinit();
     const arena = memory.allocator();
-    const fixture = try core.merge.buildForReview(
-        arena,
-        "--- !u!1 &1\nGameObject:\n  m_Component:\n  - component: {fileID: 4}\n  m_Name: Root\n" ++
-            "--- !u!4 &4\nTransform:\n  m_GameObject: {fileID: 1}\n  m_Children:\n  - {fileID: 42}\n  m_Father: {fileID: 0}\n" ++
-            "--- !u!1 &20\nGameObject:\n  m_Component:\n  - component: {fileID: 42}\n  - component: {fileID: 54}\n  m_Name: Child\n" ++
-            "--- !u!4 &42\nTransform:\n  m_GameObject: {fileID: 20}\n  m_Children: []\n  m_Father: {fileID: 4}\n" ++
-            "--- !u!54 &54\nRigidbody:\n  m_GameObject: {fileID: 20}\n  m_Mass: 1\n",
-        "--- !u!1 &1\nGameObject:\n  m_Component:\n  - component: {fileID: 4}\n  m_Name: Root\n" ++
-            "--- !u!4 &4\nTransform:\n  m_GameObject: {fileID: 1}\n  m_Children: []\n  m_Father: {fileID: 0}\n",
-        "--- !u!1 &1\nGameObject:\n  m_Component:\n  - component: {fileID: 4}\n  m_Name: Root\n" ++
-            "--- !u!4 &4\nTransform:\n  m_GameObject: {fileID: 1}\n  m_Children:\n  - {fileID: 42}\n  m_Father: {fileID: 0}\n" ++
-            "--- !u!1 &20\nGameObject:\n  m_Component:\n  - component: {fileID: 42}\n  - component: {fileID: 54}\n  m_Name: Edited Child\n" ++
-            "--- !u!4 &42\nTransform:\n  m_GameObject: {fileID: 20}\n  m_Children: []\n  m_Father: {fileID: 4}\n" ++
-            "--- !u!54 &54\nRigidbody:\n  m_GameObject: {fileID: 20}\n  m_Mass: 1\n",
-        .{},
-    );
+    const fixture = try core.merge.buildForReview(arena, childrenReorderBase, childrenReorderOurs, childrenReorderTheirs, .{});
     const operation = for (fixture.plan.operations) |*op| {
         if (std.mem.eql(u8, op.property_path, "m_Children") and op.kind == .sequence_order) break op;
     } else return error.TestUnexpectedResult;
-    const model = try build(arena, operation, operation.resolution, &fixture.plan);
-    try std.testing.expectEqual(@as(usize, 1), model.rows.len);
-    try std.testing.expectEqualStrings("Child", try model.text(arena, 0, 0));
-    try std.testing.expectEqualStrings("[]", try model.text(arena, 0, 1));
-    try std.testing.expectEqualStrings("[]", try model.text(arena, 0, 2));
+    const model = try build(arena, operation, .unresolved, &fixture.plan);
+    try std.testing.expectEqual(@as(usize, 3), model.rows.len);
+    try std.testing.expectEqualStrings("A", try model.text(arena, 0, 0));
+    try std.testing.expectEqualStrings("B", try model.text(arena, 0, 1));
+    try std.testing.expectEqualStrings("A", try model.text(arena, 0, 2));
+    try std.testing.expect(std.mem.indexOf(u8, try model.text(arena, 0, 0), "#") == null);
 }
 
 test "merge TUI: reparent rows show GameObject names" {
@@ -356,6 +342,21 @@ test "merge TUI: reparent rows show GameObject names" {
     try std.testing.expectEqualStrings("Parent B", try valueText(arena, model.rows[0].values[2]));
     try std.testing.expect(!model.editable(0));
 }
+
+const childrenReorderRoot =
+    "--- !u!1 &100\nGameObject:\n  m_Component:\n  - component: {fileID: 400}\n  m_Name: Root\n" ++
+    "--- !u!4 &400\nTransform:\n  m_GameObject: {fileID: 100}\n  m_Children:\n";
+const childrenReorderObjects =
+    "  m_Father: {fileID: 0}\n" ++
+    "--- !u!1 &110\nGameObject:\n  m_Component:\n  - component: {fileID: 410}\n  m_Name: A\n" ++
+    "--- !u!4 &410\nTransform:\n  m_GameObject: {fileID: 110}\n  m_Children: []\n  m_Father: {fileID: 400}\n" ++
+    "--- !u!1 &120\nGameObject:\n  m_Component:\n  - component: {fileID: 420}\n  m_Name: B\n" ++
+    "--- !u!4 &420\nTransform:\n  m_GameObject: {fileID: 120}\n  m_Children: []\n  m_Father: {fileID: 400}\n" ++
+    "--- !u!1 &130\nGameObject:\n  m_Component:\n  - component: {fileID: 430}\n  m_Name: C\n" ++
+    "--- !u!4 &430\nTransform:\n  m_GameObject: {fileID: 130}\n  m_Children: []\n  m_Father: {fileID: 400}\n";
+const childrenReorderBase = childrenReorderRoot ++ "  - {fileID: 410}\n  - {fileID: 420}\n  - {fileID: 430}\n" ++ childrenReorderObjects;
+const childrenReorderOurs = childrenReorderRoot ++ "  - {fileID: 420}\n  - {fileID: 410}\n  - {fileID: 430}\n" ++ childrenReorderObjects;
+const childrenReorderTheirs = childrenReorderRoot ++ "  - {fileID: 410}\n  - {fileID: 430}\n  - {fileID: 420}\n" ++ childrenReorderObjects;
 
 const reparentBase =
     "--- !u!1 &1\nGameObject:\n  m_Component:\n  - component: {fileID: 4}\n  m_Name: Root\n" ++

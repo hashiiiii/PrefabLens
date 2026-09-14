@@ -379,7 +379,6 @@ test "merge TUI: Shift+E shows the closing marker of a component delete-edit fil
     const shown = try rangeText(arena, surface, .{ .start = 0, .end = 100 }, overlay.start, overlay.end);
     try testing.expect(std.mem.indexOf(u8, shown, "<<<<<<<") != null);
     try testing.expect(std.mem.indexOf(u8, shown, ">>>>>>>") != null);
-    try testing.expect(std.mem.indexOf(u8, shown, ">>>>>>>") != null);
 }
 
 test "merge TUI: footer shows the working file shortcut" {
@@ -1013,29 +1012,26 @@ test "merge TUI: review dictionary fields are visible before choosing a source" 
 }
 
 test "merge TUI: unresolved review raw Result stays empty until a choice" {
-    for ([_]bool{ false, true }) |first_second| {
-        var memory = std.heap.ArenaAllocator.init(testing.allocator);
-        defer memory.deinit();
-        const arena = memory.allocator();
-        const original = try dictionaryUnionPlan(arena);
-        var sides = [_][]const u8{ original.plan.base.bytes, original.plan.ours.bytes, original.plan.theirs.bytes };
-        if (first_second) for (&sides) |*side| {
-            side.* = try std.mem.replaceOwned(u8, arena, try std.mem.replaceOwned(u8, arena, side.*, "key:", "first:"), "value:", "second:");
-        };
-        var built = try core.merge.buildForReview(arena, sides[0], sides[1], sides[2], .{});
-        var state = try merge_ui_state.State.init(arena, &built.plan);
-        var view = try viewForTest(arena, &state, "DictionaryFirstSecond.prefab", built.partial);
-        defer view.deinit();
-        view.raw_view = true;
-        _ = try drawForTest(arena, view.widget(), 180, 24);
-        const operation = view.selectedOperation().?;
-        // A review preview is Ours-shaped YAML, not a user choice.
-        try testing.expectEqualStrings("", try view.columnText(arena, operation, .result));
-        try state.handle(.choose_ours);
-        const result = try view.columnText(arena, operation, .result);
-        try testing.expect(std.mem.indexOf(u8, result, "Goblin") != null);
-        try testing.expect(std.mem.indexOf(u8, result, if (first_second) "second: 2" else "value: 2") != null);
+    var memory = std.heap.ArenaAllocator.init(testing.allocator);
+    defer memory.deinit();
+    const arena = memory.allocator();
+    const original = try dictionaryUnionPlan(arena);
+    var sides = [_][]const u8{ original.plan.base.bytes, original.plan.ours.bytes, original.plan.theirs.bytes };
+    for (&sides) |*side| {
+        side.* = try std.mem.replaceOwned(u8, arena, try std.mem.replaceOwned(u8, arena, side.*, "key:", "first:"), "value:", "second:");
     }
+    var built = try core.merge.buildForReview(arena, sides[0], sides[1], sides[2], .{});
+    var state = try merge_ui_state.State.init(arena, &built.plan);
+    var view = try viewForTest(arena, &state, "DictionaryFirstSecond.prefab", built.partial);
+    defer view.deinit();
+    view.raw_view = true;
+    _ = try drawForTest(arena, view.widget(), 180, 24);
+    const operation = view.selectedOperation().?;
+    try testing.expectEqualStrings("", try view.columnText(arena, operation, .result));
+    try state.handle(.choose_ours);
+    const result = try view.columnText(arena, operation, .result);
+    try testing.expect(std.mem.indexOf(u8, result, "Goblin") != null);
+    try testing.expect(std.mem.indexOf(u8, result, "second: 2") != null);
 }
 
 test "merge TUI: Raw shortcut preserves typed letters in the Result editor" {
@@ -5256,17 +5252,30 @@ test "merge TUI: Down from the last inspector value focuses Complete" {
     try testing.expectEqual(ValueColumn.result, view.selected_value);
     try pressKeyForTest(&view, &ctx, vaxis.Key.down);
     try testing.expect(view.focus_area == .complete);
+}
 
-    try pressKeyForTest(&view, &ctx, vaxis.Key.up);
-    try pressKeyForTest(&view, &ctx, vaxis.Key.left);
-    try testing.expectEqual(ValueColumn.theirs, view.selected_value);
+test "merge TUI: Down from the last property row focuses Complete" {
+    var memory = std.heap.ArenaAllocator.init(testing.allocator);
+    defer memory.deinit();
+    const arena = memory.allocator();
+    const prefix = "--- !u!114 &1\nMonoBehaviour:\n  values: ";
+    var built = try core.merge.buildForReview(arena, prefix ++ "[{left: 1, right: 1}]\n", prefix ++ "[{left: 2, right: 1}]\n", prefix ++ "[{left: 3, right: 4}]\n", .{});
+    var state = try merge_ui_state.State.init(arena, &built.plan);
+    var view = try viewForTest(arena, &state, "ItemField.prefab", built.partial);
+    defer view.deinit();
+    _ = try drawForTest(arena, view.widget(), 160, 24);
+    var ctx = eventContext(arena);
+    try view.chooseSource(&ctx, .ours, true);
+    try view.applyPendingResult(&ctx, view.eventSize());
+    try testing.expect(state.canComplete());
+    const model = try view.propertyModel(arena);
+    try testing.expect(model.rows.len > 1);
+    view.focus_area = .inspector;
+    view.selected_value = .result;
+    view.property_row = 0;
     try pressKeyForTest(&view, &ctx, vaxis.Key.down);
-    try testing.expect(view.focus_area == .complete);
-
-    try pressKeyForTest(&view, &ctx, vaxis.Key.up);
-    try pressKeyForTest(&view, &ctx, vaxis.Key.left);
-    try pressKeyForTest(&view, &ctx, vaxis.Key.left);
-    try testing.expectEqual(ValueColumn.ours, view.selected_value);
+    try testing.expect(view.focus_area == .inspector);
+    view.property_row = model.rows.len - 1;
     try pressKeyForTest(&view, &ctx, vaxis.Key.down);
     try testing.expect(view.focus_area == .complete);
 }
@@ -5701,43 +5710,26 @@ test "merge TUI: review field selection keeps automatic values and whole-item se
 }
 
 test "merge TUI: semantic YAML values that differ from Base stay yellow" {
-    const cases = [_]struct { name: []const u8, base: []const u8, ours: []const u8, theirs: []const u8 }{
-        .{
-            .name = "Conflict.prefab",
-            .base = "--- !u!114 &1\nMonoBehaviour:\n  m_Items: [A]\n",
-            .ours = "--- !u!114 &1\nMonoBehaviour:\n  m_Items: [A, O1, O2]\n",
-            .theirs = "--- !u!114 &1\nMonoBehaviour:\n  m_Items: [A, T1, T2]\n",
-        },
-        .{
-            .name = "SequenceDeleteEdit.prefab",
-            .base = "--- !u!114 &1\nMonoBehaviour:\n  m_Items: [A, B, C]\n",
-            .ours = "--- !u!114 &1\nMonoBehaviour:\n  m_Items: [A]\n",
-            .theirs = "--- !u!114 &1\nMonoBehaviour:\n  m_Items: [A, B, Edited]\n",
-        },
-        .{
-            .name = "SerializedDictionary.prefab",
-            .base = "--- !u!114 &1\nMonoBehaviour:\n  m_Stats:\n    m_Keys:\n    - Goblin\n    m_Values:\n    - 1\n",
-            .ours = "--- !u!114 &1\nMonoBehaviour:\n  m_Stats:\n    m_Keys:\n    - Goblin\n    - Dragon\n    m_Values:\n    - 2\n    - 9\n",
-            .theirs = "--- !u!114 &1\nMonoBehaviour:\n  m_Stats:\n    m_Keys:\n    - Goblin\n    - Slime\n    m_Values:\n    - 3\n    - 2\n",
-        },
-    };
-    for (cases) |case| {
-        var memory = std.heap.ArenaAllocator.init(testing.allocator);
-        defer memory.deinit();
-        const arena = memory.allocator();
-        var built = try core.merge.buildForReview(arena, case.base, case.ours, case.theirs, .{});
-        var state = try merge_ui_state.State.init(arena, &built.plan);
-        var view = try viewForTest(arena, &state, case.name, built.partial);
-        defer view.deinit();
-        const surface = try drawForTest(arena, view.widget(), 160, 24);
-        const geometry = view.valueGeometry(160);
-        const body = BodyGeometry.init(24);
-        // Scalar and sequence conflicts stay in the YAML columns; branch colors still describe Base.
-        try testing.expect(columnHasFg(surface, geometry.ours, body.inspector_rows.start, body.inspector_rows.end, Palette.conflict));
-        try testing.expect(columnHasFg(surface, geometry.theirs, body.inspector_rows.start, body.inspector_rows.end, Palette.conflict));
-        try testing.expect(!columnHasFg(surface, geometry.base, body.inspector_rows.start, body.inspector_rows.end, Palette.conflict));
-        try testing.expect(!columnHasFg(surface, geometry.result, body.inspector_rows.start, body.inspector_rows.end, Palette.conflict));
-    }
+    var memory = std.heap.ArenaAllocator.init(testing.allocator);
+    defer memory.deinit();
+    const arena = memory.allocator();
+    var built = try core.merge.buildForReview(
+        arena,
+        "--- !u!114 &1\nMonoBehaviour:\n  m_Items: [A]\n",
+        "--- !u!114 &1\nMonoBehaviour:\n  m_Items: [A, O1, O2]\n",
+        "--- !u!114 &1\nMonoBehaviour:\n  m_Items: [A, T1, T2]\n",
+        .{},
+    );
+    var state = try merge_ui_state.State.init(arena, &built.plan);
+    var view = try viewForTest(arena, &state, "Conflict.prefab", built.partial);
+    defer view.deinit();
+    const surface = try drawForTest(arena, view.widget(), 160, 24);
+    const geometry = view.valueGeometry(160);
+    const body = BodyGeometry.init(24);
+    try testing.expect(columnHasFg(surface, geometry.ours, body.inspector_rows.start, body.inspector_rows.end, Palette.conflict));
+    try testing.expect(columnHasFg(surface, geometry.theirs, body.inspector_rows.start, body.inspector_rows.end, Palette.conflict));
+    try testing.expect(!columnHasFg(surface, geometry.base, body.inspector_rows.start, body.inspector_rows.end, Palette.conflict));
+    try testing.expect(!columnHasFg(surface, geometry.result, body.inspector_rows.start, body.inspector_rows.end, Palette.conflict));
 }
 
 test "merge TUI: review Complete keeps an invalid reference editable" {

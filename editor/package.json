@@ -1,6 +1,6 @@
 {
   "name": "com.hashiiiii.prefablens",
-  "version": "0.10.6",
+  "version": "0.10.7",
   "displayName": "PrefabLens",
   "description": "Semantic diffs for UnityYAML assets.",
   "unity": "2022.3",

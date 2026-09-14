@@ -203,8 +203,8 @@ The editor still opens with a value to edit.
 **Enter** in the editor applies the value. The group advances when all required fields have choices.
 Choices already made remain pending while another field in the group is unresolved.
 
-For a matched collection item, the property table includes **Entire item** and all of its fields, including automatic values.
-Choose **Entire item** or a source column heading to take the original item from that side.
+For a matched collection item, the property table lists its fields, including automatic values.
+Click a source column heading to take the original item from that side.
 Choose a field cell to replace only that field. Result shows its value and source; fields that still need a choice remain blank.
 For scalar Dictionary pairs, choosing or editing the value resolves the pair.
 Editing an automatic field does not resolve another field's conflict.
@@ -214,7 +214,7 @@ For example, with Base `{left: 1, right: 1}`, Ours `{left: 2, right: 1}`, and Th
 
 | Choice | Result |
 | --- | --- |
-| Ours for Entire item | `{left: 2, right: 1}` |
+| Ours column heading | `{left: 2, right: 1}` |
 | Ours for Left | `{left: 2, right: 4}` |
 | Ours for Left, edit Right to 5 | `{left: 2, right: 5}` |
 

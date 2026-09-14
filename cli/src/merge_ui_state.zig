@@ -376,7 +376,7 @@ pub const State = struct {
                     return;
                 };
                 if (self.plan.review and self.fieldUnresolved(&.{})) {
-                    self.status = "Choose every unresolved field, or choose the entire item.";
+                    self.status = "Choose every unresolved field, or click a source heading.";
                     return;
                 }
                 if (self.plan.review and operation_item.resolution != .unresolved and !self.selectedDraft().dirty) {

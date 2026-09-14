@@ -494,7 +494,6 @@ pub fn build(
             },
         };
         var builder: Builder = .{ .arena = arena, .documents = @splat(null), .atomic_sequences = operation.review != null };
-        if (operation.review != null) try builder.rows.append(arena, .{ .path = &.{}, .label = "Entire item", .values = roots, .changed = true });
         try builder.walk(&.{}, "", roots);
         return .{ .documents = @splat(null), .rows = try builder.rows.toOwnedSlice(arena), .roots = roots };
     }
@@ -1011,6 +1010,6 @@ test "merge TUI: custom item Result shows each edited field" {
     const operation = fixture.plan.operations[0];
     const model = try build(arena, &operation, .{ .custom = "{left: 2, right: 5}" }, &fixture.plan);
     // The table must reflect the full Result map, including its edited automatic field.
-    try std.testing.expectEqualStrings("2", try model.text(arena, 1, 3));
-    try std.testing.expectEqualStrings("5", try model.text(arena, 2, 3));
+    try std.testing.expectEqualStrings("2", try model.text(arena, 0, 3));
+    try std.testing.expectEqualStrings("5", try model.text(arena, 1, 3));
 }

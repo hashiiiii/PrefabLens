@@ -44,8 +44,15 @@ pub fn collect(arena: std.mem.Allocator, state: *State, operations: *std.ArrayLi
         const review_group = if (state.review) reviewGroup(plan.review_groups, conflict_id) else null;
         const id: mm.OperationId = @intCast(operations.items.len);
         const atomic_id: mm.AtomicId = @intCast(atomics.items.len);
-        const preview_value = if (review_group) |group| try side(arena, group.preview, files) else null;
-        const operation_review = if (review_group) |group| if (group.scope == .item) try makeReviewMetadata(arena, group, files) else null else null;
+        // A preview is a YAML value. Source item bytes may include a sequence dash.
+        const preview_value: ?mm.SideValue = if (review_group) |group| if (group.preview) |node|
+            .{ .node = node, .bytes = yaml.flow(arena, node) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => return error.InvalidResolution,
+            }, .span = null }
+        else
+            null else null;
+        const operation_review = if (review_group) |group| if (group.scope == .item) try makeReviewMetadata(arena, group, preview_value) else null else null;
         const operation_path = if (review_group) |group| group.path else c.path;
         const operation_nodes = if (review_group) |group| group.nodes else c.nodes;
         const operation_resolution: mm.Resolution = if (review_group) |group| if (group.automatic)
@@ -86,7 +93,7 @@ fn isReviewChild(groups: []const value.ReviewGroup, conflict_id: usize) bool {
     return false;
 }
 
-fn makeReviewMetadata(arena: std.mem.Allocator, group: value.ReviewGroup, files: [3]source.ParsedFile) mm.Error!mm.ReviewMetadata {
+fn makeReviewMetadata(arena: std.mem.Allocator, group: value.ReviewGroup, preview: ?mm.SideValue) mm.Error!mm.ReviewMetadata {
     const paths = try arena.alloc([]const mm.Segment, group.required_paths.len);
     for (group.required_paths, paths) |source_path, *target_path| {
         const target = try arena.alloc(mm.Segment, source_path.len);
@@ -97,7 +104,7 @@ fn makeReviewMetadata(arena: std.mem.Allocator, group: value.ReviewGroup, files:
         target_path.* = target;
     }
     return .{
-        .preview = try side(arena, group.preview, files),
+        .preview = preview,
         .required_paths = paths,
     };
 }

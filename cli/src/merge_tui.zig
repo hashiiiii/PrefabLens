@@ -745,6 +745,33 @@ test "merge TUI: game object delete edit uses a Base diff and keeps ⇧R" {
     try testing.expectEqualStrings(fixture.plan.theirs.bytes, try core.merge.finish(arena, &fixture.plan));
 }
 
+test "merge TUI: review Children resolve names from each original side" {
+    var memory = std.heap.ArenaAllocator.init(testing.allocator);
+    defer memory.deinit();
+    const arena = memory.allocator();
+    var built = try core.merge.buildForReview(arena, game_object_delete_edit_base, game_object_delete_edit_ours, game_object_delete_edit_theirs, .{});
+    var state = try merge_ui_state.State.init(arena, &built.plan);
+    const children = for (state.conflict_indices, 0..) |operation_index, ordinal| {
+        const operation = built.plan.operations[operation_index];
+        if (std.mem.eql(u8, operation.property_path, "m_Children")) break ordinal;
+    } else return error.TestUnexpectedResult;
+    try state.handle(.{ .select_conflict = children });
+    var view = try viewForTest(arena, &state, "GameObjectDeleteEdit.prefab", built.partial);
+    defer view.deinit();
+    const surface = try drawForTest(arena, view.widget(), 180, 24);
+    const geometry = view.valueGeometry(180);
+    const body = BodyGeometry.init(24);
+    const ours = try rangeText(arena, surface, geometry.ours, body.inspector_rows.start, body.inspector_rows.end);
+    const base = try rangeText(arena, surface, geometry.base, body.inspector_rows.start, body.inspector_rows.end);
+    const theirs = try rangeText(arena, surface, geometry.theirs, body.inspector_rows.start, body.inspector_rows.end);
+    // A deleted child is an empty list; retained references use that branch's object name.
+    try testing.expect(std.mem.indexOf(u8, ours, "[]") != null);
+    try testing.expect(std.mem.indexOf(u8, base, "Child") != null);
+    try testing.expect(std.mem.indexOf(u8, theirs, "Edited Child") != null);
+    try testing.expect(std.mem.indexOf(u8, base, "#42") == null);
+    try testing.expect(std.mem.indexOf(u8, theirs, "#42") == null);
+}
+
 test "merge TUI: game object name edit stays applicable" {
     var memory = std.heap.ArenaAllocator.init(testing.allocator);
     defer memory.deinit();
@@ -905,6 +932,61 @@ test "merge TUI: dictionary semantic value can be edited to a custom result" {
         try std.mem.replaceOwned(u8, arena, fixture.plan.theirs.bytes, "value: 3", "value: 4"),
         try core.merge.finish(arena, &fixture.plan),
     );
+}
+
+test "merge TUI: review dictionary fields are visible before choosing a source" {
+    const cases = [_]struct { first_second: bool, choose_source: bool }{
+        .{ .first_second = false, .choose_source = true },
+        .{ .first_second = true, .choose_source = true },
+        .{ .first_second = false, .choose_source = false },
+        .{ .first_second = true, .choose_source = false },
+    };
+    for (cases) |case| {
+        const first_second = case.first_second;
+        var memory = std.heap.ArenaAllocator.init(testing.allocator);
+        defer memory.deinit();
+        const arena = memory.allocator();
+        const original = try dictionaryUnionPlan(arena);
+        var sides = [_][]const u8{ original.plan.base.bytes, original.plan.ours.bytes, original.plan.theirs.bytes };
+        if (first_second) for (&sides) |*side| {
+            side.* = try std.mem.replaceOwned(u8, arena, try std.mem.replaceOwned(u8, arena, side.*, "key:", "first:"), "value:", "second:");
+        };
+        var built = try core.merge.buildForReview(arena, sides[0], sides[1], sides[2], .{});
+        var state = try merge_ui_state.State.init(arena, &built.plan);
+        var view = try viewForTest(arena, &state, "Dictionary.prefab", built.partial);
+        defer view.deinit();
+        _ = try drawForTest(arena, view.widget(), 180, 24);
+        const model = try view.propertyModel(arena);
+        // A source-preserved block item must expose the same fields before and after selection.
+        try testing.expectEqual(@as(usize, 3), model.rows.len);
+        try testing.expectEqualStrings(if (first_second) "First" else "Key", model.rows[1].label);
+        try testing.expectEqualStrings(if (first_second) "Second" else "Value", model.rows[2].label);
+        try testing.expectEqualStrings("Goblin", try model.text(arena, 1, 1));
+        try testing.expectEqualStrings("2", try model.text(arena, 2, 1));
+        try testing.expectEqualStrings("3", try model.text(arena, 2, 2));
+        var ctx = eventContext(arena);
+        view.property_row = 2;
+        view.focus_area = .inspector;
+        if (case.choose_source) {
+            view.selected_value = .ours;
+            try pressKeyForTest(&view, &ctx, vaxis.Key.enter);
+            // Choosing the pair's value must retain the existing single-choice resolution flow.
+            try testing.expect(state.canComplete());
+        }
+        view.property_row = 2;
+        try view.focusResult(&ctx);
+        try pressKeyForTest(&view, &ctx, vaxis.Key.enter);
+        try testing.expectEqualStrings(if (case.choose_source) "2" else "", try view.editor.buf.dupe());
+        if (case.choose_source) try pressKeyForTest(&view, &ctx, vaxis.Key.backspace);
+        try view.widget().handleEvent(&ctx, .{ .key_press = .{ .codepoint = '4', .text = "4" } });
+        try pressKeyForTest(&view, &ctx, vaxis.Key.enter);
+        try testing.expect(state.canComplete());
+        const expected = if (first_second)
+            "--- !u!114 &1\nMonoBehaviour:\n  m_Stats:\n  - first: Goblin\n    second: 4\n  - first: Dragon\n    second: 9\n  - first: Slime\n    second: 2\n"
+        else
+            "--- !u!114 &1\nMonoBehaviour:\n  m_Stats:\n  - key: Goblin\n    value: 4\n  - key: Dragon\n    value: 9\n  - key: Slime\n    value: 2\n";
+        try testing.expectEqualStrings(expected, try core.merge.finish(arena, &built.plan));
+    }
 }
 
 test "merge TUI: Raw shortcut preserves typed letters in the Result editor" {
@@ -1457,6 +1539,14 @@ pub const View = struct {
     fn propertyModel(self: *const View, arena: std.mem.Allocator) !inspector.Model {
         const operation = self.selectedOperation().?;
         return inspector.build(arena, operation, self.state.pending orelse operation.resolution, self.state.plan);
+    }
+
+    fn hasWholeItemConflict(self: *const View) bool {
+        const metadata = (self.selectedOperation() orelse return false).review orelse return false;
+        for (metadata.required_paths) |path| {
+            if (path.len == 0) return true;
+        }
+        return false;
     }
 
     fn ensurePropertyVisible(self: *View, size: vxfw.Size, count: usize) void {
@@ -2121,7 +2211,8 @@ pub const View = struct {
                 return ctx.consumeAndRedraw();
             },
         };
-        self.state.setFieldResult(.{ .custom = bytes }, self.editor_review_path.?);
+        // An atomic pair edit resolves the item; independent fields retain their own required paths.
+        self.state.setFieldResult(.{ .custom = bytes }, if (self.hasWholeItemConflict()) &.{} else self.editor_review_path.?);
         self.resetEditor();
         self.focus_area = .inspector;
         self.selected_value = .result;
@@ -2144,7 +2235,7 @@ pub const View = struct {
     fn chooseSource(self: *View, ctx: *vxfw.EventContext, side: core.merge.Side, whole: bool) !void {
         self.state.status = "";
         self.invalidateResultPreview();
-        if (self.state.plan.review and !whole and self.usesProperties() and self.selectedOperation().?.review != null) {
+        if (self.state.plan.review and !whole and self.usesProperties() and self.selectedOperation().?.review != null and !self.hasWholeItemConflict()) {
             var memory = std.heap.ArenaAllocator.init(self.state.allocator);
             defer memory.deinit();
             const model = try self.propertyModel(memory.allocator());
@@ -3506,7 +3597,7 @@ fn paintProperties(self: *View, arena: std.mem.Allocator, surface: vxfw.Surface,
         inline for (.{ ValueColumn.base, ValueColumn.ours, ValueColumn.theirs, ValueColumn.result }, 0..) |column, i| {
             const range = valueRange(geometry, column);
             const unresolved = self.state.fieldUnresolved(model.rows[index].path);
-            const cell = if (column == .result and unresolved) "?" else try model.text(arena, index, i);
+            const cell = if (column == .result and unresolved) "" else try model.text(arena, index, i);
             const text = if (self.selectedOperation().?.review != null and column == .result and !unresolved and model.rows[index].path.len != 0)
                 try std.fmt.allocPrint(arena, "{s} [{s}]", .{ cell, review.origin(model.rows[index].values).label() })
             else
@@ -3514,8 +3605,7 @@ fn paintProperties(self: *View, arena: std.mem.Allocator, surface: vxfw.Surface,
             var style = valueStyle(column);
             if (selected and self.selected_value == column) style.bg = Palette.focus_bg;
             if (model.rows[index].changed) style.bold = true;
-            if (self.state.plan.review and !unresolved and ((column == .ours and review.omitted(model.rows[index].values, .ours)) or
-                (column == .theirs and review.omitted(model.rows[index].values, .theirs)))) style.fg = Palette.conflict;
+            if ((column == .ours or column == .theirs) and !review.equal(model.rows[index].values[0], model.rows[index].values[i])) style.fg = Palette.conflict;
             writeClipped(surface, range.start + 2, row, range.end - range.start -| 2, skipGraphemes(text, self.column_h[i]));
             styleRange(surface, row, range, style);
             if (selected and self.selected_value == column) {
@@ -5382,10 +5472,15 @@ test "merge TUI: review field selection keeps automatic values and whole-item se
         var state = try merge_ui_state.State.init(arena, &built.plan);
         var view = try viewForTest(arena, &state, "ItemField.prefab", built.partial);
         defer view.deinit();
-        _ = try drawForTest(arena, view.widget(), 160, 24);
+        const initial = try drawForTest(arena, view.widget(), 160, 24);
         var ctx = eventContext(arena);
         const geometry = view.valueGeometry(160);
         const body = BodyGeometry.init(24);
+        // Unresolved values stay blank; branch colors always describe changes from Base.
+        const initial_result = try rangeText(arena, initial, geometry.result, body.inspector_rows.start, body.inspector_rows.end);
+        try testing.expect(std.mem.indexOf(u8, initial_result, "?") == null);
+        try testing.expectEqual(Palette.conflict, firstContentFg(initial, geometry.ours, body.inspector_rows.start + 1));
+        try testing.expectEqual(Palette.conflict, firstContentFg(initial, geometry.theirs, body.inspector_rows.start + 1));
         try view.widget().handleEvent(&ctx, .{ .mouse = .{
             .type = .press,
             .button = .left,
@@ -5400,6 +5495,12 @@ test "merge TUI: review field selection keeps automatic values and whole-item se
         try pressKeyForTest(&view, &ctx, vaxis.Key.enter);
         try testing.expect(state.canComplete());
         try testing.expectEqualStrings(if (restores_right) prefix ++ "[{left: 2, right: 1}]\n" else prefix ++ "[{left: 2, right: 4}]\n", try core.merge.finish(arena, &built.plan));
+        const selected = try drawForTest(arena, view.widget(), 160, 24);
+        try testing.expectEqual(Palette.conflict, firstContentFg(selected, geometry.ours, body.inspector_rows.start + 1));
+        try testing.expectEqual(Palette.conflict, firstContentFg(selected, geometry.theirs, body.inspector_rows.start + 1));
+        try testing.expectEqual(vaxis.Color.default, firstContentFg(selected, geometry.ours, body.inspector_rows.start + 2));
+        try testing.expectEqual(Palette.conflict, firstContentFg(selected, geometry.theirs, body.inspector_rows.start + 2));
+        try testing.expectEqual(vaxis.Color.default, firstContentFg(selected, geometry.result, body.inspector_rows.start + 1));
         view.property_row = 2;
         // The same Enter key edits Result and applies it without an extra draft confirmation.
         try view.focusResult(&ctx);

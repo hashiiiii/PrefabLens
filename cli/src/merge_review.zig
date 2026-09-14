@@ -93,14 +93,3 @@ pub fn origin(values: [4]?*const Node) Origin {
     if (theirs) return .theirs;
     return .custom;
 }
-
-pub fn omitted(values: [4]?*const Node, side: core.merge.Side) bool {
-    const source = values[
-        switch (side) {
-            .base => return false,
-            .ours => @as(usize, 1),
-            .theirs => 2,
-        }
-    ];
-    return !equal(source, values[0]) and !equal(source, values[3]);
-}

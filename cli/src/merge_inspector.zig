@@ -448,7 +448,7 @@ pub fn build(
     plan: ?*const core.merge.MergePlan,
 ) !Model {
     if (operation.kind == .prefab_override) return buildPrefabOverride(arena, operation, resolution);
-    if (operation.kind == .sequence_order or keyedPairSequenceSupported(operation)) return buildSequenceOrder(arena, operation, resolution);
+    if (operation.kind == .sequence_order or keyedPairSequenceSupported(operation)) return buildSequenceOrder(arena, operation, resolution, plan);
     if (operation.kind == .reparent) return buildReparent(arena, operation, resolution, plan);
     if (operation.kind == .field) {
         const roots: [4]?*const Node = .{
@@ -555,6 +555,7 @@ fn buildSequenceOrder(
     arena: std.mem.Allocator,
     operation: *const core.merge.Operation,
     resolution: core.merge.Resolution,
+    plan: ?*const core.merge.MergePlan,
 ) !Model {
     const sides: [3]?*const Node = .{
         if (operation.values.base) |value| value.node else null,
@@ -562,6 +563,7 @@ fn buildSequenceOrder(
         if (operation.values.theirs) |value| value.node else null,
     };
     const result = try sequenceResultNode(arena, operation, resolution);
+    const result_side: core.merge.Side = if (resolution == .take) resolution.take else .ours;
     var count: usize = 0;
     for (sides) |node| if (node) |seq| {
         if (seq.* == .seq) count = @max(count, seq.seq.len);
@@ -572,10 +574,10 @@ fn buildSequenceOrder(
     const rows = try arena.alloc(Row, count);
     for (rows, 0..) |*row, index| {
         var values: [4]?*const Node = .{
-            try sequenceItemLabelNode(arena, sequenceItemAt(sides[0], index)),
-            try sequenceItemLabelNode(arena, sequenceItemAt(sides[1], index)),
-            try sequenceItemLabelNode(arena, sequenceItemAt(sides[2], index)),
-            try sequenceItemLabelNode(arena, sequenceItemAt(result, index)),
+            try sequenceItemLabelNode(arena, sides[0], index, if (plan) |p| p.base else null),
+            try sequenceItemLabelNode(arena, sides[1], index, if (plan) |p| p.ours else null),
+            try sequenceItemLabelNode(arena, sides[2], index, if (plan) |p| p.theirs else null),
+            try sequenceItemLabelNode(arena, result, index, if (plan) |p| p.file(result_side) else null),
         };
         var changed = false;
         var first: ?*const Node = null;
@@ -655,8 +657,17 @@ fn sequenceItemAt(node: ?*const Node, index: usize) ?*const Node {
     return seq.seq[index];
 }
 
-fn sequenceItemLabelNode(arena: std.mem.Allocator, node: ?*const Node) !?*const Node {
-    const item = node orelse return null;
+fn sequenceItemLabelNode(arena: std.mem.Allocator, sequence: ?*const Node, index: usize, file: ?core.source.ParsedFile) !?*const Node {
+    const item = sequenceItemAt(sequence, index) orelse {
+        if (index == 0) if (sequence) |node| {
+            if (node.* == .seq and node.seq.len == 0) return try scalarNode(arena, "[]");
+        };
+        return null;
+    };
+    if (Node.asRef(item)) |ref| if (ref.guid == null) if (file) |source_file| {
+        // File IDs belong to their source branch; a child may be renamed or absent elsewhere.
+        if (gameObjectForRef(source_file, ref) != null) return try scalarNode(arena, try fatherDisplay(arena, source_file, ref));
+    };
     return try scalarNode(arena, try sequenceItemLabel(arena, item));
 }
 

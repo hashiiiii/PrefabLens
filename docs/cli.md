@@ -202,9 +202,10 @@ Choices already made remain pending while another field in the group is unresolv
 
 For a matched collection item, the property table includes **Entire item** and all of its fields, including automatic values.
 Choose **Entire item** or a source column heading to take the original item from that side.
-Choose a field cell to replace only that field. Result shows its value and source; `?` marks fields that still need a choice.
+Choose a field cell to replace only that field. Result shows its value and source; fields that still need a choice remain blank.
+For scalar Dictionary pairs, choosing or editing the value resolves the pair.
 Editing an automatic field does not resolve another field's conflict.
-Branch values omitted from Result remain visible and are highlighted, even when Result matches Ours.
+In Semantic view, Ours and Theirs values that differ from Base stay yellow before and after selection. Result uses the normal text color.
 
 For example, with Base `{left: 1, right: 1}`, Ours `{left: 2, right: 1}`, and Theirs `{left: 3, right: 4}`:
 

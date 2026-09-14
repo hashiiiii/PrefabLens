@@ -127,7 +127,7 @@ Use the normal merge command:
 git merge origin/main
 ```
 
-https://github.com/user-attachments/assets/5a89e4d8-2d0b-493c-adc6-062154a36417
+https://github.com/user-attachments/assets/24a49904-81c7-44e2-8fae-386af0e14792
 
 ## Development
 

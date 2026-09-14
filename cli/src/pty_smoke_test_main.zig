@@ -442,10 +442,9 @@ fn runMergetoolInPty(
 fn testItemReview(io: std.Io, arena: std.mem.Allocator, scratch: []const u8, prefablens: []const u8) !void {
     const prefix = "--- !u!114 &1\nMonoBehaviour:\n  values: ";
     const cases = [_]struct { name: []const u8, keys: []const u8, right: u8 }{
-        .{ .name = "item-whole-ours", .keys = "\x1b[C\r\r", .right = 1 },
-        .{ .name = "item-field-ours", .keys = "\x1b[C\x1b[B\r\r", .right = 4 },
+        .{ .name = "item-field-ours", .keys = "\x1b[C\r\r", .right = 4 },
         // Editing Right first must keep Left unresolved until its source is selected.
-        .{ .name = "item-edit-automatic", .keys = "\x1b[C\x1b[B\x1b[B\x1b[C\x1b[C\r\x7f5\r\x1b[A\x1b[D\x1b[D\r\r", .right = 5 },
+        .{ .name = "item-edit-automatic", .keys = "\x1b[C\x1b[B\x1b[C\x1b[C\r\x7f5\r\x1b[A\x1b[D\x1b[D\r\r", .right = 5 },
     };
     for (cases) |case| {
         const repo = try prepareMergetoolRepositoryWithSides(io, arena, scratch, prefablens, case.name, .{

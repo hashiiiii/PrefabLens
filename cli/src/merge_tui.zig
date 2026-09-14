@@ -980,14 +980,14 @@ test "merge TUI: review dictionary fields are visible before choosing a source" 
         _ = try drawForTest(arena, view.widget(), 180, 24);
         const model = try view.propertyModel(arena);
         // A source-preserved block item must expose the same fields before and after selection.
-        try testing.expectEqual(@as(usize, 3), model.rows.len);
-        try testing.expectEqualStrings(if (first_second) "First" else "Key", model.rows[1].label);
-        try testing.expectEqualStrings(if (first_second) "Second" else "Value", model.rows[2].label);
-        try testing.expectEqualStrings("Goblin", try model.text(arena, 1, 1));
-        try testing.expectEqualStrings("2", try model.text(arena, 2, 1));
-        try testing.expectEqualStrings("3", try model.text(arena, 2, 2));
+        try testing.expectEqual(@as(usize, 2), model.rows.len);
+        try testing.expectEqualStrings(if (first_second) "First" else "Key", model.rows[0].label);
+        try testing.expectEqualStrings(if (first_second) "Second" else "Value", model.rows[1].label);
+        try testing.expectEqualStrings("Goblin", try model.text(arena, 0, 1));
+        try testing.expectEqualStrings("2", try model.text(arena, 1, 1));
+        try testing.expectEqualStrings("3", try model.text(arena, 1, 2));
         var ctx = eventContext(arena);
-        view.property_row = 2;
+        view.property_row = 1;
         view.focus_area = .inspector;
         if (case.choose_source) {
             view.selected_value = .ours;
@@ -995,7 +995,7 @@ test "merge TUI: review dictionary fields are visible before choosing a source" 
             // Choosing the pair's value must retain the existing single-choice resolution flow.
             try testing.expect(state.canComplete());
         }
-        view.property_row = 2;
+        view.property_row = 1;
         try view.focusResult(&ctx);
         try pressKeyForTest(&view, &ctx, vaxis.Key.enter);
         try testing.expectEqualStrings(if (case.choose_source) "2" else "", try view.editor.buf.dupe());
@@ -1765,7 +1765,7 @@ pub const View = struct {
             const model = try self.propertyModel(self.property_memory.allocator());
             if (self.selectedOperation().?.review != null and model.roots[3] != null) {
                 if (!model.editable(self.property_row)) {
-                    self.state.status = "Select a field to edit. Entire item chooses a source.";
+                    self.state.status = "This property cannot be edited.";
                     return ctx.consumeAndRedraw();
                 }
                 self.editor_review_root = model.roots[3];
@@ -5670,14 +5670,14 @@ test "merge TUI: review field selection keeps automatic values and whole-item se
         // Unresolved values stay blank; branch colors always describe changes from Base.
         const initial_result = try rangeText(arena, initial, geometry.result, body.inspector_rows.start, body.inspector_rows.end);
         try testing.expect(std.mem.indexOf(u8, initial_result, "?") == null);
-        try testing.expectEqual(Palette.conflict, firstContentFg(initial, geometry.ours, body.inspector_rows.start + 1));
-        try testing.expectEqual(Palette.conflict, firstContentFg(initial, geometry.theirs, body.inspector_rows.start + 1));
+        try testing.expectEqual(Palette.conflict, firstContentFg(initial, geometry.ours, body.inspector_rows.start));
+        try testing.expectEqual(Palette.conflict, firstContentFg(initial, geometry.theirs, body.inspector_rows.start));
         try view.widget().handleEvent(&ctx, .{ .mouse = .{
             .type = .press,
             .button = .left,
             .mods = .{},
             .col = @intCast(geometry.ours.start + 2),
-            .row = @intCast(if (whole) body.inspector_labels_row else body.inspector_rows.start + 1),
+            .row = @intCast(if (whole) body.inspector_labels_row else body.inspector_rows.start),
         } });
         // Clicking a source changes the preview, and Enter is the explicit group confirmation.
         try testing.expectEqual(@as(usize, 1), state.unresolvedCount());
@@ -5687,12 +5687,12 @@ test "merge TUI: review field selection keeps automatic values and whole-item se
         try testing.expect(state.canComplete());
         try testing.expectEqualStrings(if (restores_right) prefix ++ "[{left: 2, right: 1}]\n" else prefix ++ "[{left: 2, right: 4}]\n", try core.merge.finish(arena, &built.plan));
         const selected = try drawForTest(arena, view.widget(), 160, 24);
-        try testing.expectEqual(Palette.conflict, firstContentFg(selected, geometry.ours, body.inspector_rows.start + 1));
+        try testing.expectEqual(Palette.conflict, firstContentFg(selected, geometry.ours, body.inspector_rows.start));
+        try testing.expectEqual(Palette.conflict, firstContentFg(selected, geometry.theirs, body.inspector_rows.start));
+        try testing.expectEqual(vaxis.Color.default, firstContentFg(selected, geometry.ours, body.inspector_rows.start + 1));
         try testing.expectEqual(Palette.conflict, firstContentFg(selected, geometry.theirs, body.inspector_rows.start + 1));
-        try testing.expectEqual(vaxis.Color.default, firstContentFg(selected, geometry.ours, body.inspector_rows.start + 2));
-        try testing.expectEqual(Palette.conflict, firstContentFg(selected, geometry.theirs, body.inspector_rows.start + 2));
-        try testing.expectEqual(vaxis.Color.default, firstContentFg(selected, geometry.result, body.inspector_rows.start + 1));
-        view.property_row = 2;
+        try testing.expectEqual(vaxis.Color.default, firstContentFg(selected, geometry.result, body.inspector_rows.start));
+        view.property_row = 1;
         // The same Enter key edits Result and applies it without an extra draft confirmation.
         try view.focusResult(&ctx);
         try pressKeyForTest(&view, &ctx, vaxis.Key.enter);
@@ -5792,7 +5792,7 @@ test "merge TUI: field edits preserve shape when Result omits the field" {
         defer view.deinit();
         _ = try drawForTest(arena, view.widget(), 160, 24);
         var ctx = eventContext(arena);
-        view.property_row = 2;
+        view.property_row = 1;
         try view.beginResultEdit(&ctx, "");
         try testing.expect(view.editing);
         try view.submitReviewProperty(&ctx, "[5]");
@@ -5802,7 +5802,7 @@ test "merge TUI: field edits preserve shape when Result omits the field" {
         try view.submitReviewProperty(&ctx, "5");
         try testing.expect(!view.editing);
         try testing.expect(state.fieldUnresolved(&.{.{ .key = "left" }}));
-        view.property_row = 1;
+        view.property_row = 0;
         try view.chooseSource(&ctx, .ours, false);
         try view.applyPendingResult(&ctx, view.eventSize());
         try testing.expect(state.canComplete());

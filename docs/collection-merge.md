@@ -40,7 +40,7 @@ The existing text stays in place. **Enter** applies the edit and advances when a
 See [Edit Result](cli.md#edit-result) for multiline editing and paste controls.
 When all conflicts are resolved, **Shift+V** previews the full result, including automatic changes outside the selected item. Select **Complete** to write it.
 A local choice retains independent accepted changes elsewhere in the collection.
-For a matched map item, **Entire item** selects the original item from a branch; a property cell selects only that field.
+For a matched map item, click a source column heading to select the original item from a branch; a property cell selects only that field.
 Automatic fields remain visible and editable. Editing one does not settle another field's conflict.
 
 If repeated values or moves leave more than one possible correspondence, choose a local result.

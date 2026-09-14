@@ -359,6 +359,29 @@ test "merge TUI: Shift+E toggles the working file overlay" {
     try testing.expect(std.mem.indexOf(u8, closed, "<<<<<<<") == null);
 }
 
+test "merge TUI: Shift+E shows the closing marker of a component delete-edit file" {
+    var memory = std.heap.ArenaAllocator.init(testing.allocator);
+    defer memory.deinit();
+    const arena = memory.allocator();
+    var fixture = try componentDeletePlan(arena);
+    var state = try merge_ui_state.State.init(arena, &fixture.plan);
+    var view = try viewForTest(arena, &state, "ComponentDeleteEdit.prefab", fixture.partial);
+    defer view.deinit();
+    view.working_file =
+        "--- !u!1 &1\nGameObject:\n  m_Component:\n  - component: {fileID: 4}\n  m_Name: Root\n" ++
+        "--- !u!4 &4\nTransform:\n  m_GameObject: {fileID: 1}\n  m_Children: []\n  m_Father: {fileID: 0}\n" ++
+        "<<<<<<< ours\n=======\n--- !u!54 &54\nRigidbody:\n  m_GameObject: {fileID: 1}\n  m_Mass: 2\n>>>>>>> theirs\n";
+    _ = try drawForTest(arena, view.widget(), 100, 20);
+    var ctx = eventContext(arena);
+    try view.widget().handleEvent(&ctx, .{ .key_press = .{ .codepoint = 'e', .mods = .{ .shift = true }, .text = "E" } });
+    const surface = try drawForTest(arena, view.widget(), 100, 20);
+    const overlay = fileOverlayGeometry(20, null);
+    const shown = try rangeText(arena, surface, .{ .start = 0, .end = 100 }, overlay.start, overlay.end);
+    try testing.expect(std.mem.indexOf(u8, shown, "<<<<<<<") != null);
+    try testing.expect(std.mem.indexOf(u8, shown, ">>>>>>>") != null);
+    try testing.expect(std.mem.indexOf(u8, shown, ">>>>>>>") != null);
+}
+
 test "merge TUI: footer shows the working file shortcut" {
     var memory = std.heap.ArenaAllocator.init(testing.allocator);
     defer memory.deinit();
@@ -745,7 +768,7 @@ test "merge TUI: game object delete edit uses a Base diff and keeps ⇧R" {
     try testing.expectEqualStrings(fixture.plan.theirs.bytes, try core.merge.finish(arena, &fixture.plan));
 }
 
-test "merge TUI: review Children resolve names from each original side" {
+test "merge TUI: review Children empty payload stays empty on both sides" {
     var memory = std.heap.ArenaAllocator.init(testing.allocator);
     defer memory.deinit();
     const arena = memory.allocator();
@@ -764,12 +787,12 @@ test "merge TUI: review Children resolve names from each original side" {
     const ours = try rangeText(arena, surface, geometry.ours, body.inspector_rows.start, body.inspector_rows.end);
     const base = try rangeText(arena, surface, geometry.base, body.inspector_rows.start, body.inspector_rows.end);
     const theirs = try rangeText(arena, surface, geometry.theirs, body.inspector_rows.start, body.inspector_rows.end);
-    // A deleted child is an empty list; retained references use that branch's object name.
+    // Membership of Child is the GameObject conflict. This list payload is empty on both sides.
     try testing.expect(std.mem.indexOf(u8, ours, "[]") != null);
+    try testing.expect(std.mem.indexOf(u8, theirs, "[]") != null);
+    try testing.expect(std.mem.indexOf(u8, theirs, "Edited Child") == null);
     try testing.expect(std.mem.indexOf(u8, base, "Child") != null);
-    try testing.expect(std.mem.indexOf(u8, theirs, "Edited Child") != null);
     try testing.expect(std.mem.indexOf(u8, base, "#42") == null);
-    try testing.expect(std.mem.indexOf(u8, theirs, "#42") == null);
 }
 
 test "merge TUI: game object name edit stays applicable" {
@@ -986,6 +1009,32 @@ test "merge TUI: review dictionary fields are visible before choosing a source" 
         else
             "--- !u!114 &1\nMonoBehaviour:\n  m_Stats:\n  - key: Goblin\n    value: 4\n  - key: Dragon\n    value: 9\n  - key: Slime\n    value: 2\n";
         try testing.expectEqualStrings(expected, try core.merge.finish(arena, &built.plan));
+    }
+}
+
+test "merge TUI: unresolved review raw Result stays empty until a choice" {
+    for ([_]bool{ false, true }) |first_second| {
+        var memory = std.heap.ArenaAllocator.init(testing.allocator);
+        defer memory.deinit();
+        const arena = memory.allocator();
+        const original = try dictionaryUnionPlan(arena);
+        var sides = [_][]const u8{ original.plan.base.bytes, original.plan.ours.bytes, original.plan.theirs.bytes };
+        if (first_second) for (&sides) |*side| {
+            side.* = try std.mem.replaceOwned(u8, arena, try std.mem.replaceOwned(u8, arena, side.*, "key:", "first:"), "value:", "second:");
+        };
+        var built = try core.merge.buildForReview(arena, sides[0], sides[1], sides[2], .{});
+        var state = try merge_ui_state.State.init(arena, &built.plan);
+        var view = try viewForTest(arena, &state, "DictionaryFirstSecond.prefab", built.partial);
+        defer view.deinit();
+        view.raw_view = true;
+        _ = try drawForTest(arena, view.widget(), 180, 24);
+        const operation = view.selectedOperation().?;
+        // A review preview is Ours-shaped YAML, not a user choice.
+        try testing.expectEqualStrings("", try view.columnText(arena, operation, .result));
+        try state.handle(.choose_ours);
+        const result = try view.columnText(arena, operation, .result);
+        try testing.expect(std.mem.indexOf(u8, result, "Goblin") != null);
+        try testing.expect(std.mem.indexOf(u8, result, if (first_second) "second: 2" else "value: 2") != null);
     }
 }
 
@@ -1336,6 +1385,45 @@ fn skipWrappedPrefix(line: []const u8, width: usize, skip: *usize) []const u8 {
     return rest;
 }
 
+fn unskippedLine(line: []const u8, width: usize, skip: *usize) ?[]const u8 {
+    const skip_before = skip.*;
+    const rest = skipWrappedPrefix(line, width, skip);
+    if (skip.* > 0) return null;
+    // A line consumed exactly by the remaining skip is not an empty row to paint.
+    if (rest.len == 0 and skip_before > 0) return null;
+    return rest;
+}
+
+fn isConflictMarkerLine(line: []const u8) bool {
+    return std.mem.startsWith(u8, line, "<<<<<<<") or
+        std.mem.startsWith(u8, line, ">>>>>>>") or
+        std.mem.startsWith(u8, line, "=======") or
+        std.mem.startsWith(u8, line, "|||||||");
+}
+
+fn lastConflictMarkerVisualRow(text: []const u8, width: usize) ?usize {
+    var row: usize = 0;
+    var last: ?usize = null;
+    var last_close: ?usize = null;
+    var lines = std.mem.splitScalar(u8, text, '\n');
+    var remaining = std.mem.splitScalar(u8, text, '\n');
+    _ = remaining.next();
+    while (lines.next()) |raw_line| {
+        const more = remaining.next() != null;
+        const line = std.mem.trimEnd(u8, raw_line, "\r");
+        if (!more and line.len == 0) break;
+        if (std.mem.startsWith(u8, line, ">>>>>>>")) last_close = row;
+        if (isConflictMarkerLine(line)) last = row;
+        row += countLineVisualRows(line, width);
+    }
+    return last_close orelse last;
+}
+
+fn conflictMarkerScroll(text: []const u8, width: usize, viewport: usize) usize {
+    const last = lastConflictMarkerVisualRow(text, width) orelse return 0;
+    return (last + 1) -| viewport;
+}
+
 const ColumnScrollMetrics = struct {
     width: usize,
     rows: usize,
@@ -1405,6 +1493,10 @@ fn valueStyle(column: ValueColumn) vaxis.Style {
     };
 }
 
+fn markChangedFromBase(style: *vaxis.Style, column: ValueColumn, matches_base: bool) void {
+    if ((column == .ours or column == .theirs) and !matches_base) style.fg = Palette.conflict;
+}
+
 pub const View = struct {
     state: *merge_ui_state.State,
     path: []const u8,
@@ -1439,6 +1531,7 @@ pub const View = struct {
     working_file: []const u8 = "",
     result_file: ?[]const u8 = null,
     file_view: bool = false,
+    file_reveal_markers: bool = false,
     file_height: ?u16 = null,
     file_v: usize = 0,
     file_h: usize = 0,
@@ -2189,8 +2282,20 @@ pub const View = struct {
             .base => displaySide(self.state.plan, operation, .base, operation.values.base),
             .ours => displaySide(self.state.plan, operation, .ours, operation.values.ours),
             .theirs => displaySide(self.state.plan, operation, .theirs, operation.values.theirs),
-            .result => try displayResolution(arena, self.state.plan, operation, pending),
+            .result => if (self.hidesDefaultReviewPreview(operation, pending)) "" else try displayResolution(arena, self.state.plan, operation, pending),
         };
+    }
+
+    fn hidesDefaultReviewPreview(self: *const View, operation: *const core.merge.Operation, pending: core.merge.Resolution) bool {
+        if (!self.state.plan.review or operation.resolution != .unresolved) return false;
+        const preview = (operation.review orelse return false).preview orelse return false;
+        const pending_bytes = switch (pending) {
+            .custom => |bytes| bytes,
+            else => return false,
+        };
+        if (!std.mem.eql(u8, pending_bytes, preview.bytes)) return false;
+        if (self.state.selected_conflict >= self.state.conflict_indices.len) return false;
+        return !self.state.dirty(self.state.conflict_indices[self.state.selected_conflict]);
     }
 
     fn selectedText(self: *const View, arena: std.mem.Allocator, column: ValueColumn) std.mem.Allocator.Error![]const u8 {
@@ -2459,7 +2564,22 @@ pub const View = struct {
                 }
                 if (self.state.canComplete()) self.focusComplete(ctx) else ctx.consumeEvent();
             },
-            .inspector => if (self.usesProperties()) try self.moveProperty(ctx, size, true) else self.scrollColumnVertical(ctx, self.selected_value, true),
+            .inspector => {
+                if (self.usesProperties()) {
+                    var memory = std.heap.ArenaAllocator.init(self.editor.buf.allocator);
+                    defer memory.deinit();
+                    const model = try self.propertyModel(memory.allocator());
+                    if (self.property_row + 1 < model.rows.len) return self.moveProperty(ctx, size, true);
+                } else {
+                    const index = @intFromEnum(self.selected_value);
+                    const max = maxScrollOffset(self.column_lines[index], self.inspectorViewportRows());
+                    if (self.column_v[index] < max) {
+                        self.scrollColumnVertical(ctx, self.selected_value, true);
+                        return;
+                    }
+                }
+                if (self.state.canComplete()) self.focusComplete(ctx) else ctx.consumeEvent();
+            },
             .complete => ctx.consumeEvent(),
         }
     }
@@ -2557,7 +2677,12 @@ pub const View = struct {
         self.file_view = self.result_file != null or !self.file_view;
         self.result_file = null;
         self.file_metrics_width = 0;
-        if (!self.file_view) {
+        if (self.file_view) {
+            self.file_v = 0;
+            self.file_h = 0;
+            self.file_reveal_markers = true;
+        } else {
+            self.file_reveal_markers = false;
             self.file_drag_origin = null;
             self.hideScrollbar();
         }
@@ -3242,10 +3367,13 @@ fn draw(
             .{ geometry.theirs, try self.columnText(ctx.arena, operation, .theirs), ValueColumn.theirs },
             .{ geometry.result, try self.columnText(ctx.arena, operation, .result), ValueColumn.result },
         };
+        const base_text = columns[0][1];
         const indent = commonIndent(&.{ columns[0][1], columns[1][1], columns[2][1] });
         const viewport = body.inspector_rows.end - body.inspector_rows.start;
         var painted_end = [_]u16{body.inspector_rows.start} ** 4;
         inline for (columns, 0..) |column, index| {
+            var style = valueStyle(column[2]);
+            markChangedFromBase(&style, column[2], std.mem.eql(u8, column[1], base_text));
             const paint_range = self.prepareColumnScroll(index, column[1], viewport, column[0], indent);
             painted_end[index] = paintColumnValue(
                 surface,
@@ -3254,7 +3382,7 @@ fn draw(
                 body.inspector_rows.end,
                 column[1],
                 indent,
-                valueStyle(column[2]),
+                style,
                 self.column_v[index],
                 self.column_h[index],
             );
@@ -3264,6 +3392,13 @@ fn draw(
             const focus_end = @max(painted_end[selected_index], body.inspector_rows.start + 1);
             var selected_style = valueStyle(self.selected_value);
             selected_style.bg = Palette.focus_bg;
+            const selected_text = switch (self.selected_value) {
+                .base => columns[0][1],
+                .ours => columns[1][1],
+                .theirs => columns[2][1],
+                .result => columns[3][1],
+            };
+            markChangedFromBase(&selected_style, self.selected_value, std.mem.eql(u8, selected_text, base_text));
             var row: u16 = body.inspector_rows.start;
             while (row < focus_end) : (row += 1) {
                 styleRange(surface, row, selected_range, selected_style);
@@ -3424,6 +3559,10 @@ fn paintFileOverlay(self: *View, surface: vxfw.Surface, size: vxfw.Size) void {
         self.file_metrics_width = @intCast(inner_width);
         self.file_lines = countVisualRows(self.fileContents(), inner_width, 0);
     }
+    if (self.file_reveal_markers) {
+        self.file_v = conflictMarkerScroll(self.fileContents(), inner_width, viewport);
+        self.file_reveal_markers = false;
+    }
     self.file_v = @min(self.file_v, maxScrollOffset(self.file_lines, viewport));
     if (self.file_h != 0) self.file_h = @min(self.file_h, self.maxFileHorizontalOffset(size.width));
     for (overlay.start..overlay.end) |row| {
@@ -3446,8 +3585,7 @@ fn paintFileOverlay(self: *View, surface: vxfw.Surface, size: vxfw.Size) void {
         const line = std.mem.trimEnd(u8, raw_line, "\r");
         if (!more and line.len == 0) break;
         const style = fileLineStyle(line);
-        var rest = skipWrappedPrefix(skipGraphemes(line, self.file_h), inner_width, &skip);
-        if (skip > 0) continue;
+        var rest = unskippedLine(skipGraphemes(line, self.file_h), inner_width, &skip) orelse continue;
         while (row < overlay.end) {
             if (rest.len == 0) {
                 styleRange(surface, row, span, style);
@@ -3563,8 +3701,7 @@ fn paintDiffColumn(
         const line = std.mem.trimEnd(u8, raw_line, "\r");
         if (!more and line.len == 0) break;
         const style = diffLineStyle(column, line);
-        var rest = skipWrappedPrefix(skipGraphemes(line, horizontal), inner_width, &skip);
-        if (skip > 0) continue;
+        var rest = unskippedLine(skipGraphemes(line, horizontal), inner_width, &skip) orelse continue;
         while (row < end_row) {
             if (rest.len == 0) {
                 styleRange(surface, row, range, style);
@@ -3605,7 +3742,7 @@ fn paintProperties(self: *View, arena: std.mem.Allocator, surface: vxfw.Surface,
             var style = valueStyle(column);
             if (selected and self.selected_value == column) style.bg = Palette.focus_bg;
             if (model.rows[index].changed) style.bold = true;
-            if ((column == .ours or column == .theirs) and !review.equal(model.rows[index].values[0], model.rows[index].values[i])) style.fg = Palette.conflict;
+            markChangedFromBase(&style, column, review.equal(model.rows[index].values[0], model.rows[index].values[i]));
             writeClipped(surface, range.start + 2, row, range.end - range.start -| 2, skipGraphemes(text, self.column_h[i]));
             styleRange(surface, row, range, style);
             if (selected and self.selected_value == column) {
@@ -3846,8 +3983,7 @@ fn paintColumnValue(
         const line = std.mem.trimEnd(u8, raw_line, "\r");
         if (!more and line.len == 0) break;
         const visible = skipGraphemes(visiblePaintLine(text, line, indent), horizontal);
-        var rest = skipWrappedPrefix(visible, inner_width, &skip);
-        if (skip > 0) continue;
+        var rest = unskippedLine(visible, inner_width, &skip) orelse continue;
         while (row < end_row) {
             if (rest.len == 0) {
                 styleRange(surface, row, range, style);
@@ -4446,6 +4582,14 @@ fn cellsText(
 
 fn firstContentFg(surface: vxfw.Surface, range: Range, row: u16) vaxis.Color {
     return surface.readCell(range.start + 2, row).style.fg;
+}
+
+fn columnHasFg(surface: vxfw.Surface, range: Range, start_row: u16, end_row: u16, color: vaxis.Color) bool {
+    var row = start_row;
+    while (row < end_row) : (row += 1) {
+        if (std.meta.eql(firstContentFg(surface, range, row), color)) return true;
+    }
+    return false;
 }
 
 fn colorLuma(color: vaxis.Color) u32 {
@@ -5089,6 +5233,44 @@ test "merge TUI: Up from Complete focuses Result" {
     try testing.expectEqual(ValueColumn.result, view.selected_value);
 }
 
+test "merge TUI: Down from the last inspector value focuses Complete" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var fixture = try screenPlan(arena);
+    var state = try merge_ui_state.State.init(arena, &fixture.plan);
+    var view = try viewForTest(arena, &state, "A.prefab", fixture.partial);
+    defer view.deinit();
+    _ = try drawForTest(arena, view.widget(), 100, 20);
+    var ctx = eventContext(arena);
+
+    try pressKeyForTest(&view, &ctx, vaxis.Key.right);
+    try pressKeyForTest(&view, &ctx, vaxis.Key.enter);
+    try pressKeyForTest(&view, &ctx, vaxis.Key.right);
+    try pressKeyForTest(&view, &ctx, vaxis.Key.right);
+    try pressKeyForTest(&view, &ctx, vaxis.Key.enter);
+    try testing.expect(view.focus_area == .complete);
+
+    try pressKeyForTest(&view, &ctx, vaxis.Key.up);
+    try testing.expect(view.focus_area == .inspector);
+    try testing.expectEqual(ValueColumn.result, view.selected_value);
+    try pressKeyForTest(&view, &ctx, vaxis.Key.down);
+    try testing.expect(view.focus_area == .complete);
+
+    try pressKeyForTest(&view, &ctx, vaxis.Key.up);
+    try pressKeyForTest(&view, &ctx, vaxis.Key.left);
+    try testing.expectEqual(ValueColumn.theirs, view.selected_value);
+    try pressKeyForTest(&view, &ctx, vaxis.Key.down);
+    try testing.expect(view.focus_area == .complete);
+
+    try pressKeyForTest(&view, &ctx, vaxis.Key.up);
+    try pressKeyForTest(&view, &ctx, vaxis.Key.left);
+    try pressKeyForTest(&view, &ctx, vaxis.Key.left);
+    try testing.expectEqual(ValueColumn.ours, view.selected_value);
+    try pressKeyForTest(&view, &ctx, vaxis.Key.down);
+    try testing.expect(view.focus_area == .complete);
+}
+
 test "merge TUI: unchanged removed Result stays removed" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
@@ -5515,6 +5697,46 @@ test "merge TUI: review field selection keeps automatic values and whole-item se
         try testing.expectEqualStrings(prefix ++ "[{left: 2, right: 5}]\n", try core.merge.finish(arena, &built.plan));
         try pressKeyForTest(&view, &ctx, vaxis.Key.enter);
         try testing.expect(ctx.quit);
+    }
+}
+
+test "merge TUI: semantic YAML values that differ from Base stay yellow" {
+    const cases = [_]struct { name: []const u8, base: []const u8, ours: []const u8, theirs: []const u8 }{
+        .{
+            .name = "Conflict.prefab",
+            .base = "--- !u!114 &1\nMonoBehaviour:\n  m_Items: [A]\n",
+            .ours = "--- !u!114 &1\nMonoBehaviour:\n  m_Items: [A, O1, O2]\n",
+            .theirs = "--- !u!114 &1\nMonoBehaviour:\n  m_Items: [A, T1, T2]\n",
+        },
+        .{
+            .name = "SequenceDeleteEdit.prefab",
+            .base = "--- !u!114 &1\nMonoBehaviour:\n  m_Items: [A, B, C]\n",
+            .ours = "--- !u!114 &1\nMonoBehaviour:\n  m_Items: [A]\n",
+            .theirs = "--- !u!114 &1\nMonoBehaviour:\n  m_Items: [A, B, Edited]\n",
+        },
+        .{
+            .name = "SerializedDictionary.prefab",
+            .base = "--- !u!114 &1\nMonoBehaviour:\n  m_Stats:\n    m_Keys:\n    - Goblin\n    m_Values:\n    - 1\n",
+            .ours = "--- !u!114 &1\nMonoBehaviour:\n  m_Stats:\n    m_Keys:\n    - Goblin\n    - Dragon\n    m_Values:\n    - 2\n    - 9\n",
+            .theirs = "--- !u!114 &1\nMonoBehaviour:\n  m_Stats:\n    m_Keys:\n    - Goblin\n    - Slime\n    m_Values:\n    - 3\n    - 2\n",
+        },
+    };
+    for (cases) |case| {
+        var memory = std.heap.ArenaAllocator.init(testing.allocator);
+        defer memory.deinit();
+        const arena = memory.allocator();
+        var built = try core.merge.buildForReview(arena, case.base, case.ours, case.theirs, .{});
+        var state = try merge_ui_state.State.init(arena, &built.plan);
+        var view = try viewForTest(arena, &state, case.name, built.partial);
+        defer view.deinit();
+        const surface = try drawForTest(arena, view.widget(), 160, 24);
+        const geometry = view.valueGeometry(160);
+        const body = BodyGeometry.init(24);
+        // Scalar and sequence conflicts stay in the YAML columns; branch colors still describe Base.
+        try testing.expect(columnHasFg(surface, geometry.ours, body.inspector_rows.start, body.inspector_rows.end, Palette.conflict));
+        try testing.expect(columnHasFg(surface, geometry.theirs, body.inspector_rows.start, body.inspector_rows.end, Palette.conflict));
+        try testing.expect(!columnHasFg(surface, geometry.base, body.inspector_rows.start, body.inspector_rows.end, Palette.conflict));
+        try testing.expect(!columnHasFg(surface, geometry.result, body.inspector_rows.start, body.inspector_rows.end, Palette.conflict));
     }
 }
 

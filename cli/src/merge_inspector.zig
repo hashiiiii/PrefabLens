@@ -309,6 +309,36 @@ test "merge TUI: game object rows show the edited name" {
     try std.testing.expectEqualStrings("Edited Child", try valueText(arena, model.rows[index].values[3]));
 }
 
+test "merge TUI: children list rows follow sequence payload bytes" {
+    var memory = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer memory.deinit();
+    const arena = memory.allocator();
+    const fixture = try core.merge.buildForReview(
+        arena,
+        "--- !u!1 &1\nGameObject:\n  m_Component:\n  - component: {fileID: 4}\n  m_Name: Root\n" ++
+            "--- !u!4 &4\nTransform:\n  m_GameObject: {fileID: 1}\n  m_Children:\n  - {fileID: 42}\n  m_Father: {fileID: 0}\n" ++
+            "--- !u!1 &20\nGameObject:\n  m_Component:\n  - component: {fileID: 42}\n  - component: {fileID: 54}\n  m_Name: Child\n" ++
+            "--- !u!4 &42\nTransform:\n  m_GameObject: {fileID: 20}\n  m_Children: []\n  m_Father: {fileID: 4}\n" ++
+            "--- !u!54 &54\nRigidbody:\n  m_GameObject: {fileID: 20}\n  m_Mass: 1\n",
+        "--- !u!1 &1\nGameObject:\n  m_Component:\n  - component: {fileID: 4}\n  m_Name: Root\n" ++
+            "--- !u!4 &4\nTransform:\n  m_GameObject: {fileID: 1}\n  m_Children: []\n  m_Father: {fileID: 0}\n",
+        "--- !u!1 &1\nGameObject:\n  m_Component:\n  - component: {fileID: 4}\n  m_Name: Root\n" ++
+            "--- !u!4 &4\nTransform:\n  m_GameObject: {fileID: 1}\n  m_Children:\n  - {fileID: 42}\n  m_Father: {fileID: 0}\n" ++
+            "--- !u!1 &20\nGameObject:\n  m_Component:\n  - component: {fileID: 42}\n  - component: {fileID: 54}\n  m_Name: Edited Child\n" ++
+            "--- !u!4 &42\nTransform:\n  m_GameObject: {fileID: 20}\n  m_Children: []\n  m_Father: {fileID: 4}\n" ++
+            "--- !u!54 &54\nRigidbody:\n  m_GameObject: {fileID: 20}\n  m_Mass: 1\n",
+        .{},
+    );
+    const operation = for (fixture.plan.operations) |*op| {
+        if (std.mem.eql(u8, op.property_path, "m_Children") and op.kind == .sequence_order) break op;
+    } else return error.TestUnexpectedResult;
+    const model = try build(arena, operation, operation.resolution, &fixture.plan);
+    try std.testing.expectEqual(@as(usize, 1), model.rows.len);
+    try std.testing.expectEqualStrings("Child", try model.text(arena, 0, 0));
+    try std.testing.expectEqualStrings("[]", try model.text(arena, 0, 1));
+    try std.testing.expectEqualStrings("[]", try model.text(arena, 0, 2));
+}
+
 test "merge TUI: reparent rows show GameObject names" {
     var memory = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer memory.deinit();
@@ -558,9 +588,9 @@ fn buildSequenceOrder(
     plan: ?*const core.merge.MergePlan,
 ) !Model {
     const sides: [3]?*const Node = .{
-        if (operation.values.base) |value| value.node else null,
-        if (operation.values.ours) |value| value.node else null,
-        if (operation.values.theirs) |value| value.node else null,
+        try sequencePayloadNode(arena, operation.values.base),
+        try sequencePayloadNode(arena, operation.values.ours),
+        try sequencePayloadNode(arena, operation.values.theirs),
     };
     const result = try sequenceResultNode(arena, operation, resolution);
     const result_side: core.merge.Side = if (resolution == .take) resolution.take else .ours;
@@ -604,10 +634,22 @@ fn sequenceResultNode(
     resolution: core.merge.Resolution,
 ) !?*const Node {
     return switch (resolution) {
-        .take => |side| if (operation.values.get(side)) |value| value.node else null,
+        .take => |side| try sequencePayloadNode(arena, operation.values.get(side)),
         .custom => |text| parseSequenceResult(arena, text),
         .unresolved, .remove => null,
     };
+}
+
+fn sequencePayloadNode(arena: std.mem.Allocator, value: ?core.merge.SideValue) !?*const Node {
+    const present = value orelse return null;
+    const trimmed = std.mem.trim(u8, present.bytes, " \t\r\n");
+    if (trimmed.len == 0 or std.mem.eql(u8, trimmed, "[]")) {
+        const node = try arena.create(Node);
+        node.* = .{ .seq = &.{} };
+        return node;
+    }
+    if (parseSequenceResult(arena, present.bytes)) |node| return node;
+    return present.node;
 }
 
 fn parseSequenceResult(arena: std.mem.Allocator, text: []const u8) ?*const Node {

@@ -194,9 +194,12 @@ The user can edit it with another tool and complete the normal Git workflow.
 #### Edit Result
 
 The hierarchy includes unresolved groups and automatic changes. Navigation follows its order from top to bottom.
+Children list rows follow the same payload as Raw. Empty lists stay empty.
 Click an **Ours** or **Theirs** value to preview that choice.
 Press **Enter** on **Ours** or **Theirs** to select that value.
-Click **Result**, or focus it and press **Enter**, to edit the existing value.
+Click **Result**, or focus it and press **Enter**, to edit Result.
+Until a source is chosen or Result is edited, Result stays empty.
+The editor still opens with a value to edit.
 **Enter** in the editor applies the value. The group advances when all required fields have choices.
 Choices already made remain pending while another field in the group is unresolved.
 
@@ -205,7 +208,7 @@ Choose **Entire item** or a source column heading to take the original item from
 Choose a field cell to replace only that field. Result shows its value and source; fields that still need a choice remain blank.
 For scalar Dictionary pairs, choosing or editing the value resolves the pair.
 Editing an automatic field does not resolve another field's conflict.
-In Semantic view, Ours and Theirs values that differ from Base stay yellow before and after selection. Result uses the normal text color.
+In Semantic view, Ours and Theirs values that differ from Base stay yellow before and after selection, including YAML columns that are not a property table. Result uses the normal text color.
 
 For example, with Base `{left: 1, right: 1}`, Ours `{left: 2, right: 1}`, and Theirs `{left: 3, right: 4}`:
 
@@ -246,13 +249,14 @@ Raw keeps the four columns. Ours and Theirs are unified diffs against Base. Dele
 Result shows the Unity YAML preview. Required fields remain marked until selected, even when automatic fields have values.
 Missing sides stay empty. Each inspector column scrolls on its own and stops at the last wrapped line. A thin floating scrollbar appears on the focused column while it scrolls, then hides. Mouse wheel and trackpad two-finger scroll move vertically. Shift plus wheel scrolls a line horizontally.
 Base is not selectable. Wheel over Base still scrolls that column, so long ancestor YAML stays readable.
-**Shift+E** shows the `$MERGED` snapshot from startup, including conflict markers, in a panel over the bottom 40% of the panes. The footer keeps the **⇧E File** control. Click it, or press **Shift+E**, to show or hide the panel. Drag the top edge to resize it. The panel scrolls like an inspector column: it stops at the last wrapped line, and a thin floating scrollbar appears while it scrolls.
+**Shift+E** shows the `$MERGED` snapshot from startup, including conflict markers, in a panel over the bottom 40% of the panes. The panel opens scrolled so the closing marker stays visible. The footer keeps the **⇧E File** control. Click it, or press **Shift+E**, to show or hide the panel. Drag the top edge to resize it. The panel scrolls like an inspector column: it stops at the last wrapped line, and a thin floating scrollbar appears while it scrolls.
 **Shift+V** or **Preview** shows the complete Result after all required choices and edits have been applied. This includes accepted insertions, removals, and ordering outside the selected item. The preview is read-only and closes when a choice is changed, so it cannot show an older result as the current one. **Shift+E** returns to the original working file snapshot.
 While editing, **Shift+R**, **Shift+E**, and **Shift+V** insert text.
 
 #### Completion checks
 
 **Complete** becomes available after all required choices and edits have been applied.
+Down from the last hierarchy row, or from the last Ours / Theirs / Result value, focuses **Complete**.
 It checks the composed YAML for parse errors, duplicate fileIDs, component ownership, parent/child consistency, hierarchy cycles, and missing internal references.
 A failed check keeps the TUI open and identifies the affected document or property so it can be repaired in the same session.
 These checks cover serialized structure; they cannot verify game behavior or every constraint imposed by a custom C# component.

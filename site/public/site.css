@@ -95,6 +95,45 @@ h3 {
   margin: 24px 0 4px;
 }
 
+h2,
+h3 {
+  scroll-margin-top: 24px;
+}
+
+h2 > a,
+h3 > a {
+  color: inherit;
+  text-decoration: none;
+}
+
+h2 > a:hover,
+h3 > a:hover,
+h2 > a:focus-visible,
+h3 > a:focus-visible {
+  text-decoration: none;
+}
+
+h2 > a:focus-visible,
+h3 > a:focus-visible {
+  outline: 2px solid var(--link);
+  outline-offset: 2px;
+}
+
+h2 > a::after,
+h3 > a::after {
+  content: " #";
+  color: var(--muted);
+  font-weight: 600;
+  opacity: 0;
+}
+
+h2 > a:hover::after,
+h3 > a:hover::after,
+h2 > a:focus-visible::after,
+h3 > a:focus-visible::after {
+  opacity: 1;
+}
+
 .site-header {
   display: flex;
   align-items: baseline;

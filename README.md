@@ -4,7 +4,7 @@
 [![Release](https://img.shields.io/github/v/release/hashiiiii/PrefabLens)](https://github.com/hashiiiii/PrefabLens/releases)
 [![CI](https://img.shields.io/github/actions/workflow/status/hashiiiii/PrefabLens/ci.yml?branch=main&label=CI)](https://github.com/hashiiiii/PrefabLens/actions/workflows/ci.yml)
 
-PrefabLens shows semantic diffs for UnityYAML assets.
+PrefabLens shows semantic diffs and merges for UnityYAML assets.
 It shows changes to GameObjects, components, and fields.
 
 Use the [Chrome extension](#chrome-extension), [Unity Editor package](#unity-editor), or [CLI](#cli).

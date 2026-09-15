@@ -6,14 +6,14 @@ layout: layout.liquid
 <h1>CLI demo</h1>
 <p class="hint">This page shows actual output from the <code>prefablens</code> binary. The site build creates this output.</p>
 
-<h2>Terminal</h2>
+<h2 id="terminal"><a href="#terminal">Terminal</a></h2>
 <p><code>prefablens main</code> compares a ref with your working tree.</p>
 <div class="window terminal">
   <div class="window-title">default</div>
   <pre>{% rawHtml "terminal.html" %}</pre>
 </div>
 
-<h2>HTML report</h2>
+<h2 id="html-report"><a href="#html-report">HTML report</a></h2>
 <p>
   <code>prefablens --open main</code> writes a self-contained report.
   <a href="cli-report.html" target="_blank" rel="noopener">Open the report as a full page</a>.
@@ -23,7 +23,7 @@ layout: layout.liquid
   <iframe class="report-frame" src="cli-report.html" title="PrefabLens HTML report"></iframe>
 </div>
 
-<h2>Git merge</h2>
+<h2 id="git-merge"><a href="#git-merge">Git merge</a></h2>
 <p>
   After <code>prefablens setup-merge</code>, <code>git merge</code> opens the PrefabLens TUI for UnityYAML
   conflicts.
@@ -33,8 +33,8 @@ layout: layout.liquid
   <video
     class="window-shot"
     src="images/cli-git-merge.mp4"
-    width="1386"
-    height="950"
+    width="960"
+    height="626"
     controls
     playsinline
     preload="metadata"

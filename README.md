@@ -129,6 +129,11 @@ git merge origin/main
 
 https://github.com/user-attachments/assets/2ad6a2e9-5562-40b8-ab7e-c5f277da3d8b
 
+To resolve one file from Fork, configure PrefabLens as its custom merge tool with
+`mergetool --terminal $BASE $LOCAL $REMOTE $MERGED` as the arguments.
+PrefabLens opens a terminal on macOS or Windows and waits for the result.
+See [Fork setup](docs/cli.md#fork-and-other-desktop-git-clients) for the executable path and workflow.
+
 ## Development
 
 Install [mise](https://mise.jdx.dev/).

@@ -3,6 +3,7 @@ const command = @import("command.zig");
 const diff = @import("diff.zig");
 const merge_driver = @import("merge_driver.zig");
 const mergetool = @import("mergetool.zig");
+const mergetool_terminal = @import("mergetool_terminal.zig");
 const merge_strategy = @import("git_merge_strategy.zig");
 const merge_setup = @import("merge_setup.zig");
 const installation = @import("installation.zig");
@@ -14,6 +15,7 @@ test {
     _ = diff;
     _ = merge_driver;
     _ = mergetool;
+    _ = mergetool_terminal;
     _ = merge_strategy;
     _ = @import("atomic_file.zig");
     _ = @import("merge_io.zig");
@@ -94,6 +96,14 @@ pub fn main(init: std.process.Init) !u8 {
             stderr,
         ),
         .mergetool => |tool_args| blk: {
+            if (tool_args.terminal) {
+                break :blk mergetool_terminal.run(init.io, arena, tool_args, init.environ_map) catch |err| {
+                    try stderr.print("prefablens: Could not run the terminal merge tool: {s}.\n", .{@errorName(err)});
+                    if (err == error.TerminalLaunchUnsupported)
+                        try stderr.writeAll("--terminal supports macOS and Windows. Run mergetool from a terminal on this system.\n");
+                    break :blk @as(u8, 2);
+                };
+            }
             const stdin_tty = std.Io.File.stdin().isTty(init.io) catch false;
             const stdout_tty = std.Io.File.stdout().isTty(init.io) catch false;
             break :blk try mergetool.run(

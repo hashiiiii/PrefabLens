@@ -14,6 +14,7 @@ pub const MergetoolArgs = struct {
     local: []const u8,
     remote: []const u8,
     merged: []const u8,
+    terminal: bool = false,
 };
 
 pub const Command = union(enum) {
@@ -49,12 +50,15 @@ pub fn parse(args: []const []const u8) Error!Command {
         } };
     }
     if (std.mem.eql(u8, args[0], "mergetool")) {
-        if (args.len != 5) return error.InvalidArguments;
+        const terminal = args.len > 1 and std.mem.eql(u8, args[1], "--terminal");
+        const offset: usize = if (terminal) 2 else 1;
+        if (args.len != offset + 4) return error.InvalidArguments;
         return .{ .mergetool = .{
-            .base = args[1],
-            .local = args[2],
-            .remote = args[3],
-            .merged = args[4],
+            .base = args[offset],
+            .local = args[offset + 1],
+            .remote = args[offset + 2],
+            .merged = args[offset + 3],
+            .terminal = terminal,
         } };
     }
     if (std.mem.eql(u8, args[0], "diff-driver") or
@@ -98,4 +102,13 @@ test "command: only the first argument selects a reserved subcommand" {
     const diff = try parse(&.{ "HEAD", "merge-driver" });
     try testing.expectEqual(@as(usize, 2), diff.diff.len);
     try testing.expectEqualStrings("merge-driver", diff.diff[1]);
+}
+
+test "command: terminal mergetool keeps all four file operands" {
+    // GUI clients pass paths independently; the launch option must not shift the output path.
+    const tool = try parse(&.{ "mergetool", "--terminal", "base", "local", "remote", "Assets/My Player.prefab" });
+    try testing.expect(tool.mergetool.terminal);
+    try testing.expectEqualStrings("base", tool.mergetool.base);
+    try testing.expectEqualStrings("Assets/My Player.prefab", tool.mergetool.merged);
+    try testing.expectError(error.InvalidArguments, parse(&.{ "mergetool", "--terminal", "base", "local", "remote" }));
 }

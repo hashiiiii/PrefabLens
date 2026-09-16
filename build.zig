@@ -206,6 +206,20 @@ pub fn build(b: *std.Build) void {
     const structural_test_step = b.step("test-merge-structural", "Run structural Unity merge integration tests");
     structural_test_step.dependOn(&run_structural_tests.step);
 
+    const terminal_tests = b.addExecutable(.{
+        .name = "terminal-launcher-tests",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("cli/src/mergetool_terminal_test_main.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    const run_terminal_tests = b.addRunArtifact(terminal_tests);
+    run_terminal_tests.addArtifactArg(exe);
+    test_step.dependOn(&run_terminal_tests.step);
+    const terminal_test_step = b.step("test-mergetool-terminal", "Run terminal launcher integration tests");
+    terminal_test_step.dependOn(&run_terminal_tests.step);
+
     const pty_smoke = b.addExecutable(.{
         .name = "pty-smoke-tests",
         .root_module = b.createModule(.{
@@ -228,6 +242,7 @@ pub fn build(b: *std.Build) void {
         run_installation_tests,
         run_structural_tests,
         run_pty_smoke,
+        run_terminal_tests,
     }) |run| {
         // Independent scratch directories let these checks share the build without inherited stdio.
         run.expectExitCode(0);

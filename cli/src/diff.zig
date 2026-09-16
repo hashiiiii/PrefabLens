@@ -27,6 +27,9 @@ const help_text = usage_line ++ "\nGit merge setup: " ++ merge_setup.usage ++ "\
     \\  --local                Configure the current clone (default)
     \\  --user                 Configure all your repositories with global settings
     \\
+    \\Merge one file: prefablens mergetool [--terminal] <base> <local> <remote> <merged>
+    \\  --terminal             Open a terminal on macOS or Windows and wait for the result
+    \\
     \\Operands ending in a Unity YAML extension (.prefab, .unity, .asset, ...)
     \\are paths; anything else is a git ref.
     \\

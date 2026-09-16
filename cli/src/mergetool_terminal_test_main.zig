@@ -32,6 +32,7 @@ pub fn main(init: std.process.Init) !u8 {
         defer std.Io.Dir.cwd().deleteTree(io, scratch) catch {};
         try macCommand(io, arena, scratch, prefablens, init.environ_map);
         try macClose(io, arena, scratch, init.environ_map);
+        try macEarlyClose(io, arena, scratch, init.environ_map);
     }
     try std.Io.File.stdout().writeStreamingAll(io, "terminal launcher integration: passed\n");
     return 0;
@@ -90,4 +91,26 @@ fn macClose(io: std.Io, arena: std.mem.Allocator, scratch: []const u8, env: *std
     try std.posix.kill(child.id.?, .HUP);
     try integration.require(try session.wait(io, arena) == 1, "window close did not report cancellation");
     _ = try child.wait(io);
+}
+
+fn macEarlyClose(io: std.Io, arena: std.mem.Allocator, scratch: []const u8, env: *std.process.Environ.Map) !void {
+    const session = try terminal.MacSession.create(io, arena, scratch, scratch, &.{ "/bin/sleep", "60" }, env);
+    defer session.deinit(io);
+    const child_pid_path = try std.fs.path.join(arena, &.{ scratch, "early-child.pid" });
+    const script = try std.Io.Dir.cwd().readFileAlloc(io, session.command_path, arena, .limited(64 * 1024));
+    // Inject a real HUP between spawning the child and recording its PID, without relying on scheduler timing.
+    const interruption = try std.fmt.allocPrint(arena, "printf '%s\\n' \"$!\" > {s}\nkill -HUP \"$$\"\nchild=$!\n", .{try terminal.shellQuote(arena, child_pid_path)});
+    const interrupted = try std.mem.replaceOwned(u8, arena, script, "child=$!\n", interruption);
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = session.command_path, .data = interrupted });
+    const launch = try std.fmt.allocPrint(arena, "exec /bin/sh {s} >/dev/null 2>&1", .{try terminal.shellQuote(arena, session.command_path)});
+    const result = try std.process.run(arena, io, .{ .argv = &.{ "/bin/sh", "-c", launch }, .timeout = .{ .duration = .{ .clock = .awake, .raw = .fromSeconds(5) } } });
+    const child_pid = try std.fmt.parseInt(std.posix.pid_t, std.mem.trim(u8, try std.Io.Dir.cwd().readFileAlloc(io, child_pid_path, arena, .limited(32)), "\r\n"), 10);
+    defer std.posix.kill(child_pid, .KILL) catch {};
+    try integration.expectCode(result, 1, "cancel during terminal startup");
+    try integration.require(try session.wait(io, arena) == 1, "startup cancellation was not returned");
+    std.posix.kill(child_pid, @enumFromInt(0)) catch |err| switch (err) {
+        error.ProcessNotFound => return,
+        else => return err,
+    };
+    return error.TerminalChildWasOrphaned;
 }

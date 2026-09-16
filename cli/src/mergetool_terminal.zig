@@ -72,8 +72,9 @@ pub const MacSession = struct {
             \\    printf '\nPrefabLens exit: %s\n' "$result"
             \\}
             \\trap finish EXIT
-            \\trap 'exit 1' HUP INT TERM
             \\child=
+            \\cancelled=
+            \\trap 'cancelled=1; if [ -n "$child" ]; then exit 1; fi' HUP INT TERM
             \\exec 3<&0
             \\
         );
@@ -92,7 +93,8 @@ pub const MacSession = struct {
         }
         // Explicit stdin keeps the asynchronous child attached to the terminal while wait handles window-close signals.
         try out.writeAll(" <&3 &\nchild=$!\n");
-        try out.print("printf '%s\\n' \"$$\" > {s}\n", .{try shellQuote(arena, session.pid_path)});
+        try out.writeAll("[ -z \"$cancelled\" ] || exit 1\n");
+        try out.print("pid_file={s}\nprintf '%s\\n' \"$$\" > \"$pid_file.tmp\" && /bin/mv -f \"$pid_file.tmp\" \"$pid_file\"\n", .{try shellQuote(arena, session.pid_path)});
         try out.writeAll("wait \"$child\"\nresult=$?\nchild=\nexit \"$result\"\n");
         const file = try std.Io.Dir.cwd().createFile(io, session.command_path, .{ .exclusive = true, .permissions = .fromMode(0o700) });
         defer file.close(io);
@@ -119,13 +121,7 @@ pub const MacSession = struct {
                     error.FileNotFound => "",
                     else => return err,
                 };
-                if (bytes.len > 0) {
-                    const value = std.fmt.parseInt(std.posix.pid_t, std.mem.trim(u8, bytes, "\r\n"), 10) catch null;
-                    if (value) |number| {
-                        if (number <= 0) return error.InvalidTerminalProcess;
-                        pid = number;
-                    }
-                }
+                pid = try readPid(bytes);
                 if (pid == null and start.durationTo(std.Io.Clock.awake.now(io)).toSeconds() >= 60)
                     return error.TerminalStartupTimeout;
             }
@@ -143,6 +139,19 @@ pub const MacSession = struct {
     }
 };
 
+fn readPid(bytes: []const u8) !?std.posix.pid_t {
+    if (!std.mem.endsWith(u8, bytes, "\n")) return null;
+    const number = std.fmt.parseInt(std.posix.pid_t, std.mem.trim(u8, bytes, "\r\n"), 10) catch return null;
+    if (number <= 0) return error.InvalidTerminalProcess;
+    return number;
+}
+
+test "terminal: a partially published PID cannot identify another process" {
+    if (builtin.os.tag == .windows) return error.SkipZigTest;
+    try std.testing.expectEqual(@as(?std.posix.pid_t, null), try readPid("123"));
+    try std.testing.expectEqual(@as(?std.posix.pid_t, 123), try readPid("123\n"));
+}
+
 pub fn shellQuote(arena: std.mem.Allocator, value: []const u8) ![]const u8 {
     var quoted: std.ArrayList(u8) = .empty;
     try quoted.append(arena, '\'');
@@ -157,7 +166,7 @@ pub fn shellQuote(arena: std.mem.Allocator, value: []const u8) ![]const u8 {
     return quoted.toOwnedSlice(arena);
 }
 
-test "terminal: macOS command preserves arguments and reports process failure" {
+test "terminal: macOS command preserves Git environment and reports process failure" {
     if (builtin.os.tag == .windows) return error.SkipZigTest;
     var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena_state.deinit();
@@ -169,7 +178,7 @@ test "terminal: macOS command preserves arguments and reports process failure" {
     try env.put("GIT_CONFIG_COUNT", "1");
     try env.put("GIT_CONFIG_KEY_0", "prefablens.launch-test");
     try env.put("GIT_CONFIG_VALUE_0", "日本語 ' $value `uname`\nsecond line");
-    // The real Git process must receive the caller's working directory and literal configuration.
+    // Terminal's login shell must not replace the invoking Git client's literal configuration.
     const session = try MacSession.create(std.testing.io, arena, root, root, &.{ "git", "config", "--get", "prefablens.launch-test" }, &env);
     defer session.deinit(std.testing.io);
     const result = try std.process.run(arena, std.testing.io, .{ .argv = &.{ "/bin/sh", session.command_path }, .cwd = .{ .path = "/" } });

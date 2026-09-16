@@ -140,6 +140,10 @@ Replace the four paths with your client's placeholders.
 Open a conflicted file with the external merge tool.
 Resolve it in PrefabLens, then return to your Git client to stage it.
 
+[Fork](https://fork.dev/) example:
+
+https://github.com/user-attachments/assets/d6dd0038-498f-42f3-8447-77a6e597ddf2
+
 ## Development
 
 Install [mise](https://mise.jdx.dev/).

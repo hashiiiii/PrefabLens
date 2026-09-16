@@ -79,6 +79,8 @@ scoop bucket add hashiiiii https://github.com/hashiiiii/scoop-bucket
 scoop install prefablens
 ```
 
+After installation, fully close and reopen your Git client to load the updated `Path`.
+
 #### mise
 
 ```bash
@@ -143,6 +145,43 @@ Resolve it in PrefabLens, then return to your Git client to stage it.
 [Fork](https://fork.dev/) example:
 
 https://github.com/user-attachments/assets/d6dd0038-498f-42f3-8447-77a6e597ddf2
+
+<details>
+<summary>Windows: Could not find merge strategy 'prefablens'</summary>
+
+Your Git client may still have a `Path` that predates the PrefabLens installation.
+Check discovery in PowerShell:
+
+```powershell
+prefablens --version
+git merge-prefablens --version
+git --list-cmds=others | Select-String '^merge-prefablens$'
+```
+
+The versions should match, and the last command should print `merge-prefablens`.
+If discovery fails, add the folder containing both `prefablens.exe` and `git-merge-prefablens` to your user `Path`.
+For Scoop, `scoop prefix prefablens` shows this folder.
+Open a new PowerShell window and check again.
+
+If PowerShell finds the strategy but your Git client does not, fully close and reopen the client.
+If the error persists, launch the client from the PowerShell window where discovery succeeded.
+For Fork, first save its executable path while it is running:
+
+```powershell
+$forkExe = (Get-Process -Name Fork | Select-Object -First 1).Path
+```
+
+Fully exit Fork, then run this in the same PowerShell window:
+
+```powershell
+Start-Process -FilePath $forkExe
+```
+
+Fork inherits that window's `Path`.
+Keep your merge setup and retry the merge in Fork.
+If it still fails, check the Git executable selected in Fork's preferences.
+
+</details>
 
 ## Development
 

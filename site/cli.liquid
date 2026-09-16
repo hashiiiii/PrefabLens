@@ -42,3 +42,30 @@ layout: layout.liquid
     PrefabLens resolving a UnityYAML merge conflict in the terminal.
   </video>
 </div>
+
+<h2 id="gui-git-clients"><a href="#gui-git-clients">GUI Git clients</a></h2>
+<p>
+  For GUI Git clients on macOS and Windows, set the installed PrefabLens executable as the external merge tool.
+  Use these arguments:
+</p>
+<pre><code>mergetool --terminal &lt;base&gt; &lt;local&gt; &lt;remote&gt; &lt;merged&gt;</code></pre>
+<p>
+  Replace the four paths with your client's placeholders.
+  Open a conflicted file with the external merge tool.
+  Resolve it in PrefabLens, then return to your Git client to stage it.
+</p>
+<div class="window">
+  <div class="window-title"><a href="https://fork.dev/">Fork</a> example</div>
+  <video
+    class="window-shot"
+    src="images/cli-fork-merge.mp4"
+    width="1750"
+    height="982"
+    aria-label="Fork merge example"
+    controls
+    playsinline
+    preload="metadata"
+  >
+    PrefabLens resolving a UnityYAML merge conflict from Fork.
+  </video>
+</div>

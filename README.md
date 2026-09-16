@@ -129,10 +129,16 @@ git merge origin/main
 
 https://github.com/user-attachments/assets/2ad6a2e9-5562-40b8-ab7e-c5f277da3d8b
 
-To resolve one file from a GUI Git client, configure PrefabLens as its external merge tool.
-Use `mergetool --terminal <base> <local> <remote> <merged>`, replacing the paths with your client's placeholders.
-PrefabLens opens a terminal on macOS or Windows and waits for the result.
-See [GUI Git client setup](docs/cli.md#gui-git-clients) for requirements and a Fork configuration example.
+For GUI Git clients on macOS and Windows, set the installed PrefabLens executable as the external merge tool.
+Use these arguments:
+
+```text
+mergetool --terminal <base> <local> <remote> <merged>
+```
+
+Replace the four paths with your client's placeholders.
+Open a conflicted file with the external merge tool.
+Resolve it in PrefabLens, then return to your Git client to stage it.
 
 ## Development
 

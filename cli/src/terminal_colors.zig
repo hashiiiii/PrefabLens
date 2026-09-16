@@ -100,7 +100,7 @@ test "merge TUI: terminal color output respects RGB support and NO_COLOR" {
         if (case.no_color) {
             try t.expect(std.mem.indexOf(u8, bytes, "\x1b[38") == null);
         } else {
-            // This checks the real renderer's wire format, including the legacy terminal separator.
+            // Vaxis uses semicolon separators for RGB colors on Windows.
             const expected = if (@import("builtin").os.tag == .windows and mode == .rgb) "\x1b[38;2;255;0;0m" else case.expected;
             try t.expect(std.mem.indexOf(u8, bytes, expected) != null);
         }

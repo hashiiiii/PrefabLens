@@ -60,7 +60,7 @@ test "merge TUI: unknown terminal retains conflict and editor colors without RGB
     var view = View.init(arena, &state, "A.prefab", try merge_tree.buildForState(arena, fixture.partial, &state));
     defer view.deinit();
 
-    // RGB escape sequences disappear on older Apple Terminal versions, including the conflict colors.
+    // Older Apple Terminal versions ignore RGB colors, so conflicts need an indexed fallback.
     const surface = try drawForTest(arena, view.widget(), 100, 24);
     var indexed: usize = 0;
     for (surface.buffer) |cell| {

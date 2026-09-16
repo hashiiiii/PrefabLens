@@ -7,6 +7,7 @@ const merge_ui_state = @import("merge_ui_state.zig");
 const result_text = @import("merge_result_text.zig");
 const inspector = @import("merge_inspector.zig");
 const review = @import("merge_review.zig");
+const terminal_colors = @import("terminal_colors.zig");
 const testing = std.testing;
 
 test "merge TUI: unresolved semantic Result does not show a placeholder dash" {
@@ -49,6 +50,38 @@ test "merge TUI: component property editing retains its document and owner refer
     try testing.expectEqualStrings(try std.mem.replaceOwned(u8, arena, fixture.plan.theirs.bytes, "m_Mass: 2", "m_Mass: 3"), try core.merge.finish(arena, &fixture.plan));
 }
 const vxfw = vaxis.vxfw;
+
+test "merge TUI: unknown terminal retains conflict and editor colors without RGB" {
+    var memory = std.heap.ArenaAllocator.init(testing.allocator);
+    defer memory.deinit();
+    const arena = memory.allocator();
+    var fixture = try screenPlan(arena);
+    var state = try merge_ui_state.State.init(arena, &fixture.plan);
+    var view = View.init(arena, &state, "A.prefab", try merge_tree.buildForState(arena, fixture.partial, &state));
+    defer view.deinit();
+
+    // RGB escape sequences disappear on older Apple Terminal versions, including the conflict colors.
+    const surface = try drawForTest(arena, view.widget(), 100, 24);
+    var indexed: usize = 0;
+    for (surface.buffer) |cell| {
+        for ([_]vaxis.Color{ cell.style.fg, cell.style.bg }) |color| {
+            try testing.expect(color != .rgb);
+            if (color == .index) indexed += 1;
+        }
+    }
+    try testing.expect(indexed > 0);
+
+    var ctx = eventContext(arena);
+    try focusResultForTest(&view, &ctx);
+    try pressKeyForTest(&view, &ctx, vaxis.Key.enter);
+    const editing = try drawForTest(arena, view.widget(), 100, 24);
+    try testing.expect(editing.children.len > 0);
+    for (editing.children) |child| {
+        for (child.surface.buffer) |cell| {
+            try testing.expect(cell.style.bg != .rgb);
+        }
+    }
+}
 
 test "merge TUI: cancelling an empty property edit retains the component choice" {
     var memory = std.heap.ArenaAllocator.init(testing.allocator);
@@ -1494,6 +1527,7 @@ fn markChangedFromBase(style: *vaxis.Style, column: ValueColumn, matches_base: b
 }
 
 pub const View = struct {
+    color_mode: terminal_colors.Mode = .indexed,
     state: *merge_ui_state.State,
     path: []const u8,
     tree: merge_tree.Model,
@@ -3529,6 +3563,7 @@ fn draw(
             surface.children = children;
         }
     }
+    self.color_mode.apply(surface);
     return surface;
 }
 
@@ -4264,6 +4299,7 @@ pub fn run(
 /// One terminal session covers every remaining content conflict in a merge.
 pub const Session = struct {
     app: vxfw.App,
+    color_mode: terminal_colors.Mode,
 
     pub fn init(
         io: std.Io,
@@ -4271,7 +4307,8 @@ pub const Session = struct {
         env_map: *std.process.Environ.Map,
         buffer: []u8,
     ) !Session {
-        return .{ .app = try vxfw.App.init(io, allocator, env_map, buffer) };
+        var app = try vxfw.App.init(io, allocator, env_map, buffer);
+        return .{ .color_mode = terminal_colors.Mode.configure(&app.vx), .app = app };
     }
 
     pub fn deinit(self: *Session) void {
@@ -4297,6 +4334,7 @@ pub const Session = struct {
         try state.handle(.{ .select_conflict = first });
         var view = View.init(allocator, state, path, tree);
         defer view.deinit();
+        view.color_mode = self.color_mode;
         view.working_file = working_file;
         view.live_screen = &self.app.vx.screen;
         try self.app.run(view.widget(), .{});
@@ -4551,7 +4589,9 @@ fn viewForTest(
     partial: []const u8,
 ) !View {
     const tree = try merge_tree.buildForState(arena, partial, state);
-    return View.init(arena, state, path, tree);
+    var view = View.init(arena, state, path, tree);
+    view.color_mode = .rgb;
+    return view;
 }
 
 fn rowText(arena: std.mem.Allocator, surface: vxfw.Surface, row: u16) ![]const u8 {

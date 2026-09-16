@@ -47,6 +47,8 @@ pub fn readIndex(store: *revision.Store) !Index {
     try env.put("GIT_INDEX_FILE", absolute);
     var alternate = git;
     alternate.env = &env;
+    // index-info uses repository-relative paths; the root also includes conflicts outside the launch directory.
+    alternate.cwd = merge_git.trim(try git.output(&.{ "rev-parse", "--show-toplevel" }));
     const unmerged = try alternate.output(&.{ "ls-files", "--unmerged", "-z" });
     var records: std.ArrayList(u8) = .empty;
     var paths: std.StringHashMap(void) = .init(git.arena);
@@ -266,10 +268,16 @@ test "session context preserves schema evidence and detects index changes" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
     var env = std.process.Environ.Map.init(arena);
+    // The native merge strategy disables pathspec magic before handing off to the CLI.
+    try env.put("GIT_LITERAL_PATHSPECS", "1");
     const git = try fixtureGit(&tmp, arena, &env);
+    try tmp.dir.createDir(testing.io, "Assets/Prefabs", .default_dir);
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "Assets/Prefabs/Nested.prefab", .data = base_bytes });
     const base = try fixtureCommit(git, base_bytes);
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "Assets/Prefabs/Nested.prefab", .data = ours_bytes });
     const ours = try fixtureCommit(git, ours_bytes);
     try git.ok(&.{ "checkout", "-q", "--detach", base });
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "Assets/Prefabs/Nested.prefab", .data = theirs_bytes });
     const theirs = try fixtureCommit(git, theirs_bytes);
     try git.ok(&.{ "checkout", "-q", "--detach", ours });
     const merge_result = try git.run(&.{ "merge", "--no-commit", theirs });
@@ -283,6 +291,18 @@ test "session context preserves schema evidence and detects index changes" {
     try testing.expectEqual(core.merge_context.Kind.int32_array, output.snapshot.kind(script_guid, "values").?);
     try testing.expectEqualStrings(unmerged_before, try git.output(&.{ "ls-files", "--unmerged", "-z" }));
     try output.unchanged(git);
+    // GUI launchers may start beside the selected asset; conflicts elsewhere still belong to the same index.
+    var nested_git = git;
+    nested_git.cwd = try git.path("Assets/Prefabs");
+    var nested_store = revision.Store.init(nested_git);
+    defer nested_store.deinit();
+    const nested = try readIndex(&nested_store);
+    try testing.expectEqualStrings(output.snapshot.revision, nested.snapshot.revision);
+    try testing.expectEqual(output.snapshot.kind(script_guid, "values"), nested.snapshot.kind(script_guid, "values"));
+    const nested_base = try nested_store.snapshot(base);
+    try testing.expectEqual(output.snapshot.kind(script_guid, "values"), nested_base.kind(script_guid, "values"));
+    try testing.expectEqualStrings(unmerged_before, try git.output(&.{ "ls-files", "--unmerged", "-z" }));
+    try nested.unchanged(nested_git);
     // A later source decision invalidates plans that still use the old output snapshot.
     try tmp.dir.writeFile(testing.io, .{ .sub_path = asset_path, .data = ours_bytes });
     try git.ok(&.{ "add", "--", asset_path });

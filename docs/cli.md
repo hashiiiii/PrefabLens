@@ -266,6 +266,8 @@ The final write rechecks the source/index snapshot and the working file snapshot
 Original input files have a 64 MiB limit. Working conflict output has a separate 256 MiB limit.
 The mergetool requires both standard input and standard output to be TTYs.
 Without them, it returns 2 and keeps `$MERGED` unchanged. The automatic strategy instead leaves the merge unresolved.
+The TUI uses RGB colors when the terminal environment advertises support; otherwise, it uses a 256-color palette compatible with older macOS Terminal versions.
+A nonempty `NO_COLOR` environment variable disables colors.
 PrefabLens writes completed output with atomic file replacement and retains existing permissions.
 
 `diff-driver` and `difftool` remain reserved for Issue #227.

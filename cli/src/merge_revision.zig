@@ -30,7 +30,7 @@ pub const Store = struct {
         const expression = try std.fmt.allocPrint(arena, "{s}^{{}}", .{revision});
         const identity = @import("merge_git.zig").trim(try self.git.output(&.{ "rev-parse", "--verify", "--end-of-options", expression }));
         if (!validOid(identity)) return error.InvalidRevision;
-        const tree = try self.git.output(&.{ "ls-tree", "-r", "-z", "-l", identity });
+        const tree = try self.git.output(&.{ "ls-tree", "--full-tree", "-r", "-z", "-l", identity });
         var entries: std.ArrayList(Entry) = .empty;
         var records = std.mem.splitScalar(u8, tree, 0);
         var names: schema.Names = .{};

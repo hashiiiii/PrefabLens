@@ -273,29 +273,25 @@ PrefabLens writes completed output with atomic file replacement and retains exis
 `diff-driver` and `difftool` remain reserved for Issue #227.
 libvaxis is a CLI dependency. The core and WASM targets do not import it.
 
-#### Fork and other desktop Git clients
+#### GUI Git clients
 
 Use `--terminal` when the Git client launches external tools without an interactive terminal.
 This option is included in the PrefabLens executable. No Python installation or separate launcher script is needed.
 
-In Fork, open **Settings / Preferences > Integration** and select **Custom** for **Merge Tool**.
-Set **Path** to the installed `prefablens` executable, or `prefablens.exe` on Windows.
+The client must support a custom external merge tool, supply four file paths, and wait for the process to finish.
+Set the executable to the installed `prefablens`, or `prefablens.exe` on Windows.
 For Homebrew on Apple Silicon, the path is `/opt/homebrew/bin/prefablens`.
 Use `command -v prefablens` on macOS or `where.exe prefablens` on Windows to locate your installation.
 
-Set **Arguments** to:
+Pass arguments in this order:
 
 ```text
-mergetool --terminal $BASE $LOCAL $REMOTE $MERGED
+mergetool --terminal <base> <local> <remote> <merged>
 ```
 
-Fork substitutes the four paths. In Fork 2.70.2 for macOS, leave these placeholders unquoted; quotes become part of the arguments.
-This field is different from Git's shell-based `mergetool.prefablens.cmd` setting.
-
-Select a conflicted Unity asset and choose **Merge in External Tool**.
-Resolve its conflicts, then select **Complete**.
-Return to Fork and stage the resolved file.
-Fork owns staging and the merge commit; PrefabLens only writes the selected file.
+Replace `<base>`, `<local>`, `<remote>`, and `<merged>` with placeholders for the common ancestor, local version, remote version, and output file.
+Placeholder names and quoting rules depend on the client.
+PrefabLens writes the selected output file; the Git client handles staging and the merge commit.
 
 On macOS, PrefabLens opens the standard Terminal app using a private temporary command file and removes it after the session.
 On Windows, PrefabLens starts a child process with a new console using the system's console host.
@@ -306,6 +302,24 @@ Closing a terminal window does not report a successful resolution.
 
 `--terminal` supports macOS and Windows. On Linux, run `mergetool` directly from a terminal.
 Normal terminal-based `git mergetool` usage and `setup-merge` do not need this option.
+
+##### Example: Fork
+
+The GUI workflow has been verified with Fork 2.70.2 on macOS. Other GUI clients and Fork on Windows have not been verified.
+
+Open **Settings / Preferences > Integration** and select **Custom** for **Merge Tool**.
+Set **Path** to the installed executable and **Arguments** to:
+
+```text
+mergetool --terminal $BASE $LOCAL $REMOTE $MERGED
+```
+
+In Fork 2.70.2 for macOS, leave these placeholders unquoted; quotes become part of the arguments.
+This field is different from Git's shell-based `mergetool.prefablens.cmd` setting.
+
+Select a conflicted Unity asset and choose **Merge in External Tool**.
+Resolve its conflicts, then select **Complete**.
+Return to Fork and stage the resolved file.
 
 ### CLI contract
 

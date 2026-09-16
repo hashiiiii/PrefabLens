@@ -7,7 +7,7 @@ pub fn run(arena: std.mem.Allocator, argv: []const []const u8) !u8 {
     var startup: windows.STARTUPINFOW = std.mem.zeroes(windows.STARTUPINFOW);
     startup.cb = @sizeOf(windows.STARTUPINFOW);
     var process: windows.PROCESS.INFORMATION = undefined;
-    // Inheriting Fork's redirected handles would leave the new window without terminal input.
+    // Inheriting the caller's redirected handles would leave the new window without terminal input.
     if (windows.kernel32.CreateProcessW(application, command_line, null, null, .FALSE, .{ .create_new_console = true }, null, null, &startup, &process) == .FALSE)
         return error.TerminalLaunchFailed;
     defer windows.CloseHandle(process.hProcess);

@@ -71,7 +71,7 @@ fn macCommand(io: std.Io, arena: std.mem.Allocator, scratch: []const u8, prefabl
 }
 
 fn macClose(io: std.Io, arena: std.mem.Allocator, scratch: []const u8, env: *std.process.Environ.Map) !void {
-    // Closing Terminal sends HUP. The shell must stop its child before telling Fork it was cancelled.
+    // Closing Terminal sends HUP. The shell must stop its child before reporting cancellation to the caller.
     const session = try terminal.MacSession.create(io, arena, scratch, scratch, &.{ "/bin/sleep", "60" }, env);
     defer session.deinit(io);
     var child = try std.process.spawn(io, .{ .argv = &.{ "/bin/sh", session.command_path }, .stdin = .ignore, .stdout = .ignore, .stderr = .ignore });

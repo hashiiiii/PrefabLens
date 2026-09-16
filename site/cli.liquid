@@ -69,34 +69,3 @@ layout: layout.liquid
     PrefabLens resolving a UnityYAML merge conflict from Fork.
   </video>
 </div>
-
-<details>
-  <summary>Windows: Could not find merge strategy 'prefablens'</summary>
-  <p>
-    After installing PrefabLens, fully close and reopen your Git client to load the updated <code>Path</code>.
-    A running client may still have a <code>Path</code> that predates the installation.
-    Check discovery in PowerShell:
-  </p>
-  <pre><code>prefablens --version
-git merge-prefablens --version
-git --list-cmds=others | Select-String '^merge-prefablens$'</code></pre>
-  <p>
-    The versions should match, and the last command should print <code>merge-prefablens</code>.
-    If discovery fails, add the folder containing both <code>prefablens.exe</code> and
-    <code>git-merge-prefablens</code> to your user <code>Path</code>.
-    For Scoop, <code>scoop prefix prefablens</code> shows this folder.
-    Open a new PowerShell window and check again.
-  </p>
-  <p>
-    If PowerShell finds the strategy but restarting your Git client does not help, launch it from that PowerShell window.
-    For Fork, first save its executable path while it is running:
-  </p>
-  <pre><code>$forkExe = (Get-Process -Name Fork | Select-Object -First 1).Path</code></pre>
-  <p>Fully exit Fork, then run this in the same PowerShell window:</p>
-  <pre><code>Start-Process -FilePath $forkExe</code></pre>
-  <p>
-    Fork inherits that window's <code>Path</code>.
-    Keep your merge setup and retry the merge in Fork.
-    If it still fails, check the Git executable selected in Fork's preferences.
-  </p>
-</details>

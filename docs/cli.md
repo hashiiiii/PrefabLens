@@ -253,6 +253,47 @@ Base is not selectable. Wheel over Base still scrolls that column, so long ances
 **Shift+V** or **Preview** shows the complete Result after all required choices and edits have been applied. This includes accepted insertions, removals, and ordering outside the selected item. The preview is read-only and closes when a choice is changed, so it cannot show an older result as the current one. **Shift+E** returns to the original working file snapshot.
 While editing, **Shift+R**, **Shift+E**, and **Shift+V** insert text.
 
+#### Key bindings
+
+The CLI merge TUI loads `keymap.toml` from these locations:
+
+| Environment | Path |
+| --- | --- |
+| Nonempty `XDG_CONFIG_HOME` | `$XDG_CONFIG_HOME/prefablens/keymap.toml` |
+| Windows | `%APPDATA%\prefablens\keymap.toml` |
+| macOS / Linux | `~/.config/prefablens/keymap.toml` |
+
+```toml
+[merge]
+toggle_raw_view = ["Ctrl+r"]
+toggle_file_view = ["Ctrl+e"]
+
+[file_choice]
+choose_current = ["i"]
+confirm = ["F2"]
+
+[editor]
+submit = ["Ctrl+Enter"]
+```
+
+Each array replaces an action's default keys. Unspecified actions retain their defaults; `[]` disables an action.
+Missing files use defaults. Invalid configuration reports its path and prevents interactive resolution.
+Headless merges do not load this file.
+
+| Section | Actions |
+| --- | --- |
+| `merge` | `back`, `move_left`, `move_right`, `move_up`, `move_down`, `activate`, `toggle_raw_view`, `toggle_file_view`, `toggle_result_preview`, `toggle_combine` |
+| `inspector` | `pan_left`, `pan_right` |
+| `file_choice` | `quit`, `confirm`, `choose_current`, `choose_incoming`, `keep`, `delete`, `edit_custom` |
+| `dialog` | `confirm`, `cancel`, `choose_cancel`, `choose_confirm`, `activate_choice` |
+| `editor` | `submit`, `cancel`, `copy_selection`, `insert_newline`, `move_up`, `move_down`, `line_start`, `line_end` |
+
+Keys accept one Unicode character or a named key, with optional `Shift`, `Ctrl`, `Alt`, `Super`, `Meta`, or `Hyper` modifiers.
+Named keys include arrows, `Enter`, `Escape`, `Tab`, `Backspace`, `Delete`, `Home`, `End`, `PageUp`, `PageDown`, `Insert`, `Space`, and `F1`–`F12`.
+Modifier and named key names are case insensitive. Character case is preserved.
+Dialogs, file choices, and the editor use separate bindings. `merge` and `inspector` bindings cannot share a key.
+Hints display configured keys. Native text editing, mouse input, and paste remain available.
+
 #### Completion checks
 
 **Complete** becomes available after all required choices and edits have been applied.

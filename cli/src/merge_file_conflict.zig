@@ -1,4 +1,5 @@
 const std = @import("std");
+const keymap = @import("keymap.zig");
 const core = @import("core");
 const merge_git = @import("merge_git.zig");
 const strategy = @import("git_merge_strategy.zig");
@@ -58,10 +59,12 @@ pub fn finishContent(git: Git, prepared: ContentPrepared, canonical_bytes: []con
 }
 
 pub fn resolve(git: Git, result: strategy.Result, conflict: strategy.Conflict, env: *std.process.Environ.Map) !Outcome {
-    return resolveWithContext(git, result, conflict, env, null);
+    var bindings = try keymap.defaults(git.arena);
+    defer bindings.deinit();
+    return resolveWithContext(git, result, conflict, env, null, &bindings);
 }
 
-pub fn resolveWithContext(git: Git, result: strategy.Result, conflict: strategy.Conflict, env: *std.process.Environ.Map, captured: ?session_context.Index) !Outcome {
+pub fn resolveWithContext(git: Git, result: strategy.Result, conflict: strategy.Conflict, env: *std.process.Environ.Map, captured: ?session_context.Index, bindings: *const keymap.Bindings) !Outcome {
     const classified = classify(result.stages, conflict) orelse return .unresolved;
     const layout = originals(git, result, classified) catch return .unresolved;
     for (layout.paths) |path| if (!safePath(path) or std.mem.endsWith(u8, path, ".meta")) return .unresolved;
@@ -113,7 +116,7 @@ pub fn resolveWithContext(git: Git, result: strategy.Result, conflict: strategy.
     try checkIndexPaths(git, result, paths.items);
     try checkIndexBytes(git, index_path, index_before);
     if (captured) |output| if (!std.mem.eql(u8, output.before, index_before)) return error.SourceChanged;
-    const decision = try file_choice.run(git.io, git.arena, env, .{ .base = layout.base_path, .ours = layout.ours_path, .theirs = layout.theirs_path, .paired_meta = meta != null });
+    const decision = try file_choice.run(git.io, git.arena, env, .{ .base = layout.base_path, .ours = layout.ours_path, .theirs = layout.theirs_path, .paired_meta = meta != null }, bindings);
     if (decision == .quit) return .aborted;
     var replacements: std.ArrayList(Replacement) = .empty;
     if (decision != .delete) {
@@ -127,7 +130,7 @@ pub fn resolveWithContext(git: Git, result: strategy.Result, conflict: strategy.
             var state = try merge_ui_state.State.init(git.arena, &merge.plan);
             if (state.outcome != .ready) {
                 const working_file = merge_io.readOutputLimited(git.io, git.arena, final_path) catch "";
-                try merge_tui.run(git.io, git.arena, env, &state, final_path, merge.partial, working_file);
+                try merge_tui.run(git.io, git.arena, env, &state, final_path, merge.partial, working_file, bindings);
             }
             if (state.outcome != .ready) return .aborted;
             const resolved = core.merge.finish(git.arena, &merge.plan) catch return .unresolved;

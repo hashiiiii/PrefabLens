@@ -77,19 +77,20 @@ pub fn draw(editor: *vxfw.TextField, top: *usize, selection: ?Selection, ctx: vx
     return surface;
 }
 
-pub fn moveLine(editor: *vxfw.TextField, key: vaxis.Key) !bool {
-    const up = key.matches(vaxis.Key.up, .{});
-    const down = key.matches(vaxis.Key.down, .{});
-    const home = key.matches(vaxis.Key.home, .{}) or key.matches('a', .{ .ctrl = true });
-    const end = key.matches(vaxis.Key.end, .{}) or key.matches('e', .{ .ctrl = true });
-    if (!up and !down and !home and !end) return false;
+pub const Movement = enum { up, down, line_start, line_end };
+
+pub fn moveLine(editor: *vxfw.TextField, movement: Movement) !void {
+    const up = movement == .up;
+    const down = movement == .down;
+    const home = movement == .line_start;
+    const end = movement == .line_end;
     const text = try editor.buf.dupe();
     defer editor.buf.allocator.free(text);
     const cursor = editor.buf.cursor;
     const start = if (std.mem.lastIndexOfScalar(u8, text[0..cursor], '\n')) |at| at + 1 else 0;
     const stop = std.mem.indexOfScalarPos(u8, text, cursor, '\n') orelse text.len;
     const target = if (home) start else if (end) stop else blk: {
-        if ((up and start == 0) or (down and stop == text.len)) return true;
+        if ((up and start == 0) or (down and stop == text.len)) return;
         const next_start = if (up)
             (if (std.mem.lastIndexOfScalar(u8, text[0 .. start - 1], '\n')) |at| at + 1 else 0)
         else
@@ -109,7 +110,6 @@ pub fn moveLine(editor: *vxfw.TextField, key: vaxis.Key) !bool {
         break :blk offset;
     };
     if (target < cursor) editor.buf.moveGapLeft(cursor - target) else editor.buf.moveGapRight(target - cursor);
-    return true;
 }
 
 pub fn cellAt(editor: *vxfw.TextField, width: usize, row: usize, col: usize) !Selection {

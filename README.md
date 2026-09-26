@@ -144,6 +144,22 @@ Resolve it in PrefabLens, then return to your Git client to stage it.
 
 https://github.com/user-attachments/assets/d6dd0038-498f-42f3-8447-77a6e597ddf2
 
+#### Key bindings
+
+Create `~/.config/prefablens/keymap.toml` on macOS or Linux, or `%APPDATA%\prefablens\keymap.toml` on Windows.
+If `XDG_CONFIG_HOME` is set, use `$XDG_CONFIG_HOME/prefablens/keymap.toml`.
+
+```toml
+[merge]
+toggle_raw_view = ["Ctrl+r"]
+
+[editor]
+submit = ["Ctrl+Enter"]
+```
+
+Unspecified actions keep their defaults. `[]` disables an action.
+See [available actions](docs/cli.md#key-bindings).
+
 ## Development
 
 Install [mise](https://mise.jdx.dev/).

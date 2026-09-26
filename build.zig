@@ -20,10 +20,12 @@ pub fn build(b: *std.Build) void {
     });
     const vaxis_dep = b.dependency("vaxis", .{ .target = target, .optimize = optimize });
     const vaxis_mod = vaxis_dep.module("vaxis");
+    const keymap_mod = b.dependency("zig_keymap", .{ .target = target, .optimize = optimize }).module("keymap");
     const cli_imports: []const std.Build.Module.Import = &.{
         .{ .name = "core", .module = core_mod },
         .{ .name = "build_options", .module = build_options_mod },
         .{ .name = "vaxis", .module = vaxis_mod },
+        .{ .name = "keymap", .module = keymap_mod },
     };
 
     const exe = b.addExecutable(.{
@@ -157,6 +159,7 @@ pub fn build(b: *std.Build) void {
         .{ .name = "core", .module = core_mod },
         .{ .name = "build_options", .module = alternate_opts.createModule() },
         .{ .name = "vaxis", .module = vaxis_mod },
+        .{ .name = "keymap", .module = keymap_mod },
     };
     const alternate_exe = b.addExecutable(.{
         .name = "prefablens",

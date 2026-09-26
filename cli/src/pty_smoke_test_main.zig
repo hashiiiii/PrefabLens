@@ -70,6 +70,7 @@ pub fn main(init: std.process.Init) !u8 {
 
     try testDelayedTerminals(io, arena, scratch, prefablens);
     if (args.len == 3) return 0;
+    try testCustomKeymaps(io, arena, scratch, prefablens);
     try testCompletion(io, arena, scratch, prefablens);
     try testBackspaceBeforeEditing(io, arena, scratch, prefablens);
     try testResultEditing(io, arena, scratch, prefablens);
@@ -80,6 +81,55 @@ pub fn main(init: std.process.Init) !u8 {
     try testTimeout(io, arena, scratch, prefablens);
     try std.Io.File.stdout().writeStreamingAll(io, "pty mergetool smoke: passed\n");
     return 0;
+}
+
+fn testCustomKeymaps(io: std.Io, arena: std.mem.Allocator, scratch: []const u8, prefablens: []const u8) !void {
+    const prefix = "--- !u!114 &1\nMonoBehaviour:\n  Value: ";
+    const repo = try prepareMergetoolRepositoryWithSides(io, arena, scratch, prefablens, "custom-editor-keymap", .{
+        .path = "Assets/Conflict.prefab",
+        .base = prefix ++ "1\n",
+        .ours = prefix ++ "2\n",
+        .theirs = prefix ++ "3\n",
+    });
+    try integration.expectNonzero(try integration.gitRun(io, arena, repo, &.{ "merge", "--no-edit", "remote" }), "prepare custom editor conflict");
+    try std.Io.Dir.cwd().createDirPath(io, try std.fs.path.join(arena, &.{ repo, ".git", "xdg", "prefablens" }));
+    try integration.writeFile(io, arena, repo, ".git/xdg/prefablens/keymap.toml", "[merge]\ntoggle_raw_view=[\"Ctrl+r\"]\n[editor]\nsubmit=[\"Ctrl+Enter\"]\n");
+    // An unbound Enter must leave editing active so the next digit joins the same value.
+    const edited = try runMergetoolInPty(io, arena, repo, "\x12\x12\x1b[<0;83;5M7\r8\x1b[13;5u\r", 30);
+    try integration.expectCode(edited, 0, "submit a remapped editor command");
+    try integration.expectFile(io, arena, repo, "Assets/Conflict.prefab", prefix ++ "78\n");
+    // The ASCII capture helper can offset columns around UTF-8 titles; the key text stays contiguous.
+    try integration.require(pty.terminalCaptureContains(edited.stdout, "Ctrl+r"), "custom raw hint was not rendered");
+
+    const choice = try prepareMergetoolRepositoryWithSides(io, arena, scratch, prefablens, "custom-file-choice-keymap", .{
+        .path = "Assets/Conflict.prefab",
+        .base = prefix ++ "1\n",
+        .ours = prefix ++ "2\n",
+        .theirs = prefix ++ "3\n",
+    });
+    try integration.gitOk(io, arena, choice, &.{ "switch", "-q", "--orphan", "unrelated" });
+    try std.Io.Dir.cwd().createDirPath(io, try std.fs.path.join(arena, &.{ choice, "Assets" }));
+    try integration.writeFile(io, arena, choice, "Assets/Conflict.prefab", prefix ++ "3\n");
+    try integration.gitOk(io, arena, choice, &.{ "add", "--all" });
+    try integration.gitOk(io, arena, choice, &.{ "commit", "-qm", "unrelated root" });
+    try integration.gitOk(io, arena, choice, &.{ "switch", "-q", "local" });
+    try integration.expectNonzero(try integration.gitRun(io, arena, choice, &.{ "merge", "--no-edit", "--allow-unrelated-histories", "unrelated" }), "prepare unknown ancestry choice");
+    try std.Io.Dir.cwd().createDirPath(io, try std.fs.path.join(arena, &.{ choice, ".git", "xdg", "prefablens" }));
+    try integration.writeFile(io, arena, choice, ".git/xdg/prefablens/keymap.toml", "[file_choice]\nchoose_current=[\"i\"]\nconfirm=[\"F2\"]\n");
+    // The old b/Enter pair cannot commit a side before the configured i/F2 decision.
+    const chosen = try runMergetoolInPty(io, arena, choice, "b\ri\x1bOQ", 30);
+    try integration.expectCode(chosen, 0, "confirm a remapped whole-file choice");
+    try integration.expectFile(io, arena, choice, "Assets/Conflict.prefab", prefix ++ "2\n");
+    try integration.require(pty.terminalCaptureContains(chosen.stdout, "i: Whole current file"), "custom choice hint was not rendered");
+    try integration.require(pty.terminalCaptureContains(chosen.stdout, "Press F2 to confirm"), "custom confirmation hint was not rendered");
+
+    try integration.writeFile(io, arena, repo, ".git/xdg/prefablens/keymap.toml", "[editor]\nsubmit=42\n");
+    const direct = try std.fmt.allocPrint(arena, "{s} mergetool unused-base unused-local unused-remote Assets/Conflict.prefab", .{try integration.shellQuote(arena, prefablens)});
+    // Startup errors must remain distinguishable from cancellation without opening the TUI or writing output.
+    const invalid = try pty.runCommandInPty(io, arena, repo, direct, "", 5);
+    try integration.expectCode(invalid, 2, "invalid keymap startup status");
+    try integration.require(std.mem.indexOf(u8, invalid.stdout, "prefablens/keymap.toml") != null, "invalid keymap diagnostic omitted its path");
+    try integration.expectFile(io, arena, repo, "Assets/Conflict.prefab", prefix ++ "78\n");
 }
 
 fn testCollectionChoices(

@@ -108,9 +108,40 @@ pub fn main(init: std.process.Init) !u8 {
     try testSemanticConflict(io, arena, scratch, prefablens);
     try testTextConflictUsesDefaultDriver(io, arena, scratch, prefablens);
     try testConflictStyles(io, arena, scratch, prefablens);
+    try testInvalidKeymapIsIgnored(io, arena, scratch, prefablens, init.environ_map);
 
     try std.Io.File.stdout().writeStreamingAll(io, "git merge integration: passed\n");
     return 0;
+}
+
+fn testInvalidKeymapIsIgnored(io: std.Io, arena: std.mem.Allocator, scratch: []const u8, prefablens: []const u8, environment: *const std.process.Environ.Map) !void {
+    const cases = [_]struct { name: []const u8, file: support.FileSides }{
+        .{ .name = "keymap-automatic", .file = .{ .path = "Assets/A.prefab", .base = automatic_base, .ours = automatic_ours, .theirs = automatic_theirs } },
+        .{ .name = "keymap-conflict", .file = .{ .path = "Assets/A.prefab", .base = conflict_base, .ours = conflict_ours, .theirs = conflict_theirs } },
+    };
+    for (cases) |case| {
+        const repo = try std.fs.path.join(arena, &.{ scratch, case.name });
+        try support.prepareRepository(io, arena, repo, prefablens, .local, &.{case.file});
+        const xdg = try std.fs.path.join(arena, &.{ repo, ".git", "xdg" });
+        try std.Io.Dir.cwd().createDirPath(io, try std.fs.path.join(arena, &.{ xdg, "prefablens" }));
+        var env = try environment.clone(arena);
+        defer env.deinit();
+        try env.put("XDG_CONFIG_HOME", xdg);
+        const argv = &.{ "git", "merge", "--no-commit", "--no-edit", "remote" };
+        const baseline = try std.process.run(arena, io, .{ .argv = argv, .cwd = .{ .path = repo }, .environ_map = &env });
+        const baseline_index = try support.gitRun(io, arena, repo, &.{ "ls-files", "--stage", "-z" });
+        const baseline_file = try support.readFile(io, arena, repo, case.file.path);
+        try support.gitOk(io, arena, repo, &.{ "merge", "--abort" });
+        try support.writeFile(io, arena, repo, ".git/xdg/prefablens/keymap.toml", "[editor]\nsubmit = 42\n");
+        // User TUI configuration cannot change headless merge output or conflict stages.
+        const invalid = try std.process.run(arena, io, .{ .argv = argv, .cwd = .{ .path = repo }, .environ_map = &env });
+        const invalid_index = try support.gitRun(io, arena, repo, &.{ "ls-files", "--stage", "-z" });
+        try support.require(std.meta.eql(baseline.term, invalid.term), "invalid keymap changed headless merge status");
+        try support.require(std.mem.eql(u8, baseline.stdout, invalid.stdout), "invalid keymap changed headless merge stdout");
+        try support.require(std.mem.eql(u8, baseline.stderr, invalid.stderr), "invalid keymap changed headless merge stderr");
+        try support.require(std.mem.eql(u8, baseline_index.stdout, invalid_index.stdout), "invalid keymap changed headless merge index");
+        try support.expectFile(io, arena, repo, case.file.path, baseline_file);
+    }
 }
 
 fn testAutomaticMerge(

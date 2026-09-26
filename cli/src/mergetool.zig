@@ -1,4 +1,5 @@
 const std = @import("std");
+const keymap = @import("keymap.zig");
 const core = @import("core");
 
 const command = @import("command.zig");
@@ -129,6 +130,8 @@ pub fn run(
     stderr: *std.Io.Writer,
 ) !u8 {
     if (!stdin_tty or !stdout_tty) return merge_io.reportFailure(stderr, args.merged);
+    var bindings = keymap.loadUser(io, arena, env_map, stderr) catch return 2;
+    defer bindings.deinit();
     const git: merge_git.Git = .{ .io = io, .arena = arena, .env = env_map };
     if (@import("merge_unknown_context.zig").inMerge(git) catch false) {
         const before = try merge_io.readOutputLimited(io, arena, args.merged);
@@ -137,7 +140,7 @@ pub fn run(
         var store = revision.Store.init(git);
         defer store.deinit();
         const captured = try session_context.readIndex(&store);
-        const selected = (try @import("merge_unknown_context.zig").choose(git, env_map, args.merged, local, remote)) orelse return 1;
+        const selected = (try @import("merge_unknown_context.zig").choose(git, env_map, args.merged, local, remote, &bindings)) orelse return 1;
         const lock_path = try std.fmt.allocPrint(arena, "{s}.lock", .{captured.path});
         const lock_file = try std.Io.Dir.cwd().createFile(io, lock_path, .{ .exclusive = true });
         const lock: SourceLock = .{ .file = lock_file, .path = lock_path };
@@ -151,7 +154,7 @@ pub fn run(
     var state = merge_ui_state.State.init(arena, &prepared.built.plan) catch
         return merge_io.reportFailure(stderr, args.merged);
     if (state.conflict_indices.len != 0) {
-        merge_tui.run(io, arena, env_map, &state, args.merged, prepared.built.partial, prepared.original_merged) catch
+        merge_tui.run(io, arena, env_map, &state, args.merged, prepared.built.partial, prepared.original_merged, &bindings) catch
             return merge_io.reportFailure(stderr, args.merged);
     }
     return finish(io, arena, &prepared, &state, stderr);

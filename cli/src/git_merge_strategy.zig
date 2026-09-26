@@ -1,4 +1,5 @@
 const std = @import("std");
+const keymap = @import("keymap.zig");
 const core = @import("core");
 const merge_git = @import("merge_git.zig");
 const atomic_file = @import("atomic_file.zig");
@@ -124,6 +125,8 @@ fn resolveSession(git: Git, candidate: *candidate_module.Candidate, env: *std.pr
     // Git owns MERGE_HEAD, merge commits, squash and abort after this command returns.
     const tty = (std.Io.File.stdin().isTty(git.io) catch false) and (std.Io.File.stdout().isTty(git.io) catch false);
     if (tty) {
+        var bindings = try keymap.loadUser(git.io, git.arena, env, stderr);
+        defer bindings.deinit();
         var tty_buffer: [4096]u8 = undefined;
         var session: ?merge_tui.Session = null;
         defer if (session) |*open| open.deinit();
@@ -136,13 +139,13 @@ fn resolveSession(git: Git, candidate: *candidate_module.Candidate, env: *std.pr
             var captured = try session_context.readIndex(&candidate.store);
             captured.snapshot = session_context.maskUnresolved(captured.snapshot, try candidate.pendingPaths());
             if (item.conflict != null and isStructural(item.conflict.?.kind)) {
-                switch (try file_conflict.resolveWithContext(git, candidate.result, item.conflict.?, env, captured)) {
+                switch (try file_conflict.resolveWithContext(git, candidate.result, item.conflict.?, env, captured, &bindings)) {
                     .unresolved => {},
                     .aborted => break,
                     .resolved => |paths| try candidate.refresh(paths),
                 }
             } else {
-                switch (try resolveContent(git, candidate, index, captured, env, &tty_buffer, &session)) {
+                switch (try resolveContent(git, candidate, index, captured, env, &tty_buffer, &session, &bindings)) {
                     .resolved => try candidate.refresh(item.paths),
                     .aborted => break,
                     .unresolved => {},
@@ -244,6 +247,7 @@ fn resolveContent(
     env: *std.process.Environ.Map,
     tty_buffer: []u8,
     session: *?merge_tui.Session,
+    bindings: *const keymap.Bindings,
 ) !ContentOutcome {
     const path = candidate.items.items[index].paths[0];
     if (candidate.result.sources.?.known == null) {
@@ -252,7 +256,7 @@ fn resolveContent(
         if (!core.isUnityYaml(inputs.ours) or !core.isUnityYaml(inputs.theirs)) return .unresolved;
         const prepared = try file_conflict.prepareContent(git, candidate.result, path) orelse return .unresolved;
         if (!std.mem.eql(u8, captured.before, prepared.index_before)) return error.SourceChanged;
-        const bytes = (try @import("merge_unknown_context.zig").choose(git, env, path, inputs.ours, inputs.theirs)) orelse return .aborted;
+        const bytes = (try @import("merge_unknown_context.zig").choose(git, env, path, inputs.ours, inputs.theirs, bindings)) orelse return .aborted;
         try file_conflict.finishContent(git, prepared, bytes);
         return .resolved;
     }
@@ -261,7 +265,7 @@ fn resolveContent(
     if (!std.mem.eql(u8, captured.before, prepared.index_before)) return error.SourceChanged;
     var state = try merge_ui_state.State.init(git.arena, &built.plan);
     if (state.outcome != .ready) {
-        if (session.* == null) session.* = try merge_tui.Session.init(git.io, git.arena, env, tty_buffer);
+        if (session.* == null) session.* = try merge_tui.Session.init(git.io, git.arena, env, tty_buffer, bindings);
         if (session.*) |*open| {
             const working_file = merge_io.readOutputLimited(git.io, git.arena, path) catch "";
             try open.present(git.arena, &state, path, built.partial, working_file);

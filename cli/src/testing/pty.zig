@@ -207,7 +207,9 @@ fn runPty(
     const action_failed = try std.fmt.allocPrint(arena, "{s}.action-failed", .{capture});
     defer std.Io.Dir.cwd().deleteFile(io, action_failed) catch {};
     const capture_argument = try integration.shellQuote(arena, capture);
-    const terminal_command = try integration.shellQuote(arena, try std.fmt.allocPrint(arena, "stty cols 100 rows 24; {s}; terminal_status=$?; : > {s}; exit \"$terminal_status\"", .{ git_command, try integration.shellQuote(arena, completed) }));
+    // User remappings must not change the keys used by these real-terminal regression cases.
+    const config_home = try integration.shellQuote(arena, try std.fs.path.join(arena, &.{ repository, ".git", "xdg" }));
+    const terminal_command = try integration.shellQuote(arena, try std.fmt.allocPrint(arena, "export XDG_CONFIG_HOME={s}; stty cols 100 rows 24; {s}; terminal_status=$?; : > {s}; exit \"$terminal_status\"", .{ config_home, git_command, try integration.shellQuote(arena, completed) }));
     const shell_command = switch (builtin.os.tag) {
         .linux => try std.fmt.allocPrint(arena, "script -qfec {s} {s}", .{ terminal_command, capture_argument }),
         .macos => try std.fmt.allocPrint(arena, "script -qF {s} sh -c {s}", .{ capture_argument, terminal_command }),

@@ -28,7 +28,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Install tools
-        uses: jdx/mise-action@v4
+        uses: jdx/mise-action@v5
       - name: Validate input
         run: |
           set -euo pipefail
@@ -73,7 +73,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/apply-version-bump
-      - uses: jdx/mise-action@v4
+      - uses: jdx/mise-action@v5
       - uses: ./.github/actions/setup-zig-cache
       - name: Build CLI
         run: |
@@ -96,7 +96,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/apply-version-bump
-      - uses: jdx/mise-action@v4
+      - uses: jdx/mise-action@v5
       - uses: ./.github/actions/setup-zig-cache
       - uses: ./.github/actions/setup-pnpm-store
       - name: Build and package extension

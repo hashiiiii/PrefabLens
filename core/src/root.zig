@@ -35,8 +35,8 @@ pub fn diffBytes(
     return diffBytesWithAssets(arena, before_src, after_src, &no_assets);
 }
 
-// A sole-status instance supplied with assets (guid -> source prefab bytes) is
-// expanded into the merged tree. Guids with no supply go into needed_sources.
+// Supplied source bytes expand prefab instance contents in the diff tree.
+// Missing source GUIDs appear in needed_sources so the host can load them.
 pub fn diffBytesWithAssets(
     arena: std.mem.Allocator,
     before_src: []const u8,

@@ -1,11 +1,8 @@
 const std = @import("std");
 const resolve = @import("resolve.zig");
 
-// Performance budget gate for the default guid-resolution scan, mirroring
-// core/src/perf_main.zig's convention: a nominal target with CI-noise headroom.
-// Nominal: a full 50k-.meta scan (no early exit — the wanted guid never
-// appears) measures ~350 ms on a dev laptop. The ceiling fails only on a true
-// regression, e.g. the scan going serial again.
+// A missing target GUID forces all 50,000 .meta files to be scanned without early exit.
+// That workload took about 350 ms on a development laptop. The 1,200 ms ceiling allows for CI variance while catching regressions.
 const meta_files = 50_000;
 const files_per_dir = 100;
 const scratch = ".zig-cache/tmp/prefablens-perf-scan";

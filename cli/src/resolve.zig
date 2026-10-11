@@ -2,37 +2,30 @@ const std = @import("std");
 const core = @import("core");
 const testing = std.testing;
 
-/// guid -> project-relative asset path ("Assets/..."), the form Unity users
-/// read and the extension shows. Same type as core.json.Resolver, so it can be
-/// passed through directly; callers join with the project root to open files.
+/// Maps GUIDs to project-relative asset paths, such as "Assets/...", matching Unity and extension displays.
+/// This is core.json.Resolver, so callers can pass it directly. Join paths with the project root to open files.
 pub const Index = core.json.Resolver;
 
-/// Unity puts "guid:" on the second line of every .meta; 4 KiB covers any
-/// importer header, and reading only the head keeps the scan I/O-minimal.
+/// Unity puts "guid:" on the second line of each .meta file. Reading the first 4 KiB covers importer headers without loading entire files.
 const meta_head_bytes = 4096;
 
-/// Concurrent .meta readers. Measured on a 50k-.meta tree (macOS/ARM): 2-4
-/// readers ~350 ms where serial takes ~700 ms, and 8+ regresses to worse than
-/// serial on APFS — so the count is capped, not scaled to the machine.
+/// On a 50,000-file .meta tree on macOS/ARM, 2-4 readers took about 350 ms; serial reads took about 700 ms.
+/// Eight or more readers were slower than serial reads on APFS, so concurrency is capped rather than scaled to CPU count.
 const max_readers = 4;
 
-/// Full index of every .meta under `project_root` — the explicit --project
-/// path. An unreadable root is an error (surfaced as "cannot read project
-/// directory" by the caller).
+/// Indexes every .meta file under project_root for explicit --project resolution.
+/// An unreadable root returns an error, reported by the caller as "cannot read project directory".
 pub fn buildIndex(io: std.Io, arena: std.mem.Allocator, project_root: []const u8) !Index {
     return scan(io, arena, project_root, &.{""}, &.{});
 }
 
-/// Index for default resolution: scans only Assets/ and Packages/ (the only
-/// trees Unity puts .meta files in), skips the ones that don't exist, and
-/// stops early once every guid in `wanted` (deduplicated by the caller) has
-/// been found.
+/// Default resolution scans Assets/ and Packages/, skipping directories that do not exist.
+/// It stops once every GUID in wanted, deduplicated by the caller, has been found.
 pub fn buildIndexFor(io: std.Io, arena: std.mem.Allocator, project_root: []const u8, wanted: []const []const u8) !Index {
     return scan(io, arena, project_root, &.{ "Assets", "Packages" }, wanted);
 }
 
-/// A guid found by a scan worker; fixed storage so workers never allocate
-/// (the shared arena is not thread-safe). Unity guids are 32 hex chars.
+/// Fixed storage avoids allocating from the shared arena, which is not thread-safe. Unity GUIDs contain 32 hexadecimal characters.
 const FoundGuid = struct {
     len: u8 = 0,
     buf: [64]u8 = undefined,
@@ -87,8 +80,7 @@ fn scan(
     var root = try std.Io.Dir.cwd().openDir(io, project_root, .{});
     defer root.close(io);
 
-    // Serial walk collecting .meta paths — ~20 ms even at 50k files; the
-    // per-file open+read below is the cost worth spreading across readers.
+    // Walking 50,000 files took about 20 ms. Opening and reading each file costs more, so only those reads are parallel.
     var paths: std.ArrayList([]const u8) = .empty;
     for (subroots) |sub| {
         var dir = if (sub.len == 0)
@@ -175,8 +167,7 @@ test "buildIndex maps guid to a project-relative asset path" {
     const root = try tmp.dir.realPathFileAlloc(testing.io, ".", arena);
     var index = try buildIndex(testing.io, arena, root);
     const path = index.get("1234567890abcdef1234567890abcdef").?;
-    // Relative to the root, never joined with it: the display form ("Assets/...")
-    // the extension shows; Windows walkers emit `\`, so compare natively.
+    // Display paths must stay project-relative. Native path joining accounts for Windows directory separators.
     const want = try std.fs.path.join(arena, &.{ "Assets", "Scripts", "Player.cs" });
     try testing.expectEqualStrings(want, path);
 }
@@ -188,7 +179,7 @@ test "buildIndexFor scans only Assets and Packages and skips missing subroots" {
 
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
-    // No Packages/ here — it must be skipped, not error.
+    // A project without Packages/ must still resolve references from Assets/.
     try tmp.dir.createDirPath(testing.io, "Assets");
     try tmp.dir.createDirPath(testing.io, "Library");
     try tmp.dir.writeFile(testing.io, .{ .sub_path = "Assets/Robot.prefab.meta", .data = "fileFormatVersion: 2\nguid: aaa111\n" });

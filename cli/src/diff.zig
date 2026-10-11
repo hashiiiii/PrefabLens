@@ -349,12 +349,9 @@ pub fn run(io: std.Io, arena: std.mem.Allocator, args: []const []const u8, stdou
         .exit => |code| return code,
     };
 
-    // Default guid resolution: with no --project and no --no-project, git mode
-    // resolves against the repository root — but only after the diffs prove
-    // there is something to resolve, so ref-free changes cost nothing. Built-in
-    // refs display by name without any .meta, so they neither trigger a scan
-    // nor keep its early exit waiting. A failed or empty scan degrades to the
-    // unresolved output, "--project" hint included.
+    // Without --project or --no-project, Git mode scans the repository only when the diff contains unresolved references.
+    // Built-in references need no .meta lookup, so they neither trigger a scan nor delay its early exit.
+    // A failed or empty scan keeps unresolved output and the --project hint.
     if (resolver_ptr == null and !opt.no_project and opt.target == .git) {
         const wanted = try wantedGuids(arena, diffs);
         if (wanted.len != 0) scan: {

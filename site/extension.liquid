@@ -17,7 +17,6 @@ layout: layout.liquid
       {{ pullRequest.files.size }} commits into <span class="branch">{{ pullRequest.base }}</span> from
       <span class="branch">{{ pullRequest.head }}</span>
     </p>
-    {% comment %} Files changed: one file-card per changed path {% endcomment %}
     {% for file in pullRequest.files %}
       {% include 'file-card.liquid', file: file %}
     {% endfor %}

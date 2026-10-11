@@ -59,12 +59,12 @@ pub fn finishContent(git: Git, prepared: ContentPrepared, canonical_bytes: []con
 }
 
 pub fn resolve(git: Git, result: strategy.Result, conflict: strategy.Conflict, env: *std.process.Environ.Map) !Outcome {
-    var bindings = try keymap.defaults(git.arena);
+    var bindings = (try keymap.Bindings.load(git.arena, keymap.initial_json)).bindings;
     defer bindings.deinit();
     return resolveWithContext(git, result, conflict, env, null, &bindings);
 }
 
-pub fn resolveWithContext(git: Git, result: strategy.Result, conflict: strategy.Conflict, env: *std.process.Environ.Map, captured: ?session_context.Index, bindings: *const keymap.Bindings) !Outcome {
+pub fn resolveWithContext(git: Git, result: strategy.Result, conflict: strategy.Conflict, env: *std.process.Environ.Map, captured: ?session_context.Index, bindings: *keymap.Bindings) !Outcome {
     const classified = classify(result.stages, conflict) orelse return .unresolved;
     const layout = originals(git, result, classified) catch return .unresolved;
     for (layout.paths) |path| if (!safePath(path) or std.mem.endsWith(u8, path, ".meta")) return .unresolved;

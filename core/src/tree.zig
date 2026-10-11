@@ -1,7 +1,5 @@
-// Tree materialization: group components under their owning GameObject or
-// PrefabInstance, assemble parent-child links, and materialize the pruned
-// ObjectDiff tree. Reference walking lives in tree_chain.zig and Hierarchy
-// ordering in tree_order.zig.
+// Builds ObjectDiff trees with components under their owning GameObject or PrefabInstance.
+// Reference traversal and Hierarchy ordering stay in tree_chain.zig and tree_order.zig so structural lookup rules are shared.
 const std = @import("std");
 const model = @import("model.zig");
 const root = @import("root.zig");
@@ -73,16 +71,11 @@ pub fn build(arena: std.mem.Allocator, fd: diffmod.FlatDiff) !model.DiffResult {
         const owner = blk: {
             const doc = idx.structuralDoc(d.file_id) orelse break :blk null;
             const go_id = tree_chain.gameObjectIdOfComponent(doc) orelse break :blk null;
-            // Only a doc confirmed to be a GameObject can be an owner. Allowing an
-            // unresolvable reference ({fileID: 0} or dangling) would sort the component
-            // under a phantom id and make it vanish.
+            // An owner must resolve to a GameObject. A null or dangling reference would hide the component under a nonexistent node.
             const go_doc = idx.structuralDoc(go_id) orelse break :blk null;
             if (go_doc.class_id != 1) break :blk null;
-            // A stripped GameObject (a nested instance's root placed in the outer
-            // document) does not become a node. Bridge to its owning PrefabInstance so
-            // the component doesn't silently vanish. The owning instance itself can also
-            // be stripped (nested prefab), so walk the chain to the nearest instance that
-            // gets materialized.
+            // Stripped GameObjects do not become nodes, so their components need an owning PrefabInstance.
+            // Nested instances can also be stripped. Follow the chain to the nearest instance that appears in the tree.
             const owner_id = if (go_doc.stripped) inner: {
                 const pi_id = tree_chain.refFileId(go_doc.body.get("m_PrefabInstance")) orelse break :blk null;
                 break :inner tree_chain.resolveInstanceChain(&idx, pi_id) orelse break :blk null;

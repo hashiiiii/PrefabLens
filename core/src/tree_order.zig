@@ -22,9 +22,8 @@ fn sceneRootsDoc(fd: diffmod.FlatDiff) ?*model.Document {
     return null;
 }
 
-// Stable reorder of node ids against a list of transform refs (m_Children / m_Roots):
-// ids matching a ref (in ref order) first, the rest in insertion order after them
-// (removed objects have no position in the after-side Hierarchy anymore).
+// Referenced nodes follow m_Children or m_Roots order. Unreferenced nodes retain insertion order at the end.
+// Removed objects need this fallback because they have no position in the after-side Hierarchy.
 fn orderByTransformRefs(arena: std.mem.Allocator, idx: *Index, refs: []*model.Node, list: *std.ArrayList(i64)) !void {
     var members = std.AutoHashMap(i64, void).init(arena);
     for (list.items) |id| try members.put(id, {});
@@ -44,9 +43,8 @@ fn orderByTransformRefs(arena: std.mem.Allocator, idx: *Index, refs: []*model.No
     list.* = out;
 }
 
-// Reorder a sibling list to the parent Transform's m_Children order. A PrefabInstance
-// parent keeps insertion order: its inner transforms live in the source prefab, so the
-// outer document carries no sibling order for them.
+// Children follow the parent Transform's m_Children order.
+// A PrefabInstance keeps insertion order because its source prefab, rather than the outer document, stores the inner transforms' order.
 pub fn orderChildren(arena: std.mem.Allocator, idx: *Index, parent_id: i64, list: *std.ArrayList(i64)) !void {
     const parent = idx.structuralDoc(parent_id) orelse return;
     if (parent.class_id != 1) return;

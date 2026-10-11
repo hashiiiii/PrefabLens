@@ -223,8 +223,6 @@ namespace UnityEngine.UIElements
 
         public void SetSelection(int index) { }
 
-        public void ClearSelectionWithoutNotify() { }
-
         public void RefreshItems() { }
     }
 }

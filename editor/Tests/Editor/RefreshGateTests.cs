@@ -27,8 +27,7 @@ namespace PrefabLens.Tests
         [Test]
         public void ACanceledRunDoesNotConsumeTheQueuedRefresh()
         {
-            // The window is closing when a run cancels: the pending flag must not be
-            // eaten by the canceled completion (matches the pre-extraction behavior).
+            // A canceled run belongs to a closing window and must not consume its queued refresh.
             var gate = new RefreshGate();
             gate.OnRefresh(Found("bin/prefablens"));
             gate.OnRefresh(Found("bin/prefablens")); // queues
@@ -48,8 +47,7 @@ namespace PrefabLens.Tests
             gate.OnDownloadDone();
             // After a failed download the missing screen shows instead of re-downloading.
             Assert.AreEqual(RefreshGate.Step.ShowMissingCli, gate.OnRefresh(NotFound()).Step);
-            // The refresh queued mid-download survives OnDownloadDone and rides the next
-            // run's completion — the accepted one-redundant-refresh behavior from #195.
+            // A refresh queued during download survives completion and triggers one more run when a CLI becomes available.
             Assert.AreEqual(RefreshGate.Step.Run, gate.OnRefresh(Found("bin/prefablens")).Step);
             Assert.IsTrue(gate.OnRunDone(canceled: false));
         }

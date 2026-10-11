@@ -1,6 +1,6 @@
-# Security Policy
+# Security policy
 
-## Supported Versions
+## Supported versions
 
 PrefabLens is pre-1.0 software.
 The maintainer applies security fixes only to the latest released version.
@@ -11,7 +11,7 @@ Upgrade to the newest release before you report a vulnerability.
 | Latest release | Yes       |
 | Older releases | No        |
 
-## Reporting a Vulnerability
+## Reporting a vulnerability
 
 Do **not** open a public issue for security vulnerabilities.
 

@@ -13,7 +13,7 @@ namespace PrefabLens
         Unchanged,
     }
 
-    /// A diff.v2 field value: one of three states — scalar / ref / null.
+    /// A diff.v2 field value is a scalar, reference, or null.
     public sealed class Value
     {
         public string Scalar; // only when scalar

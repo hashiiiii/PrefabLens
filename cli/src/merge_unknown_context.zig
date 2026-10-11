@@ -23,7 +23,7 @@ pub fn inMerge(git: Git) !bool {
 
 // This fallback makes one explicit whole-file decision. It has no automatic
 // branch and does not pretend that an absent merge base means an added file.
-pub fn choose(git: Git, env: *std.process.Environ.Map, path: []const u8, ours: []const u8, theirs: []const u8, bindings: *const keymap.Bindings) !?[]const u8 {
+pub fn choose(git: Git, env: *std.process.Environ.Map, path: []const u8, ours: []const u8, theirs: []const u8, bindings: *keymap.Bindings) !?[]const u8 {
     const decision = try file_choice.run(git.io, git.arena, env, .{ .base = "unavailable (multiple or absent ancestors)", .ours = path, .theirs = path, .paired_meta = false, .unknown_context = true }, bindings);
     const bytes = switch (decision) {
         .ours => ours,

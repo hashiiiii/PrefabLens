@@ -10,8 +10,8 @@ using UnityEngine.UIElements;
 
 namespace PrefabLens
 {
-    /// Master-detail view: UnityYAML assets that differ from the chosen base ref
-    /// (HEAD by default) on the left, the selected asset's semantic diff on the right.
+    /// The left pane lists UnityYAML assets that differ from the Base ref, which defaults to HEAD.
+    /// The right pane shows the selected asset's semantic diff.
     public sealed class PrefabLensWindow : EditorWindow
     {
         Label status;
@@ -56,8 +56,7 @@ namespace PrefabLens
             toolbar.Add(status);
             baseRef = new TextField("Base")
             {
-                // Commit on Enter or focus loss instead of every keystroke, so each
-                // edit triggers exactly one CLI run.
+                // Committing on Enter or focus loss avoids a CLI run for every keystroke.
                 isDelayed = true,
                 tooltip = "Git ref to compare against: branch, tag, or commit. Empty = HEAD.",
                 style = { width = 220, marginRight = 4 },
@@ -111,8 +110,7 @@ namespace PrefabLens
             {
                 case RefreshGate.Step.Run:
                     status.text = "Refreshing…";
-                    // Capture the ref this run compares against: the field can change before
-                    // it completes, and the callback must label the data with its own ref.
+                    // The Base field can change during a run, so its result must retain the ref it used.
                     var runRef = baseRef.value;
                     Cli.RunBulkAsync(loc.Path, runRef, res => OnBulkDone(res, runRef), runCts.Token);
                     break;
@@ -127,8 +125,7 @@ namespace PrefabLens
 
         void OnBulkDone(Cli.Result res, string runRef)
         {
-            // Runs even when content is already null: harmless, content is never nulled
-            // after CreateGUI, and a close-time completion arrives Canceled (queue kept).
+            // A canceled completion must update the gate while leaving the closing window's UI alone.
             var rerun = gate.OnRunDone(res.Canceled);
             if (content == null || res.Canceled)
                 return; // window gone or closing: leave the UI alone
@@ -139,8 +136,7 @@ namespace PrefabLens
 
         internal void ShowBulkResult(Cli.Result res, string runRef)
         {
-            // Unchanged output — the common focus-triggered refresh. Leave the whole UI
-            // alone so the user's tree fold state survives; only restore the status line.
+            // A focus-triggered refresh often returns unchanged output. Preserve the user's expanded rows in that case.
             if (res.ExitCode == 0 && res.Stdout == lastStdout)
             {
                 status.text = CountText(runRef);
@@ -148,7 +144,7 @@ namespace PrefabLens
             }
             if (res.ExitCode != 0)
             {
-                // The CLI's stderr is the primary source (non-git repository, timeout, etc.)
+                // CLI stderr includes the cause, such as a missing Git repository or timeout.
                 ResetList();
                 content.Clear();
                 Note(string.IsNullOrEmpty(res.Stderr) ? $"prefablens exited with {res.ExitCode}" : res.Stderr.Trim());
@@ -160,8 +156,8 @@ namespace PrefabLens
             }
             catch (Exception e)
             {
-                // The generic UI note stays short; the console carries the real reason
-                // (exception type + message) so a version mismatch is diagnosable.
+                // The console retains the exception type and message for diagnosing a version mismatch.
+                // The UI note stays short.
                 Debug.LogException(e);
                 ResetList();
                 content.Clear();
@@ -183,15 +179,14 @@ namespace PrefabLens
             if (idx < 0)
                 idx = 0;
             list.SetSelection(idx);
-            // Render directly instead of relying on SetSelection to re-fire selectionChanged
-            // when the index is unchanged (undocumented ListView behavior).
+            // ListView may omit selectionChanged when the index stays the same, so the selected entry needs a direct render.
             ShowEntry(bulk.Entries[idx]);
         }
 
         string CountText(string runRef) =>
             bulk.Entries.Count == 0
                 ? $"No changes vs {BaseLabel(runRef)}"
-                : $"{bulk.Entries.Count} changed vs {BaseLabel(runRef)}";
+                : $"Changed assets vs {BaseLabel(runRef)}: {bulk.Entries.Count}";
 
         static string BaseLabel(string runRef)
         {
@@ -227,7 +222,7 @@ namespace PrefabLens
         void ResetList()
         {
             bulk = new BulkModel();
-            list.ClearSelectionWithoutNotify();
+            list.SetSelection(-1);
             list.itemsSource = bulk.Entries;
             list.RefreshItems();
             lastStdout = null;
@@ -307,8 +302,8 @@ namespace PrefabLens
             Refresh();
         }
 
-        /// Unity calls this when the window closes (and on domain reload): stop an
-        /// in-flight download and kill an in-flight CLI run (no 90 s orphan).
+        /// Closing the window or reloading the domain must cancel downloads and CLI runs.
+        /// Otherwise, a CLI process could remain alive for its 90 s timeout.
         void OnDisable()
         {
             downloadCts?.Cancel();

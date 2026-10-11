@@ -2,18 +2,14 @@ const std = @import("std");
 const builtin = @import("builtin");
 const testing = std.testing;
 
-/// Shared input-size ceiling for both file reads (diff.zig) and `git show`
-/// output (here), so the two acquisition paths reject oversized input the
-/// same way instead of diverging on an arbitrary limit.
+/// File reads in diff.zig and `git show` output share this limit so both reject oversized input consistently.
 pub const max_input_bytes: usize = 64 * 1024 * 1024; // 64 MiB guard
 
-/// Default timeout for running git. An upper bound so that not just the direct CLI
-/// invocation but also the Unity Editor (which waits with WaitForExit) isn't
-/// dragged down by a hung git.
+/// A hung Git process must not block the CLI or the waiting Unity Editor indefinitely.
 pub const default_git_timeout: std.Io.Timeout = .{ .duration = .{ .clock = .awake, .raw = .fromSeconds(60) } };
 
 /// Absolute path of the work-tree root of the repository containing `dir`.
-/// git reports changed paths relative to this root, so anchoring reads here
+/// Git reports changed paths relative to this root, so anchoring reads here
 /// keeps subdirectory invocations correct.
 pub fn repoRoot(io: std.Io, arena: std.mem.Allocator, dir: []const u8, timeout: std.Io.Timeout) ![]const u8 {
     const res = runGit(arena, io, .{
@@ -44,7 +40,7 @@ test "repoRoot resolves the work-tree root from a subdirectory" {
 
     const sub = try tmp.dir.realPathFileAlloc(testing.io, "Assets/Sub", arena);
     const root = try repoRoot(testing.io, arena, sub, .none);
-    // macOS tmp dirs come back through /private symlinks: compare realpaths.
+    // macOS temporary directories can resolve through /private symlinks, so compare canonical paths.
     const canonical = try std.Io.Dir.cwd().realPathFileAlloc(testing.io, root, arena);
     try testing.expectEqualStrings(dir, canonical);
 
@@ -73,18 +69,18 @@ pub fn showAtRef(io: std.Io, arena: std.mem.Allocator, repo_dir: []const u8, ref
     switch (res.term) {
         .exited => |c| {
             if (c == 0) return res.stdout;
-            // Path absent at a valid ref (added/deleted side) -> empty.
+            // Added or deleted files have an empty side when the path is absent at a valid ref.
             if (std.mem.indexOf(u8, res.stderr, "does not exist in") != null or
                 std.mem.indexOf(u8, res.stderr, "exists on disk, but not in") != null)
                 return &[_]u8{};
-            // Anything else (bad revision, not a git repository, ...) is a real failure.
+            // An invalid revision or missing Git repository must remain an error.
             return error.GitShowFailed;
         },
         else => return error.GitShowFailed,
     }
 }
 
-/// Working-tree side (the after side when only one ref is given). A missing file is treated as "deleted" = empty side.
+/// Reads the working tree as the after side when one ref is given. A missing file represents deletion.
 pub fn readWorktree(io: std.Io, arena: std.mem.Allocator, repo_dir: []const u8, path: []const u8) ![]u8 {
     const full = try std.fs.path.join(arena, &.{ repo_dir, path });
     return std.Io.Dir.cwd().readFileAlloc(io, full, arena, .limited(max_input_bytes)) catch |err| switch (err) {
@@ -93,11 +89,9 @@ pub fn readWorktree(io: std.Io, arena: std.mem.Allocator, repo_dir: []const u8, 
     };
 }
 
-/// Paths changed between before_ref and after_ref (empty after_ref = the
-/// working tree), one repo-relative path per git output NUL-separated entry.
-/// Untracked files are not listed — same semantics as `git diff --name-only`.
-/// The -z flag both NUL-separates the output and disables git's quotepath
-/// C-quoting mangling, so non-ASCII filenames come through as literal UTF-8.
+/// Repository-relative paths changed between before_ref and after_ref. An empty after_ref selects the working tree.
+/// Untracked files are excluded, as with `git diff --name-only`.
+/// The -z flag separates paths with NUL bytes and disables Git's path quoting, preserving non-ASCII names as UTF-8.
 pub fn changedPaths(
     io: std.Io,
     arena: std.mem.Allocator,
@@ -112,11 +106,8 @@ pub fn changedPaths(
     var argv: std.ArrayList([]const u8) = .empty;
     try argv.appendSlice(arena, &.{ "git", "diff", "--name-only", "-z", "--end-of-options", before_ref });
     if (after_ref.len != 0) try argv.append(arena, after_ref);
-    // No pathspec follows the refs, but the trailing "--" still matters: without it, a ref
-    // operand that fails to resolve as a revision but happens to name a file in the working
-    // tree (e.g. a caller passing a non-Unity path like "Note.txt" as if it were a ref) would
-    // have git silently reinterpret it as a pathspec instead of failing. The explicit "--"
-    // forces every operand before it to be resolved strictly as a revision.
+    // The trailing "--" prevents Git from treating an invalid ref as a working-tree path.
+    // For example, an existing Note.txt passed as a ref must fail revision lookup instead of filtering the diff.
     try argv.append(arena, "--");
     const res = runGit(arena, io, .{
         .argv = argv.items,

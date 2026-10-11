@@ -1,7 +1,6 @@
 const std = @import("std");
 const keymap = @import("keymap.zig");
 const vaxis = @import("vaxis");
-const shared = @import("keymap");
 const merge_io = @import("merge_io.zig");
 const vxfw = vaxis.vxfw;
 
@@ -10,7 +9,9 @@ pub const Paths = struct { base: []const u8, ours: ?[]const u8, theirs: ?[]const
 
 /// Selection is separate from Enter so deletion and path changes are confirmed.
 /// This screen only records a decision; the caller owns all filesystem writes.
-pub fn run(io: std.Io, arena: std.mem.Allocator, env: *std.process.Environ.Map, paths: Paths, bindings: *const keymap.Bindings) !Choice {
+pub fn run(io: std.Io, arena: std.mem.Allocator, env: *std.process.Environ.Map, paths: Paths, bindings: *keymap.Bindings) !Choice {
+    bindings.cancel();
+    defer bindings.cancel();
     var view: View = .{
         .paths = paths,
         .bindings = bindings,
@@ -33,7 +34,7 @@ fn label(arena: std.mem.Allocator, prefix: []const u8, path: ?[]const u8) ![]con
 }
 
 const View = struct {
-    bindings: *const keymap.Bindings,
+    bindings: *keymap.Bindings,
     paths: Paths,
     base: []const u8,
     ours: []const u8,
@@ -49,7 +50,10 @@ const View = struct {
         const self: *View = @ptrCast(@alignCast(userdata));
         switch (value) {
             .key_press => |key| {
-                const action = self.bindings.resolve(&.{.file_choice}, shared.vaxisMatcher(key)) orelse return;
+                const action = switch (self.bindings.receive(&.{.file_choice}, key)) {
+                    .action => |action| action,
+                    .pending, .none => return ctx.consumeEvent(),
+                };
                 switch (action) {
                     .quit => {
                         self.result = .quit;
@@ -82,6 +86,8 @@ const View = struct {
                 }
                 ctx.consumeAndRedraw();
             },
+            .focus_out, .paste_start, .paste => self.bindings.cancel(),
+            .mouse => |mouse| if (mouse.type == .press) self.bindings.cancel(),
             .winsize => ctx.consumeAndRedraw(),
             else => {},
         }

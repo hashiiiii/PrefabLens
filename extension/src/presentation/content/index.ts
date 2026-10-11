@@ -13,13 +13,13 @@ import { createFileView, type FileRegistry, fileKey } from "./overlay/file-view"
 
 const ERROR_TEXT: Record<AuthError, string> = {
   "access-token-missing": "Please sign in with GitHub to view semantic diffs.",
-  "auth-failed": "GitHub authentication did not work. Please sign in again.",
+  "auth-failed": "GitHub authentication failed. Please sign in again.",
 };
 
 const SIGN_IN_FAILURE_TEXT: Record<SignInFailure, string> = {
   denied: "Authorization was denied. Please try again.",
   expired: "The code expired. Please try again.",
-  failed: "Sign-in did not work. Please try again.",
+  failed: "Sign-in failed. Please try again.",
 };
 
 const files: FileRegistry = new Map();
@@ -42,8 +42,7 @@ const messengerGateway = createMessengerGateway();
 const authRepository = createAuthRepository();
 const githubAuthGateway = createGithubAuthGateway();
 const signInState = { inFlight: false };
-// _blank: Open in a new tab
-// noopener: Prevent the opened tab from accessing the original tab
+// GitHub authorization must not give the opened tab access to this page.
 const openTab = (url: string) => void window.open(url, "_blank", "noopener");
 const now = () => Date.now();
 
@@ -55,7 +54,7 @@ const saveViewMode = async (view: ViewMode): Promise<void> => {
   }
 };
 
-// Auth-error panel: device flow. Failures land back here for retry.
+// Authentication failures keep the sign-in panel available for another attempt.
 async function signInPanel(root: ShadowRoot, message: string): Promise<void> {
   await renderSignIn(root, message);
   for await (const event of signIn(githubAuthGateway, authRepository, now, signInState)) {
@@ -66,7 +65,7 @@ async function signInPanel(root: ShadowRoot, message: string): Promise<void> {
       await signInPanel(root, SIGN_IN_FAILURE_TEXT[event.reason]);
       return;
     }
-    // ok: accessToken storage.onChanged retries auth-blocked panels
+    // Token storage changes retry panels that were blocked by authentication.
   }
 }
 
@@ -115,11 +114,8 @@ function ensureGlobalToggle(viewState: ViewState, anchor: Element): void {
 }
 
 async function init(): Promise<void> {
-  // The device activation page opens in a new tab.
-  // The PR (pull request) tab already starts the main runtime.
-  // This tab's only job is to fill in the activation code.
-  // If you use soft navigation, it does not reload this script.
-  // All other pages also start the runtime, but do nothing until on a diff or PR URL.
+  // The PR tab already runs the diff UI; the new device tab only needs to fill the activation code.
+  // Soft navigation does not reload this script. Other pages keep the runtime ready for navigation to a diff or PR.
   if (location.pathname === "/login/device") {
     const pending = await authRepository.loadPendingSignIn();
     if (pending) fillDeviceCode(document, pending, Date.now());

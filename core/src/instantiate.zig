@@ -1,7 +1,6 @@
-// Source-prefab merging for PrefabInstance.
-// Merge = parse the source -> apply m_Modifications to the Document -> reuse the existing
-// one-sided compute + tree.build -> graft onto the instance node. core owns no I/O;
-// the host supplies guid -> bytes (Assets). Guids with no supply go into needed_sources.
+// Expands PrefabInstance sources by parsing source documents and applying m_Modifications.
+// The existing one-sided diff and tree builder then attach the result to the instance node.
+// The host supplies source bytes through Assets because core performs no I/O. Missing sources appear in needed_sources.
 const std = @import("std");
 const model = @import("model.zig");
 const parser = @import("parser.zig");
@@ -247,9 +246,9 @@ fn applyModifications(arena: std.mem.Allocator, inst_doc: *const model.Document,
     return applied;
 }
 
-// Append the XOR-transformed mod to every instance doc. Only in the correct instance does the
-// inner fileID match and get applied; others are pushed down recursively or surface as leftover rows
-// (extra rows in a source with multiple instances are tolerated — safer than dropping information).
+// XOR-transformed modifications match only the correct instance's internal fileID.
+// Other instances pass them down recursively or retain them as unapplied rows.
+// Sources with multiple instances may show extra rows, but retaining those rows avoids losing modification data.
 fn pushDown(arena: std.mem.Allocator, src_docs: []model.Document, target_id: i64, property_path: []const u8, value: ?*model.Node, obj_ref: ?*model.Node) !bool {
     var pushed = false;
     for (src_docs) |*d| {
@@ -408,7 +407,7 @@ test "instantiate: cyclic source reference terminates" {
     defer arena_state.deinit();
     const arena = arena_state.allocator();
     // The source itself contains a PrefabInstance of the same guid (corrupt data).
-    // Just verify the ancestor-chain cycle guard stops it and it doesn't land in needed either.
+    // The cycle must terminate without requesting the same source again.
     const cyclic_source =
         \\--- !u!1001 &7
         \\PrefabInstance:
@@ -629,7 +628,7 @@ test "instantiate: unappliable overrides stay visible as rows" {
     try assets.put(arena, "srcguid", test_source);
     const res = try root.diffBytesWithAssets(arena, "", variant, &assets);
     const inst = res.roots[0];
-    // Scale.y is applied to the merge. The unapplicable otherguid row is kept, not silently dropped.
+    // Scale.y applies to the source. The unmatched otherguid row must remain visible so its modification is not lost.
     try testing.expectEqual(@as(usize, 1), inst.components.len);
     try testing.expectEqualStrings("(1, 2, 1)", inst.components[0].fields[0].after.?.scalar);
     try testing.expectEqual(@as(usize, 1), inst.overrides.len);

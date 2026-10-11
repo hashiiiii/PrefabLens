@@ -5,8 +5,8 @@ using UnityEditor;
 
 namespace PrefabLens
 {
-    /// Locate, download, and run the prefablens CLI. All git logic lives in the CLI.
-    /// Split by concern: Cli.cs (constants + locate), Cli.Download.cs, Cli.Run.cs.
+    /// Locates, downloads, and runs the prefablens CLI, which owns all Git operations.
+    /// Cli.cs defines lookup; Cli.Download.cs and Cli.Run.cs handle download and execution.
     public static partial class Cli
     {
         /// Version of the CLI to download (kept in sync with the GitHub Releases tag v{Version}).
@@ -16,7 +16,7 @@ namespace PrefabLens
         public static string BinaryName =>
             RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? "prefablens.exe" : "prefablens";
 
-        /// Default install location. Under Library, relative to cwd (= Unity project root).
+        /// Install location under Library, relative to the Unity project root.
         public static string DefaultPath => Path.Combine("Library", "PrefabLens", Version, BinaryName);
 
         const int VersionTimeoutMs = 5_000;
@@ -85,9 +85,8 @@ namespace PrefabLens
             return new Location(ValidateCli(defaultPath, Version) == null ? defaultPath : null, overrideError);
         }
 
-        /// The manual CLI path override, EditorPrefs-backed. Empty = unset. The single
-        /// get/set surface shared by the window and the settings page (#162); clearing
-        /// deletes the key so "unset" and "empty" cannot drift apart.
+        /// The window and Preferences page share this EditorPrefs-backed CLI path override.
+        /// Clearing it deletes the key so an empty value has the same meaning as an unset override.
         public static string PathOverride
         {
             get => EditorPrefs.GetString(CliPathPref, "");

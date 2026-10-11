@@ -127,8 +127,8 @@ fn appendSegment(arena: std.mem.Allocator, out: *std.ArrayList(u8), seg: []const
     try out.appendSlice(arena, seg[br..]);
 }
 
-// Equivalent to Unity's ObjectNames.NicifyVariableName: fixed table →
-// strip "m_" + capitalize first + insert a space at lowercase/digit→uppercase boundaries.
+// Match Unity's ObjectNames.NicifyVariableName so field labels read like Inspector labels.
+// After fixed-name lookup, strip "m_", capitalize the first character, and separate lowercase or digit characters from following uppercase characters.
 fn appendNicified(arena: std.mem.Allocator, out: *std.ArrayList(u8), name: []const u8) !void {
     for (display) |d| if (std.mem.eql(u8, name, d.raw)) {
         try out.appendSlice(arena, d.shown);

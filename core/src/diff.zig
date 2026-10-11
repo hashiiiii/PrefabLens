@@ -2,8 +2,7 @@ const std = @import("std");
 const model = @import("model.zig");
 const testing = std.testing;
 
-// Test-only lookup of one document's diff by fileID.
-// pub: diff_overrides' tests use it too.
+// Public because diff_overrides tests also need to inspect a document's diff by fileID.
 pub fn findDoc(fd: FlatDiff, file_id: i64) ?DocDiff {
     for (fd.docs) |d| if (d.component.file_id == file_id) return d;
     return null;
@@ -130,9 +129,7 @@ test "diff: duplicate before fileIDs match the first occurrence" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
-    // A malformed anchor makes the parser drop file_id to 0, so duplicates do
-    // actually occur. The linear scan before the index was introduced matched the
-    // "first" document, so that semantics must be preserved.
+    // Malformed anchors can produce duplicate fileIDs. Matching the first occurrence keeps the diff deterministic.
     const before =
         \\--- !u!114 &5
         \\MonoBehaviour:
@@ -390,8 +387,7 @@ fn buildIndex(arena: std.mem.Allocator, docs: []model.Document) !std.AutoHashMap
     var idx = std.AutoHashMap(i64, *model.Document).init(arena);
     try idx.ensureTotalCapacity(@intCast(docs.len));
     for (docs) |*d| {
-        // Duplicate fileIDs: first occurrence wins (happens with malformed anchors).
-        // Same semantics as the linear scan before the index was introduced.
+        // Malformed anchors can repeat a fileID; retaining the first occurrence makes matching deterministic.
         const gop = idx.getOrPutAssumeCapacity(d.file_id);
         if (!gop.found_existing) gop.value_ptr.* = d;
     }

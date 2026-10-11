@@ -16,7 +16,7 @@ namespace PrefabLens.Tests
                 PrefabLensSettings.ResolvedLabel(new Cli.Location("/custom/prefablens", null), "0.7.1")
             );
             Assert.AreEqual(
-                "Resolved CLI: not found — the PrefabLens window downloads v0.7.1 on its next refresh",
+                "Resolved CLI: not found. The PrefabLens window downloads v0.7.1 on its next refresh.",
                 PrefabLensSettings.ResolvedLabel(new Cli.Location(null, null), "0.7.1")
             );
 

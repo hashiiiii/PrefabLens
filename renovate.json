@@ -4,10 +4,27 @@
     "config:recommended",
     "customManagers:biomeVersions"
   ],
+  "dependencyDashboard": true,
+  "enabledManagers": [
+    "github-actions",
+    "mise",
+    "npm",
+    "nuget",
+    "unity3d",
+    "custom.jsonata"
+  ],
+  "timezone": "Asia/Tokyo",
+  "schedule": [
+    "* * * * 1"
+  ],
+  "updateNotScheduled": false,
+  "automerge": false,
   "labels": [
     "dependencies"
   ],
   "minimumReleaseAge": "7 days",
+  "minimumReleaseAgeBehaviour": "timestamp-required",
+  "internalChecksFilter": "strict",
   "prConcurrentLimit": 10,
   "prHourlyLimit": 0,
   "osvVulnerabilityAlerts": true,
@@ -55,6 +72,18 @@
       ],
       "groupName": "toolchain (mise)",
       "automerge": false
+    },
+    {
+      "description": "Group Zig and ZLS because their versions must stay compatible",
+      "matchManagers": [
+        "mise"
+      ],
+      "matchDepNames": [
+        "zig",
+        "zls"
+      ],
+      "groupName": "Zig and ZLS",
+      "groupSlug": "zig-and-zls"
     },
     {
       "description": "Group pnpm updates across mise and package.json",

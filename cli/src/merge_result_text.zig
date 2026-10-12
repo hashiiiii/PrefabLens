@@ -112,14 +112,21 @@ pub fn moveLine(editor: *vxfw.TextField, movement: Movement) !void {
     if (target < cursor) editor.buf.moveGapLeft(cursor - target) else editor.buf.moveGapRight(target - cursor);
 }
 
-pub fn cellAt(editor: *vxfw.TextField, width: usize, row: usize, col: usize) !Selection {
+pub fn cellAt(editor: *vxfw.TextField, width: usize, row: usize, col: usize, horizontal: usize) !Selection {
     const text = try editor.buf.dupe();
     defer editor.buf.allocator.free(text);
     var position: Position = .{};
+    var skipped: usize = 0;
     var iter = vaxis.unicode.graphemeIterator(text);
     while (iter.next()) |g| {
         const bytes = g.bytes(text);
         const newline = std.mem.eql(u8, bytes, "\n");
+        if (newline) {
+            skipped = 0;
+        } else if (skipped < horizontal) {
+            skipped += 1;
+            continue;
+        }
         const cells = vaxis.gwidth.gwidth(bytes, .unicode);
         if (!newline and position.col + cells > width) {
             position.row += 1;

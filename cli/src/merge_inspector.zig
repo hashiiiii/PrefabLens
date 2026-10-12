@@ -426,7 +426,7 @@ pub const Model = struct {
         for (self.documents) |document| {
             if (document != null) return false;
         }
-        if (std.mem.eql(u8, row.label, "Path") or std.mem.eql(u8, row.label, "Key")) return false;
+        if (std.mem.eql(u8, row.label, "Path")) return false;
         // Sequence order is one list choice. An index row is not a cell you can edit.
         if (row.path.len == 1 and row.path[0] == .index) return false;
         // Reparent is one parent choice. The displayed name is not YAML to edit.

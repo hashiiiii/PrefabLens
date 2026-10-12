@@ -1,44 +1,43 @@
 {
-  "merge": {
+  "global": {
     "back": ["Escape"],
-    "move_left": ["Left"],
-    "move_right": ["Right"],
-    "move_up": ["Up"],
-    "move_down": ["Down"],
+    "complete": ["Enter"],
     "toggle_result_preview": ["Shift+v"],
-    "activate": ["Enter"],
     "toggle_raw_view": ["Shift+r"],
     "toggle_file_view": ["Shift+e"],
     "toggle_combine": ["Shift+t"]
   },
-  "inspector": {
-    "pan_left": ["Shift+Left"],
-    "pan_right": ["Shift+Right"]
+  "tree": {
+    "move_left": ["Left"],
+    "move_right": ["Right"],
+    "move_up": ["Up"],
+    "move_down": ["Down"],
+    "activate": ["Enter"]
   },
-  "file_choice": {
-    "quit": ["q", "Escape", "Ctrl+c"],
-    "confirm": ["Enter"],
+  "content": {
+    "back": ["Escape"],
+    "move_left": ["Left", "Ctrl+b"],
+    "move_right": ["Right", "Ctrl+f"],
+    "move_up": ["Up"],
+    "move_down": ["Down"],
+    "activate": ["Enter"],
+    "pan_left": ["Shift+Left"],
+    "pan_right": ["Shift+Right"],
+    "copy_selection": ["Super+c", "Ctrl+c"],
+    "insert_newline": ["Ctrl+j", "Shift+Enter"],
+    "line_start": ["Home", "Ctrl+a"],
+    "line_end": ["End", "Ctrl+e"]
+  },
+  "dialog": {
+    "activate": ["Enter"],
+    "confirm": ["y", "Shift+y"],
+    "cancel": ["n", "Shift+n", "Escape", "q", "Ctrl+c"],
+    "move_left": ["Left"],
+    "move_right": ["Right"],
     "choose_current": ["a"],
     "choose_incoming": ["b"],
     "keep": ["k"],
     "delete": ["d"],
     "edit_custom": ["e"]
-  },
-  "dialog": {
-    "confirm": ["y", "Shift+y"],
-    "cancel": ["n", "Shift+n", "Escape"],
-    "choose_cancel": ["Left"],
-    "choose_confirm": ["Right"],
-    "activate_choice": ["Enter"]
-  },
-  "editor": {
-    "submit": ["Enter"],
-    "cancel": ["Escape"],
-    "copy_selection": ["Super+c", "Ctrl+c"],
-    "insert_newline": ["Ctrl+j", "Shift+Enter"],
-    "cursor_up": ["Up"],
-    "cursor_down": ["Down"],
-    "line_start": ["Home", "Ctrl+a"],
-    "line_end": ["End", "Ctrl+e"]
   }
 }

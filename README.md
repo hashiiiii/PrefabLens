@@ -156,16 +156,24 @@ Edit that file, then reopen the merge tool to apply changes.
 | Windows | `%APPDATA%\prefablens\keymap.json` |
 | macOS / Linux | `~/.config/prefablens/keymap.json` |
 
+| Context | Where keys apply |
+| --- | --- |
+| `global` | Shared display controls and the Complete button |
+| `tree` | The hierarchy on the left |
+| `content` | The values on the right and Result editing |
+| `dialog` | Confirmations and file conflict choices |
+
 Edit entries in the generated file, such as these two shortcuts:
 
 ```json
 {
-  "merge": { "toggle_raw_view": ["Ctrl+r"] },
-  "editor": { "submit": ["Ctrl+x Ctrl+Enter"] }
+  "global": { "toggle_raw_view": ["Ctrl+r"] },
+  "content": { "activate": ["Ctrl+x Ctrl+Enter"] }
 }
 ```
 
-See [zig-keymap](https://github.com/hashiiiii/zig-keymap#keys) for details.
+`content.activate` selects a value, starts Result editing, or accepts the edit, depending on focus and editing state.
+See [available actions](docs/cli.md#key-bindings) and [key names](https://github.com/hashiiiii/zig-keymap#keys).
 
 ## Development
 

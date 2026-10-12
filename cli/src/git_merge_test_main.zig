@@ -132,7 +132,7 @@ fn testInvalidKeymapIsIgnored(io: std.Io, arena: std.mem.Allocator, scratch: []c
         const baseline_index = try support.gitRun(io, arena, repo, &.{ "ls-files", "--stage", "-z" });
         const baseline_file = try support.readFile(io, arena, repo, case.file.path);
         try support.gitOk(io, arena, repo, &.{ "merge", "--abort" });
-        try support.writeFile(io, arena, repo, ".git/xdg/prefablens/keymap.json", "{\"editor\": {\"submit\": 42}}");
+        try support.writeFile(io, arena, repo, ".git/xdg/prefablens/keymap.json", "{\"content\": {\"activate\": 42}}");
         // User TUI configuration cannot change headless merge output or conflict stages.
         const invalid = try std.process.run(arena, io, .{ .argv = argv, .cwd = .{ .path = repo }, .environ_map = &env });
         const invalid_index = try support.gitRun(io, arena, repo, &.{ "ls-files", "--stage", "-z" });

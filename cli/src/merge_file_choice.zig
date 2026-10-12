@@ -50,17 +50,17 @@ const View = struct {
         const self: *View = @ptrCast(@alignCast(userdata));
         switch (value) {
             .key_press => |key| {
-                const action = switch (self.bindings.receive(&.{.file_choice}, key)) {
+                const action = switch (self.bindings.receive(&.{.dialog}, key)) {
                     .action => |action| action,
                     .pending, .none => return ctx.consumeEvent(),
                 };
                 switch (action) {
-                    .quit => {
+                    .cancel => {
                         self.result = .quit;
                         ctx.quit = true;
                         return;
                     },
-                    .confirm => {
+                    .activate, .confirm => {
                         if (self.selected) |selected| {
                             self.result = selected;
                             ctx.quit = true;
@@ -82,6 +82,7 @@ const View = struct {
                     .delete => if (self.paths.ours == null or self.paths.theirs == null) {
                         self.selected = .delete;
                     },
+                    .move_left, .move_right => return ctx.consumeEvent(),
                     else => unreachable,
                 }
                 ctx.consumeAndRedraw();
@@ -94,7 +95,7 @@ const View = struct {
     }
 
     fn instruction(self: *const View, arena: std.mem.Allocator, output: *std.ArrayList(u8), action: keymap.Action, operation: []const u8) std.mem.Allocator.Error!void {
-        const hint = self.bindings.hint(.file_choice, action);
+        const hint = self.bindings.hint(.dialog, action);
         if (hint.len == 0) return;
         if (output.items.len != 0) try output.appendSlice(arena, "   ");
         try output.appendSlice(arena, try std.fmt.allocPrint(arena, "{s}: {s}", .{ hint, operation }));
@@ -113,7 +114,7 @@ const View = struct {
             try self.instruction(ctx.arena, &instructions, .delete, "Delete the file");
         }
         if (self.paths.unknown_context) try self.instruction(ctx.arena, &instructions, .edit_custom, "Edit custom file");
-        try self.instruction(ctx.arena, &instructions, .quit, "Quit");
+        try self.instruction(ctx.arena, &instructions, .cancel, "Cancel");
         const description = if (self.selected) |selected| switch (selected) {
             .keep => "Keep the file.",
             .delete => "Delete the file.",
@@ -122,7 +123,8 @@ const View = struct {
             .custom => "Open the editor with the current file. Save and close to apply.",
             .quit => unreachable,
         } else "Choose an operation.";
-        const confirm_key = self.bindings.hint(.file_choice, .confirm);
+        const activate_key = self.bindings.hint(.dialog, .activate);
+        const confirm_key = if (activate_key.len != 0) activate_key else self.bindings.hint(.dialog, .confirm);
         const confirmation = if (confirm_key.len == 0) description else try std.fmt.allocPrint(ctx.arena, "{s} Press {s} to confirm.", .{ description, confirm_key });
         const lines: []const []const u8 = &.{ if (self.paths.unknown_context) "Unknown base/context: choose the whole file" else "Unity asset file conflict", "", self.base, self.ours, self.theirs, if (self.paths.paired_meta) "The asset and its matching .meta file are handled together." else "", "", instructions.items, "", confirmation };
         // Wrap full paths so two long names with a shared prefix stay distinguishable.

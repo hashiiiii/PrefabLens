@@ -93,7 +93,7 @@ namespace PrefabLens.Tests
                 window.ShowBulkResult(Ok(OneFile), "HEAD");
 
                 Assert.AreEqual(1, FileCount(window));
-                Assert.AreEqual("1 changed vs HEAD", window.StatusText);
+                Assert.AreEqual("Changed assets vs HEAD: 1", window.StatusText);
                 var labels = Labels(window.DetailPane);
                 Assert.That(labels, Does.Contain("Assets/Smoke.prefab"));
                 Assert.That(labels, Does.Not.Contain(CliError));
@@ -118,7 +118,7 @@ namespace PrefabLens.Tests
                 window.ShowBulkResult(Ok(OneFile), "main");
 
                 Assert.AreEqual(1, FileCount(window));
-                Assert.AreEqual("1 changed vs main", window.StatusText);
+                Assert.AreEqual("Changed assets vs main: 1", window.StatusText);
                 Assert.That(Labels(window.DetailPane), Does.Contain("Assets/Smoke.prefab"));
             }
             finally
@@ -155,7 +155,7 @@ namespace PrefabLens.Tests
                 window.ShowBulkResult(Ok(emptyDiff), "HEAD");
 
                 Assert.AreEqual(1, FileCount(window));
-                Assert.AreEqual("1 changed vs HEAD", window.StatusText);
+                Assert.AreEqual("Changed assets vs HEAD: 1", window.StatusText);
                 var labels = Labels(window.DetailPane);
                 Assert.That(labels, Does.Contain("Assets/Smoke.prefab"));
                 Assert.That(labels, Does.Contain("No semantic changes"));
@@ -188,7 +188,8 @@ namespace PrefabLens.Tests
         static void CloseWindow(PrefabLensWindow window)
         {
 #if UNITY_EDITOR
-            window.Close();
+            // The fixture has no parent window, which EditorWindow.Close requires.
+            Object.DestroyImmediate(window);
 #endif
         }
 

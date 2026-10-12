@@ -1,7 +1,7 @@
 # Chrome extension
 
 This page describes the `extension/` code for contributors.
-For install steps and product overview, see the [README](../README.md).
+For installation and usage, see the [README](../README.md).
 For the contribution process, see [CONTRIBUTING.md](../CONTRIBUTING.md).
 
 ## Purpose
@@ -62,8 +62,8 @@ Two modules are outside the four layers:
 | `src/container.ts` | Composition root. DI factories only |
 | `src/internal/` | Shared helpers that no layer owns (for example `must`) |
 
-The extension has three JS contexts.
-Each JS context has its own entry point and its own container wiring:
+The extension runs in three JavaScript contexts.
+Each context has its own entry point and container setup:
 
 | Context | Entry point |
 |---|---|
@@ -88,17 +88,14 @@ domain/
     fn/<name>.ts              # pure functions that read or build domain types
 ```
 
-- If the symbol is a domain type (including `Result`), put it in
-  `domain/<area>/` (outside `fn/`).
+- Put domain types, including `Result`, in `domain/<area>/`, outside `fn/`.
   Type files hold types plus constructors and type guards only
   (for example `ok` / `err` next to `Result`).
   Put queries and transforms under `fn/`.
-- If the symbol is a repository interface for domain-model persistence, put it in
-  `domain/<area>/<noun>-repository.ts`.
+- Put repository interfaces for domain model persistence in `domain/<area>/<noun>-repository.ts`.
   Public functions depend on these interfaces.
   Clients in `infrastructure/` implement these interfaces.
-- If the symbol is a pure function that reads or builds a domain type, put it in
-  `domain/<area>/fn/<name>.ts`.
+- Put pure functions that read or build domain types in `domain/<area>/fn/<name>.ts`.
 - If a helper is not a domain type, keep it out of `domain/`.
   Put cross-layer helpers in `src/internal/` (see Overview).
 
@@ -114,13 +111,11 @@ application/
     <name>.ts          # gateway types (XxxGateway)
 ```
 
-- If the symbol is an application public function (a use case or a state factory),
-  put it in `application/<area>/<verb>-<noun>.ts`.
+- Put public application functions (use cases or state factories) in `application/<area>/<verb>-<noun>.ts`.
   Export one function per file.
   If a helper serves one public function only, keep it non-exported in that file.
-- If two or more application callers share work that is not itself a public function,
-  put it in `application/internal/<noun>.ts`
-  (for example `raw-diff.ts`, `repo-index.ts`).
+- Put helpers shared by multiple application callers in `application/internal/<noun>.ts`, unless they are public functions.
+  Examples include `raw-diff.ts` and `repo-index.ts`.
 - Gateway types owned by the application live in `application/gateway/<name>.ts`
   as `XxxGateway`:
   `GithubGateway`, `DifferGateway` (WASM), `MessengerGateway` (chrome.runtime),
@@ -164,8 +159,8 @@ presentation/
 - Per-file UI state lives next to the content script under `content/overlay/`.
 - Use explicit subscriptions when a UI event has more than one consumer.
 - Register subscriptions before initial activation.
-- If two or more presentation contexts share a helper (such as rendering, the
-  view toggle, or view state), put it in `presentation/internal/`.
+- Put helpers shared by multiple presentation contexts in `presentation/internal/`.
+  Examples include rendering, the view toggle, and view state.
 - Presentation types are values or objects.
 - Do not mix the two shapes in one type.
 - This split applies to `presentation/` only.

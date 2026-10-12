@@ -146,18 +146,19 @@ https://github.com/user-attachments/assets/d6dd0038-498f-42f3-8447-77a6e597ddf2
 
 #### Key bindings
 
-Create `~/.config/prefablens/keymap.toml` on macOS or Linux, or `%APPDATA%\prefablens\keymap.toml` on Windows.
-If `XDG_CONFIG_HOME` is set, use `$XDG_CONFIG_HOME/prefablens/keymap.toml`.
+Copy the [initial keymap](cli/src/keymap.json) to `~/.config/prefablens/keymap.json` on macOS or Linux, or `%APPDATA%\prefablens\keymap.json` on Windows.
+If `XDG_CONFIG_HOME` is nonempty, use `$XDG_CONFIG_HOME/prefablens/keymap.json`.
 
-```toml
-[merge]
-toggle_raw_view = ["Ctrl+r"]
-
-[editor]
-submit = ["Ctrl+Enter"]
+```json
+{
+  "merge": { "toggle_raw_view": ["Ctrl+r"] },
+  "editor": { "submit": ["Ctrl+x Ctrl+Enter"] }
+}
 ```
 
-Unspecified actions keep their defaults. `[]` disables an action.
+The file defines every binding. This example binds only the two actions shown.
+Omitted actions and `[]` leave keys unbound. A missing file uses the embedded initial keymap.
+Separate sequence steps with spaces: `Ctrl+x Ctrl+Enter` means Ctrl+X, then Ctrl+Enter.
 See [available actions](docs/cli.md#key-bindings).
 
 ## Development

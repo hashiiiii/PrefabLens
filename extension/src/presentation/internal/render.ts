@@ -36,7 +36,7 @@ export function render(
 ): Promise<void> {
   const container = mount(root);
   let retry: Promise<void> | undefined;
-  // The resolving indicator: the diff body is correct from the start. Only reference names arrive later.
+  // Reference names arrive after the diff body, so unresolved names need a progress indicator.
   if (opts?.resolving) {
     const busy = note("pl-resolving", `Resolving ${opts.resolving} reference(s)…`);
     const spin = document.createElement("span");
@@ -44,7 +44,7 @@ export function render(
     busy.prepend(spin);
     container.append(busy);
   } else if (opts?.incomplete) {
-    // Resolution gave up (rate limit or error): say so instead of pretending it finished (#194).
+    // Rate limits and errors leave unresolved references that the user may need to retry.
     const bar = note("pl-resolving", "Some references were not resolved (GitHub rate limit or error).", ALERT);
     retry = clickPromise(bar, "Retry");
     container.append(bar);
@@ -92,14 +92,14 @@ export function renderLoading(root: ShadowRoot): void {
   mount(root).append(box);
 }
 
-// The over-25MB guard: no auto-render. Resolves when the user clicks "Render anyway".
+// Files over 25 MB require confirmation before rendering. This promise resolves when the user clicks "Render anyway".
 export function renderTooLarge(root: ShadowRoot, bytes: number): Promise<void> {
   const container = mount(root);
   container.append(note("pl-empty", `Large file (${Math.round(bytes / (1024 * 1024))} MB).`, ALERT));
   return clickPromise(container, "Render anyway");
 }
 
-// Auth-error panel: message + in-place device-flow button. Resolves on click.
+// The promise resolves when the user chooses to start GitHub Device Flow.
 export function renderSignIn(root: ShadowRoot, message: string): Promise<void> {
   const container = mount(root);
   container.append(note("pl-error", message, ALERT));

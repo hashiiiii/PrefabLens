@@ -4,7 +4,7 @@
 
 ## Motivation
 
-<!-- Why is this change needed? Keep the Closes line below — the issue gate reads it. -->
+<!-- Why is this change needed? Keep the Closes line below because the issue gate reads it. -->
 
 Closes #NNN
 
@@ -14,4 +14,4 @@ Closes #NNN
 
 ## Testing
 
-<!-- Commands you ran and their result. Show real output — no mocks or stubs. -->
+<!-- List the commands you ran and their results. Include actual output from real dependencies. Do not use mocks or stubs. -->

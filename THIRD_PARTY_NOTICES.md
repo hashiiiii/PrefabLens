@@ -1,12 +1,12 @@
 # Third-party notices
 
-Configurable bindings use [zig-keymap](https://github.com/hashiiiii/zig-keymap) under Apache-2.0 and [z-toml](https://github.com/eneskemalergin/z-toml/tree/3b71076a3988fe008faa09f80eec2b0f75412861) under MIT.
+Configurable bindings use [zig-keymap v0.5.1](https://github.com/hashiiiii/zig-keymap/tree/v0.5.1) under Apache-2.0.
 
-PrefabLens depends on the pinned [libvaxis](https://github.com/rockorager/libvaxis/tree/c060d314930c5552b99a89278a6a695baf0352da) source. That package depends on [zigimg](https://github.com/zigimg/zigimg/tree/d695acd97c02e57bb151e8f659d1280f5cd6ca70) and [uucode](https://github.com/jacobsandlund/uucode/tree/2826a37a4562284fdacd8fa029d49509cc9bffcd). The notices below come from these pinned sources.
+The pinned [libvaxis](https://github.com/rockorager/libvaxis/tree/c060d314930c5552b99a89278a6a695baf0352da) dependency uses [zigimg](https://github.com/zigimg/zigimg/tree/d695acd97c02e57bb151e8f659d1280f5cd6ca70) and [uucode](https://github.com/jacobsandlund/uucode/tree/2826a37a4562284fdacd8fa029d49509cc9bffcd).
+The following notices apply to those pinned sources.
 
 ## MIT-licensed code
 
-- z-toml: Copyright (c) 2026 Enes Kemal Ergin.
 - libvaxis: Copyright (c) 2023 Tim Culverhouse.
 - zigimg: Copyright (c) 2019-2021 zigimg developers.
 - uucode: Copyright (c) 2026 Jacob Sandlund.

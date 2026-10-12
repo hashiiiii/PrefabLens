@@ -1,10 +1,9 @@
 namespace PrefabLens
 {
     /// <summary>
-    /// Renders a diff.v2 field value for display. All four surfaces follow the
-    /// same decision table — keep in sync with the extension's formatValue
-    /// (render.ts) and the CLI's writeValueText (render_tree.zig) /
-    /// writeValue (render_html.zig).
+    /// Formats a diff.v2 field value consistently across all four views.
+    /// Keep this aligned with formatValue in the extension's render.ts.
+    /// The CLI's matching functions are writeValueText in render_tree.zig and writeValue in render_html.zig.
     /// </summary>
     public static class ValueFormat
     {

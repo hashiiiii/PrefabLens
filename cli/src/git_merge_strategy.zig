@@ -247,7 +247,7 @@ fn resolveContent(
     env: *std.process.Environ.Map,
     tty_buffer: []u8,
     session: *?merge_tui.Session,
-    bindings: *const keymap.Bindings,
+    bindings: *keymap.Bindings,
 ) !ContentOutcome {
     const path = candidate.items.items[index].paths[0];
     if (candidate.result.sources.?.known == null) {

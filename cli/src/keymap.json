@@ -1,0 +1,44 @@
+{
+  "merge": {
+    "back": ["Escape"],
+    "move_left": ["Left"],
+    "move_right": ["Right"],
+    "move_up": ["Up"],
+    "move_down": ["Down"],
+    "toggle_result_preview": ["Shift+v"],
+    "activate": ["Enter"],
+    "toggle_raw_view": ["Shift+r"],
+    "toggle_file_view": ["Shift+e"],
+    "toggle_combine": ["Shift+t"]
+  },
+  "inspector": {
+    "pan_left": ["Shift+Left"],
+    "pan_right": ["Shift+Right"]
+  },
+  "file_choice": {
+    "quit": ["q", "Escape", "Ctrl+c"],
+    "confirm": ["Enter"],
+    "choose_current": ["a"],
+    "choose_incoming": ["b"],
+    "keep": ["k"],
+    "delete": ["d"],
+    "edit_custom": ["e"]
+  },
+  "dialog": {
+    "confirm": ["y", "Shift+y"],
+    "cancel": ["n", "Shift+n", "Escape"],
+    "choose_cancel": ["Left"],
+    "choose_confirm": ["Right"],
+    "activate_choice": ["Enter"]
+  },
+  "editor": {
+    "submit": ["Enter"],
+    "cancel": ["Escape"],
+    "copy_selection": ["Super+c", "Ctrl+c"],
+    "insert_newline": ["Ctrl+j", "Shift+Enter"],
+    "cursor_up": ["Up"],
+    "cursor_down": ["Down"],
+    "line_start": ["Home", "Ctrl+a"],
+    "line_end": ["End", "Ctrl+e"]
+  }
+}

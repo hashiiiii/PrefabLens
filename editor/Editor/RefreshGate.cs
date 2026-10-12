@@ -1,8 +1,7 @@
 namespace PrefabLens
 {
-    /// The window's refresh/download gating, extracted so the state machine runs
-    /// under DotNetTests~. Holds state and decides the next step; the window
-    /// executes the step (UI, process, download) and reports completions back.
+    /// Tracks refresh and download state and selects the next step.
+    /// The window performs UI updates, CLI runs, and downloads, then reports completion.
     public sealed class RefreshGate
     {
         bool refreshing;
@@ -32,8 +31,7 @@ namespace PrefabLens
         {
             if (refreshing)
             {
-                // A trigger landed mid-run: run again when the in-flight work returns,
-                // instead of silently dropping the edit.
+                // An edit during a run must trigger another refresh when that run finishes.
                 pendingRefresh = true;
                 return new Decision { Step = Step.Wait };
             }

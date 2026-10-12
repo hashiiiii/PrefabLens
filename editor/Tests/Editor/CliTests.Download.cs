@@ -109,9 +109,8 @@ namespace PrefabLens.Tests
             }
         }
 
-        /// One-shot HTTP server on a loopback socket: real HttpClient traffic, no mocks.
-        /// Sends Content-Length: body.Length but only the first sendOnly bytes, then blocks
-        /// on release — that models a stalled connection for the cancellation test.
+        /// A loopback HTTP server lets cancellation tests exercise real HttpClient traffic.
+        /// It advertises the full body length, sends only sendOnly bytes, and waits for release to reproduce a stalled connection.
         static TcpListener ServeOnce(byte[] body, int sendOnly, ManualResetEventSlim release, out int port)
         {
             var listener = new TcpListener(IPAddress.Loopback, 0);

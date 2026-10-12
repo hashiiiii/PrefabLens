@@ -3,16 +3,15 @@ using UnityEngine.UIElements;
 
 namespace PrefabLens
 {
-    /// Preferences > PrefabLens: edit the CLI path override and see which binary
-    /// actually runs. All state goes through Cli.PathOverride / Cli.Locate so the
-    /// page can never drift from the window's resolution behavior.
+    /// Preferences > PrefabLens shows the CLI path override and the executable in use.
+    /// Cli.PathOverride and Cli.Locate keep these settings consistent with the window.
     public static class PrefabLensSettings
     {
         /// One line that names the binary that Locate will run.
         public static string ResolvedLabel(Cli.Location loc, string version)
         {
             if (loc.Path == null)
-                return $"Resolved CLI: not found — the PrefabLens window downloads v{version} on its next refresh";
+                return $"Resolved CLI: not found. The PrefabLens window downloads v{version} on its next refresh.";
             var source = loc.Path == Cli.DefaultPath ? "downloaded" : "override";
             return $"Resolved CLI ({source}): {loc.Path}";
         }
@@ -47,8 +46,7 @@ namespace PrefabLens
             };
             path.RegisterValueChangedCallback(e =>
             {
-                // Trim: a pasted path with trailing whitespace would otherwise fail
-                // File.Exists with an invisible cause in the warning line.
+                // Trailing whitespace in a pasted path would make File.Exists fail without a visible cause.
                 Cli.PathOverride = e.newValue?.Trim();
                 Sync(resolved, warning);
             });
@@ -56,9 +54,9 @@ namespace PrefabLens
 
             var browse = new Button(() =>
             {
-                var picked = EditorUtility.OpenFilePanel("Select prefablens binary", "", "");
+                var picked = EditorUtility.OpenFilePanel("Select the prefablens executable", "", "");
                 if (string.IsNullOrEmpty(picked))
-                    return; // canceled: keep the current override
+                    return;
                 Cli.PathOverride = picked;
                 path.value = picked;
                 Sync(resolved, warning);
@@ -79,7 +77,6 @@ namespace PrefabLens
             Sync(resolved, warning);
         }
 
-        /// Re-derives the diagnostic lines from the current resolution state.
         static void Sync(Label resolved, Label warning)
         {
             var loc = Cli.Locate();

@@ -48,11 +48,11 @@ test "html: self-contained page with pl-root and escaped content" {
     try testing.expect(std.mem.indexOf(u8, html, "@media (prefers-color-scheme: dark)") != null);
     try testing.expect(std.mem.indexOf(u8, html, ":root { color-scheme: dark; }") != null);
     try testing.expect(std.mem.indexOf(u8, html, "</html>") != null);
-    // The stylesheet is embedded, not linked: no external requests ever.
+    // Reports must work offline without external stylesheets or scripts.
     try testing.expect(std.mem.indexOf(u8, html, "pl-root") != null);
     try testing.expect(std.mem.indexOf(u8, html, "<link") == null);
     try testing.expect(std.mem.indexOf(u8, html, "<script") == null);
-    // HTML special chars escaped: "A<x>" -> "A&lt;x&gt;"
+    // Asset names containing markup must remain text in the report.
     try testing.expect(std.mem.indexOf(u8, html, "A&lt;x&gt;") != null);
     try testing.expect(std.mem.indexOf(u8, html, "Hp") != null);
 }
@@ -61,8 +61,7 @@ test "html: ref guid with markup is escaped" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
-    // The parser enforces no hex-only constraint on guids: this parses
-    // cleanly into Node.ref.guid and must not reach the HTML unescaped.
+    // The parser accepts non-hexadecimal GUIDs, so reference text must be escaped before it reaches HTML.
     const before =
         \\--- !u!114 &1
         \\MonoBehaviour:
@@ -89,12 +88,10 @@ test "html: file sections wrap per-path reports; empty diff notes no changes" {
         .{ .path = "Assets/A & B.prefab", .res = changed },
         .{ .path = "Assets/Same.prefab", .res = same },
     }, null);
-    // Section summaries carry the escaped path (a non pl-* class so the
-    // parity tripwire stays clean).
+    // File wrappers use a separate class so CLI/extension parity checks compare only semantic rows.
     try testing.expect(std.mem.indexOf(u8, html, "<details open class=\"file\">") != null);
     try testing.expect(std.mem.indexOf(u8, html, "Assets/A &amp; B.prefab") != null);
-    // A semantically unchanged file is listed with the extension's note, not
-    // silently dropped.
+    // An unchanged semantic diff still needs a file entry, matching the extension's note.
     try testing.expect(std.mem.indexOf(u8, html, "No semantic changes") != null);
 }
 
@@ -102,13 +99,13 @@ const model = core.model;
 const display = @import("display.zig");
 
 pub const FileDiff = struct {
-    /// null for a single unnamed report (plain two-file mode / single git target).
+    /// Null for an unnamed report from two files or a single Git target.
     path: ?[]const u8,
     res: model.DiffResult,
 };
 
-// Inline SVG markup for tree glyphs, byte-identical to
-// extension/src/renderer/icons.ts. Static strings only — never interpolate data.
+// Keep tree glyphs byte-identical to extension/src/presentation/internal/icons.ts.
+// Static markup must not contain interpolated input.
 const chevron_svg =
     \\<svg width="12" height="12" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path d="M6 4l4 4-4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
 ;
@@ -331,8 +328,7 @@ fn renderField(
     try w.writeAll("\"><span class=\"pl-path\">");
     try writeEscaped(w, label);
     try w.writeAll("</span>");
-    // A structural summary row (before=after=null) has the count in its
-    // label and no value — same as the extension's fieldRow.
+    // Structural summaries have null before/after values and carry the count in their label, matching the extension's fieldRow.
     if (before != null or after != null) {
         switch (status) {
             .modified => {
@@ -358,8 +354,8 @@ fn renderField(
     try w.writeAll("</div>");
 }
 
-// Extension formatValue parity: — for null, None for {fileID: 0}, #fileID for
-// other local refs, resolved path / built-in name / raw guid: for external refs.
+// Match the extension's formatValue: "—" for null, None for {fileID: 0}, and #fileID for other local references.
+// External references show a resolved path, built-in name, or raw guid: value.
 fn writeValue(w: *std.Io.Writer, node: ?*const model.Node, resolved: ?*const core.json.Resolver) !void {
     const n = node orelse {
         try w.writeAll("—");
@@ -367,8 +363,7 @@ fn writeValue(w: *std.Io.Writer, node: ?*const model.Node, resolved: ?*const cor
     };
     switch (n.*) {
         .scalar => |s| try writeEscaped(w, s),
-        // The resolution ladder lives in display.refDisplay; this switch adds
-        // only the HTML escaping and decoration.
+        // Shared reference formatting comes from display.refDisplay. HTML output still needs escaping and decoration.
         .ref => |r| switch (display.refDisplay(r, resolved)) {
             .path => |p| try writeEscaped(w, p),
             .builtin => |b| {

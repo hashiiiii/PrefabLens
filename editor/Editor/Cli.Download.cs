@@ -13,9 +13,8 @@ namespace PrefabLens
     // Fetch, verify, extract, and clean up the pinned CLI release.
     public static partial class Cli
     {
-        /// Upper bound on the whole download (SHA256SUMS + zip). Explicit so a stalled connection
-        /// can't silently hold the status line for HttpClient's default 100 s; generous for slow
-        /// links because the window offers Cancel.
+        /// A 120 s deadline covers SHA256SUMS and the ZIP, including stalled body reads.
+        /// Slow connections have time to finish, and the window offers Cancel.
         public const int DownloadTimeoutMs = 120_000;
 
         public static string ReleaseAssetName(bool isWindows, bool isMac, bool isArm64)
@@ -65,10 +64,10 @@ namespace PrefabLens
                 );
         }
 
-        /// Fetch from GitHub Releases, verify against the release's SHA256SUMS, and extract under
-        /// Library. Returns the executable path on success, throws on failure (TimeoutException
-        /// after DownloadTimeoutMs, OperationCanceledException when ct is cancelled).
-        /// Synchronous and free of Unity API calls so it can run on a worker thread (see DownloadAsync).
+        /// Downloads from GitHub Releases, verifies SHA256SUMS, and installs under Library.
+        /// Returns the executable path or throws on failure.
+        /// Throws TimeoutException after DownloadTimeoutMs, or OperationCanceledException when ct is canceled.
+        /// No Unity API calls are made, so DownloadAsync can run this on a worker thread.
         public static string Download(Action<long, long> onProgress = null, CancellationToken ct = default)
         {
             var asset = ReleaseAssetName(
@@ -79,8 +78,7 @@ namespace PrefabLens
             var dir = Path.GetDirectoryName(DefaultPath);
 
             using var http = new HttpClient();
-            // One deadline for the whole operation. HttpClient.Timeout is disabled because it
-            // only covers the headers once the body is streamed.
+            // With a streamed response, HttpClient.Timeout covers only headers. The shared deadline must also cover body reads.
             http.Timeout = Timeout.InfiniteTimeSpan;
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             cts.CancelAfter(DownloadTimeoutMs);
@@ -88,7 +86,7 @@ namespace PrefabLens
             string sums;
             try
             {
-                // SHA256SUMS first: a missing/broken release fails fast, before the multi-MB zip.
+                // Fetching SHA256SUMS first avoids downloading a large ZIP for an incomplete release.
                 sums = Encoding.UTF8.GetString(FetchBytes(http, DownloadUrl(Version, "SHA256SUMS"), null, cts.Token));
                 bytes = FetchBytes(http, DownloadUrl(Version, asset), onProgress, cts.Token);
             }
@@ -102,9 +100,8 @@ namespace PrefabLens
             return installed;
         }
 
-        /// Run Download() off the main thread. Progress and the outcome are posted back through
-        /// the caller's SynchronizationContext (Unity's main thread when called from the window).
-        /// Exactly one of (path, error) is non-null.
+        /// Download runs on a worker thread. Progress and completion return through the caller's SynchronizationContext.
+        /// For window callers, that is Unity's main thread. Exactly one of path or error is non-null.
         public static void DownloadAsync(
             Action<string, string> onDone,
             Action<long, long> onProgress = null,
@@ -112,8 +109,7 @@ namespace PrefabLens
         )
         {
             var ctx = SynchronizationContext.Current;
-            // Coalesce the per-chunk callbacks (network reads can be TCP-segment sized) so the
-            // main thread sees one post per visible change, not thousands per download.
+            // Network chunks can be small. Coalescing callbacks avoids thousands of main-thread posts for changes the UI cannot display.
             Action<long, long> progress = null;
             if (onProgress != null)
             {

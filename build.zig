@@ -5,7 +5,7 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    // Single source of the version is build.zig.zon; inject it into the CLI binary via build options.
+    // The CLI version must stay aligned with the package metadata in build.zig.zon.
     const opts = b.addOptions();
     opts.addOption([]const u8, "version", zon.version);
     const build_options_mod = opts.createModule();

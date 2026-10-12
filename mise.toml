@@ -2,9 +2,8 @@
 zig = '0.16.0'
 zls = '0.16.0'
 node = '24'
-# pnpm ships its own bundled Node.js to run pnpm itself; that runtime is never
-# exposed as `node`, so its version need not match the one above. Project code
-# (node build.mjs, node --test) always runs on the Node.js pinned above.
+# pnpm uses a bundled Node.js runtime, which is not exposed as `node`.
+# Project commands such as `node build.mjs` and `node --test` use the pinned Node.js above.
 pnpm = '12.5.1'
 dotnet = '10'
 'pipx:bump-my-version' = '1.5.1'

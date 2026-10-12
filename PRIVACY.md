@@ -1,4 +1,4 @@
-# Privacy Policy: PrefabLens Chrome Extension
+# Privacy policy: PrefabLens Chrome extension
 
 Last updated: 2026-07-12
 
@@ -10,13 +10,14 @@ It sends data only through requests to GitHub.
 ## Data the extension handles
 
 - **GitHub OAuth token (authentication information).** GitHub issues this token after you authenticate with GitHub Device Flow. The extension uses it to authenticate requests to the GitHub API.
-- **Extension settings.** Your view-mode preference (semantic or raw) and a per-repository GUID index built from repository contents. The index makes diff rendering faster.
-- **Diff cache.** Rendered diff data for the pull requests that you view. The cache lasts for the browser session.
+- **Extension settings.** These include your view preference (semantic or raw) and a GUID index built from each repository's contents. The index makes diff rendering faster.
+- **Diff cache.** The extension caches rendered diffs for the pull requests you view. The cache lasts for the browser session.
 
 ## How data is collected and used
 
 GitHub issues the token after you complete the GitHub Device Flow authorization.
-The extension uses the token only to fetch file contents and pull request metadata from the GitHub API so it can show semantic diffs.
+The extension uses the token only to fetch file contents and pull request metadata from the GitHub API.
+These requests supply the data for semantic diffs.
 It collects no other data.
 It does not collect browsing history.
 It does not collect page content from any site other than `https://github.com`.
@@ -35,7 +36,8 @@ It does not upload data anywhere else.
 ## Who data is shared with
 
 The extension shares data only with GitHub.
-The token goes only to `github.com` (GitHub Device Flow endpoints) and `api.github.com` (file contents and pull request metadata) over HTTPS.
+The extension sends the token over HTTPS only to `github.com` and `api.github.com`.
+These hosts serve GitHub Device Flow, file contents, and pull request metadata.
 It uses no service other than GitHub and has no analytics, tracking, or telemetry.
 
 ## Data removal

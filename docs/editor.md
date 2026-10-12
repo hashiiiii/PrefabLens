@@ -1,7 +1,7 @@
 # Unity Editor package
 
 This page describes the `editor/` package for contributors.
-For install steps and product overview, see the [README](../README.md).
+For installation and usage, see the [README](../README.md).
 For the contribution process, see [CONTRIBUTING.md](../CONTRIBUTING.md).
 
 ## Purpose
@@ -9,10 +9,9 @@ For the contribution process, see [CONTRIBUTING.md](../CONTRIBUTING.md).
 The Editor package shows semantic diffs for UnityYAML assets inside Unity.
 Authors can review changes in the Editor without opening a separate CLI session for each asset.
 
-The package does not reimplement Git or the diff engine.
 It runs the `prefablens` CLI as a child process and displays its `--json` output.
-The CLI owns all Git logic.
-See [docs/cli.md](cli.md).
+The CLI handles Git operations and runs the shared diff engine.
+See [CLI documentation](cli.md).
 
 The UI resolves GUIDs with the local `AssetDatabase`.
 It displays script and prefab references as project paths.
@@ -42,11 +41,11 @@ project root.
 | `editor/DotNetTests~/` | Headless harness. The trailing `~` hides it from the Unity asset importer |
 | `editor/package.json` | UPM package manifest |
 
-Important types under `Editor/`:
+Types under `Editor/`:
 
 - `PrefabLensWindow.cs`: window layout and refresh flow
 - `Cli.cs`, `Cli.Download.cs`, `Cli.Run.cs`: locate, download, and run the CLI
-- `BulkModel.cs`, `DiffModel.cs`, `DiffTree.cs`: JSON models and display row tree
+- `BulkModel.cs`, `DiffModel.cs`, `DiffTree.cs`: JSON models and the tree of display rows
 - `DiffTreeView.cs`: UI Toolkit rows, status badges, and TreeView wiring
 - `RefreshGate.cs`: one in-flight CLI run, with a queue for later Base edits
 - `PrefabLensSettings.cs`: Preferences UI for the CLI path override
@@ -74,7 +73,7 @@ Each `diff` uses `prefablens.diff.v2`.
 CLI runs time out after 90 s.
 If the window closes, the package kills an in-flight run.
 
-### CLI binary locate and download
+### CLI executable lookup and download
 
 The pinned CLI version is `Cli.Version` in `Editor/Cli.cs`.
 Release automation keeps it in sync with `editor/package.json` and

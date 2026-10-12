@@ -6,8 +6,8 @@
     .minimum_zig_version = "0.16.0",
     .dependencies = .{
         .zig_keymap = .{
-            .url = "https://github.com/hashiiiii/zig-keymap/archive/baf8a0f8f7ac0686ea0ae16ef39ea173c23d5b11.tar.gz",
-            .hash = "zig_keymap-0.1.0-s0XxwrWcAACyag_HzFGqkibsKPo-OjYeTB7Gyj5-uM-y",
+            .url = "https://github.com/hashiiiii/zig-keymap/archive/refs/tags/v0.5.1.tar.gz",
+            .hash = "zig_keymap-0.5.1-s0Xxwpo5AQATppEaU17X2n1bI0-Wv0gjq4OS0aQk38tg",
         },
         .vaxis = .{
             .url = "https://github.com/rockorager/libvaxis/archive/c060d314930c5552b99a89278a6a695baf0352da.tar.gz",

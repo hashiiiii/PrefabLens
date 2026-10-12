@@ -1,7 +1,7 @@
 # CLI
 
 This page describes the `cli/` and shared `core/` code for contributors.
-For install steps and quick-start examples, see the [README](../README.md).
+For installation and usage, see the [README](../README.md).
 For the contribution process, see [CONTRIBUTING.md](../CONTRIBUTING.md).
 
 ## Purpose
@@ -101,8 +101,6 @@ prefablens setup-merge [--project|--local|--user]
 | `--user` | User attributes file | Global |
 
 Choose at most one scope.
-The former `--team` flag has been replaced by `--project` and is no longer accepted.
-Existing merge configuration remains valid.
 
 Local and project setup require a Git working tree and also work from its subdirectories.
 Local setup resolves the attributes path through Git, including in linked worktrees.
@@ -208,7 +206,8 @@ Click a source column heading to take the original item from that side.
 Choose a field cell to replace only that field. Result shows its value and source; fields that still need a choice remain blank.
 For scalar Dictionary pairs, choosing or editing the value resolves the pair.
 Editing an automatic field does not resolve another field's conflict.
-In Semantic view, Ours and Theirs values that differ from Base stay yellow before and after selection, including YAML columns that are not a property table. Result uses the normal text color.
+In Semantic view, Ours and Theirs values that differ from Base stay yellow before and after selection.
+This includes YAML columns outside property tables. Result uses the normal text color.
 
 For example, with Base `{left: 1, right: 1}`, Ours `{left: 2, right: 1}`, and Theirs `{left: 3, right: 4}`:
 
@@ -240,59 +239,96 @@ Bracketed paste keeps indentation and line breaks and waits for **Enter** before
 Collection values accept block YAML and flow YAML split across lines.
 Keep each scalar token on one line; folded scalar input remains unsupported.
 PrefabLens keeps the existing collection shape checks and output formatting rules.
-Conflicts show Ours, Base, Theirs, and Result. Column headings are uncolored. Base uses a darker paper than Ours, Theirs, and Result so it reads as the ancestor, not the focused column.
+Conflicts show Ours, Base, Theirs, and Result. Column headings are uncolored.
+Base has a darker background to distinguish the ancestor from the focused column.
 **Shift+R** switches Semantic and Raw on every conflict. **Shift+T** still toggles Both sides when both orders exist.
 Semantic is a property table when the conflict has named fields or keyed items.
 Keyed pair sequences show each item's `key` or `first` value. Result shows the value that will be written.
 Reparent conflicts show the parent GameObject name. Duplicate names include the path from the root.
 Raw keeps the four columns. Ours and Theirs are unified diffs against Base. Deletions are red. Additions are green. YAML document headers stay uncolored.
 Result shows the Unity YAML preview. Required fields remain marked until selected, even when automatic fields have values.
-Missing sides stay empty. Each inspector column scrolls on its own and stops at the last wrapped line. A thin floating scrollbar appears on the focused column while it scrolls, then hides. Mouse wheel and trackpad two-finger scroll move vertically. Shift plus wheel scrolls a line horizontally.
-Base is not selectable. Wheel over Base still scrolls that column, so long ancestor YAML stays readable.
-**Shift+E** shows the `$MERGED` snapshot from startup, including conflict markers, in a panel over the bottom 40% of the panes. The panel opens scrolled so the closing marker stays visible. The footer keeps the **⇧E File** control. Click it, or press **Shift+E**, to show or hide the panel. Drag the top edge to resize it. The panel scrolls like an inspector column: it stops at the last wrapped line, and a thin floating scrollbar appears while it scrolls.
-**Shift+V** or **Preview** shows the complete Result after all required choices and edits have been applied. This includes accepted insertions, removals, and ordering outside the selected item. The preview is read-only and closes when a choice is changed, so it cannot show an older result as the current one. **Shift+E** returns to the original working file snapshot.
+Missing sides stay empty. Each inspector column scrolls independently and stops at the last wrapped line.
+A thin floating scrollbar appears on the focused column while it scrolls, then hides.
+The mouse wheel and two-finger trackpad scroll move vertically. Shift plus wheel scrolls horizontally, one line at a time.
+Base is not selectable. Scrolling over Base still moves that column, keeping long ancestor YAML readable.
+
+**Shift+E** opens the startup `$MERGED` snapshot, including conflict markers, over the bottom 40% of the panes.
+The panel opens with the closing marker visible.
+Click **⇧E File** in the footer, or press **Shift+E**, to show or hide it.
+Drag the top edge to resize it.
+Like inspector columns, the panel stops at the last wrapped line and shows a thin floating scrollbar while scrolling.
+
+**Shift+V** or **Preview** shows the complete Result after all required choices and edits have been applied.
+This includes accepted insertions, removals, and ordering outside the selected item.
+The preview is read-only. Changing a choice closes it so an older result cannot appear current.
+**Shift+E** returns to the original working file snapshot.
 While editing, **Shift+R**, **Shift+E**, and **Shift+V** insert text.
 
 #### Key bindings
 
-The CLI merge TUI loads `keymap.toml` from these locations:
+The merge TUI loads `keymap.json` from the first applicable location:
 
 | Environment | Path |
 | --- | --- |
-| Nonempty `XDG_CONFIG_HOME` | `$XDG_CONFIG_HOME/prefablens/keymap.toml` |
-| Windows | `%APPDATA%\prefablens\keymap.toml` |
-| macOS / Linux | `~/.config/prefablens/keymap.toml` |
+| Nonempty `XDG_CONFIG_HOME` | `$XDG_CONFIG_HOME/prefablens/keymap.json` |
+| Windows | `%APPDATA%\prefablens\keymap.json` |
+| macOS / Linux | `~/.config/prefablens/keymap.json` |
 
-```toml
-[merge]
-toggle_raw_view = ["Ctrl+r"]
-toggle_file_view = ["Ctrl+e"]
+Copy the [initial keymap](../cli/src/keymap.json) to this location before editing to keep its existing shortcuts.
+The file defines every binding. This example binds only the actions shown:
 
-[file_choice]
-choose_current = ["i"]
-confirm = ["F2"]
-
-[editor]
-submit = ["Ctrl+Enter"]
+```json
+{
+  "merge": {
+    "toggle_raw_view": ["Ctrl+r"],
+    "toggle_file_view": ["e e"]
+  },
+  "file_choice": {
+    "choose_current": ["i i"],
+    "confirm": ["F2"]
+  },
+  "editor": {
+    "submit": ["Ctrl+x Ctrl+Enter"]
+  }
+}
 ```
 
-Each array replaces an action's default keys. Unspecified actions retain their defaults; `[]` disables an action.
-Missing files use defaults. Invalid configuration reports its path and prevents interactive resolution.
+Each array assigns keys to an action. Omitted actions and `[]` leave keys unbound.
+A missing file uses the embedded initial keymap.
+Invalid configuration identifies its path and the affected entry. JSON syntax errors also include a line and column.
+Configuration errors prevent interactive resolution and return status 2.
 Headless merges do not load this file.
+Actions are valid only in their listed contexts.
 
-| Section | Actions |
+| Context | Actions |
 | --- | --- |
 | `merge` | `back`, `move_left`, `move_right`, `move_up`, `move_down`, `activate`, `toggle_raw_view`, `toggle_file_view`, `toggle_result_preview`, `toggle_combine` |
 | `inspector` | `pan_left`, `pan_right` |
 | `file_choice` | `quit`, `confirm`, `choose_current`, `choose_incoming`, `keep`, `delete`, `edit_custom` |
 | `dialog` | `confirm`, `cancel`, `choose_cancel`, `choose_confirm`, `activate_choice` |
-| `editor` | `submit`, `cancel`, `copy_selection`, `insert_newline`, `move_up`, `move_down`, `line_start`, `line_end` |
+| `editor` | `submit`, `cancel`, `copy_selection`, `insert_newline`, `cursor_up`, `cursor_down`, `line_start`, `line_end` |
 
 Keys accept one Unicode character or a named key, with optional `Shift`, `Ctrl`, `Alt`, `Super`, `Meta`, or `Hyper` modifiers.
-Named keys include arrows, `Enter`, `Escape`, `Tab`, `Backspace`, `Delete`, `Home`, `End`, `PageUp`, `PageDown`, `Insert`, `Space`, and `F1`–`F12`.
-Modifier and named key names are case insensitive. Character case is preserved.
-Dialogs, file choices, and the editor use separate bindings. `merge` and `inspector` bindings cannot share a key.
-Hints display configured keys. Native text editing, mouse input, and paste remain available.
+Named keys include navigation, editing, lock, keypad, media, and volume keys, plus `F1` through `F35`.
+Use `Space` for the space key and `Ctrl++` for Ctrl plus the plus key.
+See [all accepted key names](https://github.com/hashiiiii/zig-keymap/tree/v0.5.1#keys).
+Modifier and named key names ignore case. Characters keep their case; ASCII uppercase is equivalent to Shift plus the lowercase letter.
+`Cmd`, `Command`, `Win`, and `Windows` mean `Super`; `Option` and `Opt` mean `Alt`; `Control` means `Ctrl`.
+These aliases work on every platform when the terminal reports the configured key and modifiers.
+
+Separate successive key presses with spaces, such as `e e` or `Ctrl+x Ctrl+Enter`.
+Sequences have no timeout. Clicking, scrolling, pasting, or changing focus clears pending sequence steps.
+Modifier-only events preserve pending steps.
+A sequence prefix does not enter the editor as text.
+
+Dialogs, file choices, and the editor use separate contexts.
+Fresh matches follow the active context order. The inspector activates `merge` before `inspector`.
+Focusing Result also activates `editor`, with the lowest priority until editing starts.
+While editing with no dialog open, only `editor` is active. Its vertical movement actions are `cursor_up` and `cursor_down`.
+Pending sequences take priority over fresh matches.
+Within a context, different actions cannot share equivalent keys.
+A shorter sequence cannot be the start of another sequence.
+Hints show the first configured key or sequence. Native text editing, mouse input, and paste remain available.
 
 #### Completion checks
 

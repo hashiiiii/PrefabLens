@@ -1,12 +1,10 @@
 //! Suffix gate for Unity text-serialized assets (UnityYAML).
-//! Mirrors extension/src/domain/unity/fn/is-unity-path.ts UNITY_PATH — keep both lists in sync.
+//! Keep this list aligned with UNITY_PATH in extension/src/domain/unity/fn/is-unity-path.ts so both classify the same assets.
 const std = @import("std");
 const testing = std.testing;
 
 test "isUnityPath accepts every supported extension, case-insensitively" {
-    // One spelling per extension, plus a case-mangled sample: the git side of
-    // the CLI must classify operands exactly like the extension classifies
-    // PR file paths, or the two products would disagree on what is diffable.
+    // Git operands and PR file paths must use the same extension rules, including case-insensitive matching.
     const yes = [_][]const u8{
         "a.prefab",             "Assets/Scenes/Main.unity", "x.asset",
         "m.mat",                "run.anim",                 "ac.controller",

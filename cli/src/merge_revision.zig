@@ -9,6 +9,7 @@ const testing = std.testing;
 pub const Store = struct {
     git: Git,
     objects: std.StringHashMapUnmanaged([]const u8) = .empty,
+    snapshots: std.StringHashMapUnmanaged(context.Snapshot) = .empty,
     cached_bytes: usize = 0,
 
     pub fn init(git: Git) Store {
@@ -17,6 +18,7 @@ pub const Store = struct {
 
     pub fn deinit(self: *Store) void {
         self.objects.deinit(self.git.arena);
+        self.snapshots.deinit(self.git.arena);
     }
 
     pub fn cachedObjectCount(self: *const Store) usize {
@@ -25,11 +27,21 @@ pub const Store = struct {
 
     pub fn snapshot(self: *Store, revision: []const u8) !context.Snapshot {
         const arena = self.git.arena;
+        // Symbolic revisions can move while resolving conflicts; only object IDs are immutable.
+        if (validOid(revision)) if (self.snapshots.get(revision)) |cached| return cached;
         // Peel annotated tags without forcing a candidate tree into a commit.
         // ls-tree accepts only commits/trees, and all later IO uses this identity.
         const expression = try std.fmt.allocPrint(arena, "{s}^{{}}", .{revision});
         const identity = @import("merge_git.zig").trim(try self.git.output(&.{ "rev-parse", "--verify", "--end-of-options", expression }));
         if (!validOid(identity)) return error.InvalidRevision;
+        if (self.snapshots.get(identity)) |cached| return cached;
+        const result = try self.readSnapshot(identity);
+        try self.snapshots.put(arena, identity, result);
+        return result;
+    }
+
+    fn readSnapshot(self: *Store, identity: []const u8) !context.Snapshot {
+        const arena = self.git.arena;
         const tree = try self.git.output(&.{ "ls-tree", "--full-tree", "-r", "-z", "-l", identity });
         var entries: std.ArrayList(Entry) = .empty;
         var records = std.mem.splitScalar(u8, tree, 0);
@@ -56,6 +68,7 @@ pub const Store = struct {
             if (size > max_object_bytes) return error.SourceTooLarge;
             try entries.append(arena, .{ .path = path, .oid = oid, .size = size });
         }
+        if (entries.items.len == 0) return .{ .revision = identity };
 
         var batch = try Batch.init(self.git);
         defer batch.child.kill(self.git.io);
@@ -118,21 +131,8 @@ pub const Store = struct {
     fn blob(self: *Store, batch: *Batch, entry: Entry) ![]const u8 {
         if (self.objects.get(entry.oid)) |bytes| return bytes;
         if (entry.size > max_cached_bytes - self.cached_bytes) return error.ContextTooLarge;
-        const io = self.git.io;
-        // Exactly one tiny request is outstanding. Drain its body before writing
-        // another request, even when the body is larger than the OS pipe buffer.
-        try batch.child.stdin.?.writeStreamingAll(io, try std.fmt.allocPrint(self.git.arena, "{s}\n", .{entry.oid}));
-        const reader = &batch.reader.interface;
-        const header = try reader.takeDelimiterExclusive('\n');
-        var parts = std.mem.splitScalar(u8, header, ' ');
-        const oid = parts.next() orelse return error.InvalidObject;
-        const kind = parts.next() orelse return error.InvalidObject;
-        const size = try std.fmt.parseInt(usize, parts.next() orelse return error.InvalidObject, 10);
-        if (!std.mem.eql(u8, oid, entry.oid) or !std.mem.eql(u8, kind, "blob") or parts.next() != null or size != entry.size) return error.InvalidObject;
-        if (size > max_object_bytes) return error.SourceTooLarge;
-        if (try reader.takeByte() != '\n') return error.InvalidObject;
-        const bytes = try reader.readAlloc(self.git.arena, size);
-        if (try reader.takeByte() != '\n') return error.InvalidObject;
+        const bytes = try batch.read(self.git, entry.oid, max_object_bytes);
+        if (bytes.len != entry.size) return error.InvalidObject;
         try self.objects.put(self.git.arena, entry.oid, bytes);
         self.cached_bytes += bytes.len;
         return bytes;
@@ -143,11 +143,11 @@ const max_object_bytes = 64 * 1024 * 1024;
 const max_cached_bytes = 256 * 1024 * 1024;
 const Entry = struct { path: []const u8, oid: []const u8, size: usize, bytes: []const u8 = "", guid: ?[]const u8 = null };
 
-const Batch = struct {
+pub const Batch = struct {
     child: std.process.Child,
     reader: std.Io.File.Reader,
 
-    fn init(git: Git) !Batch {
+    pub fn init(git: Git) !Batch {
         var child = try std.process.spawn(git.io, .{
             .argv = &.{ "git", "cat-file", "--batch" },
             .cwd = .{ .path = git.cwd },
@@ -158,6 +158,24 @@ const Batch = struct {
         });
         errdefer child.kill(git.io);
         return .{ .child = child, .reader = child.stdout.?.readerStreaming(git.io, try git.arena.alloc(u8, 4096)) };
+    }
+
+    pub fn read(self: *Batch, git: Git, oid: []const u8, limit: usize) ![]const u8 {
+        if (!validOid(oid)) return error.InvalidObject;
+        // Drain each body before sending another request so large blobs cannot fill both pipes.
+        try self.child.stdin.?.writeStreamingAll(git.io, try std.fmt.allocPrint(git.arena, "{s}\n", .{oid}));
+        const reader = &self.reader.interface;
+        const header = try reader.takeDelimiterExclusive('\n');
+        var parts = std.mem.splitScalar(u8, header, ' ');
+        const returned_oid = parts.next() orelse return error.InvalidObject;
+        const kind = parts.next() orelse return error.InvalidObject;
+        const size = try std.fmt.parseInt(usize, parts.next() orelse return error.InvalidObject, 10);
+        if (!std.mem.eql(u8, returned_oid, oid) or !std.mem.eql(u8, kind, "blob") or parts.next() != null) return error.InvalidObject;
+        if (size > limit) return error.SourceTooLarge;
+        if (try reader.takeByte() != '\n') return error.InvalidObject;
+        const bytes = try reader.readAlloc(git.arena, size);
+        if (try reader.takeByte() != '\n') return error.InvalidObject;
+        return bytes;
     }
 
     fn finish(self: *Batch, io: std.Io) !void {
@@ -245,6 +263,48 @@ test "revision snapshots preserve divergent array schema and ignore dirty worktr
     try testing.expectEqualStrings(base, b.revision);
     try testing.expectEqual(cached + 2, store.cachedObjectCount());
     try testing.expectEqualStrings(base, repeat.revision);
+}
+
+test "revision snapshots reuse immutable evidence after HEAD moves" {
+    var memory = std.heap.ArenaAllocator.init(testing.allocator);
+    defer memory.deinit();
+    const arena = memory.allocator();
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var env = std.process.Environ.Map.init(arena);
+    const git = try fixtureGit(&tmp, arena, &env);
+    try fixtureWrite(&tmp, "Example.cs", "using UnityEngine; class Example : MonoBehaviour { public int[] values; }");
+    try fixtureWrite(&tmp, "Example.cs.meta", "guid: " ++ script_guid ++ "\n");
+    const base = try fixtureCommit(git);
+    try env.put("GIT_TRACE2_EVENT", try git.path(".git/snapshot-trace.jsonl"));
+    var store = Store.init(git);
+    defer store.deinit();
+    _ = try store.snapshot(base);
+    _ = try store.snapshot(base);
+    const before = try store.snapshot("HEAD");
+    try fixtureWrite(&tmp, "Example.cs", "using UnityEngine; class Example : MonoBehaviour { public string[] values; }");
+    _ = try fixtureCommit(git);
+    // Only immutable identities can be reused; HEAD must still observe a new declaration.
+    const after = try store.snapshot("HEAD");
+    const original = try store.snapshot(base);
+    try testing.expectEqual(context.Kind.int32_array, before.kind(script_guid, "values").?);
+    try testing.expectEqual(context.Kind.ordered, after.kind(script_guid, "values").?);
+    try testing.expectEqual(context.Kind.int32_array, original.kind(script_guid, "values").?);
+
+    // Count real Git calls so repeated evidence scans cannot regress without timing noise.
+    const trace = try tmp.dir.readFileAlloc(testing.io, ".git/snapshot-trace.jsonl", arena, .limited(1024 * 1024));
+    var lines = std.mem.splitScalar(u8, trace, '\n');
+    var tree_reads: usize = 0;
+    while (lines.next()) |line| {
+        if (line.len == 0) continue;
+        var event = try std.json.parseFromSlice(std.json.Value, arena, line, .{});
+        defer event.deinit();
+        if (!std.mem.eql(u8, event.value.object.get("event").?.string, "start")) continue;
+        for (event.value.object.get("argv").?.array.items) |arg| {
+            if (std.mem.eql(u8, arg.string, "ls-tree")) tree_reads += 1;
+        }
+    }
+    try testing.expectEqual(@as(usize, 2), tree_reads);
 }
 
 test "revision snapshots decline absent metadata duplicate GUIDs and unknown assembly evidence" {

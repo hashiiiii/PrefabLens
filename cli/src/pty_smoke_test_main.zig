@@ -92,10 +92,24 @@ fn testCustomKeymaps(io: std.Io, arena: std.mem.Allocator, scratch: []const u8, 
         .theirs = prefix ++ "3\n",
     });
     try integration.expectNonzero(try integration.gitRun(io, arena, repo, &.{ "merge", "--no-edit", "remote" }), "prepare custom editor conflict");
-    try std.Io.Dir.cwd().createDirPath(io, try std.fs.path.join(arena, &.{ repo, ".git", "xdg", "prefablens" }));
-    try integration.writeFile(io, arena, repo, ".git/xdg/prefablens/keymap.json",
-        \\{"merge": {"toggle_raw_view": ["Ctrl+r"], "activate": ["Enter"]}, "editor": {"submit": ["Ctrl+x Ctrl+Enter"]}}
-    );
+    // Installed users must be able to export, edit, and use the keymap without a source checkout.
+    var env = std.process.Environ.Map.init(arena);
+    try env.put("XDG_CONFIG_HOME", try std.fs.path.join(arena, &.{ repo, ".git", "xdg" }));
+    try integration.expectCode(try std.process.run(arena, io, .{
+        .argv = &.{ prefablens, "setup-keymap" },
+        .cwd = .{ .path = repo },
+        .environ_map = &env,
+    }), 0, "export the editable keymap");
+    const keymap_path = try std.fs.path.join(arena, &.{ repo, ".git", "xdg", "prefablens", "keymap.json" });
+    const initial = try std.Io.Dir.cwd().readFileAlloc(io, keymap_path, arena, .limited(1024 * 1024));
+    var config = try std.json.parseFromSlice(std.json.Value, arena, initial, .{});
+    defer config.deinit();
+    config.value.object.getPtr("merge").?.object.getPtr("toggle_raw_view").?.array.items[0].string = "Ctrl+r";
+    config.value.object.getPtr("editor").?.object.getPtr("submit").?.array.items[0].string = "Ctrl+x Ctrl+Enter";
+    try std.Io.Dir.cwd().writeFile(io, .{
+        .sub_path = keymap_path,
+        .data = try std.json.Stringify.valueAlloc(arena, config.value, .{}),
+    });
     // An unbound Enter must leave editing active so the next digit joins the same value.
     const edited = try runMergetoolInPty(io, arena, repo, "\x12\x12\x1b[<0;83;5M7\r8\x18\x1b[13;5u\r", 30);
     try integration.expectCode(edited, 0, "submit a remapped editor command");

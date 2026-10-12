@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const command = @import("command.zig");
 const diff = @import("diff.zig");
 const merge_driver = @import("merge_driver.zig");
@@ -7,6 +8,7 @@ const mergetool_terminal = @import("mergetool_terminal.zig");
 const merge_strategy = @import("git_merge_strategy.zig");
 const merge_setup = @import("merge_setup.zig");
 const installation = @import("installation.zig");
+const keymap = @import("keymap.zig");
 const version = @import("build_options").version;
 
 test {
@@ -55,6 +57,19 @@ pub fn main(init: std.process.Init) !u8 {
         return 2;
     };
     const code = switch (parsed) {
+        .setup_keymap => blk: {
+            keymap.setupUser(init.io, arena, init.environ_map, stdout) catch |err| {
+                switch (err) {
+                    error.ConfigHomeUnavailable => try stderr.writeAll(if (builtin.os.tag == .windows)
+                        "prefablens: Set XDG_CONFIG_HOME or APPDATA to create keymap.json.\n"
+                    else
+                        "prefablens: Set XDG_CONFIG_HOME or HOME to create keymap.json.\n"),
+                    else => try stderr.print("prefablens: Could not set up keymap.json: {s}.\n", .{@errorName(err)}),
+                }
+                break :blk @as(u8, 2);
+            };
+            break :blk @as(u8, 0);
+        },
         .merge_strategy => |strategy_args| blk: {
             if (strategy_args.len == 1 and std.mem.eql(u8, strategy_args[0], "--version")) {
                 try stdout.writeAll("prefablens merge-strategy " ++ version ++ "\n");

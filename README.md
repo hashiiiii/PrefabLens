@@ -4,16 +4,14 @@
 [![Release](https://img.shields.io/github/v/release/hashiiiii/PrefabLens)](https://github.com/hashiiiii/PrefabLens/releases)
 [![CI](https://img.shields.io/github/actions/workflow/status/hashiiiii/PrefabLens/ci.yml?branch=main&label=CI)](https://github.com/hashiiiii/PrefabLens/actions/workflows/ci.yml)
 
-PrefabLens shows semantic diffs and merges for UnityYAML assets.
-It shows changes to GameObjects, components, and fields.
+PrefabLens shows semantic diffs and merges for UnityYAML assets, including changes to GameObjects, components, and fields.
 
 Use the [Chrome extension](#chrome-extension), [Unity Editor package](#unity-editor), or [CLI](#cli).
 Try the [live demo](https://prefablens.hashiiiii.workers.dev/).
 
 ## Chrome extension
 
-The extension shows semantic diffs on GitHub pull requests.
-It works only on `github.com`.
+The extension shows semantic diffs in GitHub pull requests, only on `github.com`.
 
 <p align="center">
   <img width="924" src="docs/images/extension.png" alt="Semantic diff in a GitHub pull request" />
@@ -38,25 +36,23 @@ Install the extension from the [Chrome Web Store](https://chromewebstore.google.
 openupm add com.hashiiiii.prefablens
 ```
 
-If you do not use [openupm-cli](https://github.com/openupm/openupm-cli), follow the scoped registry instructions on the [package page](https://openupm.com/packages/com.hashiiiii.prefablens/).
+For scoped registry installation without [openupm-cli](https://github.com/openupm/openupm-cli), see the [package page](https://openupm.com/packages/com.hashiiiii.prefablens/).
 
 #### UPM
 
-1. Open Unity and select `Window > Package Manager`.
-2. Click the + button in the top left corner and choose `Add package from git URL....`
-3. Enter the following URL: `https://github.com/hashiiiii/PrefabLens.git?path=editor`
-4. Click Add to install the package.
+1. Open `Window > Package Manager` in Unity.
+2. Click + in the top left corner, then select `Add package from git URL....`
+3. Enter `https://github.com/hashiiiii/PrefabLens.git?path=editor`.
+4. Click Add.
 
-For more details, see the [Unity manual](https://docs.unity3d.com/6000.6/Documentation/Manual/upm-ui-giturl.html).
+See the [Unity manual](https://docs.unity3d.com/6000.6/Documentation/Manual/upm-ui-giturl.html) for details.
 
 ### Usage
 
 Open `Window > PrefabLens`.
 
-The left pane lists every UnityYAML asset that differs from the Git reference in **Base**.
-If **Base** is empty, the window uses **HEAD**.
-
-The right pane shows the semantic diff for the selected asset.
+The left pane lists UnityYAML assets changed from **Base**, or **HEAD** when **Base** is empty.
+Select an asset to view its semantic diff on the right.
 
 ## CLI
 
@@ -87,7 +83,7 @@ mise use -g github:hashiiiii/PrefabLens
 
 #### Manual
 
-Download the ZIP archive for your platform from [GitHub Releases](https://github.com/hashiiiii/PrefabLens/releases).
+Download your platform's ZIP from [GitHub Releases](https://github.com/hashiiiii/PrefabLens/releases).
 Each archive contains one native `prefablens` executable and the `git-merge-prefablens` script.
 
 ### Usage
@@ -119,7 +115,7 @@ Choose a setup scope:
 | `prefablens setup-merge --user`    | User attributes file   | Global            |
 
 > [!NOTE]
-> Without a flag, `prefablens setup-merge` uses `--local`.
+> `prefablens setup-merge` defaults to `--local`.
 
 Use the normal merge command:
 
@@ -129,7 +125,7 @@ git merge origin/main
 
 https://github.com/user-attachments/assets/2ad6a2e9-5562-40b8-ab7e-c5f277da3d8b
 
-For GUI Git clients on macOS and Windows, set the installed PrefabLens executable as the external merge tool.
+Set the installed PrefabLens executable as your GUI client's external merge tool on macOS or Windows.
 Use these arguments:
 
 ```text
@@ -137,8 +133,7 @@ mergetool --terminal <base> <local> <remote> <merged>
 ```
 
 Replace the four paths with your client's placeholders.
-Open a conflicted file with the external merge tool.
-Resolve it in PrefabLens, then return to your Git client to stage it.
+Open a conflicted file with the tool, resolve it in PrefabLens, then stage it in your Git client.
 
 [Fork](https://fork.dev/) example:
 
@@ -146,8 +141,22 @@ https://github.com/user-attachments/assets/d6dd0038-498f-42f3-8447-77a6e597ddf2
 
 #### Key bindings
 
-Copy the [initial keymap](cli/src/keymap.json) to `~/.config/prefablens/keymap.json` on macOS or Linux, or `%APPDATA%\prefablens\keymap.json` on Windows.
-If `XDG_CONFIG_HOME` is nonempty, use `$XDG_CONFIG_HOME/prefablens/keymap.json`.
+Create an editable keymap after installing the CLI:
+
+```bash
+prefablens setup-keymap
+```
+
+The command prints the file path and preserves existing files.
+Edit that file, then reopen the merge tool to apply changes.
+
+| Environment | Path |
+| --- | --- |
+| Nonempty `XDG_CONFIG_HOME` | `$XDG_CONFIG_HOME/prefablens/keymap.json` |
+| Windows | `%APPDATA%\prefablens\keymap.json` |
+| macOS / Linux | `~/.config/prefablens/keymap.json` |
+
+Edit entries in the generated file, such as these two shortcuts:
 
 ```json
 {
@@ -156,15 +165,14 @@ If `XDG_CONFIG_HOME` is nonempty, use `$XDG_CONFIG_HOME/prefablens/keymap.json`.
 }
 ```
 
-The file defines every binding. This example binds only the two actions shown.
-Omitted actions and `[]` leave keys unbound. A missing file uses the embedded initial keymap.
+Keep the other entries to retain their shortcuts. Omitted actions and `[]` are unbound.
+A missing file uses the embedded initial keymap.
 Separate sequence steps with spaces: `Ctrl+x Ctrl+Enter` means Ctrl+X, then Ctrl+Enter.
-See [available actions](docs/cli.md#key-bindings).
+See [available actions](docs/cli.md#key-bindings) and the [initial keymap](cli/src/keymap.json).
 
 ## Development
 
-Install [mise](https://mise.jdx.dev/).
-Install the toolchain from the repository root:
+Install [mise](https://mise.jdx.dev/), then install the toolchain from the repository root:
 
 ```bash
 mise install
@@ -175,14 +183,14 @@ mise install
 | Directory    | Description                                                        |
 | ------------ | ------------------------------------------------------------------ |
 | `core/`      | Zig semantic diff engine for the CLI and WASM                      |
-| `cli/`       | `prefablens` CLI tool                                              |
-| `extension/` | Chrome extension for semantic diffs on GitHub pull requests        |
+| `cli/`       | Native `prefablens` CLI                                            |
+| `extension/` | Chrome extension for semantic GitHub pull request diffs            |
 | `editor/`    | Unity Editor package for semantic diffs                            |
-| `site/`      | Live demo on Cloudflare Workers, using CLI and extension artifacts |
+| `site/`      | Live demo on Cloudflare Workers using CLI and extension artifacts   |
 
 ### Build and test
 
-Run the commands in each code block from the repository root.
+Run these commands from the repository root.
 
 #### Core and CLI
 
@@ -192,13 +200,13 @@ zig build wasm
 zig build test
 ```
 
-`zig build` installs the CLI and the Git strategy script to `zig-out/bin/`.
-`zig build wasm` compiles `core/` to WASM for the extension and the site.
-`zig build test` runs native tests for both.
+`zig build` installs the CLI and Git strategy script to `zig-out/bin/`.
+`zig build wasm` compiles `core/` to WASM for the extension and site.
+`zig build test` runs native core and CLI tests.
 
 #### Chrome extension
 
-The extension build and test commands run `zig build wasm` when needed.
+Build and test commands run `zig build wasm` when needed.
 
 ```bash
 (cd extension && pnpm install && pnpm run build && pnpm test)
@@ -206,8 +214,7 @@ The extension build and test commands run `zig build wasm` when needed.
 
 #### Unity Editor
 
-These tests run on .NET and call the native CLI.
-They do not require Unity.
+These .NET tests call the native CLI and run without Unity.
 
 ```bash
 zig build test-installation-binaries -Doptimize=ReleaseSafe
@@ -235,8 +242,7 @@ zig build wasm
 
 ## Contributing
 
-Open an issue first.
-If the issue does not have the `approved` label, do not open a pull request.
+Open an issue first and wait for its `approved` label before submitting a pull request.
 Read [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License

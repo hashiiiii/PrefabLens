@@ -19,5 +19,6 @@
         "build.zig.zon",
         "cli",
         "core",
+        "e2e",
     },
 }

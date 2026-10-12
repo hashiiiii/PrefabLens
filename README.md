@@ -6,7 +6,7 @@
 
 PrefabLens shows semantic diffs and merges for UnityYAML assets, including changes to GameObjects, components, and fields.
 
-Use the [Chrome extension](#chrome-extension), [Unity Editor package](#unity-editor), or [CLI](#cli).
+Use the [Chrome extension](#chrome-extension), [Unity Editor package](#unity-editor), or [CLI](#cli).  
 Try the [live demo](https://prefablens.hashiiiii.workers.dev/).
 
 ## Chrome extension
@@ -51,7 +51,7 @@ See the [Unity manual](https://docs.unity3d.com/6000.6/Documentation/Manual/upm-
 
 Open `Window > PrefabLens`.
 
-The left pane lists UnityYAML assets changed from **Base**, or **HEAD** when **Base** is empty.
+The left pane lists UnityYAML assets changed from **Base**, or **HEAD** when **Base** is empty.  
 Select an asset to view its semantic diff on the right.
 
 ## CLI
@@ -83,7 +83,7 @@ mise use -g github:hashiiiii/PrefabLens
 
 #### Manual
 
-Download your platform's ZIP from [GitHub Releases](https://github.com/hashiiiii/PrefabLens/releases).
+Download your platform's ZIP from [GitHub Releases](https://github.com/hashiiiii/PrefabLens/releases).  
 Each archive contains one native `prefablens` executable and the `git-merge-prefablens` script.
 
 ### Usage
@@ -125,14 +125,14 @@ git merge origin/main
 
 https://github.com/user-attachments/assets/2ad6a2e9-5562-40b8-ab7e-c5f277da3d8b
 
-Set the installed PrefabLens executable as your GUI client's external merge tool on macOS or Windows.
+Set the installed PrefabLens executable as your GUI client's external merge tool on macOS or Windows.  
 Use these arguments:
 
 ```text
 mergetool --terminal <base> <local> <remote> <merged>
 ```
 
-Replace the four paths with your client's placeholders.
+Replace the four paths with your client's placeholders.  
 Open a conflicted file with the tool, resolve it in PrefabLens, then stage it in your Git client.
 
 [Fork](https://fork.dev/) example:
@@ -147,7 +147,7 @@ Create an editable keymap after installing the CLI:
 prefablens setup-keymap
 ```
 
-The command prints the file path and preserves existing files.
+The command prints the file path and preserves existing files.  
 Edit that file, then reopen the merge tool to apply changes.
 
 | Environment | Path |
@@ -165,10 +165,7 @@ Edit entries in the generated file, such as these two shortcuts:
 }
 ```
 
-Keep the other entries to retain their shortcuts. Omitted actions and `[]` are unbound.
-A missing file uses the embedded initial keymap.
-Separate sequence steps with spaces: `Ctrl+x Ctrl+Enter` means Ctrl+X, then Ctrl+Enter.
-See [available actions](docs/cli.md#key-bindings) and the [initial keymap](cli/src/keymap.json).
+See [zig-keymap](https://github.com/hashiiiii/zig-keymap#keys) for details.
 
 ## Development
 
@@ -200,8 +197,8 @@ zig build wasm
 zig build test
 ```
 
-`zig build` installs the CLI and Git strategy script to `zig-out/bin/`.
-`zig build wasm` compiles `core/` to WASM for the extension and site.
+`zig build` installs the CLI and Git strategy script to `zig-out/bin/`.  
+`zig build wasm` compiles `core/` to WASM for the extension and site.  
 `zig build test` runs native core and CLI tests.
 
 #### Chrome extension
@@ -242,7 +239,7 @@ zig build wasm
 
 ## Contributing
 
-Open an issue first and wait for its `approved` label before submitting a pull request.
+Open an issue first and wait for its `approved` label before submitting a pull request.  
 Read [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License

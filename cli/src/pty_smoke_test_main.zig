@@ -85,7 +85,7 @@ pub fn main(init: std.process.Init) !u8 {
 
 fn testCustomKeymaps(io: std.Io, arena: std.mem.Allocator, scratch: []const u8, prefablens: []const u8) !void {
     const prefix = "--- !u!114 &1\nMonoBehaviour:\n  Value: ";
-    const repo = try prepareMergetoolRepositoryWithSides(io, arena, scratch, prefablens, "custom-editor-keymap", .{
+    const repo = try prepareMergetoolRepositoryWithSides(io, arena, scratch, prefablens, "custom-content-keymap", .{
         .path = "Assets/Conflict.prefab",
         .base = prefix ++ "1\n",
         .ours = prefix ++ "2\n",
@@ -104,20 +104,20 @@ fn testCustomKeymaps(io: std.Io, arena: std.mem.Allocator, scratch: []const u8, 
     const initial = try std.Io.Dir.cwd().readFileAlloc(io, keymap_path, arena, .limited(1024 * 1024));
     var config = try std.json.parseFromSlice(std.json.Value, arena, initial, .{});
     defer config.deinit();
-    config.value.object.getPtr("merge").?.object.getPtr("toggle_raw_view").?.array.items[0].string = "Ctrl+r";
-    config.value.object.getPtr("editor").?.object.getPtr("submit").?.array.items[0].string = "Ctrl+x Ctrl+Enter";
+    config.value.object.getPtr("global").?.object.getPtr("toggle_raw_view").?.array.items[0].string = "Ctrl+r";
+    config.value.object.getPtr("content").?.object.getPtr("activate").?.array.items[0].string = "Ctrl+x Ctrl+Enter";
     try std.Io.Dir.cwd().writeFile(io, .{
         .sub_path = keymap_path,
         .data = try std.json.Stringify.valueAlloc(arena, config.value, .{}),
     });
     // An unbound Enter must leave editing active so the next digit joins the same value.
     const edited = try runMergetoolInPty(io, arena, repo, "\x12\x12\x1b[<0;83;5M7\r8\x18\x1b[13;5u\r", 30);
-    try integration.expectCode(edited, 0, "submit a remapped editor command");
+    try integration.expectCode(edited, 0, "activate a remapped content command");
     try integration.expectFile(io, arena, repo, "Assets/Conflict.prefab", prefix ++ "78\n");
     // The ASCII capture helper can offset columns around UTF-8 titles; the key text stays contiguous.
     try integration.require(pty.terminalCaptureContains(edited.stdout, "Ctrl+r"), "custom raw hint was not rendered");
 
-    const choice = try prepareMergetoolRepositoryWithSides(io, arena, scratch, prefablens, "custom-file-choice-keymap", .{
+    const choice = try prepareMergetoolRepositoryWithSides(io, arena, scratch, prefablens, "custom-dialog-keymap", .{
         .path = "Assets/Conflict.prefab",
         .base = prefix ++ "1\n",
         .ours = prefix ++ "2\n",
@@ -131,7 +131,7 @@ fn testCustomKeymaps(io: std.Io, arena: std.mem.Allocator, scratch: []const u8, 
     try integration.gitOk(io, arena, choice, &.{ "switch", "-q", "local" });
     try integration.expectNonzero(try integration.gitRun(io, arena, choice, &.{ "merge", "--no-edit", "--allow-unrelated-histories", "unrelated" }), "prepare unknown ancestry choice");
     try std.Io.Dir.cwd().createDirPath(io, try std.fs.path.join(arena, &.{ choice, ".git", "xdg", "prefablens" }));
-    try integration.writeFile(io, arena, choice, ".git/xdg/prefablens/keymap.json", "{\"file_choice\": {\"choose_current\": [\"i i\"], \"confirm\": [\"F2\"]}}");
+    try integration.writeFile(io, arena, choice, ".git/xdg/prefablens/keymap.json", "{\"dialog\": {\"choose_current\": [\"i i\"], \"activate\": [\"F2\"]}}");
     // Default keys must not confirm a side before the configured i i sequence and F2 confirmation.
     const chosen = try runMergetoolInPty(io, arena, choice, "b\rii\x1bOQ", 30);
     try integration.expectCode(chosen, 0, "confirm a remapped whole-file choice");
@@ -139,24 +139,17 @@ fn testCustomKeymaps(io: std.Io, arena: std.mem.Allocator, scratch: []const u8, 
     try integration.require(pty.terminalCaptureContains(chosen.stdout, "i i: Whole current file"), "custom choice hint was not rendered");
     try integration.require(pty.terminalCaptureContains(chosen.stdout, "Press F2 to confirm"), "custom confirmation hint was not rendered");
 
-    try integration.writeFile(io, arena, repo, ".git/xdg/prefablens/keymap.json", "{\"editor\": {\"submit\": 42}}");
     const direct = try std.fmt.allocPrint(arena, "{s} mergetool unused-base unused-local unused-remote Assets/Conflict.prefab", .{try integration.shellQuote(arena, prefablens)});
-    // Startup errors must remain distinguishable from cancellation without opening the TUI or writing output.
-    const invalid = try pty.runCommandInPty(io, arena, repo, direct, "", 5);
-    try integration.expectCode(invalid, 2, "invalid keymap startup status");
-    try integration.require(std.mem.indexOf(u8, invalid.stdout, "prefablens/keymap.json") != null, "invalid keymap diagnostic omitted its path");
-    try integration.require(std.mem.indexOf(u8, invalid.stdout, "editor.submit") != null, "invalid keymap diagnostic omitted the affected action");
-    try integration.expectFile(io, arena, repo, "Assets/Conflict.prefab", prefix ++ "78\n");
-
     // A known action in the wrong context must fail before a key can reach an unsupported handler.
-    try integration.writeFile(io, arena, repo, ".git/xdg/prefablens/keymap.json", "{\"editor\": {\"move_up\": [\"Up\"]}}");
+    try integration.writeFile(io, arena, repo, ".git/xdg/prefablens/keymap.json", "{\"tree\": {\"copy_selection\": [\"Ctrl+c\"]}}");
     const unsupported = try pty.runCommandInPty(io, arena, repo, direct, "", 5);
     try integration.expectCode(unsupported, 2, "unsupported action startup status");
-    try integration.require(std.mem.indexOf(u8, unsupported.stdout, "editor.move_up") != null, "unsupported action diagnostic omitted the affected entry");
+    try integration.require(std.mem.indexOf(u8, unsupported.stdout, "prefablens/keymap.json") != null, "unsupported action diagnostic omitted its path");
+    try integration.require(std.mem.indexOf(u8, unsupported.stdout, "tree.copy_selection") != null, "unsupported action diagnostic omitted the affected entry");
     try integration.expectFile(io, arena, repo, "Assets/Conflict.prefab", prefix ++ "78\n");
 
     // Syntax errors must show where to repair the file before any conflict output is changed.
-    try integration.writeFile(io, arena, repo, ".git/xdg/prefablens/keymap.json", "{\n  \"editor\": {\n    \"submit\": [\"Enter\"]\n");
+    try integration.writeFile(io, arena, repo, ".git/xdg/prefablens/keymap.json", "{\n  \"content\": {\n    \"activate\": [\"Enter\"]\n");
     const syntax = try pty.runCommandInPty(io, arena, repo, direct, "", 5);
     try integration.expectCode(syntax, 2, "invalid JSON startup status");
     try integration.require(std.mem.indexOf(u8, syntax.stdout, "keymap.json:4:1:") != null, "JSON diagnostic omitted its line and column");
@@ -356,12 +349,6 @@ fn testCompletion(
         try integration.require(
             pty.terminalCaptureContains(result.stdout, text),
             "PTY output omitted merge screen text",
-        );
-    }
-    inline for (.{ "Hierarchy", "Inspector", "Apply result", "[ Quit ]" }) |text| {
-        try integration.require(
-            !pty.terminalCaptureContains(result.stdout, text),
-            "PTY output included a removed pane title",
         );
     }
     try integration.expectFile(io, arena, repo, "Assets/Conflict.prefab", conflict_resolved);

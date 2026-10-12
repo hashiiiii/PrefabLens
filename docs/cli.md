@@ -247,7 +247,7 @@ Keyed pair sequences show each item's `key` or `first` value. Result shows the v
 Reparent conflicts show the parent GameObject name. Duplicate names include the path from the root.
 Raw keeps the four columns. Ours and Theirs are unified diffs against Base. Deletions are red. Additions are green. YAML document headers stay uncolored.
 Result shows the Unity YAML preview. Required fields remain marked until selected, even when automatic fields have values.
-Missing sides stay empty. Each inspector column scrolls independently and stops at the last wrapped line.
+Missing sides stay empty. Each value column scrolls independently and stops at the last wrapped line.
 A thin floating scrollbar appears on the focused column while it scrolls, then hides.
 The mouse wheel and two-finger trackpad scroll move vertically. Shift plus wheel scrolls horizontally, one line at a time.
 Base is not selectable. Scrolling over Base still moves that column, keeping long ancestor YAML readable.
@@ -256,7 +256,7 @@ Base is not selectable. Scrolling over Base still moves that column, keeping lon
 The panel opens with the closing marker visible.
 Click **⇧E File** in the footer, or press **Shift+E**, to show or hide it.
 Drag the top edge to resize it.
-Like inspector columns, the panel stops at the last wrapped line and shows a thin floating scrollbar while scrolling.
+Like value columns, the panel stops at the last wrapped line and shows a thin floating scrollbar while scrolling.
 
 **Shift+V** or **Preview** shows the complete Result after all required choices and edits have been applied.
 This includes accepted insertions, removals, and ordering outside the selected item.
@@ -289,16 +289,16 @@ This excerpt shows remapped actions:
 
 ```json
 {
-  "merge": {
+  "global": {
     "toggle_raw_view": ["Ctrl+r"],
     "toggle_file_view": ["e e"]
   },
-  "file_choice": {
+  "dialog": {
     "choose_current": ["i i"],
-    "confirm": ["F2"]
+    "activate": ["F2"]
   },
-  "editor": {
-    "submit": ["Ctrl+x Ctrl+Enter"]
+  "content": {
+    "activate": ["Ctrl+x Ctrl+Enter"]
   }
 }
 ```
@@ -310,13 +310,32 @@ Configuration errors prevent interactive resolution and return status 2.
 Headless merges do not load this file.
 Actions are valid only in their listed contexts.
 
-| Context | Actions |
-| --- | --- |
-| `merge` | `back`, `move_left`, `move_right`, `move_up`, `move_down`, `activate`, `toggle_raw_view`, `toggle_file_view`, `toggle_result_preview`, `toggle_combine` |
-| `inspector` | `pan_left`, `pan_right` |
-| `file_choice` | `quit`, `confirm`, `choose_current`, `choose_incoming`, `keep`, `delete`, `edit_custom` |
-| `dialog` | `confirm`, `cancel`, `choose_cancel`, `choose_confirm`, `activate_choice` |
-| `editor` | `submit`, `cancel`, `copy_selection`, `insert_newline`, `cursor_up`, `cursor_down`, `line_start`, `line_end` |
+| Context | Where keys apply | Actions |
+| --- | --- | --- |
+| `global` | Shared controls on the normal merge screen | `back`, `complete`, `toggle_raw_view`, `toggle_file_view`, `toggle_result_preview`, `toggle_combine` |
+| `tree` | The hierarchy on the left | `move_left`, `move_right`, `move_up`, `move_down`, `activate` |
+| `content` | The value panes and Result editing on the right | `back`, `move_left`, `move_right`, `move_up`, `move_down`, `activate`, `pan_left`, `pan_right`, `copy_selection`, `insert_newline`, `line_start`, `line_end` |
+| `dialog` | Confirmations and file conflict choices | `activate`, `confirm`, `cancel`, `move_left`, `move_right`, `choose_current`, `choose_incoming`, `keep`, `delete`, `edit_custom` |
+
+The focused `tree` or `content` context takes priority over `global`.
+The Complete button uses `global` first, with `content` navigation back to the values or tree.
+While editing, only `content` handles shortcuts; printable display shortcuts become text.
+Dialogs handle only `dialog` shortcuts.
+`complete` activates the Complete button only while it has focus.
+
+`content.activate` takes a source value or starts Result editing; while editing, it accepts the value.
+`move_left`, `move_right`, `move_up`, and `move_down` navigate values or move the editing cursor.
+`Left` / `Ctrl+b` and `Right` / `Ctrl+f` share the content movement bindings.
+`back` returns to the tree and cancels an active edit.
+Panning applies while comparing values; copying and line boundaries apply while editing.
+`insert_newline` starts editing the focused Result or inserts an indented newline in the editor.
+
+In a confirmation dialog, `activate` chooses the selected button, `confirm` accepts, and `cancel` dismisses.
+File conflict choices appear for supported deletion or rename conflicts during a PrefabLens Git merge.
+They also appear when the merge ancestry cannot identify one common base.
+Use `choose_current` or `choose_incoming` for paths or whole files, and `keep` or `delete` for deletion conflicts.
+`edit_custom` opens the configured external editor when the common base is unknown.
+`activate` or `confirm` accepts the selected file choice; `cancel` leaves the conflict unresolved.
 
 Keys accept one Unicode character or a named key, with optional `Shift`, `Ctrl`, `Alt`, `Super`, `Meta`, or `Hyper` modifiers.
 Named keys include navigation, editing, lock, keypad, media, and volume keys, plus `F1` through `F35`.
@@ -331,10 +350,6 @@ Sequences have no timeout. Clicking, scrolling, pasting, or changing focus clear
 Modifier-only events preserve pending steps.
 A sequence prefix does not enter the editor as text.
 
-Dialogs, file choices, and the editor use separate contexts.
-Fresh matches follow the active context order. The inspector activates `merge` before `inspector`.
-Focusing Result also activates `editor`, with the lowest priority until editing starts.
-While editing with no dialog open, only `editor` is active. Its vertical movement actions are `cursor_up` and `cursor_down`.
 Pending sequences take priority over fresh matches.
 Within a context, different actions cannot share equivalent keys.
 A shorter sequence cannot be the start of another sequence.

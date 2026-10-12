@@ -3,9 +3,10 @@ const builtin = @import("builtin");
 const shared = @import("keymap");
 const vaxis = @import("vaxis");
 
-pub const Context = enum { merge, inspector, file_choice, dialog, editor };
+pub const Context = enum { global, tree, content, dialog };
 pub const Action = enum {
     back,
+    complete,
     move_left,
     move_right,
     move_up,
@@ -17,7 +18,6 @@ pub const Action = enum {
     toggle_combine,
     pan_left,
     pan_right,
-    quit,
     confirm,
     choose_current,
     choose_incoming,
@@ -25,14 +25,8 @@ pub const Action = enum {
     delete,
     edit_custom,
     cancel,
-    choose_cancel,
-    choose_confirm,
-    activate_choice,
-    submit,
     copy_selection,
     insert_newline,
-    cursor_up,
-    cursor_down,
     line_start,
     line_end,
 };
@@ -41,23 +35,17 @@ pub const initial_json = @embedFile("keymap.json");
 
 fn supportsAction(context: Context, action: Action) bool {
     return switch (action) {
-        .back,
-        .move_left,
-        .move_right,
-        .move_up,
-        .move_down,
-        .activate,
+        .complete,
         .toggle_raw_view,
         .toggle_file_view,
         .toggle_result_preview,
         .toggle_combine,
-        => context == .merge,
-        .pan_left, .pan_right => context == .inspector,
-        .quit, .choose_current, .choose_incoming, .keep, .delete, .edit_custom => context == .file_choice,
-        .confirm => context == .file_choice or context == .dialog,
-        .cancel => context == .dialog or context == .editor,
-        .choose_cancel, .choose_confirm, .activate_choice => context == .dialog,
-        .submit, .copy_selection, .insert_newline, .cursor_up, .cursor_down, .line_start, .line_end => context == .editor,
+        => context == .global,
+        .back => context == .global or context == .content,
+        .move_left, .move_right, .activate => context == .tree or context == .content or context == .dialog,
+        .move_up, .move_down => context == .tree or context == .content,
+        .pan_left, .pan_right, .copy_selection, .insert_newline, .line_start, .line_end => context == .content,
+        .confirm, .cancel, .choose_current, .choose_incoming, .keep, .delete, .edit_custom => context == .dialog,
     };
 }
 
@@ -191,35 +179,28 @@ pub fn loadUser(io: std.Io, allocator: std.mem.Allocator, env: *const std.proces
 test "keymap: omitted actions leave initial shortcuts unbound" {
     // A custom file must not silently restore actions the user omitted.
     var bindings = (try Bindings.load(std.testing.allocator,
-        \\{"merge": {"toggle_raw_view": ["Ctrl+r"]}}
+        \\{"global": {"toggle_raw_view": ["Ctrl+r"]}}
     )).bindings;
     defer bindings.deinit();
-    try std.testing.expectEqual(.none, bindings.receive(&.{.merge}, .{ .codepoint = vaxis.Key.up }));
-    try std.testing.expectEqualStrings("", bindings.hint(.merge, .move_up));
+    try std.testing.expectEqual(.none, bindings.receive(&.{ .tree, .global }, .{ .codepoint = vaxis.Key.up }));
+    try std.testing.expectEqualStrings("", bindings.hint(.tree, .move_up));
 }
 
 test "keymap: actions from another context are rejected" {
     // Handlers dispatch only their supported actions, even when an action exists in another context.
-    const cases = [_]struct { json: []const u8, entry: []const u8 }{
-        .{ .json = "{\"merge\": {\"quit\": [\"q\"]}}", .entry = "merge.quit" },
-        .{ .json = "{\"inspector\": {\"submit\": [\"Enter\"]}}", .entry = "inspector.submit" },
-        .{ .json = "{\"file_choice\": {\"back\": [\"Escape\"]}}", .entry = "file_choice.back" },
-        .{ .json = "{\"dialog\": {\"move_up\": []}}", .entry = "dialog.move_up" },
-        .{ .json = "{\"editor\": {\"move_up\": [\"Up\"]}}", .entry = "editor.move_up" },
-    };
-    for (cases) |case| {
-        switch (try Bindings.load(std.testing.allocator, case.json)) {
-            .bindings => |value| {
-                var bindings = value;
-                bindings.deinit();
-                return error.TestUnexpectedResult;
-            },
-            .invalid => |value| {
-                var diagnostic = value;
-                defer diagnostic.deinit();
-                try std.testing.expectEqual(shared.Diagnostic.Kind.unknown_action, diagnostic.kind);
-                try std.testing.expect(std.mem.indexOf(u8, diagnostic.message, case.entry) != null);
-            },
-        }
+    switch (try Bindings.load(std.testing.allocator,
+        \\{"tree": {"copy_selection": ["Ctrl+c"]}}
+    )) {
+        .bindings => |value| {
+            var bindings = value;
+            bindings.deinit();
+            return error.TestUnexpectedResult;
+        },
+        .invalid => |value| {
+            var diagnostic = value;
+            defer diagnostic.deinit();
+            try std.testing.expectEqual(shared.Diagnostic.Kind.unknown_action, diagnostic.kind);
+            try std.testing.expect(std.mem.indexOf(u8, diagnostic.message, "tree.copy_selection") != null);
+        },
     }
 }

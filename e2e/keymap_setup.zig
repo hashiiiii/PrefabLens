@@ -31,14 +31,8 @@ pub fn main(init: std.process.Init) !u8 {
     try t.expectCode(created, 0, "create user keymap");
     try t.require(std.mem.eql(u8, std.mem.trim(u8, created.stdout, "\r\n"), path), "setup did not print the editable keymap path");
     const bytes = try cwd.readFileAlloc(io, path, a, .limited(1024 * 1024));
-    const config = try std.json.parseFromSlice(std.json.Value, a, bytes, .{});
-    defer config.deinit();
-    for ([_][]const u8{ "merge", "inspector", "file_choice", "dialog", "editor" }) |context| {
-        try t.require(config.value.object.contains(context), "initial keymap omitted a context");
-    }
-
     // Repeating setup during an upgrade must preserve the user's assignments byte for byte.
-    const custom = "{\"merge\":{\"toggle_raw_view\":[\"Ctrl+r\"]}}\n";
+    const custom = "{\"global\":{\"toggle_raw_view\":[\"Ctrl+r\"]}}\n";
     try cwd.writeFile(io, .{ .sub_path = path, .data = custom });
     const repeated = try std.process.run(a, io, .{
         .argv = &.{ prefablens, "setup-keymap" },

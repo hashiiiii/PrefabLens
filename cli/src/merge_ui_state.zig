@@ -4,12 +4,9 @@ const review = @import("merge_review.zig");
 
 const testing = std.testing;
 
-pub const Pane = enum { hierarchy, inspector };
 pub const Outcome = enum { active, ready, aborted };
 
 pub const Action = union(enum) {
-    pane_left,
-    pane_right,
     move_up,
     move_down,
     select_conflict: usize,
@@ -68,7 +65,6 @@ pub const State = struct {
     initial_resolutions: []core.merge.Resolution,
     conflict_indices: []usize,
     drafts: []Draft,
-    pane: Pane = .hierarchy,
     selected_conflict: usize = 0,
     pending: ?core.merge.Resolution = null,
     status: []const u8 = "",
@@ -336,8 +332,6 @@ pub const State = struct {
         if (self.outcome == .aborted) return;
 
         switch (action) {
-            .pane_left => self.pane = .hierarchy,
-            .pane_right => self.pane = .inspector,
             .move_up => self.selectConflict(self.selected_conflict -| 1),
             .move_down => if (self.selected_conflict + 1 < self.conflict_indices.len) {
                 self.selectConflict(self.selected_conflict + 1);
@@ -625,11 +619,9 @@ test "merge UI state: choices stay pending until apply" {
     var fixture = try conflictPlan(arena, 2);
     var state = try State.init(arena, &fixture.plan);
 
-    try state.handle(.pane_right);
     try state.handle(.move_down);
     try state.handle(.choose_theirs);
 
-    try testing.expectEqual(Pane.inspector, state.pane);
     try testing.expectEqual(@as(usize, 1), state.selected_conflict);
     try testing.expect(fixture.plan.operations[1].resolution == .unresolved);
     try testing.expect(state.pending.? == .take and state.pending.?.take == .theirs);

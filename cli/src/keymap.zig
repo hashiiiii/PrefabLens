@@ -130,19 +130,39 @@ pub const Bindings = struct {
     }
 };
 
+fn userPath(allocator: std.mem.Allocator, env: *const std.process.Environ.Map) !?[]const u8 {
+    if (env.get("XDG_CONFIG_HOME")) |xdg| {
+        if (xdg.len != 0) return try std.fs.path.join(allocator, &.{ xdg, "prefablens", "keymap.json" });
+    }
+    const home = env.get(if (builtin.os.tag == .windows) "APPDATA" else "HOME") orelse return null;
+    if (home.len == 0) return null;
+    if (builtin.os.tag == .windows) return try std.fs.path.join(allocator, &.{ home, "prefablens", "keymap.json" });
+    return try std.fs.path.join(allocator, &.{ home, ".config", "prefablens", "keymap.json" });
+}
+
+pub fn setupUser(io: std.Io, allocator: std.mem.Allocator, env: *const std.process.Environ.Map, stdout: *std.Io.Writer) !void {
+    const path = try userPath(allocator, env) orelse return error.ConfigHomeUnavailable;
+    defer allocator.free(path);
+    const cwd = std.Io.Dir.cwd();
+    try cwd.createDirPath(io, std.fs.path.dirname(path).?);
+    {
+        const file = cwd.createFile(io, path, .{ .exclusive = true }) catch |err| switch (err) {
+            error.PathAlreadyExists => {
+                try stdout.print("{s}\n", .{path});
+                return;
+            },
+            else => return err,
+        };
+        // A partial keymap would prevent later interactive sessions from starting.
+        errdefer cwd.deleteFile(io, path) catch {};
+        defer file.close(io);
+        try file.writeStreamingAll(io, initial_json);
+    }
+    try stdout.print("{s}\n", .{path});
+}
+
 pub fn loadUser(io: std.Io, allocator: std.mem.Allocator, env: *const std.process.Environ.Map, stderr: *std.Io.Writer) !Bindings {
-    const xdg = env.get("XDG_CONFIG_HOME");
-    const base = if (xdg != null and xdg.?.len != 0)
-        xdg.?
-    else if (builtin.os.tag == .windows)
-        env.get("APPDATA") orelse return (try Bindings.load(allocator, initial_json)).bindings
-    else
-        try std.fs.path.join(allocator, &.{ env.get("HOME") orelse return (try Bindings.load(allocator, initial_json)).bindings, ".config" });
-    defer if (xdg == null or xdg.?.len == 0) {
-        if (builtin.os.tag != .windows) allocator.free(base);
-    };
-    if (base.len == 0) return (try Bindings.load(allocator, initial_json)).bindings;
-    const path = try std.fs.path.join(allocator, &.{ base, "prefablens", "keymap.json" });
+    const path = try userPath(allocator, env) orelse return (try Bindings.load(allocator, initial_json)).bindings;
     defer allocator.free(path);
     const text = std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .limited(1024 * 1024)) catch |err| switch (err) {
         error.FileNotFound => return (try Bindings.load(allocator, initial_json)).bindings,

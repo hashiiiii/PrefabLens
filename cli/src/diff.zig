@@ -30,6 +30,9 @@ const help_text = usage_line ++ "\nGit merge setup: " ++ merge_setup.usage ++ "\
     \\External merge tool: prefablens mergetool [--terminal] <base> <local> <remote> <merged>
     \\  --terminal             Open a terminal on macOS or Windows and wait for the result
     \\
+    \\Keymap setup: prefablens setup-keymap
+    \\  Create keymap.json if missing and print its path
+    \\
     \\Operands ending in a Unity YAML extension (.prefab, .unity, .asset, ...)
     \\are paths; anything else is a git ref.
     \\

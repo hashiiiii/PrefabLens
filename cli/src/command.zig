@@ -23,6 +23,7 @@ pub const Command = union(enum) {
     merge_driver: MergeDriverArgs,
     mergetool: MergetoolArgs,
     setup_merge: []const []const u8,
+    setup_keymap,
 };
 
 pub const Error = error{
@@ -32,6 +33,10 @@ pub const Error = error{
 
 pub fn parse(args: []const []const u8) Error!Command {
     if (args.len == 0) return .{ .diff = args };
+    if (std.mem.eql(u8, args[0], "setup-keymap")) {
+        if (args.len != 1) return error.InvalidArguments;
+        return .setup_keymap;
+    }
     if (std.mem.eql(u8, args[0], "setup-merge")) return .{ .setup_merge = args[1..] };
     if (std.mem.eql(u8, args[0], "merge-strategy")) return .{ .merge_strategy = args[1..] };
     if (std.mem.eql(u8, args[0], "merge-driver")) {

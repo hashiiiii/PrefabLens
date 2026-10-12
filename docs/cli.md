@@ -274,8 +274,18 @@ The merge TUI loads `keymap.json` from the first applicable location:
 | Windows | `%APPDATA%\prefablens\keymap.json` |
 | macOS / Linux | `~/.config/prefablens/keymap.json` |
 
-Copy the [initial keymap](../cli/src/keymap.json) to this location before editing to keep its existing shortcuts.
-The file defines every binding. This example binds only the actions shown:
+After installing the CLI, create an editable copy of the [initial keymap](../cli/src/keymap.json):
+
+```bash
+prefablens setup-keymap
+```
+
+The command creates the file if missing and prints its path. Existing files are preserved, including across CLI upgrades.
+Edit the printed file, then reopen the merge tool to apply changes.
+No source checkout is needed.
+
+The file defines every binding. Edit individual entries to keep the other shortcuts.
+This excerpt shows remapped actions:
 
 ```json
 {

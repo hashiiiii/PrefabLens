@@ -87,6 +87,28 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_cli_tests.step);
     test_step.dependOn(&run_merge_driver_cwd_tests.step);
 
+    const keymap_setup_tests = b.addExecutable(.{
+        .name = "keymap-setup-tests",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("e2e/keymap_setup.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{.{ .name = "integration", .module = b.createModule(.{
+                .root_source_file = b.path("cli/src/testing/git.zig"),
+                .target = target,
+                .optimize = optimize,
+            }) }},
+        }),
+    });
+    const run_keymap_setup_tests = b.addRunArtifact(keymap_setup_tests);
+    run_keymap_setup_tests.addArtifactArg(exe);
+    run_keymap_setup_tests.setCwd(.{ .cwd_relative = b.graph.global_cache_root.path.? });
+    run_keymap_setup_tests.expectExitCode(0);
+    run_keymap_setup_tests.has_side_effects = true;
+    test_step.dependOn(&run_keymap_setup_tests.step);
+    const keymap_setup_test_step = b.step("test-keymap-setup", "Run user keymap setup integration tests");
+    keymap_setup_test_step.dependOn(&run_keymap_setup_tests.step);
+
     const git_merge_tests = b.addExecutable(.{
         .name = "git-merge-tests",
         .root_module = b.createModule(.{
@@ -310,7 +332,7 @@ pub fn build(b: *std.Build) void {
     const wasm_step = b.step("wasm", "Build the core as a freestanding WASM library");
     wasm_step.dependOn(&b.addInstallArtifact(wasm, .{}).step);
 
-    const zig_sources = &.{ "build.zig", "core", "cli" };
+    const zig_sources = &.{ "build.zig", "core", "cli", "e2e" };
 
     const fmt = b.addFmt(.{ .paths = zig_sources });
     const fmt_step = b.step("fmt", "Format Zig sources");

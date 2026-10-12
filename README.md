@@ -156,12 +156,24 @@ Edit that file, then reopen the merge tool to apply changes.
 | Windows | `%APPDATA%\prefablens\keymap.json` |
 | macOS / Linux | `~/.config/prefablens/keymap.json` |
 
-| Context | Where keys apply |
+##### Contexts
+
+Place bindings in the context for their UI:
+
+| Context | Active UI |
 | --- | --- |
-| `global` | Shared display controls and the Complete button |
-| `tree` | The hierarchy on the left |
-| `content` | The values on the right and Result editing |
-| `dialog` | Confirmations and file conflict choices |
+| `global` | Merge screen display controls and Complete button; inactive while editing Result or in dialogs |
+| `tree` | Left hierarchy, when focused |
+| `content` | Right Base / Ours / Theirs / Result panes, when focused; Result editing |
+| `dialog` | Quit and empty value confirmations, or file conflict choices; all other contexts are inactive |
+
+<p align="center">
+  <img width="924" src="docs/images/tree-content.png" alt="Left tree and right content contexts in the merge TUI" />
+</p>
+
+<p align="center">
+  <img width="924" src="docs/images/dialog.png" alt="Quit confirmation dialog context in the merge TUI" />
+</p>
 
 Edit entries in the generated file, such as these two shortcuts:
 

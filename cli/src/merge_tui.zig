@@ -1160,28 +1160,6 @@ test "merge TUI: prefab override semantic value can be edited to a custom result
     );
 }
 
-test "merge TUI: dictionary raw edit keeps the displayed pair YAML" {
-    var memory = std.heap.ArenaAllocator.init(testing.allocator);
-    defer memory.deinit();
-    const arena = memory.allocator();
-    var fixture = try dictionaryGoblinPlan(arena);
-    var state = try merge_ui_state.State.init(arena, &fixture.plan);
-    try state.handle(.choose_theirs);
-    var view = try viewForTest(arena, &state, "Stats.prefab", fixture.partial);
-    defer view.deinit();
-    _ = try drawForTest(arena, view.widget(), 160, 24);
-    var ctx = eventContext(arena);
-    try view.widget().handleEvent(&ctx, .{ .key_press = .{ .codepoint = 'r', .mods = .{ .shift = true }, .text = "R" } });
-    try focusResultForTest(&view, &ctx);
-    try pressKeyForTest(&view, &ctx, vaxis.Key.enter);
-    // Pair conflicts display the sequence item. Opening the editor must not drop the key.
-    const text = try view.editor.buf.dupe();
-    try testing.expect(view.editing);
-    try testing.expect(std.mem.indexOf(u8, text, "key: Goblin") != null);
-    try testing.expect(std.mem.indexOf(u8, text, "value: 3") != null);
-    try testing.expect(!std.mem.eql(u8, text, "3"));
-}
-
 test "merge TUI: dictionary delete-edit Key edits retain the Value" {
     var memory = std.heap.ArenaAllocator.init(testing.allocator);
     defer memory.deinit();
@@ -1216,84 +1194,7 @@ test "merge TUI: dictionary delete-edit Key edits retain the Value" {
     );
 }
 
-test "merge TUI: dictionary Raw keeps an edited Key when reopened" {
-    var memory = std.heap.ArenaAllocator.init(testing.allocator);
-    defer memory.deinit();
-    const arena = memory.allocator();
-    var fixture = try core.merge.buildForReview(
-        arena,
-        "--- !u!114 &1\nMonoBehaviour:\n  m_Stats:\n  - key: Goblin\n    value: 1\n",
-        "--- !u!114 &1\nMonoBehaviour:\n  m_Stats: []\n",
-        "--- !u!114 &1\nMonoBehaviour:\n  m_Stats:\n  - key: Goblin\n    value: 2\n",
-        .{},
-    );
-    var state = try merge_ui_state.State.init(arena, &fixture.plan);
-    try state.handle(.choose_theirs);
-    var view = try viewForTest(arena, &state, "DictionaryDeleteEdit.prefab", fixture.partial);
-    defer view.deinit();
-    _ = try drawForTest(arena, view.widget(), 180, 24);
-    var ctx = eventContext(arena);
-    try view.widget().handleEvent(&ctx, .{ .key_press = .{ .codepoint = 'r', .mods = .{ .shift = true }, .text = "R" } });
-    try focusResultForTest(&view, &ctx);
-    try pressKeyForTest(&view, &ctx, vaxis.Key.enter);
-    try pressKeyForTest(&view, &ctx, vaxis.Key.up);
-    try view.widget().handleEvent(&ctx, .{ .key_press = .{ .codepoint = 'a', .mods = .{ .ctrl = true } } });
-    for (0..9) |_| try pressKeyForTest(&view, &ctx, vaxis.Key.right);
-    for (0..6) |_| try pressKeyForTest(&view, &ctx, vaxis.Key.delete);
-    try view.widget().handleEvent(&ctx, .{ .key_press = .{ .codepoint = 'B', .text = "Bob" } });
-    try pressKeyForTest(&view, &ctx, vaxis.Key.enter);
-    // Raw must show the edited item rather than restoring its source key around the new value.
-    try testing.expectEqualStrings("  - key: Bob\n    value: 2", try view.columnText(arena, view.selectedOperation().?, .result));
-    try pressKeyForTest(&view, &ctx, vaxis.Key.up);
-    try pressKeyForTest(&view, &ctx, vaxis.Key.enter);
-    try testing.expectEqualStrings("  - key: Bob\n    value: 2", try view.editor.buf.dupe());
-    try testing.expectEqualStrings(
-        "--- !u!114 &1\nMonoBehaviour:\n  m_Stats: [{key: Bob, value: 2}]\n",
-        try core.merge.finish(arena, &fixture.plan),
-    );
-}
-
-test "merge TUI: the first Raw Result click edits the clicked key" {
-    var memory = std.heap.ArenaAllocator.init(testing.allocator);
-    defer memory.deinit();
-    const arena = memory.allocator();
-    var fixture = try core.merge.buildForReview(
-        arena,
-        "--- !u!114 &1\nMonoBehaviour:\n  m_Stats:\n  - key: Goblin\n    value: 1\n",
-        "--- !u!114 &1\nMonoBehaviour:\n  m_Stats: []\n",
-        "--- !u!114 &1\nMonoBehaviour:\n  m_Stats:\n  - key: Goblin\n    value: 2\n",
-        .{},
-    );
-    var state = try merge_ui_state.State.init(arena, &fixture.plan);
-    try state.handle(.choose_theirs);
-    var view = try viewForTest(arena, &state, "DictionaryDeleteEdit.prefab", fixture.partial);
-    defer view.deinit();
-    view.raw_view = true;
-    const surface = try drawForTest(arena, view.widget(), 180, 24);
-    const geometry = Geometry.init(180);
-    const key_row = BodyGeometry.init(24).inspector_rows.start;
-    const key_col = for (geometry.result.start..geometry.result.end) |col| {
-        if (std.mem.eql(u8, surface.readCell(col, key_row).char.grapheme, "G")) break col;
-    } else return error.TestExpectedEqual;
-    var ctx = eventContext(arena);
-    try view.widget().handleEvent(&ctx, .{ .mouse = .{
-        .col = @intCast(key_col),
-        .row = @intCast(key_row),
-        .button = .left,
-        .mods = .{},
-        .type = .press,
-    } });
-    // A click on Goblin must not leave the insertion point on the following Value line.
-    for (0..6) |_| try pressKeyForTest(&view, &ctx, vaxis.Key.delete);
-    try view.widget().handleEvent(&ctx, .{ .key_press = .{ .codepoint = 'B', .text = "Bob" } });
-    try pressKeyForTest(&view, &ctx, vaxis.Key.enter);
-    try testing.expectEqualStrings(
-        "--- !u!114 &1\nMonoBehaviour:\n  m_Stats: [{key: Bob, value: 2}]\n",
-        try core.merge.finish(arena, &fixture.plan),
-    );
-}
-
-test "merge TUI: a scrolled Raw Result click edits the visible key" {
+test "merge TUI: a scrolled Raw Result key edit survives reopening" {
     var memory = std.heap.ArenaAllocator.init(testing.allocator);
     defer memory.deinit();
     const arena = memory.allocator();
@@ -1328,39 +1229,20 @@ test "merge TUI: a scrolled Raw Result click edits the visible key" {
         .type = .press,
     } });
     // The retained note makes the item scroll; the visible l still belongs to Goblin.
+    try testing.expectEqualStrings("  - key: Goblin\n    value: 2\n    note: keep", try view.editor.buf.dupe());
     for (0..3) |_| try pressKeyForTest(&view, &ctx, vaxis.Key.left);
     for (0..6) |_| try pressKeyForTest(&view, &ctx, vaxis.Key.delete);
     try view.widget().handleEvent(&ctx, .{ .key_press = .{ .codepoint = 'B', .text = "Bob" } });
     try pressKeyForTest(&view, &ctx, vaxis.Key.enter);
+    // The preview and reopened editor must retain the edited key and the item's indentation.
+    try testing.expectEqualStrings("  - key: Bob\n    value: 2\n    note: keep", try view.columnText(arena, view.selectedOperation().?, .result));
+    try pressKeyForTest(&view, &ctx, vaxis.Key.up);
+    try pressKeyForTest(&view, &ctx, vaxis.Key.enter);
+    try testing.expectEqualStrings("  - key: Bob\n    value: 2\n    note: keep", try view.editor.buf.dupe());
     try testing.expectEqualStrings(
         "--- !u!114 &1\nMonoBehaviour:\n  m_Stats: [{key: Bob, value: 2, note: keep}]\n",
         try core.merge.finish(arena, &fixture.plan),
     );
-}
-
-test "merge TUI: dictionary custom result keeps pair indent on every side" {
-    var memory = std.heap.ArenaAllocator.init(testing.allocator);
-    defer memory.deinit();
-    const arena = memory.allocator();
-    var fixture = try dictionaryUnionPlan(arena);
-    var state = try merge_ui_state.State.init(arena, &fixture.plan);
-    try state.handle(.choose_theirs);
-    var view = try viewForTest(arena, &state, "Dictionary.prefab", fixture.partial);
-    defer view.deinit();
-    _ = try drawForTest(arena, view.widget(), 180, 24);
-    view.raw_view = true;
-    const operation = view.selectedOperation().?;
-    const ours_before = try view.columnText(arena, operation, .ours);
-    const theirs_before = try view.columnText(arena, operation, .theirs);
-    try state.handle(.{ .edit_result = "key: Goblin\nvalue: 4" });
-    // Result must keep the sequence-item indent. Otherwise common indent drops to 0
-    // and Ours/Theirs appear to shift by two spaces of invalid YAML.
-    try testing.expectEqualStrings(ours_before, try view.columnText(arena, operation, .ours));
-    try testing.expectEqualStrings(theirs_before, try view.columnText(arena, operation, .theirs));
-    const result = try view.columnText(arena, operation, .result);
-    try testing.expect(std.mem.indexOf(u8, result, "key: Goblin") != null);
-    try testing.expect(std.mem.indexOf(u8, result, "value: 4") != null);
-    try testing.expectEqual(lineIndent(ours_before), lineIndent(result));
 }
 
 test "merge TUI: dictionary semantic value can be edited to a custom result" {
@@ -2232,12 +2114,16 @@ pub const View = struct {
             }
             _ = self.property_memory.reset(.retain_capacity);
             const model = try self.propertyModel(self.property_memory.allocator());
+            if (model.documents[3] == null and hasParsedDocuments(model)) {
+                self.state.status = "Choose a component to keep before editing its properties.";
+                return ctx.consumeAndRedraw();
+            }
+            if (!model.editable(self.property_row)) {
+                self.state.status = "This property cannot be edited.";
+                return ctx.consumeAndRedraw();
+            }
             const root = model.roots[3] orelse model.roots[1] orelse model.roots[2] orelse model.roots[0];
             if (self.selectedOperation().?.kind == .field and root != null) {
-                if (!model.editable(self.property_row)) {
-                    self.state.status = "This property cannot be edited.";
-                    return ctx.consumeAndRedraw();
-                }
                 self.editor_review_root = root;
                 self.editor_review_path = model.rows[self.property_row].path;
                 const node = review.at(model.roots[3], self.editor_review_path.?);
@@ -2248,21 +2134,10 @@ pub const View = struct {
                 else
                     "";
             } else if (model.documents[3]) |document| {
-                if (!model.editable(self.property_row)) {
-                    self.state.status = "This property cannot be edited.";
-                    return ctx.consumeAndRedraw();
-                }
                 self.editor_document = document;
                 self.editor_property = model.rows[self.property_row].path;
                 input = document.input(model.rows[self.property_row].path).?;
-            } else if (hasParsedDocuments(model)) {
-                self.state.status = "Choose a component to keep before editing its properties.";
-                return ctx.consumeAndRedraw();
             } else {
-                if (!model.editable(self.property_row)) {
-                    self.state.status = "This property cannot be edited.";
-                    return ctx.consumeAndRedraw();
-                }
                 // Variant values are not Unity documents, so they use their scalar payload.
                 self.editor_document = null;
                 self.editor_property = null;

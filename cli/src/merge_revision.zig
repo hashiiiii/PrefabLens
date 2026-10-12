@@ -272,24 +272,32 @@ test "revision snapshots reuse immutable evidence after HEAD moves" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
     var env = std.process.Environ.Map.init(arena);
-    const git = try fixtureGit(&tmp, arena, &env);
-    try fixtureWrite(&tmp, "Example.cs", "using UnityEngine; class Example : MonoBehaviour { public int[] values; }");
-    try fixtureWrite(&tmp, "Example.cs.meta", "guid: " ++ script_guid ++ "\n");
-    const base = try fixtureCommit(git);
+    try env.put("PATH", "/usr/bin:/bin");
+    const git: Git = .{ .io = testing.io, .arena = arena, .env = &env, .cwd = try tmp.dir.realPathFileAlloc(testing.io, ".", arena) };
+    try git.ok(&.{ "init", "-q" });
+    try git.ok(&.{ "config", "user.name", "Snapshot test" });
+    try git.ok(&.{ "config", "user.email", "snapshot@example.invalid" });
+    try git.ok(&.{ "config", "commit.gpgsign", "false" });
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "Example.cs", .data = "using UnityEngine; class Example : MonoBehaviour { public int[] values; }" });
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "Example.cs.meta", .data = "guid: 11111111111111111111111111111111\n" });
+    try git.ok(&.{ "add", "--all" });
+    try git.ok(&.{ "commit", "-qm", "int array" });
+    const base = @import("merge_git.zig").trim(try git.output(&.{ "rev-parse", "HEAD" }));
     try env.put("GIT_TRACE2_EVENT", try git.path(".git/snapshot-trace.jsonl"));
     var store = Store.init(git);
     defer store.deinit();
     _ = try store.snapshot(base);
     _ = try store.snapshot(base);
     const before = try store.snapshot("HEAD");
-    try fixtureWrite(&tmp, "Example.cs", "using UnityEngine; class Example : MonoBehaviour { public string[] values; }");
-    _ = try fixtureCommit(git);
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "Example.cs", .data = "using UnityEngine; class Example : MonoBehaviour { public string[] values; }" });
+    try git.ok(&.{ "add", "--all" });
+    try git.ok(&.{ "commit", "-qm", "string array" });
     // Only immutable identities can be reused; HEAD must still observe a new declaration.
     const after = try store.snapshot("HEAD");
     const original = try store.snapshot(base);
-    try testing.expectEqual(context.Kind.int32_array, before.kind(script_guid, "values").?);
-    try testing.expectEqual(context.Kind.ordered, after.kind(script_guid, "values").?);
-    try testing.expectEqual(context.Kind.int32_array, original.kind(script_guid, "values").?);
+    try testing.expectEqual(context.Kind.int32_array, before.kind("11111111111111111111111111111111", "values").?);
+    try testing.expectEqual(context.Kind.ordered, after.kind("11111111111111111111111111111111", "values").?);
+    try testing.expectEqual(context.Kind.int32_array, original.kind("11111111111111111111111111111111", "values").?);
 
     // Count real Git calls so repeated evidence scans cannot regress without timing noise.
     const trace = try tmp.dir.readFileAlloc(testing.io, ".git/snapshot-trace.jsonl", arena, .limited(1024 * 1024));

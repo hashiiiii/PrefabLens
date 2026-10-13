@@ -34,6 +34,7 @@ pub const Candidate = struct {
     nodes: std.ArrayList(Node) = .empty,
     node_index: std.StringHashMap(usize),
     blobs: std.StringHashMap([]const u8),
+    batch: ?revision.Batch = null,
     relevance: std.StringHashMap(bool),
     items: std.ArrayList(Item) = .empty,
     snapshots: std.ArrayList([]const Entry) = .empty,
@@ -55,6 +56,7 @@ pub const Candidate = struct {
         alternate.env = env;
         try alternate.ok(&.{ "read-tree", result.tree });
         var self: Candidate = .{ .git = git, .alternate = alternate, .scratch = absolute, .result = result, .store = revision.Store.init(git), .node_index = .init(git.arena), .blobs = .init(git.arena), .relevance = .init(git.arena) };
+        errdefer if (self.batch) |*batch| batch.child.kill(git.io);
         const sources = result.sources orelse return error.MissingMergeSources;
         for (sources.bases) |base| try self.scan(base);
         try self.scan(sources.ours);
@@ -65,6 +67,7 @@ pub const Candidate = struct {
     }
 
     pub fn deinit(self: *Candidate) void {
+        if (self.batch) |*batch| batch.child.kill(self.git.io);
         self.store.deinit();
         std.Io.Dir.cwd().deleteTree(self.git.io, self.scratch) catch {};
     }
@@ -79,7 +82,8 @@ pub const Candidate = struct {
 
     fn readBlob(self: *Candidate, oid: []const u8) ![]const u8 {
         if (self.blobs.get(oid)) |bytes| return bytes;
-        const bytes = try self.git.output(&.{ "cat-file", "blob", oid });
+        if (self.batch == null) self.batch = try revision.Batch.init(self.git);
+        const bytes = try self.batch.?.read(self.git, oid, 256 * 1024 * 1024);
         try self.blobs.put(oid, bytes);
         return bytes;
     }
@@ -237,7 +241,13 @@ pub const Candidate = struct {
 
     pub fn readInputs(self: *Candidate, path: []const u8) !session.Inputs {
         const entries = try self.inputEntries(path);
-        return .{ .base = try strategy.blob(self.git, entries[0]), .ours = try strategy.blob(self.git, entries[1]), .theirs = try strategy.blob(self.git, entries[2]) };
+        return .{ .base = try self.readStage(entries[0]), .ours = try self.readStage(entries[1]), .theirs = try self.readStage(entries[2]) };
+    }
+
+    fn readStage(self: *Candidate, stage: ?strategy.Stage) ![]const u8 {
+        const entry = stage orelse return "";
+        if (!regular(entry.mode)) return error.UnsupportedFileMode;
+        return self.readBlob(entry.oid);
     }
 
     fn inputEntries(self: *Candidate, path: []const u8) ![3]?strategy.Stage {

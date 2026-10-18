@@ -6,4 +6,4 @@ node = '24'
 # Project commands such as `node build.mjs` and `node --test` use the pinned Node.js above.
 pnpm = '12.9.1'
 dotnet = '10'
-'pipx:bump-my-version' = '1.5.1'
+'pipx:bump-my-version' = '1.6.0'

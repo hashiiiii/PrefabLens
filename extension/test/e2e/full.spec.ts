@@ -454,7 +454,8 @@ test("gates oversized files behind an explicit render click", async () => {
   await header.getByRole("button", { name: "Semantic" }).click();
 
   const view = page.locator("[data-prefablens-view]");
-  await expect(view).toContainText("Large file (52 MB)", { timeout: 30_000 });
+  // The fixture has no Content-Length, so the bounded reader reports a lower bound without downloading both bodies.
+  await expect(view).toContainText("Large file (over ", { timeout: 30_000 });
   await view.getByRole("button", { name: "Render anyway" }).click();
   await expect(view).toContainText("No semantic changes", { timeout: 30_000 });
   await page.close();

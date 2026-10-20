@@ -14,11 +14,18 @@ test "writeReportFile writes the html into the given directory" {
     defer tmp.cleanup();
     const dir = try tmp.dir.realPathFileAlloc(testing.io, ".", arena);
 
-    const path = try writeReportFile(testing.io, arena, dir, "Robot", "<!DOCTYPE html>x");
-    try testing.expect(std.mem.indexOf(u8, path, "prefablens-Robot-") != null);
+    const path = try writeReportFile(testing.io, arena, dir, "<!DOCTYPE html>x");
+    try testing.expect(std.mem.indexOf(u8, path, "prefablens-") != null);
+    try testing.expect(std.mem.indexOf(u8, path, "Robot") == null);
     try testing.expect(std.mem.endsWith(u8, path, ".html"));
     const back = try std.Io.Dir.cwd().readFileAlloc(testing.io, path, arena, .limited(1024));
     try testing.expectEqualStrings("<!DOCTYPE html>x", back);
+
+    // Same-millisecond invocations must never truncate an earlier report.
+    const second_path = try writeReportFile(testing.io, arena, dir, "<!DOCTYPE html>y");
+    try testing.expect(!std.mem.eql(u8, path, second_path));
+    const first_again = try std.Io.Dir.cwd().readFileAlloc(testing.io, path, arena, .limited(1024));
+    try testing.expectEqualStrings("<!DOCTYPE html>x", first_again);
 }
 
 test "run: bulk mode diffs every changed Unity file and skips others" {
@@ -135,6 +142,84 @@ test "run: bulk json emits an array of path/diff objects" {
     try testing.expect(std.mem.startsWith(u8, text, "["));
     try testing.expect(std.mem.indexOf(u8, text, "\"path\":\"Foo.prefab\"") != null);
     try testing.expect(std.mem.indexOf(u8, text, "\"schema\":\"prefablens.diff.v2\"") != null);
+}
+
+test "run: terminal output escapes controls in Git paths and read errors" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const dir = try tmp.dir.realPathFileAlloc(testing.io, ".", arena);
+    const unsafe_name = "bad\n\x1b[2J.prefab";
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = unsafe_name, .data = "--- !u!4 &4\nTransform:\n  x: 1\n" });
+    try gitInit(arena, dir);
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = unsafe_name, .data = "--- !u!4 &4\nTransform:\n  x: 2\n" });
+
+    var stdout = std.Io.Writer.Allocating.init(arena);
+    var stderr = std.Io.Writer.Allocating.init(arena);
+    const code = try run(testing.io, arena, &.{ "--project", dir }, &stdout.writer, &stderr.writer, false, null);
+    try testing.expectEqual(@as(u8, 0), code);
+    const tree = stdout.toArrayList().items;
+    // Git paths may contain terminal controls, so bulk headers must escape before printing them.
+    try testing.expect(std.mem.indexOfScalar(u8, tree, 0x1b) == null);
+    try testing.expect(std.mem.indexOf(u8, tree, "bad\\n\\u001b[2J.prefab") != null);
+
+    stdout = std.Io.Writer.Allocating.init(arena);
+    stderr = std.Io.Writer.Allocating.init(arena);
+    const bad_path = "missing\n\x1b[2J.prefab";
+    const error_code = try run(testing.io, arena, &.{ "--no-project", bad_path, "after.prefab" }, &stdout.writer, &stderr.writer, false, null);
+    try testing.expectEqual(@as(u8, 1), error_code);
+    const error_text = stderr.toArrayList().items;
+    try testing.expect(std.mem.indexOfScalar(u8, error_text, 0x1b) == null);
+    try testing.expect(std.mem.indexOf(u8, error_text, "missing\\n\\u001b[2J.prefab") != null);
+}
+
+test "run: a changed Git symlink cannot read a prefab outside the repository" {
+    if (@import("builtin").os.tag == .windows) return error.SkipZigTest;
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(testing.io, "Repo/Assets");
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "private.prefab", .data = "--- !u!1 &1\nGameObject:\n  m_Name: OUTSIDE_SENTINEL\n" });
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "Repo/Assets/Linked.prefab", .data = "--- !u!1 &1\nGameObject:\n  m_Name: InRepo\n" });
+    const repo = try tmp.dir.realPathFileAlloc(testing.io, "Repo", arena);
+    try gitInit(arena, repo);
+    try tmp.dir.deleteFile(testing.io, "Repo/Assets/Linked.prefab");
+    try tmp.dir.symLink(testing.io, "../../private.prefab", "Repo/Assets/Linked.prefab", .{});
+
+    var stdout = std.Io.Writer.Allocating.init(arena);
+    var stderr = std.Io.Writer.Allocating.init(arena);
+    const code = try run(testing.io, arena, &.{ "--project", repo }, &stdout.writer, &stderr.writer, false, null);
+    try testing.expectEqual(@as(u8, 1), code);
+    try testing.expect(std.mem.indexOf(u8, stdout.toArrayList().items, "OUTSIDE_SENTINEL") == null);
+    try testing.expect(std.mem.indexOf(u8, stderr.toArrayList().items, "cannot read file 'Assets/Linked.prefab'") != null);
+}
+
+test "run: deeply linked GameObjects fail cleanly before recursive walks overflow" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const depth = 12_000;
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "before.unity", .data = try hierarchyFixture(arena, depth, false) });
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "after.unity", .data = try hierarchyFixture(arena, depth, true) });
+    const before = try tmp.dir.realPathFileAlloc(testing.io, "before.unity", arena);
+    const after = try tmp.dir.realPathFileAlloc(testing.io, "after.unity", arena);
+
+    var stdout = std.Io.Writer.Allocating.init(arena);
+    var stderr = std.Io.Writer.Allocating.init(arena);
+    // This shallow YAML graph exceeds the stack limit during tree construction, before prefab expansion can check it.
+    const code = try run(testing.io, arena, &.{ "--no-project", before, after }, &stdout.writer, &stderr.writer, false, null);
+    try testing.expectEqual(@as(u8, 1), code);
+    try testing.expectEqualStrings("error: object hierarchy nested too deeply\n", stderr.toArrayList().items);
+    try testing.expectEqual(@as(usize, 0), stdout.toArrayList().items.len);
 }
 
 test "run: --help prints usage on stdout and exits 0" {
@@ -436,6 +521,26 @@ fn gitInit(arena: std.mem.Allocator, dir: []const u8) !void {
         const r = try std.process.run(arena, testing.io, .{ .argv = argv, .cwd = .{ .path = dir } });
         if (r.term != .exited or r.term.exited != 0) return error.GitFailed;
     }
+}
+
+fn hierarchyFixture(arena: std.mem.Allocator, depth: usize, change_leaf: bool) ![]const u8 {
+    var source: std.ArrayList(u8) = .empty;
+    for (1..depth + 1) |i| {
+        const transform = depth + i;
+        const parent = if (i == 1) 0 else transform - 1;
+        const name = if (change_leaf and i == depth) "Changed" else "Object";
+        try source.appendSlice(arena, try std.fmt.allocPrint(
+            arena,
+            "--- !u!1 &{d}\nGameObject:\n  m_Name: {s}{d}\n  m_Component:\n  - component: {{fileID: {d}}}\n",
+            .{ i, name, i, transform },
+        ));
+        try source.appendSlice(arena, try std.fmt.allocPrint(
+            arena,
+            "--- !u!4 &{d}\nTransform:\n  m_GameObject: {{fileID: {d}}}\n  m_Father: {{fileID: {d}}}\n",
+            .{ transform, i, parent },
+        ));
+    }
+    return source.toOwnedSlice(arena);
 }
 
 test "run: --project points git mode at a repo outside the cwd" {

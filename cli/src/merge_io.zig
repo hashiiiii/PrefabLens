@@ -20,15 +20,15 @@ pub fn readLimited(
 
 pub fn reportFailure(stderr: *std.Io.Writer, path: []const u8) !u8 {
     try stderr.writeAll("prefablens: Merge failed for ");
-    try writeSafePath(stderr, path);
+    try writeSafeTerminalText(stderr, path);
     try stderr.writeAll(". PrefabLens did not write the output.\n");
     return 2;
 }
 
-pub fn writeSafePath(stderr: *std.Io.Writer, path: []const u8) !void {
+pub fn writeSafeTerminalText(stderr: *std.Io.Writer, text: []const u8) !void {
     var index: usize = 0;
-    while (index < path.len) {
-        const byte = path[index];
+    while (index < text.len) {
+        const byte = text[index];
         if (byte < 0x80) {
             if (byte == '\n') {
                 try stderr.writeAll("\\n");
@@ -51,12 +51,12 @@ pub fn writeSafePath(stderr: *std.Io.Writer, path: []const u8) !void {
             continue;
         };
         const end = index + @as(usize, sequence_length);
-        if (end > path.len) {
+        if (end > text.len) {
             try writeByteEscape(stderr, byte);
             index += 1;
             continue;
         }
-        const codepoint = std.unicode.utf8Decode(path[index..end]) catch {
+        const codepoint = std.unicode.utf8Decode(text[index..end]) catch {
             try writeByteEscape(stderr, byte);
             index += 1;
             continue;
@@ -64,10 +64,14 @@ pub fn writeSafePath(stderr: *std.Io.Writer, path: []const u8) !void {
         if (isUnsafeCodepoint(codepoint)) {
             try writeUnicodeEscape(stderr, codepoint);
         } else {
-            try stderr.writeAll(path[index..end]);
+            try stderr.writeAll(text[index..end]);
         }
         index = end;
     }
+}
+
+pub fn writeSafePath(stderr: *std.Io.Writer, path: []const u8) !void {
+    try writeSafeTerminalText(stderr, path);
 }
 
 fn isUnsafeCodepoint(codepoint: u21) bool {

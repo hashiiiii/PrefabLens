@@ -82,11 +82,40 @@ pub fn showAtRef(io: std.Io, arena: std.mem.Allocator, repo_dir: []const u8, ref
 
 /// Reads the working tree as the after side when one ref is given. A missing file represents deletion.
 pub fn readWorktree(io: std.Io, arena: std.mem.Allocator, repo_dir: []const u8, path: []const u8) ![]u8 {
-    const full = try std.fs.path.join(arena, &.{ repo_dir, path });
-    return std.Io.Dir.cwd().readFileAlloc(io, full, arena, .limited(max_input_bytes)) catch |err| switch (err) {
-        error.FileNotFound => try arena.alloc(u8, 0),
-        else => err,
+    if (!safeRepoPath(path)) return error.InvalidPath;
+    var current = try std.Io.Dir.cwd().openDir(io, repo_dir, .{});
+    defer current.close(io);
+    var components = std.mem.splitScalar(u8, path, '/');
+    var component = components.next() orelse return error.InvalidPath;
+    while (components.next()) |next| {
+        const child = current.openDir(io, component, .{ .follow_symlinks = false }) catch |err| switch (err) {
+            error.FileNotFound => return arena.alloc(u8, 0),
+            error.NotDir, error.AccessDenied, error.SymLinkLoop => return error.UnsupportedFileMode,
+            else => return err,
+        };
+        current.close(io);
+        current = child;
+        component = next;
+    }
+    const stat = current.statFile(io, component, .{ .follow_symlinks = false }) catch |err| switch (err) {
+        error.FileNotFound => return arena.alloc(u8, 0),
+        else => return err,
     };
+    if (stat.kind != .file) return error.UnsupportedFileMode;
+    var file = try current.openFile(io, component, .{ .allow_directory = false, .follow_symlinks = false });
+    defer file.close(io);
+    var reader = file.reader(io, &.{});
+    return reader.interface.allocRemaining(arena, .limited(max_input_bytes));
+}
+
+fn safeRepoPath(path: []const u8) bool {
+    if (path.len == 0 or std.fs.path.isAbsolute(path) or std.mem.indexOfScalar(u8, path, 0) != null) return false;
+    const separators = if (builtin.os.tag == .windows) "/\\" else "/";
+    var components = std.mem.splitAny(u8, path, separators);
+    while (components.next()) |component| {
+        if (component.len == 0 or std.mem.eql(u8, component, ".") or std.mem.eql(u8, component, "..")) return false;
+    }
+    return true;
 }
 
 /// Repository-relative paths changed between before_ref and after_ref. An empty after_ref selects the working tree.
@@ -267,6 +296,27 @@ test "readWorktree reads the file and treats absence as an empty side" {
     try testing.expectEqualStrings("v2\n", try readWorktree(testing.io, arena, dir, "Foo.prefab"));
     // Deleted in the working tree = empty side (not an error)
     try testing.expectEqual(@as(usize, 0), (try readWorktree(testing.io, arena, dir, "Gone.prefab")).len);
+}
+
+test "readWorktree refuses symlinks in final and parent components" {
+    if (builtin.os.tag == .windows) return error.SkipZigTest;
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(testing.io, "Repo/Assets");
+    try tmp.dir.createDir(testing.io, "outside", .default_dir);
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "private.prefab", .data = "outside" });
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "outside/Parent.prefab", .data = "outside" });
+    try tmp.dir.symLink(testing.io, "../../private.prefab", "Repo/Assets/Linked.prefab", .{});
+    try tmp.dir.symLink(testing.io, "../outside", "Repo/Alias", .{ .is_directory = true });
+    const repo = try tmp.dir.realPathFileAlloc(testing.io, "Repo", arena);
+
+    // Asset symlinks must not turn a repository diff into a read of an outside file.
+    try testing.expectError(error.UnsupportedFileMode, readWorktree(testing.io, arena, repo, "Assets/Linked.prefab"));
+    try testing.expectError(error.UnsupportedFileMode, readWorktree(testing.io, arena, repo, "Alias/Parent.prefab"));
 }
 
 test "showAtRef returns file contents at a commit" {

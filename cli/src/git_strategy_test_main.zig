@@ -67,6 +67,7 @@ pub fn main(init: std.process.Init) !u8 {
     }
     try automatic(ctx);
     try nonInteractive(ctx);
+    try terminalSafeConflictMessages(ctx);
     try guards(ctx);
     try directoryConflict(ctx);
     try mergeOptions(ctx);
@@ -98,6 +99,26 @@ const Context = struct {
         return git;
     }
 };
+
+fn terminalSafeConflictMessages(ctx: Context) !void {
+    const path = "Assets/bad\n\x1b[2J.prefab";
+    const git = try ctx.repo("terminal-control-path", &.{.{ .path = path, .base = "base\n", .ours = "ours\n", .theirs = "theirs\n" }});
+    const ours_oid = merge_git.trim(try git.output(&.{ "rev-parse", "HEAD" }));
+    const theirs_oid = merge_git.trim(try git.output(&.{ "rev-parse", "remote" }));
+    const base_oid = merge_git.trim(try git.output(&.{ "merge-base", ours_oid, theirs_oid }));
+    const result = try std.process.run(ctx.git.arena, ctx.git.io, .{
+        .argv = &.{ ctx.prefablens, "merge-strategy", base_oid, "--", ours_oid, theirs_oid },
+        .cwd = .{ .path = git.cwd },
+        .environ_map = git.env,
+        .stdout_limit = .limited(1024 * 1024),
+        .stderr_limit = .limited(1024 * 1024),
+        .timeout = .{ .duration = .{ .clock = .awake, .raw = .fromSeconds(20) } },
+    });
+
+    try t.expectCode(result, 1, "conflicted filename containing terminal controls");
+    try t.require(std.mem.indexOfScalar(u8, result.stderr, 0x1b) == null, "merge conflict diagnostics emitted a raw ESC from the Git path");
+    try t.require(std.mem.indexOf(u8, result.stderr, "Assets/bad\\n\\u001b[2J.prefab") != null, "merge conflict diagnostics did not show an escaped Git path");
+}
 
 fn readCollectionFile(ctx: Context, root: []const u8, relative: []const u8) ![]const u8 {
     const path = try std.fs.path.join(ctx.git.arena, &.{ root, relative });

@@ -82,7 +82,11 @@ namespace PrefabLens
                 if (overrideError == null)
                     return new Location(manual, null);
             }
-            return new Location(ValidateCli(defaultPath, Version) == null ? defaultPath : null, overrideError);
+            var defaultPathIsSafe = !HasProjectPathReparsePoint(defaultPath);
+            return new Location(
+                defaultPathIsSafe && ValidateCli(defaultPath, Version) == null ? defaultPath : null,
+                overrideError
+            );
         }
 
         /// The window and Preferences page share this EditorPrefs-backed CLI path override.

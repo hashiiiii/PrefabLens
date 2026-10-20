@@ -142,7 +142,7 @@ pub fn build(arena: std.mem.Allocator, fd: diffmod.FlatDiff) !model.DiffResult {
     // Materialize recursively, pruning unchanged subtrees with no changed descendants.
     var roots: std.ArrayList(ObjectDiff) = .empty;
     for (roots_ids.items) |rid| {
-        if (try materialize(arena, &obj_by_id, &children_of, rid)) |node| {
+        if (try materialize(arena, &obj_by_id, &children_of, rid, 0)) |node| {
             try roots.append(arena, node);
         }
     }
@@ -181,12 +181,14 @@ fn materialize(
     obj_by_id: *std.AutoHashMap(i64, ObjectDiff),
     children_of: *std.AutoHashMap(i64, std.ArrayList(i64)),
     go_id: i64,
-) std.mem.Allocator.Error!?ObjectDiff {
+    depth: usize,
+) (std.mem.Allocator.Error || error{HierarchyTooDeep})!?ObjectDiff {
+    if (depth > model.max_hierarchy_depth) return error.HierarchyTooDeep;
     var self = obj_by_id.get(go_id).?;
     var kept_children: std.ArrayList(ObjectDiff) = .empty;
     if (children_of.get(go_id)) |kids| {
         for (kids.items) |cid| {
-            if (try materialize(arena, obj_by_id, children_of, cid)) |child| {
+            if (try materialize(arena, obj_by_id, children_of, cid, depth + 1)) |child| {
                 try kept_children.append(arena, child);
             }
         }

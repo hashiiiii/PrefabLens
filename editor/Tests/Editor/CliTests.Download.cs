@@ -109,6 +109,123 @@ namespace PrefabLens.Tests
             }
         }
 
+        [Test]
+        public void DeleteStaleVersionsDoesNotFollowALinkedCacheParent()
+        {
+            // Unity projects can retain links inside ignored cache paths; cleanup must not delete the link target's unrelated versions.
+            var root = Path.Combine(Directory.GetCurrentDirectory(), Path.GetRandomFileName());
+            var targetCache = Path.Combine(root, "target", "PrefabLens");
+            var projectRoot = Path.Combine(root, "project");
+            var linkedParent = Path.Combine(projectRoot, "Library");
+            var linkedCache = Path.Combine(linkedParent, "PrefabLens");
+            var stale = Path.Combine(targetCache, "other-version");
+            var pinned = Path.Combine(targetCache, "0.11.0");
+            Directory.CreateDirectory(stale);
+            Directory.CreateDirectory(pinned);
+            Directory.CreateDirectory(projectRoot);
+            try
+            {
+                CreateDirectoryLink(Path.Combine(root, "target"), linkedParent);
+
+                Cli.DeleteStaleVersions(linkedCache, keep: "0.11.0");
+
+                Assert.IsTrue(Directory.Exists(stale), "cleanup deleted a version outside the project cache");
+                Assert.IsTrue(Directory.Exists(pinned));
+            }
+            finally
+            {
+                if (Directory.Exists(linkedParent))
+                    Directory.Delete(linkedParent);
+                if (Directory.Exists(root))
+                    Directory.Delete(root, recursive: true);
+            }
+        }
+
+        [Test]
+        public void LocateRejectsDefaultCliThroughALinkedCacheAncestor()
+        {
+            // The default cache must not execute a binary reached through project-controlled Library links.
+            var root = Path.Combine(Directory.GetCurrentDirectory(), Path.GetRandomFileName());
+            var target = Path.Combine(root, "target");
+            var linkedParent = Path.Combine(root, "project", "Library");
+            var targetCliDirectory = Path.Combine(target, "PrefabLens", Cli.Version);
+            Directory.CreateDirectory(targetCliDirectory);
+            Directory.CreateDirectory(Path.GetDirectoryName(linkedParent));
+            CopyNativeCli(NativeCliDirectory(), targetCliDirectory);
+            try
+            {
+                CreateDirectoryLink(target, linkedParent);
+
+                var path = Path.Combine(linkedParent, "PrefabLens", Cli.Version, Cli.BinaryName);
+                var location = Cli.Locate("", path);
+
+                Assert.IsNull(location.Path);
+            }
+            finally
+            {
+                if (Directory.Exists(linkedParent))
+                    Directory.Delete(linkedParent);
+                if (Directory.Exists(root))
+                    Directory.Delete(root, recursive: true);
+            }
+        }
+
+        [Test]
+        public void InstallArchiveRejectsALinkedCacheAncestor()
+        {
+            // Installation must stop before replacing a cache directory reached through a project-controlled link.
+            var root = Path.Combine(Directory.GetCurrentDirectory(), Path.GetRandomFileName());
+            var target = Path.Combine(root, "target");
+            var linkedParent = Path.Combine(root, "project", "Library");
+            var finalDirectory = Path.Combine(linkedParent, "PrefabLens", Cli.Version);
+            var archive = CreateNativeCliArchive(NativeCliDirectory());
+            Directory.CreateDirectory(target);
+            Directory.CreateDirectory(Path.GetDirectoryName(linkedParent));
+            try
+            {
+                CreateDirectoryLink(target, linkedParent);
+
+                Assert.Throws<InvalidOperationException>(() =>
+                    Cli.InstallArchive(archive, finalDirectory, Cli.Version)
+                );
+                Assert.IsFalse(Directory.Exists(Path.Combine(target, "PrefabLens")));
+            }
+            finally
+            {
+                if (Directory.Exists(linkedParent))
+                    Directory.Delete(linkedParent);
+                if (Directory.Exists(root))
+                    Directory.Delete(root, recursive: true);
+            }
+        }
+
+        static void CreateDirectoryLink(string target, string link)
+        {
+            var isWindows = RuntimeInformation.IsOSPlatform(OSPlatform.Windows);
+            var process = new ProcessStartInfo(isWindows ? "cmd.exe" : "ln")
+            {
+                UseShellExecute = false,
+                CreateNoWindow = true,
+            };
+            if (isWindows)
+            {
+                process.ArgumentList.Add("/c");
+                process.ArgumentList.Add("mklink");
+                process.ArgumentList.Add("/J");
+                process.ArgumentList.Add(link);
+                process.ArgumentList.Add(target);
+            }
+            else
+            {
+                process.ArgumentList.Add("-s");
+                process.ArgumentList.Add(target);
+                process.ArgumentList.Add(link);
+            }
+            using var child = Process.Start(process);
+            Assert.IsTrue(child.WaitForExit(10_000), "directory-link command did not exit");
+            Assert.AreEqual(0, child.ExitCode, "directory-link command failed");
+        }
+
         /// A loopback HTTP server lets cancellation tests exercise real HttpClient traffic.
         /// It advertises the full body length, sends only sendOnly bytes, and waits for release to reproduce a stalled connection.
         static TcpListener ServeOnce(byte[] body, int sendOnly, ManualResetEventSlim release, out int port)

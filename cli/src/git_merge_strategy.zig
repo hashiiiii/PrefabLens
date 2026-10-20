@@ -102,7 +102,7 @@ pub fn run(io: std.Io, arena: std.mem.Allocator, args: []const []const u8, env: 
     const merge_args = try std.mem.concat(arena, []const u8, &.{ &.{ "merge-tree", "--write-tree", "-z", "--messages" }, options.items, &.{ sources.ours, sources.theirs } });
     const output = try git.run(merge_args);
     if (merge_git.exitCode(output) > 1) {
-        try stderr.writeAll(output.stderr);
+        try merge_io.writeSafeTerminalText(stderr, output.stderr);
         return 2;
     }
     var result = try parse(arena, output.stdout);
@@ -153,7 +153,7 @@ fn resolveSession(git: Git, candidate: *candidate_module.Candidate, env: *std.pr
             }
         }
     }
-    for (candidate.result.conflicts) |conflict| try stderr.writeAll(conflict.message);
+    for (candidate.result.conflicts) |conflict| try merge_io.writeSafeTerminalText(stderr, conflict.message);
     const remaining = try git.output(&.{ "ls-files", "--unmerged", "-z" });
     return if (candidate.result.conflicts.len != 0 or remaining.len != 0) 1 else 0;
 }

@@ -76,6 +76,8 @@ namespace PrefabLens
                 RuntimeInformation.ProcessArchitecture == Architecture.Arm64
             );
             var dir = Path.GetDirectoryName(DefaultPath);
+            if (HasProjectPathReparsePoint(dir))
+                throw new InvalidOperationException("The CLI cache path contains a symbolic link or junction.");
 
             using var http = new HttpClient();
             // With a streamed response, HttpClient.Timeout covers only headers. The shared deadline must also cover body reads.
@@ -188,6 +190,7 @@ namespace PrefabLens
         public static string InstallArchive(byte[] zipBytes, string finalDirectory, string requiredVersion)
         {
             var fullFinalDirectory = Path.GetFullPath(finalDirectory);
+            EnsureProjectPathHasNoReparsePoints(fullFinalDirectory);
             var root = Path.GetDirectoryName(fullFinalDirectory);
             Directory.CreateDirectory(root);
             var name = Path.GetFileName(fullFinalDirectory);
@@ -204,6 +207,7 @@ namespace PrefabLens
                 if (error != null)
                     throw new InvalidOperationException(error);
 
+                EnsureProjectPathHasNoReparsePoints(fullFinalDirectory);
                 ReplaceDirectory(stagingDirectory, fullFinalDirectory, backupDirectory);
                 return Path.Combine(finalDirectory, BinaryName);
             }
@@ -215,6 +219,9 @@ namespace PrefabLens
 
         static void ReplaceDirectory(string stagingDirectory, string finalDirectory, string backupDirectory)
         {
+            EnsureProjectPathHasNoReparsePoints(stagingDirectory);
+            EnsureProjectPathHasNoReparsePoints(finalDirectory);
+            EnsureProjectPathHasNoReparsePoints(backupDirectory);
             var hadPrevious = Directory.Exists(finalDirectory);
             if (hadPrevious)
                 Directory.Move(finalDirectory, backupDirectory);
@@ -233,6 +240,8 @@ namespace PrefabLens
 
         static void DeleteDirectoryBestEffort(string path)
         {
+            if (HasProjectPathReparsePoint(path))
+                return;
             if (!Directory.Exists(path))
                 return;
             try
@@ -261,6 +270,8 @@ namespace PrefabLens
         /// on Windows) must not fail the download that just succeeded.
         public static void DeleteStaleVersions(string root, string keep)
         {
+            if (HasProjectPathReparsePoint(root))
+                return;
             if (!Directory.Exists(root))
                 return;
             foreach (var dir in Directory.GetDirectories(root))
@@ -268,6 +279,57 @@ namespace PrefabLens
                 if (Path.GetFileName(dir) != keep)
                     DeleteDirectoryBestEffort(dir);
             }
+        }
+
+        /// OS aliases above the project root are common, but links below it can redirect cache I/O.
+        static bool HasProjectPathReparsePoint(string path)
+        {
+            var projectRoot = Path.GetFullPath(Directory.GetCurrentDirectory());
+            var fullPath = Path.GetFullPath(path);
+            var relativePath = Path.GetRelativePath(projectRoot, fullPath);
+            if (relativePath == "." || Path.IsPathRooted(relativePath))
+                return false;
+
+            var segments = relativePath.Split(
+                new[] { Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar },
+                StringSplitOptions.RemoveEmptyEntries
+            );
+            if (segments.Length == 0 || segments[0] == "..")
+                return false;
+
+            var current = projectRoot;
+            foreach (var segment in segments)
+            {
+                current = Path.Combine(current, segment);
+                try
+                {
+                    if ((File.GetAttributes(current) & FileAttributes.ReparsePoint) != 0)
+                        return true;
+                }
+                catch (FileNotFoundException)
+                {
+                    return false;
+                }
+                catch (DirectoryNotFoundException)
+                {
+                    return false;
+                }
+                catch (IOException)
+                {
+                    return true;
+                }
+                catch (UnauthorizedAccessException)
+                {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        static void EnsureProjectPathHasNoReparsePoints(string path)
+        {
+            if (HasProjectPathReparsePoint(path))
+                throw new InvalidOperationException("The CLI cache path contains a symbolic link or junction.");
         }
     }
 }

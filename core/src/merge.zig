@@ -296,10 +296,7 @@ pub fn collectionConflict(plan: *const MergePlan, operation_id: OperationId) ?Co
 fn offersBothOrders(plan: @import("merge_value.zig").Plan, conflict: @import("merge_value.zig").Conflict) bool {
     if (conflict.reason != .insertion_order) return false;
     if (plan.input.schema) |schema| return schema.kind != .dictionary;
-    return switch (@import("merge_dictionary.zig").detect(conflict.nodes.base, conflict.nodes.ours, conflict.nodes.theirs)) {
-        .shape => false,
-        else => true,
-    };
+    return !conflict.dictionary;
 }
 pub fn combinedCollectionValue(arena: std.mem.Allocator, plan: *const MergePlan, operation_id: OperationId, order: @import("merge_value.zig").Order) Error![]const u8 {
     const operation = merge_model.operationByIdConst(plan, operation_id) orelse return error.InvalidResolution;

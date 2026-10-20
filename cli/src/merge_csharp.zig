@@ -27,6 +27,7 @@ const Token = struct {
     }
 };
 const LexError = std.mem.Allocator.Error || error{UnsupportedSource};
+const max_tokens_per_source = 1_000_000;
 
 fn tokenize(arena: std.mem.Allocator, source: []const u8) LexError![]const Token {
     var result: std.ArrayList(Token) = .empty;
@@ -68,6 +69,7 @@ fn tokenize(arena: std.mem.Allocator, source: []const u8) LexError![]const Token
                 } else i += 1;
             }
             if (!closed) return error.UnsupportedSource;
+            if (result.items.len == max_tokens_per_source) return error.UnsupportedSource;
             try result.append(arena, .{ .text = source[start..i], .kind = .literal });
             continue;
         }
@@ -76,17 +78,22 @@ fn tokenize(arena: std.mem.Allocator, source: []const u8) LexError![]const Token
         if (std.ascii.isAlphabetic(source[i]) or source[i] == '_') {
             i += 1;
             while (i < source.len and (std.ascii.isAlphanumeric(source[i]) or source[i] == '_')) : (i += 1) {}
+            if (result.items.len == max_tokens_per_source) return error.UnsupportedSource;
             try result.append(arena, .{ .text = source[start..i], .kind = .identifier });
         } else {
             i += 1;
+            if (result.items.len == max_tokens_per_source) return error.UnsupportedSource;
             try result.append(arena, .{ .text = source[start..i], .kind = .punctuation });
         }
     }
     return result.items;
 }
 
-pub fn inspectNames(arena: std.mem.Allocator, source: []const u8, names: *Names) std.mem.Allocator.Error!void {
-    const tokens = tokenize(arena, source) catch |err| switch (err) {
+pub fn inspectNames(source: []const u8, names: *Names) std.mem.Allocator.Error!void {
+    // Token slices only index this call's source; keeping them in the revision arena would multiply memory across files.
+    var scratch = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer scratch.deinit();
+    const tokens = tokenize(scratch.allocator(), source) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         error.UnsupportedSource => {
             names.* = .unknown;
@@ -118,7 +125,9 @@ pub fn inspectNames(arena: std.mem.Allocator, source: []const u8, names: *Names)
 // Used to reject script identities that appear in multiple source files.
 // Counting simple names across namespaces is deliberately conservative.
 pub fn declaredNames(arena: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error![]const []const u8 {
-    const tokens = tokenize(arena, source) catch |err| switch (err) {
+    var scratch = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer scratch.deinit();
+    const tokens = tokenize(scratch.allocator(), source) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         error.UnsupportedSource => return &.{},
     };
@@ -134,7 +143,9 @@ pub fn declaredNames(arena: std.mem.Allocator, source: []const u8) std.mem.Alloc
 const Imports = struct { unity: bool = false };
 
 pub fn read(arena: std.mem.Allocator, source: []const u8, class_name: []const u8, names: Names) std.mem.Allocator.Error![]const Field {
-    const tokens = tokenize(arena, source) catch |err| switch (err) {
+    var scratch = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer scratch.deinit();
+    const tokens = tokenize(scratch.allocator(), source) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         error.UnsupportedSource => return &.{},
     };
@@ -202,6 +213,25 @@ pub fn read(arena: std.mem.Allocator, source: []const u8, class_name: []const u8
         }
     }
     return fields.items;
+}
+
+test "csharp: token budget bounds valid punctuation-heavy source" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const prefix = "using UnityEngine; class Payload : MonoBehaviour { void M(){";
+    const suffix = "} }";
+    const source = try arena.alloc(u8, prefix.len + max_tokens_per_source + suffix.len);
+    @memcpy(source[0..prefix.len], prefix);
+    @memset(source[prefix.len .. source.len - suffix.len], ';');
+    @memcpy(source[source.len - suffix.len ..], suffix);
+
+    // A million valid empty statements are small on disk but large as stored token slices.
+    var names: Names = .{};
+    try inspectNames(source, &names);
+    try testing.expectEqual(Names.unknown, names);
+    try testing.expectEqual(@as(usize, 0), (try declaredNames(arena, source)).len);
+    try testing.expectEqual(@as(usize, 0), (try read(arena, source, "Payload", names)).len);
 }
 
 fn match(tokens: []const Token, start: usize, open: []const u8, close: []const u8) ?usize {
@@ -409,9 +439,9 @@ test "C# project evidence detects shadowed framework types and aliases" {
     var memory = std.heap.ArenaAllocator.init(testing.allocator);
     defer memory.deinit();
     var evidence: Names = .{};
-    try inspectNames(memory.allocator(), "namespace Game { public class SerializeFieldAttribute {} }", &evidence);
+    try inspectNames("namespace Game { public class SerializeFieldAttribute {} }", &evidence);
     try testing.expect(!evidence.serialize_field);
     try testing.expect(evidence.mono_behaviour);
-    try inspectNames(memory.allocator(), "global using MonoBehaviour = Other.Base;", &evidence);
+    try inspectNames("global using MonoBehaviour = Other.Base;", &evidence);
     try testing.expect(!evidence.mono_behaviour);
 }

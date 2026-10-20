@@ -60,20 +60,60 @@ fn readFile(io: std.Io, arena: std.mem.Allocator, path: []const u8) ![]u8 {
     return std.Io.Dir.cwd().readFileAlloc(io, path, arena, .limited(input.max_input_bytes));
 }
 
-/// Writes the report under `dir` with a collision-resistant name and
-/// returns the full path.
-pub fn writeReportFile(io: std.Io, arena: std.mem.Allocator, dir: []const u8, name_stem: []const u8, html: []const u8) ![]const u8 {
-    // Zig 0.16 clocks go through Io: no std.time.milliTimestamp anymore.
-    const millis: u64 = @intCast(std.Io.Clock.now(.real, io).toMilliseconds());
-    const path = try std.fmt.allocPrint(arena, "{s}/prefablens-{s}-{d}.html", .{ dir, name_stem, millis });
-    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = html });
+/// Writes a private report under `dir` with an unpredictable leaf name.
+pub fn writeReportFile(io: std.Io, arena: std.mem.Allocator, dir: []const u8, html: []const u8) ![]const u8 {
+    var nonce: [16]u8 = undefined;
+    try io.randomSecure(&nonce);
+    return writeReportFileWithNonce(io, arena, dir, &std.fmt.bytesToHex(nonce, .lower), html);
+}
+
+fn writeReportFileWithNonce(io: std.Io, arena: std.mem.Allocator, dir_path: []const u8, nonce: []const u8, html: []const u8) ![]const u8 {
+    const filename = try std.fmt.allocPrint(arena, "prefablens-{s}.html", .{nonce});
+    const path = try std.fs.path.join(arena, &.{ dir_path, filename });
+    var dir = try std.Io.Dir.cwd().openDir(io, dir_path, .{});
+    defer dir.close(io);
+    const permissions: std.Io.Dir.Permissions = if (builtin.os.tag == .windows)
+        .default_file
+    else
+        .fromMode(0o600);
+    var file = try dir.createFile(io, filename, .{ .exclusive = true, .permissions = permissions });
+    errdefer {
+        file.close(io);
+        dir.deleteFile(io, filename) catch {};
+    }
+    try file.writeStreamingAll(io, html);
+    file.close(io);
     return path;
+}
+
+test "report creation refuses a pre-existing symlink without changing its target" {
+    const testing = std.testing;
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const dir_path = try tmp.dir.realPathFileAlloc(testing.io, ".", arena);
+    const report_name = "prefablens-0123456789abcdef0123456789abcdef.html";
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "sentinel", .data = "keep" });
+    if (builtin.os.tag != .windows) {
+        try tmp.dir.symLink(testing.io, "sentinel", report_name, .{});
+        try testing.expectError(error.PathAlreadyExists, writeReportFileWithNonce(testing.io, arena, dir_path, "0123456789abcdef0123456789abcdef", "overwrite"));
+        const sentinel = try tmp.dir.readFileAlloc(testing.io, "sentinel", arena, .limited(16));
+        try testing.expectEqualStrings("keep", sentinel);
+    } else {
+        // CREATE_NEW must also refuse an existing regular file on Windows, where symlink creation may require a privilege.
+        try tmp.dir.writeFile(testing.io, .{ .sub_path = report_name, .data = "keep" });
+        try testing.expectError(error.PathAlreadyExists, writeReportFileWithNonce(testing.io, arena, dir_path, "0123456789abcdef0123456789abcdef", "overwrite"));
+        const existing = try tmp.dir.readFileAlloc(testing.io, report_name, arena, .limited(16));
+        try testing.expectEqualStrings("keep", existing);
+    }
 }
 
 fn openInBrowser(io: std.Io, arena: std.mem.Allocator, path: []const u8) !void {
     const argv: []const []const u8 = switch (builtin.os.tag) {
         .macos => &.{ "open", path },
-        .windows => &.{ "cmd", "/c", "start", "", path },
+        .windows => &.{ "rundll32.exe", "url.dll,FileProtocolHandler", path },
         else => &.{ "xdg-open", path },
     };
     const res = try std.process.run(arena, io, .{ .argv = argv });
@@ -131,10 +171,19 @@ fn envDir(env: *const std.process.Environ.Map, key: []const u8) ?[]const u8 {
 /// null when it fails (the caller exits 1).
 fn gitShowOrReport(io: std.Io, arena: std.mem.Allocator, repo_dir: []const u8, ref: []const u8, path: []const u8, stderr: *std.Io.Writer) !?[]u8 {
     return input.showAtRef(io, arena, repo_dir, ref, path, input.default_git_timeout) catch |err| {
-        if (err == error.GitTimeout)
-            try stderr.print("error: git timed out for '{s}:{s}'\n", .{ ref, path })
-        else
-            try stderr.print("error: git show failed for '{s}:{s}'\n", .{ ref, path });
+        if (err == error.GitTimeout) {
+            try stderr.writeAll("error: git timed out for '");
+            try render_tree.writeTerminalText(stderr, ref);
+            try stderr.writeAll(":");
+            try render_tree.writeTerminalText(stderr, path);
+            try stderr.writeAll("'\n");
+        } else {
+            try stderr.writeAll("error: git show failed for '");
+            try render_tree.writeTerminalText(stderr, ref);
+            try stderr.writeAll(":");
+            try render_tree.writeTerminalText(stderr, path);
+            try stderr.writeAll("'\n");
+        }
         return null;
     };
 }
@@ -154,11 +203,15 @@ fn collectFileDiffs(
     stderr: *std.Io.Writer,
 ) !Collected {
     const before = readFile(io, arena, f.before) catch {
-        try stderr.print("error: cannot read file '{s}'\n", .{f.before});
+        try stderr.writeAll("error: cannot read file '");
+        try render_tree.writeTerminalText(stderr, f.before);
+        try stderr.writeAll("'\n");
         return .{ .exit = 1 };
     };
     const after = readFile(io, arena, f.after) catch {
-        try stderr.print("error: cannot read file '{s}'\n", .{f.after});
+        try stderr.writeAll("error: cannot read file '");
+        try render_tree.writeTerminalText(stderr, f.after);
+        try stderr.writeAll("'\n");
         return .{ .exit = 1 };
     };
     const res = diffOne(io, arena, before, after, resolver, assets, project_root) catch |err| return .{ .exit = try diffError(stderr, err) };
@@ -189,10 +242,13 @@ fn collectGitDiffs(
         try path_list.append(arena, p);
     } else {
         const all = input.changedPaths(io, arena, repo_dir, g.before_ref, g.after_ref, input.default_git_timeout) catch |err| {
-            if (err == error.GitTimeout)
-                try stderr.writeAll("error: git timed out listing changed files\n")
-            else
-                try stderr.print("error: git diff failed for '{s}'\n", .{g.before_ref});
+            if (err == error.GitTimeout) {
+                try stderr.writeAll("error: git timed out listing changed files\n");
+            } else {
+                try stderr.writeAll("error: git diff failed for '");
+                try render_tree.writeTerminalText(stderr, g.before_ref);
+                try stderr.writeAll("'\n");
+            }
             return .{ .exit = 1 };
         };
         for (all) |p| if (unity_path.isUnityPath(p)) try path_list.append(arena, p);
@@ -204,7 +260,9 @@ fn collectGitDiffs(
             // One ref = comparison against the working tree (a
             // missing file is deletion = empty side).
             input.readWorktree(io, arena, repo_dir, p) catch {
-                try stderr.print("error: cannot read file '{s}'\n", .{p});
+                try stderr.writeAll("error: cannot read file '");
+                try render_tree.writeTerminalText(stderr, p);
+                try stderr.writeAll("'\n");
                 return .{ .exit = 1 };
             }
         else
@@ -255,7 +313,8 @@ fn emitTree(arena: std.mem.Allocator, stdout: *std.Io.Writer, diffs: []const Nam
         if (d.path) |p| {
             if (i != 0) try stdout.writeByte('\n');
             if (use_color) try stdout.writeAll(render_tree.Color.bold);
-            try stdout.print("{s}\n", .{p});
+            try render_tree.writeTerminalText(stdout, p);
+            try stdout.writeByte('\n');
             if (use_color) try stdout.writeAll(render_tree.Color.reset);
         }
         try render_tree.render(arena, stdout, d.res, resolver, use_color);
@@ -286,20 +345,20 @@ fn emitHtml(
         envDir(env, "TMPDIR") orelse envDir(env, "TEMP") orelse "/tmp"
     else
         "/tmp";
-    // Single-file reports carry the file stem; bulk mode is just "report".
-    const stem = switch (opt.target) {
-        .files => |f| std.fs.path.stem(f.after),
-        .git => |g| if (g.path) |p| std.fs.path.stem(p) else "report",
-    };
-    const report = writeReportFile(io, arena, tmp_dir, stem, aw.toArrayList().items) catch {
-        try stderr.print("error: cannot write report to '{s}'\n", .{tmp_dir});
+    const report = writeReportFile(io, arena, tmp_dir, aw.toArrayList().items) catch {
+        try stderr.writeAll("error: cannot write report to '");
+        try render_tree.writeTerminalText(stderr, tmp_dir);
+        try stderr.writeAll("'\n");
         return 1;
     };
-    try stdout.print("{s}\n", .{report});
+    try render_tree.writeTerminalText(stdout, report);
+    try stdout.writeByte('\n');
     openInBrowser(io, arena, report) catch {
         // The path is already printed; failing to launch a
         // browser must not fail the diff.
-        try stderr.print("warning: could not open a browser for '{s}'\n", .{report});
+        try stderr.writeAll("warning: could not open a browser for '");
+        try render_tree.writeTerminalText(stderr, report);
+        try stderr.writeAll("'\n");
     };
     return 0;
 }
@@ -335,7 +394,9 @@ pub fn run(io: std.Io, arena: std.mem.Allocator, args: []const []const u8, stdou
     var idx: core.json.Resolver = undefined;
     if (opt.project_root) |proj| {
         idx = resolve.buildIndex(io, arena, proj) catch {
-            try stderr.print("error: cannot read project directory '{s}'\n", .{proj});
+            try stderr.writeAll("error: cannot read project directory '");
+            try render_tree.writeTerminalText(stderr, proj);
+            try stderr.writeAll("'\n");
             return 1;
         };
         resolver_ptr = &idx;
@@ -411,6 +472,10 @@ fn wantedGuids(arena: std.mem.Allocator, diffs: []const NamedDiff) ![]const []co
 fn diffError(stderr: *std.Io.Writer, err: anyerror) !u8 {
     if (err == error.NestingTooDeep) {
         try stderr.writeAll("error: input nested too deeply\n");
+        return 1;
+    }
+    if (err == error.HierarchyTooDeep) {
+        try stderr.writeAll("error: object hierarchy nested too deeply\n");
         return 1;
     }
     return err;

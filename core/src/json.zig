@@ -189,23 +189,64 @@ fn writeI64String(w: *std.Io.Writer, v: i64) !void {
 
 pub fn writeJsonString(w: *std.Io.Writer, s: []const u8) !void {
     try w.writeByte('"');
-    for (s) |c| {
-        switch (c) {
-            '"' => try w.writeAll("\\\""),
-            '\\' => try w.writeAll("\\\\"),
-            '\n' => try w.writeAll("\\n"),
-            '\r' => try w.writeAll("\\r"),
-            '\t' => try w.writeAll("\\t"),
-            else => {
-                if (c < 0x20) {
-                    try w.print("\\u{x:0>4}", .{c});
-                } else {
-                    try w.writeByte(c);
-                }
-            },
+    var i: usize = 0;
+    while (i < s.len) {
+        const c = s[i];
+        if (c < 0x80) {
+            switch (c) {
+                '"' => try w.writeAll("\\\""),
+                '\\' => try w.writeAll("\\\\"),
+                '\n' => try w.writeAll("\\n"),
+                '\r' => try w.writeAll("\\r"),
+                '\t' => try w.writeAll("\\t"),
+                else => if (c < 0x20 or c == 0x7f)
+                    try writeUnicodeEscape(w, c)
+                else
+                    try w.writeByte(c),
+            }
+            i += 1;
+            continue;
         }
+
+        const sequence_len = std.unicode.utf8ByteSequenceLength(c) catch {
+            // A raw invalid byte such as 0x9b could be a C1 terminal control outside UTF-8 mode.
+            try writeUnicodeEscape(w, c);
+            i += 1;
+            continue;
+        };
+        if (sequence_len > s.len - i) {
+            try writeUnicodeEscape(w, c);
+            i += 1;
+            continue;
+        }
+        const sequence = s[i..][0..sequence_len];
+        const codepoint = std.unicode.utf8Decode(sequence) catch {
+            try writeUnicodeEscape(w, c);
+            i += 1;
+            continue;
+        };
+        if (isTerminalControl(codepoint)) {
+            try writeUnicodeEscape(w, codepoint);
+        } else {
+            try w.writeAll(sequence);
+        }
+        i += sequence_len;
     }
     try w.writeByte('"');
+}
+
+fn isTerminalControl(codepoint: u21) bool {
+    return (codepoint >= 0x80 and codepoint <= 0x9f) or
+        codepoint == 0x061c or
+        (codepoint >= 0x200b and codepoint <= 0x200f) or
+        (codepoint >= 0x2028 and codepoint <= 0x202e) or
+        (codepoint >= 0x2060 and codepoint <= 0x2064) or
+        (codepoint >= 0x2066 and codepoint <= 0x206f) or
+        codepoint == 0xfeff;
+}
+
+fn writeUnicodeEscape(w: *std.Io.Writer, codepoint: u21) !void {
+    try w.print("\\u{x:0>4}", .{codepoint});
 }
 
 test "json: v2 root node shape matches golden" {
@@ -399,4 +440,24 @@ test "json: control characters are escaped" {
     // Named escapes (\n etc.) use them; other control characters use \u00XX.
     try writeJsonString(&aw.writer, "a\nb\x01c");
     try testing.expectEqualStrings("\"a\\nb\\u0001c\"", aw.written());
+}
+
+test "json: terminal control codepoints are escaped without corrupting UTF-8" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var aw: std.Io.Writer.Allocating = .init(arena);
+
+    try writeJsonString(&aw.writer, "Pwn\u{009b}31m\u{202e}東京");
+
+    // JSON output is often inspected in a terminal, so Unicode control codepoints must stay inert while ordinary UTF-8 remains readable.
+    try testing.expectEqualStrings("\"Pwn\\u009b31m\\u202e東京\"", aw.written());
+
+    aw = .init(arena);
+    try writeJsonString(&aw.writer, "\x9b31m");
+    try testing.expectEqualStrings("\"\\u009b31m\"", aw.written());
+
+    aw = .init(arena);
+    try writeJsonString(&aw.writer, "DEL\x7f");
+    try testing.expectEqualStrings("\"DEL\\u007f\"", aw.written());
 }

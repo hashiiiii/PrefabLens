@@ -3,6 +3,7 @@ import {
   type GithubFailure,
   type GithubGateway,
   isRateLimited,
+  MAX_RAW_BLOB_BYTES,
   type MakeGithubGateway,
   type RefPair,
 } from "../../application/gateway/github";
@@ -118,12 +119,53 @@ class GithubClient implements GithubGateway {
   }
 
   // The shared body of getFileAtRef and getBlobRaw. It uses the raw media type and maps 404 to null.
-  private async rawBytes(path: string): Promise<Result<Uint8Array | null, GithubFailure>> {
+  private async rawBytes(
+    path: string,
+    maxBytes: number | null = MAX_RAW_BLOB_BYTES,
+  ): Promise<Result<Uint8Array | null, GithubFailure>> {
     const res = await this.request(path, "application/vnd.github.raw+json");
     if (!res.ok) return res;
     if (res.value.status === 404) return ok(null);
     if (!res.value.ok) return FETCH_FAILED;
-    return readOr(async () => new Uint8Array(await res.value.arrayBuffer()));
+    if (maxBytes === null) return readOr(async () => new Uint8Array(await res.value.arrayBuffer()));
+
+    const contentLength = res.value.headers.get("content-length");
+    if (contentLength !== null) {
+      const advertisedBytes = Number(contentLength);
+      if (Number.isSafeInteger(advertisedBytes) && advertisedBytes > maxBytes) {
+        await res.value.body?.cancel().catch(() => {});
+        return err({ kind: "too-large", bytes: advertisedBytes, exact: true });
+      }
+    }
+
+    // A missing or inaccurate Content-Length must not let an untrusted response grow without bound.
+    const body = res.value.body;
+    if (!body) return ok(new Uint8Array(0));
+    try {
+      const reader = body.getReader();
+      const chunks: Uint8Array[] = [];
+      let totalBytes = 0;
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (totalBytes + value.byteLength > maxBytes) {
+          const observedBytes = totalBytes + value.byteLength;
+          await reader.cancel().catch(() => {});
+          return err({ kind: "too-large", bytes: observedBytes, exact: false });
+        }
+        chunks.push(value);
+        totalBytes += value.byteLength;
+      }
+      const bytes = new Uint8Array(totalBytes);
+      let offset = 0;
+      for (const chunk of chunks) {
+        bytes.set(chunk, offset);
+        offset += chunk.byteLength;
+      }
+      return ok(bytes);
+    } catch {
+      return FETCH_FAILED;
+    }
   }
 
   // before = merge-base (GitHub's PR diff), not the base branch tip
@@ -228,15 +270,21 @@ class GithubClient implements GithubGateway {
     repo: string,
     path: string,
     ref: string,
+    maxBytes?: number | null,
   ): Promise<Result<Uint8Array | null, GithubFailure>> {
     const encoded = path.split("/").map(encodeURIComponent).join("/");
-    return this.rawBytes(`/repos/${owner}/${repo}/contents/${encoded}?ref=${ref}`);
+    return this.rawBytes(`/repos/${owner}/${repo}/contents/${encoded}?ref=${ref}`, maxBytes);
   }
 
   // Content-addressed blob bytes. Latency stays flat where contents-by-path stalls.
   // null on 404 (sha can vanish after force push + gc).
-  async getBlobRaw(owner: string, repo: string, sha: string): Promise<Result<Uint8Array | null, GithubFailure>> {
-    return this.rawBytes(`/repos/${owner}/${repo}/git/blobs/${sha}`);
+  async getBlobRaw(
+    owner: string,
+    repo: string,
+    sha: string,
+    maxBytes?: number | null,
+  ): Promise<Result<Uint8Array | null, GithubFailure>> {
+    return this.rawBytes(`/repos/${owner}/${repo}/git/blobs/${sha}`, maxBytes);
   }
 
   private async tree(

@@ -23,7 +23,7 @@ pub const Assets = prefab.Assets;
 pub const displayPropertyPath = inspector.displayPath;
 pub const isHiddenPropertyPath = inspector.isHidden;
 pub const isUnityYaml = parser.isUnityYaml;
-pub const DiffError = parser.Error;
+pub const DiffError = parser.Error || error{HierarchyTooDeep};
 pub const JsonError = DiffError || std.Io.Writer.Error;
 const no_assets: Assets = .empty;
 

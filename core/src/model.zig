@@ -103,6 +103,10 @@ pub const ObjectKind = enum { game_object, prefab_instance };
 // reference each other.
 pub const max_prefab_nesting = 8;
 
+// Object-tree walks recurse through Unity's transform hierarchy, so bound real
+// document depth before stack use grows with repository-controlled input.
+pub const max_hierarchy_depth = 1024;
+
 // Per-(target, propertyPath) override diff for a PrefabInstance.
 pub const OverrideDiff = struct {
     group: []const u8, // "Transform" | "GameObject" | "Overrides"

@@ -11,11 +11,11 @@ import {
   type GithubFailure,
   type GithubGateway,
   isRateLimited,
+  MAX_RAW_BLOB_BYTES,
   type RefPair,
 } from "../gateway/github";
 
 const EMPTY = new Uint8Array(0);
-const TOO_LARGE_BYTES = 25 * 1024 * 1024; // Files over 25MB render only on click.
 const MAX_CONCURRENT_META_FETCHES = 8;
 const utf8 = new TextDecoder();
 
@@ -31,14 +31,15 @@ export function getBlob(
   path: string,
   sha: string,
   blobSha?: string,
+  maxBytes: number | null = MAX_RAW_BLOB_BYTES,
 ): Promise<Result<Uint8Array | null, GithubFailure>> {
   // blob sha never collides with `${sha}:${path}`
   return session.blobs.get(blobSha ?? `${sha}:${path}`, async () => {
-    if (!blobSha) return githubGateway.getFileAtRef(owner, repo, path, sha);
-    const raw = await githubGateway.getBlobRaw(owner, repo, blobSha);
+    if (!blobSha) return githubGateway.getFileAtRef(owner, repo, path, sha, maxBytes);
+    const raw = await githubGateway.getBlobRaw(owner, repo, blobSha, maxBytes);
     if (!raw.ok) return raw;
     if (raw.value) return ok(raw.value);
-    return githubGateway.getFileAtRef(owner, repo, path, sha);
+    return githubGateway.getFileAtRef(owner, repo, path, sha, maxBytes);
   });
 }
 
@@ -50,11 +51,12 @@ export async function getPair(
   owner: string,
   repo: string,
   path: string,
+  maxBytes: number | null = MAX_RAW_BLOB_BYTES,
 ): Promise<Result<[Uint8Array, Uint8Array], GithubFailure>> {
   const file = ctx.files.find((f) => f.path === path);
   const beforePath = file?.previousPath ?? path;
   const fetchSide = async (p: string, ref: string, blob?: string): Promise<Result<Uint8Array, GithubFailure>> => {
-    const bytes = await getBlob(session, githubGateway, owner, repo, p, ref, blob);
+    const bytes = await getBlob(session, githubGateway, owner, repo, p, ref, blob, maxBytes);
     if (!bytes.ok) return bytes;
     return ok(bytes.value ?? EMPTY);
   };
@@ -75,6 +77,29 @@ export async function getPair(
         fetchSide(beforePath, ctx.refs.baseSha, ctx.baseShas?.get(beforePath)),
         fetchSide(path, ctx.refs.headSha, file?.sha),
       ]);
+      const beforeTooLarge = !before.ok && before.error.kind === "too-large";
+      const afterTooLarge = !after.ok && after.error.kind === "too-large";
+      const beforeSize = before.ok
+        ? { bytes: before.value.byteLength, exact: true }
+        : before.error.kind === "too-large"
+          ? before.error
+          : null;
+      const afterSize = after.ok
+        ? { bytes: after.value.byteLength, exact: true }
+        : after.error.kind === "too-large"
+          ? after.error
+          : null;
+      if (beforeTooLarge || afterTooLarge) {
+        if (beforeSize && afterSize) {
+          return err({
+            kind: "too-large",
+            bytes: beforeSize.bytes + afterSize.bytes,
+            exact: beforeSize.exact && afterSize.exact,
+          });
+        }
+        const oversized = beforeTooLarge ? beforeSize : afterSize;
+        if (oversized) return err({ kind: "too-large", bytes: oversized.bytes, exact: false });
+      }
       if (!before.ok) return before;
       if (!after.ok) return after;
       return ok([before.value, after.value]);
@@ -207,11 +232,16 @@ async function computeDiff(
   const differPromise = getDiffer();
   differPromise.catch(() => {}); // Early returns below skip the await. The later await still surfaces the error.
   // A file missing from the listing (the files API caps at 3000) is treated as modified. A 404 side becomes EMPTY.
-  const pair = await getPair(session, githubGateway, ctx, owner, repo, path);
-  if (!pair.ok) return { ok: false, error: pair.error.kind };
+  const pair = await getPair(session, githubGateway, ctx, owner, repo, path, force ? null : MAX_RAW_BLOB_BYTES);
+  if (!pair.ok) {
+    if (pair.error.kind === "too-large") {
+      return { ok: false, error: "too-large", bytes: pair.error.bytes, exact: pair.error.exact };
+    }
+    return { ok: false, error: pair.error.kind };
+  }
   const [before, after] = pair.value;
-  if (!force && before.length + after.length > TOO_LARGE_BYTES) {
-    return { ok: false, error: "too-large", bytes: before.length + after.length };
+  if (!force && before.length + after.length > MAX_RAW_BLOB_BYTES) {
+    return { ok: false, error: "too-large", bytes: before.length + after.length, exact: true };
   }
   const differ = await differPromise;
   // Prefilter passed, but some .asset files are binary regardless of ForceText

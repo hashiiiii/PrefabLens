@@ -1,6 +1,7 @@
 name: PR issue gate
 
 on:
+  # The gate reads GitHub metadata and never checks out or executes pull request code.
   pull_request_target:
     types: [opened, reopened, ready_for_review, edited]
   # Manual entry point for E2E tests: OWNER PRs are exempt below, so a
@@ -31,11 +32,13 @@ jobs:
        github.event.pull_request.user.login != 'renovate[bot]' &&
        github.event.pull_request.user.login != 'unidog-bot[bot]')
     steps:
-      - uses: actions/create-github-app-token@v3
+      - uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
         id: app-token
         with:
           client-id: ${{ secrets.APP_CLIENT_ID }}
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          permission-issues: read
+          permission-pull-requests: write
       - name: Enforce issue-first flow
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}

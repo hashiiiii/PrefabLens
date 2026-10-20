@@ -35,7 +35,7 @@ export function isAuthError(error: BackgroundError): error is AuthError {
 export type SemanticDiffResponse =
   | { ok: true; json: DiffV2; pending?: boolean }
   | { ok: false; error: BackgroundError }
-  | { ok: false; error: "too-large"; bytes: number };
+  | { ok: false; error: "too-large"; bytes: number; exact: boolean };
 
 export type ResolutionStatus = "complete" | "rateLimited" | "failed";
 

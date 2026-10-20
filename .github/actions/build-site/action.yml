@@ -5,7 +5,7 @@ runs:
   using: composite
   steps:
     - name: Install tools
-      uses: jdx/mise-action@v5
+      uses: jdx/mise-action@fc42bcc7ddbf51124c30f95a877a0c5168a3bfde # v5
     - name: Restore Zig global cache
       uses: ./.github/actions/setup-zig-cache
     - name: Restore pnpm store cache

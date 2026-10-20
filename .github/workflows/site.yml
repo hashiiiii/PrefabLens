@@ -18,7 +18,9 @@ jobs:
       name: cloudflare-workers
       url: https://prefablens.hashiiiii.workers.dev
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
       - name: Build site inputs
         uses: ./.github/actions/build-site
       - name: Build site

@@ -1,9 +1,12 @@
 import type { Result } from "../../domain/result";
 
+export const MAX_RAW_BLOB_BYTES = 25 * 1024 * 1024;
+
 export type GithubFailure =
   | { kind: "auth-failed" }
   | { kind: "rate-limited"; retryAfterMs?: number }
-  | { kind: "fetch-failed" };
+  | { kind: "fetch-failed" }
+  | { kind: "too-large"; bytes: number; exact: boolean };
 
 export function isRateLimited(e: unknown): e is Extract<GithubFailure, { kind: "rate-limited" }> {
   return typeof e === "object" && e !== null && "kind" in e && e.kind === "rate-limited";
@@ -40,8 +43,14 @@ export type GithubGateway = {
     repo: string,
     path: string,
     ref: string,
+    maxBytes?: number | null,
   ): Promise<Result<Uint8Array | null, GithubFailure>>;
-  getBlobRaw(owner: string, repo: string, sha: string): Promise<Result<Uint8Array | null, GithubFailure>>;
+  getBlobRaw(
+    owner: string,
+    repo: string,
+    sha: string,
+    maxBytes?: number | null,
+  ): Promise<Result<Uint8Array | null, GithubFailure>>;
   listBlobShas(
     owner: string,
     repo: string,

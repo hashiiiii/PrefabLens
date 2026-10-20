@@ -99,7 +99,7 @@ export function createFileView(
         await render(root, json, { incomplete: true });
         await file.loadDiff();
       } else if (response.error === "too-large") {
-        await renderTooLarge(root, response.bytes);
+        await renderTooLarge(root, response.bytes, response.exact);
         force = true;
         await file.loadDiff();
       } else if (isAuthError(response.error)) {

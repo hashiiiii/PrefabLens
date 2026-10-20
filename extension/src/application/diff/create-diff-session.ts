@@ -63,9 +63,9 @@ export type DiffOutcome =
   | { ok: true; json: DiffV2 }
   | {
       ok: false;
-      error: GithubFailure["kind"] | "diff-failed" | "not-unity-yaml";
+      error: Exclude<GithubFailure["kind"], "too-large"> | "diff-failed" | "not-unity-yaml";
     }
-  | { ok: false; error: "too-large"; bytes: number };
+  | { ok: false; error: "too-large"; bytes: number; exact: boolean };
 
 export type DiffSession = {
   contexts: PromiseCache<Result<DiffContext, GithubFailure>>;

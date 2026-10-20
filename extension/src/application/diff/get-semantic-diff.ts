@@ -31,7 +31,19 @@ export async function* getSemanticDiff(
   const githubGateway = makeGithubGateway(API_BASE, accessToken, "user");
   const ctxResult = await getContext(session, githubGateway, req.owner, req.repo, req.target);
   if (!ctxResult.ok) {
-    yield { type: "response", response: { ok: false, error: ctxResult.error.kind } };
+    if (ctxResult.error.kind === "too-large") {
+      yield {
+        type: "response",
+        response: {
+          ok: false,
+          error: "too-large",
+          bytes: ctxResult.error.bytes,
+          exact: ctxResult.error.exact,
+        },
+      };
+    } else {
+      yield { type: "response", response: { ok: false, error: ctxResult.error.kind } };
+    }
     return;
   }
   const ctx = ctxResult.value;

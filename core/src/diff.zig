@@ -528,10 +528,12 @@ fn diffMap(
     a: []model.Entry,
     b: []model.Entry,
 ) std.mem.Allocator.Error!void {
+    const a_index = try indexMap(arena, a);
+    const b_index = try indexMap(arena, b);
     // Keys in a: modified/removed or recurse
     for (a) |ea| {
         const path = try joinKey(arena, prefix, ea.key);
-        if (model.findValue(b, ea.key)) |bv| {
+        if (b_index.get(ea.key)) |bv| {
             try diffNode(arena, out, path, ea.value, bv);
         } else {
             try flattenSubtree(arena, out, path, ea.value, .removed);
@@ -539,11 +541,21 @@ fn diffMap(
     }
     // Keys only in b: added
     for (b) |eb| {
-        if (model.findValue(a, eb.key) == null) {
+        if (!a_index.contains(eb.key)) {
             const path = try joinKey(arena, prefix, eb.key);
             try flattenSubtree(arena, out, path, eb.value, .added);
         }
     }
+}
+
+fn indexMap(arena: std.mem.Allocator, entries: []model.Entry) !std.StringHashMapUnmanaged(*Node) {
+    var index: std.StringHashMapUnmanaged(*Node) = .empty;
+    for (entries) |entry| {
+        const slot = try index.getOrPut(arena, entry.key);
+        // findValue uses the first occurrence, so duplicate malformed keys must keep that same winner.
+        if (!slot.found_existing) slot.value_ptr.* = entry.value;
+    }
+    return index;
 }
 
 fn diffSeq(
@@ -575,21 +587,23 @@ fn diffDictionary(
     a: *const Node,
     b: *const Node,
 ) std.mem.Allocator.Error!bool {
-    switch (dictionary.detect(a, b, a)) {
+    switch (try dictionary.detect(arena, a, b, a)) {
         .none, .malformed => return false,
         .shape => |shape| {
             const before = (try dictionary.entries(arena, a, shape)) orelse return false;
             const after = (try dictionary.entries(arena, b, shape)) orelse return false;
+            const before_index = (try dictionary.Index.fromEntries(arena, before)) orelse return false;
+            const after_index = (try dictionary.Index.fromEntries(arena, after)) orelse return false;
             for (before) |entry| {
                 const path = try dictionary.keyPath(arena, prefix, entry.key);
-                if (dictionary.find(after, entry.key)) |matched| {
+                if (after_index.get(entry.key)) |matched| {
                     try diffNode(arena, out, path, entry.value, matched.value);
                 } else {
                     try flattenSubtree(arena, out, path, entry.value, .removed);
                 }
             }
             for (after) |entry| {
-                if (dictionary.contains(before, entry.key)) continue;
+                if (before_index.contains(entry.key)) continue;
                 try flattenSubtree(arena, out, try dictionary.keyPath(arena, prefix, entry.key), entry.value, .added);
             }
             return true;
@@ -634,7 +648,7 @@ fn flattenSubtree(
     node: *const Node,
     status: Status,
 ) std.mem.Allocator.Error!void {
-    switch (dictionary.detect(node, node, node)) {
+    switch (try dictionary.detect(arena, node, node, node)) {
         .shape => |shape| {
             if ((try dictionary.entries(arena, node, shape))) |list| {
                 for (list) |entry| {

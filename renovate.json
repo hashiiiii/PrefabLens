@@ -58,12 +58,12 @@
       "allowedVersions": "<4"
     },
     {
-      "description": "Keep GitHub Actions on tag references (no SHA pinning) and update them together",
+      "description": "Pin GitHub Actions to commit SHAs and update them together",
       "matchManagers": [
         "github-actions"
       ],
       "groupName": "github-actions",
-      "pinDigests": false
+      "pinDigests": true
     },
     {
       "description": "The mise toolchain (zig/zls/node/dotnet/bump-my-version) affects the whole build, so require CI review instead of automerge",

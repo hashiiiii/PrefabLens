@@ -1,4 +1,5 @@
 const std = @import("std");
+const merge_io = @import("merge_io.zig");
 
 pub const Git = struct {
     io: std.Io,
@@ -20,7 +21,10 @@ pub const Git = struct {
     pub fn output(self: Git, args: []const []const u8) ![]const u8 {
         const result = try self.run(args);
         if (exitCode(result) != 0) {
-            try std.Io.File.stderr().writeStreamingAll(self.io, result.stderr);
+            var buffer: [4096]u8 = undefined;
+            var stderr = std.Io.File.Writer.init(std.Io.File.stderr(), self.io, &buffer);
+            try merge_io.writeSafeTerminalText(&stderr.interface, result.stderr);
+            try stderr.interface.flush();
             return error.GitFailed;
         }
         return result.stdout;
@@ -38,7 +42,8 @@ pub const Git = struct {
             .environ_map = self.env,
             .stdin = .pipe,
             .stdout = .ignore,
-            .stderr = .inherit,
+            // Index records contain repository-controlled paths; Git's error messages could echo terminal controls from them.
+            .stderr = .ignore,
         });
         defer child.kill(self.io);
         try child.stdin.?.writeStreamingAll(self.io, bytes);

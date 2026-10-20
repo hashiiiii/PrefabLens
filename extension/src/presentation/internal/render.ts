@@ -93,9 +93,13 @@ export function renderLoading(root: ShadowRoot): void {
 }
 
 // Files over 25 MB require confirmation before rendering. This promise resolves when the user clicks "Render anyway".
-export function renderTooLarge(root: ShadowRoot, bytes: number): Promise<void> {
+export function renderTooLarge(root: ShadowRoot, bytes: number, exact = true): Promise<void> {
   const container = mount(root);
-  container.append(note("pl-empty", `Large file (${Math.round(bytes / (1024 * 1024))} MB).`, ALERT));
+  const megabytes = Math.round(bytes / (1024 * 1024));
+  const message = exact
+    ? `Large file (${megabytes} MB).`
+    : `Large file (over ${Math.floor(bytes / (1024 * 1024))} MB).`;
+  container.append(note("pl-empty", message, ALERT));
   return clickPromise(container, "Render anyway");
 }
 

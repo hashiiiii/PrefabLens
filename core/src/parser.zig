@@ -848,6 +848,7 @@ fn parseBlock(p: *Parser, indent: usize, depth: usize) Error!*Node {
 
 fn parseMap(p: *Parser, indent: usize, depth: usize) Error!*Node {
     var entries: std.ArrayList(Entry) = .empty;
+    var seen_keys: std.StringHashMapUnmanaged(void) = .empty;
     const start = if (p.peek()) |first| first.whole.start else 0;
     while (p.peek()) |line| {
         if (line.indent != indent) break;
@@ -856,7 +857,7 @@ fn parseMap(p: *Parser, indent: usize, depth: usize) Error!*Node {
         _ = p.advance();
         const kv = splitKeyValue(line.text);
         if (!kv.has_colon) try p.diagnostics.append(p.arena, .invalid_map_entry);
-        if (mapContainsKey(entries.items, kv.key)) try p.diagnostics.append(p.arena, .duplicate_key);
+        try recordMapKey(p, &seen_keys, kv.key);
         const value = if (kv.value.len == 0)
             try parseNestedValue(p, indent, depth)
         else
@@ -927,6 +928,7 @@ fn parseSeq(p: *Parser, indent: usize, depth: usize) Error!*Node {
 //     value: Foo
 fn parseSeqMapItem(p: *Parser, dash_indent: usize, first_line: []const u8, depth: usize, item_start: usize) Error!*Node {
     var entries: std.ArrayList(Entry) = .empty;
+    var seen_keys: std.StringHashMapUnmanaged(void) = .empty;
     // All of the item's keys line up at the column right after "- ".
     const key_indent = dash_indent + 2;
     const kv = splitKeyValue(first_line);
@@ -934,10 +936,12 @@ fn parseSeqMapItem(p: *Parser, dash_indent: usize, first_line: []const u8, depth
     if (kv.value.len == 0) {
         const value = try parseNestedValue(p, key_indent, depth);
         try entries.append(p.arena, .{ .key = kv.key, .value = value });
+        try recordMapKey(p, &seen_keys, kv.key);
         try putEntrySpan(p, value, kv, spanForSlice(p.source_bytes, first_line), .invalid_map_entry);
     } else {
         const value = try parseValue(p, kv.value, depth);
         try entries.append(p.arena, .{ .key = kv.key, .value = value });
+        try recordMapKey(p, &seen_keys, kv.key);
         try putEntrySpan(p, value, kv, spanForSlice(p.source_bytes, first_line), .invalid_map_entry);
     }
     // Continuation entries are 2 deeper than the dash (aligned right after "- ").
@@ -948,7 +952,7 @@ fn parseSeqMapItem(p: *Parser, dash_indent: usize, first_line: []const u8, depth
         _ = p.advance();
         const e = splitKeyValue(line.text);
         if (!e.has_colon) try p.diagnostics.append(p.arena, .invalid_map_entry);
-        if (mapContainsKey(entries.items, e.key)) try p.diagnostics.append(p.arena, .duplicate_key);
+        try recordMapKey(p, &seen_keys, e.key);
         const value = if (e.value.len == 0)
             try parseNestedValue(p, key_indent, depth)
         else
@@ -1000,11 +1004,14 @@ fn emptyMap(arena: std.mem.Allocator) std.mem.Allocator.Error!*Node {
     return makeNode(arena, .{ .map = &[_]Entry{} });
 }
 
-fn mapContainsKey(entries: []const Entry, key: []const u8) bool {
-    for (entries) |entry| {
-        if (std.mem.eql(u8, entry.key, key)) return true;
+fn recordMapKey(p: *Parser, seen_keys: *std.StringHashMapUnmanaged(void), key: []const u8) !void {
+    // A wide repository-controlled mapping must not rescan all prior keys for each duplicate check.
+    const entry = try seen_keys.getOrPut(p.arena, key);
+    if (entry.found_existing) {
+        try p.diagnostics.append(p.arena, .duplicate_key);
+    } else {
+        entry.value_ptr.* = {};
     }
-    return false;
 }
 
 fn stripTrailingColon(s: []const u8) []const u8 {
@@ -1088,6 +1095,7 @@ fn parseFlow(p: *Parser, s: []const u8, depth: usize) Error!*Node {
     const arena = p.arena;
     const inner = stripBrackets(s, '{', '}');
     var entries: std.ArrayList(Entry) = .empty;
+    var seen_keys: std.StringHashMapUnmanaged(void) = .empty;
     var it = splitTopLevel(inner);
     var iterator_error_reported = false;
     while (it.next()) |part| {
@@ -1100,7 +1108,7 @@ fn parseFlow(p: *Parser, s: []const u8, depth: usize) Error!*Node {
             try p.diagnostics.append(arena, .invalid_flow_value);
             continue;
         }
-        if (mapContainsKey(entries.items, kv.key)) try p.diagnostics.append(arena, .duplicate_key);
+        try recordMapKey(p, &seen_keys, kv.key);
         const value = try parseValue(p, kv.value, depth + 1);
         try putEntrySpan(p, value, kv, spanForSlice(p.source_bytes, part), .invalid_flow_value);
         try entries.append(arena, .{ .key = kv.key, .value = value });

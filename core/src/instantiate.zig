@@ -35,7 +35,7 @@ pub fn expand(arena: std.mem.Allocator, res: *model.DiffResult, fd: diffmod.Flat
     for (fd.before) |*d| try docs.put(d.file_id, d);
     for (fd.after) |*d| try docs.put(d.file_id, d);
 
-    for (res.roots) |*node| try expandNode(&ctx, node, &docs, 0);
+    for (res.roots) |*node| try expandNode(&ctx, node, &docs, 0, 0);
 
     res.unresolved_guids = ctx.guids.keys();
     res.needed_sources = try neededSlice(&ctx);
@@ -48,8 +48,9 @@ fn neededSlice(ctx: *Ctx) ![]model.NeededSource {
     return out.toOwnedSlice(ctx.arena);
 }
 
-fn expandNode(ctx: *Ctx, node: *model.ObjectDiff, docs: *std.AutoHashMap(i64, *model.Document), depth: usize) !void {
-    for (node.children) |*child| try expandNode(ctx, child, docs, depth);
+fn expandNode(ctx: *Ctx, node: *model.ObjectDiff, docs: *std.AutoHashMap(i64, *model.Document), depth: usize, hierarchy_depth: usize) !void {
+    if (hierarchy_depth > model.max_hierarchy_depth) return error.HierarchyTooDeep;
+    for (node.children) |*child| try expandNode(ctx, child, docs, depth, hierarchy_depth + 1);
     if (node.kind != .prefab_instance) return;
     if (node.status == .modified) {
         try expandModified(ctx, node, depth);
@@ -88,7 +89,8 @@ fn expandNode(ctx: *Ctx, node: *model.ObjectDiff, docs: *std.AutoHashMap(i64, *m
     var sub_docs = std.AutoHashMap(i64, *model.Document).init(ctx.arena);
     for (sub_fd.before) |*d| try sub_docs.put(d.file_id, d);
     for (sub_fd.after) |*d| try sub_docs.put(d.file_id, d);
-    for (sub.roots) |*r| try expandNode(ctx, r, &sub_docs, depth + 1);
+    const source_root_depth = hierarchy_depth + @intFromBool(sub.roots.len != 1);
+    for (sub.roots) |*r| try expandNode(ctx, r, &sub_docs, depth + 1, source_root_depth);
 
     // Graft: for a single root, lift its contents up into the instance node (same as Unity's
     // hierarchy display: instance = merge of the source root). A variant file's root is a

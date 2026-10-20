@@ -14,12 +14,13 @@ pub const Input = struct {
     review: bool = false,
 };
 pub const Reason = enum { edit_edit, delete_edit, insertion_order, ambiguous_correspondence, context_required, source_bytes };
-pub const Conflict = struct { path: []const u8 = "", nodes: Nodes, reason: Reason, sequence: bool = false };
+pub const Conflict = struct { path: []const u8 = "", nodes: Nodes, reason: Reason, sequence: bool = false, dictionary: bool = false };
 pub const Choice = union(enum) { unresolved, take: Side, remove, custom: *const model.Node };
 pub const Order = enum { ours_first, theirs_first };
 pub const Error = A.Error || error{ InvalidResolution, UnresolvedConflict };
 pub const PathSegment = union(enum) { key: []const u8, index: usize };
 pub const ReviewScope = enum { item, collection };
+const max_auto_merge_dictionary_entries = 512;
 pub const ReviewGroup = struct {
     conflict_id: usize,
     path: []const u8,
@@ -170,19 +171,35 @@ fn anySequence(n: Nodes) bool {
     return false;
 }
 fn conflict(arena: A, list: *std.ArrayList(Conflict), n: Nodes, reason: Reason, sequence: bool) A.Error!*const Value {
+    return conflictWithKind(arena, list, n, reason, sequence, false);
+}
+
+fn dictionaryConflict(arena: A, list: *std.ArrayList(Conflict), n: Nodes, reason: Reason, sequence: bool) A.Error!*const Value {
+    return conflictWithKind(arena, list, n, reason, sequence, true);
+}
+
+fn conflictWithKind(arena: A, list: *std.ArrayList(Conflict), n: Nodes, reason: Reason, sequence: bool, is_dictionary: bool) A.Error!*const Value {
     const id = list.items.len;
-    try list.append(arena, .{ .nodes = n, .reason = reason, .sequence = sequence });
+    try list.append(arena, .{ .nodes = n, .reason = reason, .sequence = sequence, .dictionary = is_dictionary });
     return alloc(arena, .{ .conflict = id });
 }
 
 fn planDictionary(arena: A, list: *std.ArrayList(Conflict), n: Nodes) Error!?*const Value {
     if (n.ours == null or n.theirs == null) return null;
-    switch (dictionary.detect(n.base, n.ours, n.theirs)) {
+    switch (try dictionary.detect(arena, n.base, n.ours, n.theirs)) {
         .none => return null,
         .malformed => return try conflict(arena, list, n, .context_required, anySequence(n)),
         .shape => |shape| {
             if (eql(n.ours, n.theirs) or eql(n.base, n.theirs)) return alloc(arena, .{ .accepted = n.ours });
             if (eql(n.base, n.ours)) return alloc(arena, .{ .accepted = n.theirs });
+            const largest = @max(
+                dictionary.count(n.base, shape),
+                @max(dictionary.count(n.ours, shape), dictionary.count(n.theirs, shape)),
+            );
+            if (largest > max_auto_merge_dictionary_entries) {
+                // The UI can still resolve a large dictionary by side, but its order reconciliation is quadratic.
+                return try dictionaryConflict(arena, list, n, .context_required, anySequence(n));
+            }
             const base_entries = (try dictionary.entries(arena, n.base, shape)) orelse
                 return try conflict(arena, list, n, .context_required, anySequence(n));
             const ours_entries = (try dictionary.entries(arena, n.ours, shape)) orelse
@@ -193,7 +210,7 @@ fn planDictionary(arena: A, list: *std.ArrayList(Conflict), n: Nodes) Error!?*co
                 dictionary.sharedOrderChanged(theirs_entries, base_entries) and
                 sharedKeyOrderDiffers(ours_entries, theirs_entries))
             {
-                return try conflict(arena, list, n, .insertion_order, true);
+                return try dictionaryConflict(arena, list, n, .insertion_order, true);
             }
             const use_theirs_order = dictionary.sharedOrderChanged(theirs_entries, base_entries) and
                 !dictionary.sharedOrderChanged(ours_entries, base_entries);
@@ -222,6 +239,35 @@ fn planDictionary(arena: A, list: *std.ArrayList(Conflict), n: Nodes) Error!?*co
             };
         },
     }
+}
+
+fn largeDictionary(arena: A, value: []const u8) ![]const u8 {
+    var source: std.ArrayList(u8) = .empty;
+    try source.appendSlice(arena, "--- !u!114 &1\nMonoBehaviour:\n  values:\n");
+    for (0..max_auto_merge_dictionary_entries + 1) |i| {
+        try source.appendSlice(arena, try std.fmt.allocPrint(arena, "  - key: key{d}\n    value: {s}\n", .{ i, value }));
+    }
+    return source.items;
+}
+
+test "large dictionaries require a side choice before quadratic order merging" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const parser = @import("parser.zig");
+    const base_documents = try parser.parse(arena, try largeDictionary(arena, "0"));
+    const ours_documents = try parser.parse(arena, try largeDictionary(arena, "1"));
+    const theirs_documents = try parser.parse(arena, try largeDictionary(arena, "2"));
+    const planned = try build(arena, .{ .nodes = .{
+        .base = base_documents[0].body.get("values").?,
+        .ours = ours_documents[0].body.get("values").?,
+        .theirs = theirs_documents[0].body.get("values").?,
+    } });
+
+    // Side selection remains available, while automatic key-order merging has quadratic worst-case work.
+    try std.testing.expectEqual(@as(usize, 1), planned.conflicts.len);
+    try std.testing.expectEqual(Reason.context_required, planned.conflicts[0].reason);
+    try std.testing.expect(planned.conflicts[0].dictionary);
 }
 
 fn sharedKeyOrderDiffers(ours: []const dictionary.Entry, theirs: []const dictionary.Entry) bool {

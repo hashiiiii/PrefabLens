@@ -11,7 +11,7 @@ on:
         default: false
 
 permissions:
-  contents: write
+  contents: read
 
 # Prevent overlapping runs of release.yml
 concurrency:
@@ -26,9 +26,11 @@ jobs:
     env:
       VERSION: ${{ inputs.version }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
       - name: Install tools
-        uses: jdx/mise-action@v5
+        uses: jdx/mise-action@fc42bcc7ddbf51124c30f95a877a0c5168a3bfde # v5
       - name: Validate input
         run: |
           set -euo pipefail
@@ -39,7 +41,7 @@ jobs:
           bump-my-version bump --new-version "$VERSION"
           git add -u
           git diff --cached --name-only -z | tar --null -T - -czf "$RUNNER_TEMP/version-bump.tar.gz"
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: version-bump
           path: ${{ runner.temp }}/version-bump.tar.gz
@@ -71,9 +73,11 @@ jobs:
             asset: windows-arm64
             binary: prefablens.exe
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
       - uses: ./.github/actions/apply-version-bump
-      - uses: jdx/mise-action@v5
+      - uses: jdx/mise-action@fc42bcc7ddbf51124c30f95a877a0c5168a3bfde # v5
       - uses: ./.github/actions/setup-zig-cache
       - name: Build CLI
         run: |
@@ -81,7 +85,7 @@ jobs:
           mkdir -p dist
           zig build -Dtarget=${{ matrix.target }} -Doptimize=ReleaseSafe
           (cd zig-out/bin && zip -j "../../dist/prefablens-${{ matrix.asset }}.zip" "${{ matrix.binary }}" git-merge-prefablens)
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: cli-${{ matrix.asset }}
           path: dist/prefablens-${{ matrix.asset }}.zip
@@ -94,9 +98,11 @@ jobs:
     env:
       VERSION: ${{ inputs.version }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
       - uses: ./.github/actions/apply-version-bump
-      - uses: jdx/mise-action@v5
+      - uses: jdx/mise-action@fc42bcc7ddbf51124c30f95a877a0c5168a3bfde # v5
       - uses: ./.github/actions/setup-zig-cache
       - uses: ./.github/actions/setup-pnpm-store
       - name: Build and package extension
@@ -108,7 +114,7 @@ jobs:
           pnpm -C extension build
           # Zip the dist contents (not the directory) so manifest.json sits at the zip root
           (cd extension/dist && zip -r "../../dist/prefablens-extension-$VERSION.zip" .)
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: extension
           path: dist/prefablens-extension-${{ inputs.version }}.zip
@@ -121,26 +127,29 @@ jobs:
     env:
       VERSION: ${{ inputs.version }}
     steps:
-      - uses: actions/create-github-app-token@v3
+      - uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
         id: app-token
         with:
           client-id: ${{ secrets.APP_CLIENT_ID }}
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
-      - uses: actions/checkout@v7
+          permission-contents: write
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           token: ${{ steps.app-token.outputs.token }}
+          # The release step pushes its version commit and tag with this token.
+          persist-credentials: true
       - uses: ./.github/actions/apply-version-bump
       - name: Stage version bump
         run: |
           set -euo pipefail
           # Stage the bump now so downloaded zips cannot leak into the commit.
           git add -u
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           pattern: cli-*
           merge-multiple: true
           path: dist
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: extension
           path: dist
@@ -175,14 +184,17 @@ jobs:
     env:
       VERSION: ${{ inputs.version }}
     steps:
-      - uses: actions/create-github-app-token@v3
+      - uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
         id: app-token
         with:
           client-id: ${{ secrets.APP_CLIENT_ID }}
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          permission-contents: write
           owner: hashiiiii
           repositories: PrefabLens,homebrew-tap,scoop-bucket
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
       - name: Render package files from the published release
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
@@ -242,6 +254,7 @@ jobs:
           token=$(curl -fsS https://oauth2.googleapis.com/token \
             -d client_id="$CWS_CLIENT_ID" -d client_secret="$CWS_CLIENT_SECRET" \
             -d refresh_token="$CWS_REFRESH_TOKEN" -d grant_type=refresh_token | jq -er .access_token)
+          echo "::add-mask::$token"
           # cws <curl args...>: call the API, log the response, and pass it to the jq assertion
           cws() { curl -fsS -H "Authorization: Bearer $token" -H "x-goog-api-version: 2" "$@" | tee /dev/stderr; }
           cws -X PUT -T "dist/prefablens-extension-$VERSION.zip" \

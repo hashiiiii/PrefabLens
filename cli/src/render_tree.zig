@@ -32,6 +32,24 @@ test "render: modified loose component under a counted components group" {
     try testing.expect(std.mem.indexOf(u8, text, "\x1b[") == null);
 }
 
+test "render: escapes terminal controls from prefab text" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const before = "--- !u!1 &1\nGameObject:\n  m_Name: Before\n";
+    const after = "--- !u!1 &1\nGameObject:\n  m_Name: \"Pwn\\e[2J\\u009b31m 東京\"\n";
+    const res = try core.diffBytes(arena, before, after);
+    var out: std.ArrayList(u8) = .empty;
+    var aw = std.Io.Writer.Allocating.fromArrayList(arena, &out);
+    try render(arena, &aw.writer, res, null, false);
+    const text = aw.toArrayList().items;
+
+    // A repository-controlled value must not be able to execute terminal controls.
+    try testing.expect(std.mem.indexOfScalar(u8, text, 0x1b) == null);
+    try testing.expect(std.mem.indexOf(u8, text, "\xc2\x9b") == null);
+    try testing.expect(std.mem.indexOf(u8, text, "Pwn\\u001b[2J\\u009b31m 東京") != null);
+}
+
 test "render: prefab instance shows cube glyph, meta marker and overrides" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
@@ -174,8 +192,70 @@ pub fn render(
 
 fn paint(w: *std.Io.Writer, color: bool, code: []const u8, text: []const u8) !void {
     if (color) try w.writeAll(code);
-    try w.writeAll(text);
+    try writeTerminalText(w, text);
     if (color) try w.writeAll(Color.reset);
+}
+
+/// Keeps repository-controlled strings printable when the tree is written to
+/// a terminal. Valid non-control Unicode remains intact, including UTF-8
+/// continuation bytes that happen to fall in the C1 byte range.
+pub fn writeTerminalText(w: *std.Io.Writer, text: []const u8) !void {
+    var i: usize = 0;
+    while (i < text.len) {
+        const sequence_len = std.unicode.utf8ByteSequenceLength(text[i]) catch {
+            try writeByteEscape(w, text[i]);
+            i += 1;
+            continue;
+        };
+        if (sequence_len > text.len - i) {
+            try writeByteEscape(w, text[i]);
+            i += 1;
+            continue;
+        }
+        const sequence = text[i..][0..sequence_len];
+        const codepoint = std.unicode.utf8Decode(sequence) catch {
+            try writeByteEscape(w, text[i]);
+            i += 1;
+            continue;
+        };
+        switch (codepoint) {
+            '\t' => try w.writeAll("\\t"),
+            '\n' => try w.writeAll("\\n"),
+            '\r' => try w.writeAll("\\r"),
+            else => if (isTerminalControl(codepoint))
+                try writeUnicodeEscape(w, codepoint)
+            else
+                try w.writeAll(sequence),
+        }
+        i += sequence_len;
+    }
+}
+
+fn isTerminalControl(codepoint: u21) bool {
+    return codepoint < 0x20 or
+        codepoint == 0x7f or
+        (codepoint >= 0x80 and codepoint <= 0x9f) or
+        codepoint == 0x061c or
+        (codepoint >= 0x200b and codepoint <= 0x200f) or
+        (codepoint >= 0x2028 and codepoint <= 0x202e) or
+        (codepoint >= 0x2060 and codepoint <= 0x2064) or
+        (codepoint >= 0x2066 and codepoint <= 0x206f) or
+        codepoint == 0xfeff;
+}
+
+fn writeByteEscape(w: *std.Io.Writer, byte: u8) !void {
+    const digits = "0123456789abcdef";
+    try w.writeAll(&.{ '\\', 'x', digits[byte >> 4], digits[byte & 0x0f] });
+}
+
+fn writeUnicodeEscape(w: *std.Io.Writer, codepoint: u21) !void {
+    const digits = "0123456789abcdef";
+    const value: u16 = @intCast(codepoint);
+    try w.writeAll(&.{
+        '\\',                         'u',
+        digits[(value >> 12) & 0x0f], digits[(value >> 8) & 0x0f],
+        digits[(value >> 4) & 0x0f],  digits[value & 0x0f],
+    });
 }
 
 fn paintLabel(w: *std.Io.Writer, color: bool, count: usize) !void {
@@ -204,11 +284,14 @@ fn renderObject(
     try w.writeAll(branch);
     try w.writeAll("◆ ");
     try signed(w, color, o.status);
-    try w.writeAll(display.objectName(o, resolved));
+    try writeTerminalText(w, display.objectName(o, resolved));
     if (o.kind == .prefab_instance) {
         if (color) try w.writeAll(Color.dim);
         try w.writeAll(" ‹Prefab");
-        if (o.source_guid) |g| if (resolved) |r| if (r.get(g)) |p| try w.print(": {s}", .{p});
+        if (o.source_guid) |g| if (resolved) |r| if (r.get(g)) |p| {
+            try w.writeAll(": ");
+            try writeTerminalText(w, p);
+        };
         try w.writeAll("›");
         if (color) try w.writeAll(Color.reset);
     }
@@ -277,16 +360,19 @@ fn renderCard(
     try signed(w, color, status);
     switch (card) {
         .component => |c| {
-            try w.writeAll(display.componentName(c, resolved));
+            try writeTerminalText(w, display.componentName(c, resolved));
             if (c.script_guid) |g| {
                 if (color) try w.writeAll(Color.dim);
                 try w.writeAll(" ‹Script");
-                if (resolved) |r| if (r.get(g)) |p| try w.print(": {s}", .{p});
+                if (resolved) |r| if (r.get(g)) |p| {
+                    try w.writeAll(": ");
+                    try writeTerminalText(w, p);
+                };
                 try w.writeAll("›");
                 if (color) try w.writeAll(Color.reset);
             }
         },
-        .group => |g| try w.writeAll(g[0].group),
+        .group => |g| try writeTerminalText(w, g[0].group),
     }
     try w.writeByte('\n');
 
@@ -319,7 +405,7 @@ fn renderFieldRow(
     try w.writeAll(prefix.items);
     // The sign repeats only when it adds information over the card's status.
     if (status != parent) try signed(w, color, status);
-    try w.writeAll(label);
+    try writeTerminalText(w, label);
     // A structural summary row (before=after=null) has the count in the
     // label and no value.
     if (before == null and after == null) {
@@ -360,14 +446,20 @@ fn writeValueText(w: *std.Io.Writer, node: ?*const model.Node, resolved: ?*const
         return;
     };
     switch (n.*) {
-        .scalar => |s| try w.writeAll(s),
+        .scalar => |s| try writeTerminalText(w, s),
         // The resolution ladder lives in display.refDisplay, the single Zig
         // source of truth (the extension's formatValue mirrors it); this
         // switch adds only the plain-text decoration.
         .ref => |r| switch (display.refDisplay(r, resolved)) {
-            .path => |p| try w.writeAll(p),
-            .builtin => |b| try w.print("{s} (built-in)", .{b}),
-            .guid => |g| try w.print("guid:{s}", .{g}),
+            .path => |p| try writeTerminalText(w, p),
+            .builtin => |b| {
+                try writeTerminalText(w, b);
+                try w.writeAll(" (built-in)");
+            },
+            .guid => |g| {
+                try w.writeAll("guid:");
+                try writeTerminalText(w, g);
+            },
             .none => try w.writeAll("None"),
             .file_id => |id| try w.print("#{d}", .{id}),
         },

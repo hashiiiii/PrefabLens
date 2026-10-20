@@ -82,7 +82,7 @@ pub const Store = struct {
             entry.bytes = try self.blob(&batch, entry.*);
             try paths.put(arena, entry.path, i);
             if (ends(entry.path, ".cs")) {
-                try schema.inspectNames(arena, entry.bytes, &names);
+                try schema.inspectNames(entry.bytes, &names);
                 for (try schema.declaredNames(arena, entry.bytes)) |name| {
                     const count = try declarations.getOrPut(arena, name);
                     if (!count.found_existing) count.value_ptr.* = 0;

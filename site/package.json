@@ -2,14 +2,14 @@
   "name": "prefablens-site",
   "private": true,
   "type": "module",
-  "packageManager": "pnpm@12.12.1",
+  "packageManager": "pnpm@12.15.0",
   "scripts": {
     "dev": "node build.mjs && eleventy --serve",
     "build": "node build.mjs && eleventy",
     "test": "node --test build.test.mjs"
   },
   "devDependencies": {
-    "@11ty/eleventy": "^3.1.6",
+    "@11ty/eleventy": "^3.1.7",
     "wrangler": "^4.114.0"
   }
 }

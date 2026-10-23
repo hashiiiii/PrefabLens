@@ -1,9 +1,8 @@
 [tools]
 zig = '0.16.0'
 zls = '0.16.0'
-node = '24'
-# pnpm uses a bundled Node.js runtime, which is not exposed as `node`.
-# Project commands such as `node build.mjs` and `node --test` use the pinned Node.js above.
-pnpm = '12.12.1'
+# Build scripts and Wrangler need the Node.js certificate revocation fix.
+node = '24.22.1'
+pnpm = '12.15.0'
 dotnet = '10'
 'pipx:bump-my-version' = '1.6.0'

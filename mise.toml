@@ -1,6 +1,6 @@
 [tools]
 zig = '0.16.0'
-zls = '0.16.0'
+zls = '0.17.0'
 # Build scripts and Wrangler need the Node.js certificate revocation fix.
 node = '24.22.1'
 pnpm = '12.15.0'

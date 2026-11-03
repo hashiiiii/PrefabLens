@@ -46,6 +46,10 @@ pub fn build(arena: std.mem.Allocator, fd: diffmod.FlatDiff) !model.DiffResult {
         .diff_by_id = std.AutoHashMap(i64, diffmod.DocDiff).init(arena),
         .doc_by_id = std.AutoHashMap(i64, *model.Document).init(arena),
     };
+    // Arena allocations retain old tables until the diff ends. Reserving known
+    // document counts avoids copying and rehashing those tables as they grow.
+    try idx.diff_by_id.ensureTotalCapacity(@intCast(fd.docs.len));
+    try idx.doc_by_id.ensureTotalCapacity(@intCast(@max(fd.before.len, fd.after.len)));
     for (fd.docs) |d| try idx.diff_by_id.put(d.component.file_id, d);
     // Structural-resolution docs: after preferred, removed objects fall back to before.
     for (fd.before) |*d| try idx.doc_by_id.put(d.file_id, d);
@@ -97,6 +101,7 @@ pub fn build(arena: std.mem.Allocator, fd: diffmod.FlatDiff) !model.DiffResult {
 
     // Build an ObjectDiff per GameObject (children still empty).
     var obj_by_id = std.AutoHashMap(i64, ObjectDiff).init(arena);
+    try obj_by_id.ensureTotalCapacity(@intCast(go_ids.items.len + pi_ids.items.len));
     for (go_ids.items) |go_id| {
         const gd = idx.diff_by_id.get(go_id).?;
         const comps: []ComponentDiff = if (comps_by_owner.get(go_id)) |list| list.items else &.{};

@@ -1087,6 +1087,14 @@ fn parseValue(p: *Parser, raw: []const u8, depth: usize) Error!*Node {
 fn parseFlow(p: *Parser, s: []const u8, depth: usize) Error!*Node {
     const arena = p.arena;
     const inner = stripBrackets(s, '{', '}');
+    // Local references need no temporary map or scalar nodes. Preserve the general
+    // parser's nesting limit and let it handle every other spelling and malformed value.
+    const local = std.mem.trim(u8, inner, " ");
+    if (depth < max_nesting_depth and s[s.len - 1] == '}' and std.mem.startsWith(u8, local, "fileID: ")) {
+        if (std.fmt.parseInt(i64, std.mem.trim(u8, local[8..], " "), 10)) |file_id| {
+            return makeNode(arena, .{ .ref = .{ .file_id = file_id } });
+        } else |_| {}
+    }
     var entries: std.ArrayList(Entry) = .empty;
     var it = splitTopLevel(inner);
     var iterator_error_reported = false;

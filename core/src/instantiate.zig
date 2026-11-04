@@ -24,6 +24,12 @@ const Ctx = struct {
 };
 
 pub fn expand(arena: std.mem.Allocator, res: *model.DiffResult, fd: diffmod.FlatDiff, assets: *const Assets) !void {
+    // Without PrefabInstance documents, source expansion cannot use a document
+    // index. Avoid duplicating the whole scene's index for this common case.
+    for (fd.docs) |doc| {
+        if (doc.component.class_id == 1001) break;
+    } else return;
+
     var ctx = Ctx{ .arena = arena, .assets = assets, .fd = fd };
     // Merge source-derived external references (scripts/materials etc.) into the
     // top-level unresolvedGuids so they too become subject to host resolution.

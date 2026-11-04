@@ -763,11 +763,13 @@ fn parseDocument(p: *Parser) Error!Document {
     var toks = std.mem.tokenizeScalar(u8, header.text, ' ');
     while (toks.next()) |t| {
         if (std.mem.startsWith(u8, t, "!u!")) {
-            class_id = std.fmt.parseInt(u32, t[3..], 10) catch 0;
-            valid_class = std.fmt.parseInt(u32, t[3..], 10) catch null != null;
+            const parsed = std.fmt.parseInt(u32, t[3..], 10) catch null;
+            class_id = parsed orelse 0;
+            valid_class = parsed != null;
         } else if (std.mem.startsWith(u8, t, "&")) {
-            file_id = std.fmt.parseInt(i64, t[1..], 10) catch 0;
-            valid_file = std.fmt.parseInt(i64, t[1..], 10) catch null != null;
+            const parsed = std.fmt.parseInt(i64, t[1..], 10) catch null;
+            file_id = parsed orelse 0;
+            valid_file = parsed != null;
         } else if (std.mem.eql(u8, t, "stripped")) {
             stripped = true;
         }

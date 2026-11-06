@@ -330,17 +330,35 @@ test "showAtRef kills git and errors when the timeout passes" {
         const windows = std.os.windows;
         // Git's access check rejects named pipes. An exclusive oplock on a regular
         // file lets that check succeed, but blocks Git's open until we release it.
-        // Disabling symlink following gives this fixture an asynchronous handle,
-        // which Windows requires for an oplock request.
-        const include_file = try std.Io.Dir.openFileAbsolute(testing.io, include_path, .{
-            .mode = .read_write,
-            .follow_symlinks = false,
-        });
-        defer include_file.close(testing.io);
+        // Oplocks require an asynchronous handle, but Zig 0.17 opens files synchronously.
+        // Open this fixture explicitly so a blocked real Git read still exercises timeout cleanup.
+        var include_handle: windows.HANDLE = undefined;
+        var opened: windows.IO_STATUS_BLOCK = undefined;
+        const include_name_w = std.unicode.utf8ToUtf16LeStringLiteral(include_name);
+        try testing.expectEqual(windows.NTSTATUS.SUCCESS, windows.ntdll.NtCreateFile(
+            &include_handle,
+            .{
+                .STANDARD = .{ .SYNCHRONIZE = true },
+                .GENERIC = .{ .READ = true, .WRITE = true },
+            },
+            &.{
+                .RootDirectory = tmp.dir.handle,
+                .ObjectName = @constCast(&windows.UNICODE_STRING.init(include_name_w)),
+            },
+            &opened,
+            null,
+            .{ .NORMAL = true },
+            .VALID_FLAGS,
+            .OPEN,
+            .{ .IO = .ASYNCHRONOUS, .NON_DIRECTORY_FILE = true },
+            null,
+            0,
+        ));
+        defer windows.CloseHandle(include_handle);
         var oplock: windows.IO_STATUS_BLOCK = undefined;
         const request_level_one: windows.CTL_CODE = @bitCast(@as(u32, 0x00090000));
         try testing.expectEqual(windows.NTSTATUS.PENDING, windows.ntdll.NtFsControlFile(
-            include_file.handle,
+            include_handle,
             null,
             null,
             null,
@@ -355,9 +373,9 @@ test "showAtRef kills git and errors when the timeout passes" {
             // Even a spawn failure must finish the asynchronous request before
             // its status block goes out of scope.
             var cancelled: windows.IO_STATUS_BLOCK = undefined;
-            const status = windows.ntdll.NtCancelIoFileEx(include_file.handle, &oplock, &cancelled);
+            const status = windows.ntdll.NtCancelIoFileEx(include_handle, &oplock, &cancelled);
             std.debug.assert(status == .SUCCESS or status == .NOT_FOUND);
-            std.debug.assert(windows.ntdll.NtWaitForSingleObject(include_file.handle, .FALSE, null) == .SUCCESS);
+            std.debug.assert(windows.ntdll.NtWaitForSingleObject(include_handle, .FALSE, null) == .SUCCESS);
         }
         try testing.expectError(error.GitTimeout, showAtRef(testing.io, arena, dir, "HEAD", "Foo.prefab", timeout));
     } else {

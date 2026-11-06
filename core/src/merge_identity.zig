@@ -107,7 +107,7 @@ pub const SequenceItemId = struct {
                 if (identity.added_object) |added| added.file_id else null,
                 if (identity.added_object) |added| added.guid orelse "" else "",
                 if (identity.added_object) |added| added.type_id else null,
-                if (identity.override_kind) |override_kind| @intFromEnum(override_kind) else null,
+                if (identity.override_kind) |override_kind| @backingInt(override_kind) else null,
             },
         );
     }

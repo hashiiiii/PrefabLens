@@ -142,7 +142,7 @@ test "fixture: variant merged with source shows Scale (1, 2, 1) and all componen
     try testing.expectEqual(model.Status.added, inst.status);
     // Expansion succeeds: overrides vanish, all source components appear as added.
     try testing.expectEqual(@as(usize, 0), inst.overrides.len);
-    var saw = [_]bool{false} ** 4; // Transform / MeshFilter / MeshRenderer / CapsuleCollider
+    var saw: [4]bool = @splat(false); // Transform / MeshFilter / MeshRenderer / CapsuleCollider
     for (inst.components) |c| {
         try testing.expectEqual(model.Status.added, c.status);
         switch (c.class_id) {

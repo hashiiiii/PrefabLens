@@ -112,7 +112,7 @@ pub const MacSession = struct {
         while (true) {
             if (try session.status(io, arena)) |code| return code;
             if (pid) |running| {
-                std.posix.kill(running, @enumFromInt(0)) catch {
+                std.posix.kill(running, @fromBackingInt(@intCast(0))) catch {
                     // A signal can stop the shell before its EXIT trap writes the result.
                     return (try session.status(io, arena)) orelse 2;
                 };

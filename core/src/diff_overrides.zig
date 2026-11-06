@@ -217,7 +217,7 @@ fn soleOverridesFromMods(arena: std.mem.Allocator, doc: *const model.Document, m
     var out: std.ArrayList(model.OverrideDiff) = .empty;
 
     // Placement summary: a single synthesized row if all components are present.
-    var consumed = [_]bool{false} ** placements.len;
+    var consumed: [placements.len]bool = @splat(false);
     for (placements, 0..) |p, pi| {
         var vals: [4][]const u8 = undefined;
         var all = true;

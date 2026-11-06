@@ -4,7 +4,7 @@ description: Overlay the bumped source files produced by the prepare job
 runs:
   using: composite
   steps:
-    - uses: actions/download-artifact@v8
+    - uses: actions/download-artifact@v8.0.2
       with:
         name: version-bump
         path: ${{ runner.temp }}

@@ -26,9 +26,9 @@ jobs:
     env:
       VERSION: ${{ inputs.version }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
       - name: Install tools
-        uses: jdx/mise-action@v5
+        uses: jdx/mise-action@v5.2.6
       - name: Validate input
         run: |
           set -euo pipefail
@@ -39,7 +39,7 @@ jobs:
           bump-my-version bump --new-version "$VERSION"
           git add -u
           git diff --cached --name-only -z | tar --null -T - -czf "$RUNNER_TEMP/version-bump.tar.gz"
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@v7.0.2
         with:
           name: version-bump
           path: ${{ runner.temp }}/version-bump.tar.gz
@@ -71,17 +71,17 @@ jobs:
             asset: windows-arm64
             binary: prefablens.exe
     steps:
-      - uses: actions/checkout@v7
-      - uses: ./.github/actions/apply-version-bump
-      - uses: jdx/mise-action@v5
-      - uses: ./.github/actions/setup-zig-cache
+      - uses: actions/checkout@v7.0.1
+      - uses: $/.github/actions/apply-version-bump
+      - uses: jdx/mise-action@v5.2.6
+      - uses: $/.github/actions/setup-zig-cache
       - name: Build CLI
         run: |
           set -euo pipefail
           mkdir -p dist
           zig build -Dtarget=${{ matrix.target }} -Doptimize=ReleaseSafe
           (cd zig-out/bin && zip -j "../../dist/prefablens-${{ matrix.asset }}.zip" "${{ matrix.binary }}" git-merge-prefablens)
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@v7.0.2
         with:
           name: cli-${{ matrix.asset }}
           path: dist/prefablens-${{ matrix.asset }}.zip
@@ -94,11 +94,11 @@ jobs:
     env:
       VERSION: ${{ inputs.version }}
     steps:
-      - uses: actions/checkout@v7
-      - uses: ./.github/actions/apply-version-bump
-      - uses: jdx/mise-action@v5
-      - uses: ./.github/actions/setup-zig-cache
-      - uses: ./.github/actions/setup-pnpm-store
+      - uses: actions/checkout@v7.0.1
+      - uses: $/.github/actions/apply-version-bump
+      - uses: jdx/mise-action@v5.2.6
+      - uses: $/.github/actions/setup-zig-cache
+      - uses: $/.github/actions/setup-pnpm-store
       - name: Build and package extension
         run: |
           set -euo pipefail
@@ -108,7 +108,7 @@ jobs:
           pnpm -C extension build
           # Zip the dist contents (not the directory) so manifest.json sits at the zip root
           (cd extension/dist && zip -r "../../dist/prefablens-extension-$VERSION.zip" .)
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@v7.0.2
         with:
           name: extension
           path: dist/prefablens-extension-${{ inputs.version }}.zip
@@ -121,26 +121,26 @@ jobs:
     env:
       VERSION: ${{ inputs.version }}
     steps:
-      - uses: actions/create-github-app-token@v3
+      - uses: actions/create-github-app-token@v3.3.0
         id: app-token
         with:
           client-id: ${{ secrets.APP_CLIENT_ID }}
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
         with:
           token: ${{ steps.app-token.outputs.token }}
-      - uses: ./.github/actions/apply-version-bump
+      - uses: $/.github/actions/apply-version-bump
       - name: Stage version bump
         run: |
           set -euo pipefail
           # Stage the bump now so downloaded zips cannot leak into the commit.
           git add -u
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@v8.0.2
         with:
           pattern: cli-*
           merge-multiple: true
           path: dist
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@v8.0.2
         with:
           name: extension
           path: dist
@@ -175,14 +175,14 @@ jobs:
     env:
       VERSION: ${{ inputs.version }}
     steps:
-      - uses: actions/create-github-app-token@v3
+      - uses: actions/create-github-app-token@v3.3.0
         id: app-token
         with:
           client-id: ${{ secrets.APP_CLIENT_ID }}
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
           owner: hashiiiii
           repositories: PrefabLens,homebrew-tap,scoop-bucket
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
       - name: Render package files from the published release
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}

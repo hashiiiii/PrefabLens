@@ -5,7 +5,7 @@ runs:
   using: composite
   steps:
     - name: Restore Zig global cache
-      uses: actions/cache@v6
+      uses: actions/cache@v6.1.0
       with:
         path: ~/.cache/zig
         key: ${{ runner.os }}-zig-${{ hashFiles('build.zig.zon') }}

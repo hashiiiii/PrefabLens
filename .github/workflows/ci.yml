@@ -28,8 +28,22 @@ jobs:
       - name: Install tools
         uses: jdx/mise-action@v5
       - name: Zig and ZLS compatibility
-        shell: bash
-        run: .github/scripts/check-zig-toolchain.sh
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const zig = (await exec.getExecOutput('zig', ['version'])).stdout.trim();
+            const zls = (await exec.getExecOutput('zls', ['--version'])).stdout.trim();
+            const stableVersion = /^(\d+\.\d+)\.\d+$/;
+            const zigRelease = zig.match(stableVersion)?.[1];
+            const zlsRelease = zls.match(stableVersion)?.[1];
+            if (!zigRelease || !zlsRelease) {
+              throw new Error('Expected stable Zig and ZLS releases.');
+            }
+            // Compilation never runs ZLS, which requires the same major/minor release as Zig.
+            if (zigRelease !== zlsRelease) {
+              throw new Error('Incompatible Zig and ZLS: major/minor versions must match.');
+            }
+            core.info('Zig and ZLS compatibility OK.');
       - name: Restore Zig global cache
         # Windows Zig caching was measured as not worth it (see PR #36 context)
         if: matrix.os == 'ubuntu-latest'

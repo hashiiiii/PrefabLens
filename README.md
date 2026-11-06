@@ -1,5 +1,6 @@
 # PrefabLens
 
+[![Zig](https://img.shields.io/badge/zig-0.17.0-f7a41d.svg?logo=zig&logoColor=white)](https://ziglang.org)
 [![License](https://img.shields.io/github/license/hashiiiii/PrefabLens)](LICENSE)
 [![Release](https://img.shields.io/github/v/release/hashiiiii/PrefabLens)](https://github.com/hashiiiii/PrefabLens/releases)
 [![CI](https://img.shields.io/github/actions/workflow/status/hashiiiii/PrefabLens/ci.yml?branch=main&label=CI)](https://github.com/hashiiiii/PrefabLens/actions/workflows/ci.yml)

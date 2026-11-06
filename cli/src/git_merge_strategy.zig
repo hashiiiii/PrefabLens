@@ -283,7 +283,7 @@ test "Git strategy: parses structured conflicts with no stage records" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     // Git documents conflicts without unmerged stages. A nonempty tree alone cannot mean clean.
-    const output = "a" ** 40 ++ "\x00\x001\x00Assets/New.prefab\x00CONFLICT (file location)\x00Path needs a decision.\n\x00";
+    const output = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\x00\x001\x00Assets/New.prefab\x00CONFLICT (file location)\x00Path needs a decision.\n\x00";
     const parsed = try parse(arena.allocator(), output);
     try std.testing.expectEqual(@as(usize, 0), parsed.stages.len);
     try std.testing.expectEqual(@as(usize, 1), parsed.conflicts.len);
@@ -293,8 +293,8 @@ test "Git strategy: parses structured conflicts with no stage records" {
 test "Git strategy: preserves path bytes and rejects truncated relationships" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
-    const tree = "a" ** 40;
-    const oid = "b" ** 40;
+    const tree = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const oid = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
     const parsed = try parse(arena.allocator(), tree ++ "\x00100644 " ++ oid ++ " 2\tAssets/a\tb\nc.prefab\x00\x001\x00Assets/a\tb\nc.prefab\x00CONFLICT (contents)\x00message\x00");
     try std.testing.expectEqualStrings("Assets/a\tb\nc.prefab", parsed.stages[0].path);
     try std.testing.expectEqualStrings("Assets/a\tb\nc.prefab", parsed.conflicts[0].paths[0]);

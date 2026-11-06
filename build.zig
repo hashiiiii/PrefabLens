@@ -11,7 +11,15 @@ pub fn build(b: *std.Build) void {
     const build_options_mod = opts.createModule();
 
     const test_opts = b.addOptions();
-    test_opts.addOption([]const u8, "fixture_root", b.pathFromRoot("core/src/testdata/merge"));
+    // The external-cwd tests need an absolute path; Options path values are relative in Zig 0.17.
+    const fixture_root = std.Io.Dir.cwd().realPathFileAlloc(
+        b.graph.io,
+        b.root.joinString(b.allocator, "core/src/testdata/merge") catch @panic("OOM"),
+        b.allocator,
+    ) catch @panic("cannot resolve merge fixtures");
+    // Resolving an absolute path observes the checkout's location during configuration.
+    b.graph.poisonCache();
+    test_opts.addOption([]const u8, "fixture_root", fixture_root);
     const test_options_mod = test_opts.createModule();
 
     const core_mod = b.addModule("core", .{
@@ -40,11 +48,14 @@ pub fn build(b: *std.Build) void {
     b.installArtifact(exe);
     const strategy_script = b.addInstallBinFile(b.path("cli/bin/git-merge-prefablens"), "git-merge-prefablens");
     b.getInstallStep().dependOn(&strategy_script.step);
-    const installed_strategy_script = b.getInstallPath(.bin, "git-merge-prefablens");
+    const installed_strategy_script: std.Build.LazyPath = .{ .relative = .{
+        .base = .install_bin,
+        .sub_path = "git-merge-prefablens",
+    } };
 
     const run_cmd = b.addRunArtifact(exe);
     run_cmd.step.dependOn(b.getInstallStep());
-    if (b.args) |args| run_cmd.addArgs(args);
+    run_cmd.addPassthruArgs();
     const run_step = b.step("run", "Run the PrefabLens CLI");
     run_step.dependOn(&run_cmd.step);
 
@@ -77,7 +88,7 @@ pub fn build(b: *std.Build) void {
     });
     const run_merge_driver_cwd_tests = b.addRunArtifact(merge_driver_cwd_tests);
     // The global cache is outside the checkout, so this run detects accidental ambient-cwd reads.
-    run_merge_driver_cwd_tests.setCwd(.{ .cwd_relative = b.graph.global_cache_root.path.? });
+    run_merge_driver_cwd_tests.setCwd(.{ .relative = .{ .base = .global_cache } });
     run_merge_driver_cwd_tests.setEnvironmentVariable("GIT_CONFIG_COUNT", "1");
     run_merge_driver_cwd_tests.setEnvironmentVariable("GIT_CONFIG_KEY_0", "merge.conflictStyle");
     run_merge_driver_cwd_tests.setEnvironmentVariable("GIT_CONFIG_VALUE_0", "merge");
@@ -101,8 +112,8 @@ pub fn build(b: *std.Build) void {
         }),
     });
     const run_keymap_setup_tests = b.addRunArtifact(keymap_setup_tests);
-    run_keymap_setup_tests.addArtifactArg(exe);
-    run_keymap_setup_tests.setCwd(.{ .cwd_relative = b.graph.global_cache_root.path.? });
+    run_keymap_setup_tests.addArtifactArg2(exe, .{ .make_absolute = true });
+    run_keymap_setup_tests.setCwd(.{ .relative = .{ .base = .global_cache } });
     run_keymap_setup_tests.expectExitCode(0);
     run_keymap_setup_tests.has_side_effects = true;
     test_step.dependOn(&run_keymap_setup_tests.step);
@@ -118,7 +129,7 @@ pub fn build(b: *std.Build) void {
         }),
     });
     const run_git_merge_tests = b.addRunArtifact(git_merge_tests);
-    run_git_merge_tests.addArtifactArg(exe);
+    run_git_merge_tests.addArtifactArg2(exe, .{ .make_absolute = true });
     test_step.dependOn(&run_git_merge_tests.step);
 
     const collection_fixture_tests = b.addExecutable(.{
@@ -131,8 +142,8 @@ pub fn build(b: *std.Build) void {
         }),
     });
     const run_collection_fixture_tests = b.addRunArtifact(collection_fixture_tests);
-    run_collection_fixture_tests.addArg(b.pathFromRoot("core/src/testdata/collections"));
-    if (b.args) |args| run_collection_fixture_tests.addArgs(args);
+    run_collection_fixture_tests.addDirectoryArg2(b.path("core/src/testdata/collections"), .{ .make_absolute = true });
+    run_collection_fixture_tests.addPassthruArgs();
     test_step.dependOn(&run_collection_fixture_tests.step);
     const collection_test_step = b.step("test-collection-fixtures", "Check collection fixtures and optionally export Unity inputs");
     collection_test_step.dependOn(&run_collection_fixture_tests.step);
@@ -149,10 +160,10 @@ pub fn build(b: *std.Build) void {
         }),
     });
     const run_strategy_tests = b.addRunArtifact(strategy_tests);
-    run_strategy_tests.addArtifactArg(exe);
-    run_strategy_tests.addArg(installed_strategy_script);
-    run_strategy_tests.addArg(b.pathFromRoot("core/src/testdata/collections"));
-    if (b.args) |args| run_strategy_tests.addArgs(args);
+    run_strategy_tests.addArtifactArg2(exe, .{ .make_absolute = true });
+    run_strategy_tests.addFileArg2(installed_strategy_script, .{ .make_absolute = true });
+    run_strategy_tests.addDirectoryArg2(b.path("core/src/testdata/collections"), .{ .make_absolute = true });
+    run_strategy_tests.addPassthruArgs();
     run_strategy_tests.step.dependOn(&strategy_script.step);
     test_step.dependOn(&run_strategy_tests.step);
     const strategy_test_step = b.step("test-merge-strategy", "Run the native Git strategy integration tests");
@@ -167,8 +178,8 @@ pub fn build(b: *std.Build) void {
         }),
     });
     const run_setup_tests = b.addRunArtifact(setup_tests);
-    run_setup_tests.addArtifactArg(exe);
-    run_setup_tests.addArg(installed_strategy_script);
+    run_setup_tests.addArtifactArg2(exe, .{ .make_absolute = true });
+    run_setup_tests.addFileArg2(installed_strategy_script, .{ .make_absolute = true });
     run_setup_tests.step.dependOn(&strategy_script.step);
     test_step.dependOn(&run_setup_tests.step);
     const setup_test_step = b.step("test-merge-setup", "Run merge setup scope integration tests");
@@ -201,9 +212,9 @@ pub fn build(b: *std.Build) void {
         }),
     });
     const run_installation_tests = b.addRunArtifact(installation_tests);
-    run_installation_tests.addArtifactArg(exe);
-    run_installation_tests.addArg(installed_strategy_script);
-    run_installation_tests.addArtifactArg(alternate_exe);
+    run_installation_tests.addArtifactArg2(exe, .{ .make_absolute = true });
+    run_installation_tests.addFileArg2(installed_strategy_script, .{ .make_absolute = true });
+    run_installation_tests.addArtifactArg2(alternate_exe, .{ .make_absolute = true });
     run_installation_tests.step.dependOn(&strategy_script.step);
     test_step.dependOn(&run_installation_tests.step);
     const installation_test_step = b.step("test-cli-installation", "Run native CLI installation integration tests");
@@ -224,8 +235,8 @@ pub fn build(b: *std.Build) void {
         }),
     });
     const run_structural_tests = b.addRunArtifact(structural_tests);
-    run_structural_tests.addArtifactArg(exe);
-    run_structural_tests.addArg(installed_strategy_script);
+    run_structural_tests.addArtifactArg2(exe, .{ .make_absolute = true });
+    run_structural_tests.addFileArg2(installed_strategy_script, .{ .make_absolute = true });
     run_structural_tests.step.dependOn(&strategy_script.step);
     test_step.dependOn(&run_structural_tests.step);
     const structural_test_step = b.step("test-merge-structural", "Run structural Unity merge integration tests");
@@ -240,7 +251,7 @@ pub fn build(b: *std.Build) void {
         }),
     });
     const run_terminal_tests = b.addRunArtifact(terminal_tests);
-    run_terminal_tests.addArtifactArg(exe);
+    run_terminal_tests.addArtifactArg2(exe, .{ .make_absolute = true });
     test_step.dependOn(&run_terminal_tests.step);
     const terminal_test_step = b.step("test-mergetool-terminal", "Run terminal launcher integration tests");
     terminal_test_step.dependOn(&run_terminal_tests.step);
@@ -254,7 +265,7 @@ pub fn build(b: *std.Build) void {
         }),
     });
     const run_pty_smoke = b.addRunArtifact(pty_smoke);
-    run_pty_smoke.addArtifactArg(exe);
+    run_pty_smoke.addArtifactArg2(exe, .{ .make_absolute = true });
     test_step.dependOn(&run_pty_smoke.step);
     const pty_test_step = b.step("test-merge-pty", "Run merge interaction tests in a real terminal");
     pty_test_step.dependOn(&run_pty_smoke.step);
@@ -332,7 +343,7 @@ pub fn build(b: *std.Build) void {
     const wasm_step = b.step("wasm", "Build the core as a freestanding WASM library");
     wasm_step.dependOn(&b.addInstallArtifact(wasm, .{}).step);
 
-    const zig_sources = &.{ "build.zig", "core", "cli", "e2e" };
+    const zig_sources = b.pathList(&.{ "build.zig", "core", "cli", "e2e" });
 
     const fmt = b.addFmt(.{ .paths = zig_sources });
     const fmt_step = b.step("fmt", "Format Zig sources");

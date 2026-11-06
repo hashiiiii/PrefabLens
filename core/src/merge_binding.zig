@@ -131,7 +131,7 @@ pub fn choices(arena: std.mem.Allocator, plan: *const mm.MergePlan, binding: Bin
         result[reference.conflict] = switch (op.resolution) {
             .unresolved => .unresolved,
             .remove => .remove,
-            .take => |s| .{ .take = @enumFromInt(@intFromEnum(s)) },
+            .take => |s| .{ .take = @fromBackingInt(@intCast(@backingInt(s))) },
             .custom => |text| blk: {
                 const parsed = yaml.parseValue(arena, text) catch |err| switch (err) {
                     error.OutOfMemory => return error.OutOfMemory,

@@ -601,8 +601,8 @@ test "merge TUI: wheel over Base scrolls Base without selecting it" {
         .type = .press,
     } });
     try testing.expectEqual(ValueColumn.theirs, view.selected_value);
-    try testing.expectEqual(@as(usize, 1), view.column_v[@intFromEnum(ValueColumn.base)]);
-    try testing.expectEqual(@as(usize, 0), view.column_v[@intFromEnum(ValueColumn.theirs)]);
+    try testing.expectEqual(@as(usize, 1), view.column_v[@backingInt(ValueColumn.base)]);
+    try testing.expectEqual(@as(usize, 0), view.column_v[@backingInt(ValueColumn.theirs)]);
     const surface = try drawForTest(arena, view.widget(), 160, 16);
     try testing.expect(hasScrollbarThumb(surface, geometry.base.end - 1, body.inspector_rows.start, body.inspector_rows.end));
     try testing.expect(!hasScrollbarThumb(surface, geometry.theirs.end - 1, body.inspector_rows.start, body.inspector_rows.end));
@@ -858,8 +858,8 @@ test "merge TUI: wheel scrolls only the focused content column" {
         .mods = .{},
         .type = .press,
     } });
-    try testing.expectEqual(@as(usize, 0), view.column_v[@intFromEnum(ValueColumn.ours)]);
-    try testing.expectEqual(@as(usize, 0), view.column_v[@intFromEnum(ValueColumn.theirs)]);
+    try testing.expectEqual(@as(usize, 0), view.column_v[@backingInt(ValueColumn.ours)]);
+    try testing.expectEqual(@as(usize, 0), view.column_v[@backingInt(ValueColumn.theirs)]);
     const ours_after = try rangeText(
         arena,
         try drawForTest(arena, view.widget(), 160, 16),
@@ -875,8 +875,8 @@ test "merge TUI: wheel scrolls only the focused content column" {
         .mods = .{},
         .type = .press,
     } });
-    try testing.expectEqual(@as(usize, 1), view.column_v[@intFromEnum(ValueColumn.theirs)]);
-    try testing.expectEqual(@as(usize, 0), view.column_v[@intFromEnum(ValueColumn.ours)]);
+    try testing.expectEqual(@as(usize, 1), view.column_v[@backingInt(ValueColumn.theirs)]);
+    try testing.expectEqual(@as(usize, 0), view.column_v[@backingInt(ValueColumn.ours)]);
 }
 
 test "merge TUI: content column scroll stops at the last line" {
@@ -913,8 +913,8 @@ test "merge TUI: content column scroll stops at the last line" {
         try view.columnText(arena, operation, .theirs),
     );
     const rows = columnScrollMetrics(geometry.theirs, text, viewport, 0).rows;
-    try testing.expect(view.column_v[@intFromEnum(ValueColumn.theirs)] < 400);
-    try testing.expectEqual(rows -| viewport, view.column_v[@intFromEnum(ValueColumn.theirs)]);
+    try testing.expect(view.column_v[@backingInt(ValueColumn.theirs)] < 400);
+    try testing.expectEqual(rows -| viewport, view.column_v[@backingInt(ValueColumn.theirs)]);
 }
 
 test "merge TUI: wrapped content lines show a floating scrollbar only while scrolling" {
@@ -997,7 +997,7 @@ test "merge TUI: wheel right scrolls wrapped content lines vertically" {
         .mods = .{},
         .type = .press,
     } });
-    try testing.expectEqual(@as(usize, 1), view.column_v[@intFromEnum(ValueColumn.theirs)]);
+    try testing.expectEqual(@as(usize, 1), view.column_v[@backingInt(ValueColumn.theirs)]);
     try view.widget().handleEvent(&ctx, .{ .mouse = .{
         .col = @intCast(geometry.theirs.start + 2),
         .row = @intCast(body.inspector_rows.start),
@@ -1005,8 +1005,8 @@ test "merge TUI: wheel right scrolls wrapped content lines vertically" {
         .mods = .{},
         .type = .press,
     } });
-    try testing.expectEqual(@as(usize, 2), view.column_v[@intFromEnum(ValueColumn.theirs)]);
-    try testing.expectEqual(@as(usize, 0), view.column_h[@intFromEnum(ValueColumn.theirs)]);
+    try testing.expectEqual(@as(usize, 2), view.column_v[@backingInt(ValueColumn.theirs)]);
+    try testing.expectEqual(@as(usize, 0), view.column_h[@backingInt(ValueColumn.theirs)]);
 }
 
 test "merge TUI: game object delete edit uses a Base diff and keeps ⇧R" {
@@ -2702,7 +2702,7 @@ pub const View = struct {
         if (self.usesProperties()) {
             const model = try self.propertyModel(arena);
             if (self.property_row >= model.rows.len) return "";
-            return model.text(arena, self.property_row, @intFromEnum(column));
+            return model.text(arena, self.property_row, @backingInt(column));
         }
         return self.columnText(arena, operation, column);
     }
@@ -2844,7 +2844,7 @@ pub const View = struct {
 
     fn scrollColumnHorizontal(self: *View, ctx: *vxfw.EventContext, column: ValueColumn, size: vxfw.Size, right: bool) void {
         const geometry = self.valueGeometry(size.width);
-        const index = @intFromEnum(column);
+        const index = @backingInt(column);
         if (right) {
             self.column_h[index] = @min(self.column_h[index] +| 1, self.maxHorizontalOffset(geometry, column));
         } else {
@@ -2881,7 +2881,7 @@ pub const View = struct {
         body: BodyGeometry,
     ) void {
         if (!self.shouldPaintFloatingScrollbar()) return;
-        const index = @intFromEnum(self.scrollbar_column);
+        const index = @backingInt(self.scrollbar_column);
         const range = valueRange(geometry, self.scrollbar_column);
         paintScrollbar(
             surface,
@@ -2894,7 +2894,7 @@ pub const View = struct {
     }
 
     fn scrollColumnVertical(self: *View, ctx: *vxfw.EventContext, column: ValueColumn, down: bool) void {
-        const index = @intFromEnum(column);
+        const index = @backingInt(column);
         const max = maxScrollOffset(self.column_lines[index], self.inspectorViewportRows());
         if (down) self.column_v[index] = @min(self.column_v[index] +| 1, max) else self.column_v[index] -|= 1;
         self.scrollbar_column = column;
@@ -2970,7 +2970,7 @@ pub const View = struct {
                     const model = try self.propertyModel(memory.allocator());
                     if (self.property_row + 1 < model.rows.len) return self.moveProperty(ctx, size, true);
                 } else {
-                    const index = @intFromEnum(self.selected_value);
+                    const index = @backingInt(self.selected_value);
                     const max = maxScrollOffset(self.column_lines[index], self.inspectorViewportRows());
                     if (self.column_v[index] < max) {
                         self.scrollColumnVertical(ctx, self.selected_value, true);
@@ -3262,9 +3262,9 @@ pub const View = struct {
                     try result_text.cellAt(
                         &self.editor,
                         geometry.result.end - geometry.result.start -| 2,
-                        self.column_v[@intFromEnum(ValueColumn.result)] + row - body.inspector_rows.start,
+                        self.column_v[@backingInt(ValueColumn.result)] + row - body.inspector_rows.start,
                         col -| (geometry.result.start + 2),
-                        self.column_h[@intFromEnum(ValueColumn.result)],
+                        self.column_h[@backingInt(ValueColumn.result)],
                     )
                 else
                     try self.editorCellAt(mouse, size);
@@ -3641,7 +3641,7 @@ fn draw(
     const footer = self.footerGeometry(size.width, size.height);
     const body = BodyGeometry.init(size.height);
     if (size_changed) self.ensureSelectionVisible(size) else self.clampVerticalOffset(size);
-    const selected_index = @intFromEnum(self.selected_value);
+    const selected_index = @backingInt(self.selected_value);
     self.column_h[selected_index] = @min(self.column_h[selected_index], self.maxHorizontalOffset(geometry, self.selected_value));
     self.horizontal_offset = self.column_h[selected_index];
     const unresolved = try std.fmt.allocPrint(
@@ -3800,7 +3800,7 @@ fn draw(
         const base_text = columns[0][1];
         const indent = commonIndent(&.{ columns[0][1], columns[1][1], columns[2][1] });
         const viewport = body.inspector_rows.end - body.inspector_rows.start;
-        var painted_end = [_]u16{body.inspector_rows.start} ** 4;
+        var painted_end: [4]u16 = @splat(body.inspector_rows.start);
         inline for (columns, 0..) |column, index| {
             var style = valueStyle(column[2]);
             markChangedFromBase(&style, column[2], std.mem.eql(u8, column[1], base_text));
@@ -4056,7 +4056,7 @@ fn paintUnified(self: *View, arena: std.mem.Allocator, surface: vxfw.Surface, si
         .{ ValueColumn.result, try self.columnText(arena, operation, .result) },
     };
     const viewport = body.inspector_rows.end - body.inspector_rows.start;
-    var painted_end = [_]u16{body.inspector_rows.start} ** 4;
+    var painted_end: [4]u16 = @splat(body.inspector_rows.start);
     inline for (columns, 0..) |column, index| {
         const range = valueRange(geometry, column[0]);
         const paint_range = self.prepareColumnScroll(index, column[1], viewport, range, 0);
@@ -4073,7 +4073,7 @@ fn paintUnified(self: *View, arena: std.mem.Allocator, surface: vxfw.Surface, si
     }
     if (self.focus_area == .content) {
         const selected_range = valueRange(geometry, self.selected_value);
-        const selected_index: usize = @intFromEnum(self.selected_value);
+        const selected_index: usize = @backingInt(self.selected_value);
         const focus_end = @max(painted_end[selected_index], body.inspector_rows.start + 1);
         var row: u16 = body.inspector_rows.start;
         while (row < focus_end) : (row += 1) {

@@ -71,7 +71,7 @@ fn consumeCsi(
     cells: *[capture_height][capture_width]u8,
     alternate_active: *bool,
 ) usize {
-    var params = [_]usize{0} ** 4;
+    var params: [4]usize = @splat(0);
     var param_count: usize = 1;
     var index = start;
     var private_mode = false;

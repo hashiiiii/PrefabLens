@@ -164,7 +164,7 @@ const windows_job = struct {
     }
 };
 
-// Zig 0.16 cancels the output readers before killing the child. On Windows,
+// Zig cancels the output readers before killing the child. On Windows,
 // reader cancellation can wait for output first, so a hung Git also hangs its
 // timeout cleanup. Keep the same collection behavior but reverse that order.
 fn runGit(gpa: std.mem.Allocator, io: std.Io, options: std.process.RunOptions) std.process.RunError!std.process.RunResult {
@@ -173,13 +173,13 @@ fn runGit(gpa: std.mem.Allocator, io: std.Io, options: std.process.RunOptions) s
     const job = windows_job.CreateJobObjectW(null, null) orelse return windows.unexpectedError(windows.GetLastError());
     defer windows.CloseHandle(job);
     var child = try std.process.spawn(io, .{
+        .exe = options.exe,
         .argv = options.argv,
         .cwd = options.cwd,
         .environ_map = options.environ_map,
         .expand_arg0 = options.expand_arg0,
         .progress_node = options.progress_node,
         .create_no_window = options.create_no_window,
-        .disable_aslr = options.disable_aslr,
         // Git for Windows launches the real Git as a child. Assign the launcher
         // to a job before it runs so timeout cleanup includes its descendants.
         .start_suspended = true,

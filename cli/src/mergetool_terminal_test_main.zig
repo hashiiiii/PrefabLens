@@ -108,7 +108,7 @@ fn macEarlyClose(io: std.Io, arena: std.mem.Allocator, scratch: []const u8, env:
     defer std.posix.kill(child_pid, .KILL) catch {};
     try integration.expectCode(result, 1, "cancel during terminal startup");
     try integration.require(try session.wait(io, arena) == 1, "startup cancellation was not returned");
-    std.posix.kill(child_pid, @enumFromInt(0)) catch |err| switch (err) {
+    std.posix.kill(child_pid, @fromBackingInt(@intCast(0))) catch |err| switch (err) {
         error.ProcessNotFound => return,
         else => return err,
     };

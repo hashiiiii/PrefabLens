@@ -3,15 +3,15 @@
     .name = .prefablens,
     .version = "0.11.0",
     .fingerprint = 0x963f0eb06ee0745d,
-    .minimum_zig_version = "0.16.0",
+    .minimum_zig_version = "0.17.0",
     .dependencies = .{
         .zig_keymap = .{
-            .url = "https://github.com/hashiiiii/zig-keymap/archive/refs/tags/v0.5.1.tar.gz",
-            .hash = "zig_keymap-0.5.1-s0Xxwpo5AQATppEaU17X2n1bI0-Wv0gjq4OS0aQk38tg",
+            .url = "https://github.com/hashiiiii/zig-keymap/archive/2b5484b9b33bcdb4c8cac53876d241fa81cf9bc6.tar.gz",
+            .hash = "zig_keymap-0.5.1-s0Xxwts5AQCT0NL1v2Pigp1JCJdgj98QqPEhQwPC9PO-",
         },
         .vaxis = .{
-            .url = "https://github.com/rockorager/libvaxis/archive/c060d314930c5552b99a89278a6a695baf0352da.tar.gz",
-            .hash = "vaxis-0.6.0-BWNV_LC4CwBka_bJk8SOXqzCM-nyQH00jzdL0kUhGwRE",
+            .url = "https://github.com/rockorager/libvaxis/archive/c1861acc835e42d6874f2b15744f472398fbdfb7.tar.gz",
+            .hash = "vaxis-0.6.0-BWNV_GQaDQAz9DPyb2245fA-MbFe1MtOMwVQ08z9-v50",
         },
     },
     .paths = .{

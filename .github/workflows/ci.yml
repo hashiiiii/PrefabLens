@@ -27,6 +27,9 @@ jobs:
         run: .github/scripts/check-version-sync.sh
       - name: Install tools
         uses: jdx/mise-action@v5
+      - name: Zig and ZLS compatibility
+        shell: bash
+        run: .github/scripts/check-zig-toolchain.sh
       - name: Restore Zig global cache
         # Windows Zig caching was measured as not worth it (see PR #36 context)
         if: matrix.os == 'ubuntu-latest'

@@ -22,7 +22,7 @@ The schema remains stable unless a release documents a breaking change.
 
 | Piece | Choice |
 |---|---|
-| Language | Zig 0.16 (see root `mise.toml` and `build.zig.zon`) |
+| Language | Zig 0.17 (see root `mise.toml` and `build.zig.zon`) |
 | Diff engine | `core/` (also built to WASM for the extension) |
 | CLI entry | `cli/src/main.zig` → binary `prefablens` |
 | Version source | `build.zig.zon` (injected via `build_options`) |
@@ -583,6 +583,8 @@ The package test creates a ZIP file for each of the six release targets.
 It checks the ZIP roots and the generated package files.
 It also runs the extracted script through Git with the host CLI.
 CI also runs `.github/scripts/check-version-sync.sh` on Ubuntu.
+The native core jobs run `.github/scripts/check-zig-toolchain.sh` after installing tools.
+It requires Zig and ZLS to use the same major/minor release; patch versions may differ.
 
 CI runs these checks in the `core` job of
 [`.github/workflows/ci.yml`](../.github/workflows/ci.yml).

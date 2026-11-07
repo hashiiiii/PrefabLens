@@ -2,7 +2,8 @@
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": [
     "config:recommended",
-    "customManagers:biomeVersions"
+    "customManagers:biomeVersions",
+    "customManagers:githubActionsVersions"
   ],
   "dependencyDashboard": true,
   "enabledManagers": [
@@ -11,7 +12,8 @@
     "npm",
     "nuget",
     "unity3d",
-    "custom.jsonata"
+    "custom.jsonata",
+    "custom.regex"
   ],
   "timezone": "Asia/Tokyo",
   "schedule": [

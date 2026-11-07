@@ -2,8 +2,16 @@ name: verify-lockfile
 
 on:
   pull_request:
+    paths:
+      - '.github/workflows/**'
+      - '**/action.yml'
+      - '**/action.yaml'
   push:
     branches: [main]
+    paths:
+      - '.github/workflows/**'
+      - '**/action.yml'
+      - '**/action.yaml'
 
 permissions:
   contents: read

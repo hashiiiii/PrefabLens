@@ -21,14 +21,14 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
       - name: Version sync guard
         if: matrix.os == 'ubuntu-latest'
         run: .github/scripts/check-version-sync.sh
       - name: Install tools
-        uses: jdx/mise-action@v5
+        uses: jdx/mise-action@v5.2.6
       - name: Zig and ZLS compatibility
-        uses: actions/github-script@v9
+        uses: actions/github-script@v9.0.0
         with:
           script: |
             const zig = (await exec.getExecOutput('zig', ['version'])).stdout.trim();
@@ -47,7 +47,7 @@ jobs:
       - name: Restore Zig global cache
         # Windows Zig caching was measured as not worth it (see PR #36 context)
         if: matrix.os == 'ubuntu-latest'
-        uses: ./.github/actions/setup-zig-cache
+        uses: $/.github/actions/setup-zig-cache
       - name: Lint
         run: zig build lint
       - name: Test
@@ -69,21 +69,21 @@ jobs:
           - x86_64-windows
           - aarch64-windows
     steps:
-      - uses: actions/checkout@v7
-      - uses: jdx/mise-action@v5
-      - uses: ./.github/actions/setup-zig-cache
+      - uses: actions/checkout@v7.0.1
+      - uses: jdx/mise-action@v5.2.6
+      - uses: $/.github/actions/setup-zig-cache
       - run: zig build -Dtarget=${{ matrix.target }} -Doptimize=ReleaseSafe
 
   extension:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
       - name: Install tools
-        uses: jdx/mise-action@v5
+        uses: jdx/mise-action@v5.2.6
       - name: Restore Zig global cache
-        uses: ./.github/actions/setup-zig-cache
+        uses: $/.github/actions/setup-zig-cache
       - name: Restore pnpm store cache
-        uses: ./.github/actions/setup-pnpm-store
+        uses: $/.github/actions/setup-pnpm-store
       - name: Resolve Playwright version
         id: playwright-version
         run: |
@@ -91,7 +91,7 @@ jobs:
           echo "version=$version" >> "$GITHUB_OUTPUT"
       - name: Restore Playwright browser cache
         id: playwright-cache
-        uses: actions/cache@v6
+        uses: actions/cache@v6.1.0
         with:
           path: ~/.cache/ms-playwright
           key: ${{ runner.os }}-playwright-${{ steps.playwright-version.outputs.version }}
@@ -133,11 +133,11 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
       - name: Install tools
-        uses: jdx/mise-action@v5
+        uses: jdx/mise-action@v5.2.6
       - name: Restore NuGet package cache
-        uses: actions/cache@v6
+        uses: actions/cache@v6.1.0
         with:
           path: ~/.nuget/packages
           key: ${{ runner.os }}-nuget-${{ hashFiles('editor/**/*.csproj', 'editor/.config/dotnet-tools.json') }}
@@ -173,9 +173,9 @@ jobs:
   site:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
       - name: Build site inputs
-        uses: ./.github/actions/build-site
+        uses: $/.github/actions/build-site
       - name: Site checks
         working-directory: site
         run: |

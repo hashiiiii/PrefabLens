@@ -74,7 +74,7 @@ pub fn main(init: std.process.Init) !u8 {
     var env = try init.environ_map.clone(a);
     try env.put("PATH", try std.fmt.allocPrint(a, "{s}{c}{s}{c}{s}", .{ std.fs.path.dirname(prefablens).?, std.fs.path.delimiter, std.fs.path.dirname(script).?, std.fs.path.delimiter, env.get("PATH") orelse "" }));
     const ctx: Context = .{ .git = .{ .io = init.io, .arena = a, .env = &env }, .root = scratch, .prefablens = prefablens };
-    const cases = .{ repositoryScopes, linkedWorktree, outsideRepository, invalidArguments, newUser, userScopes, systemAttributes, invalidUserPaths, userInstallationFailure };
+    const cases = .{ repositoryScopes, driverOnly, driverOnlyScopes, inheritedStrategy, includedStrategy, linkedWorktree, outsideRepository, invalidArguments, newUser, userScopes, systemAttributes, invalidUserPaths, userInstallationFailure };
     var failures: usize = 0;
     inline for (cases) |case| {
         case(ctx) catch |err| {
@@ -201,8 +201,9 @@ fn invalidArguments(parent: Context) !void {
     const git = try ctx.repo("repo");
     const before = try read(git, try git.path(".git/config"));
     const cases = [_][]const []const u8{
-        &.{"--unknown"},             &.{"extra"},               &.{ "--local", "--project" },
-        &.{ "--project", "--user" }, &.{ "--user", "--local" },
+        &.{"--unknown"},                &.{"extra"},               &.{ "--local", "--project" },
+        &.{ "--project", "--user" },    &.{ "--user", "--local" }, &.{ "--no-strategy", "--no-strategy" },
+        &.{ "--no-strategy", "extra" },
     };
     for (cases) |flags| {
         try t.expectCode(try ctx.setup(git, flags), 2, "invalid setup arguments");
@@ -330,4 +331,92 @@ fn userInstallationFailure(parent: Context) !void {
     try t.require(std.mem.indexOf(u8, result.stderr, "PATH") != null, "invalid installation omitted repair guidance");
     try t.require(std.mem.eql(u8, before, try read(ctx.git, global_path)), "invalid installation changed global configuration");
     try t.require(std.mem.eql(u8, existing_attributes, try read(ctx.git, attributes)), "invalid installation changed user attributes");
+}
+
+fn driverOnly(parent: Context) !void {
+    const ctx = try parent.isolated("driver-only", false);
+    var git = try ctx.repo("repo");
+    // Re-running setup must remove the strategy selected by an earlier local setup.
+    try git.ok(&.{ "config", "--global", "prefablens.test.setting", "keep" });
+    const global_before = try read(git, git.env.get("GIT_CONFIG_GLOBAL").?);
+    try git.ok(&.{ "config", "--local", "--add", "pull.twohead", "prefablens" });
+    try git.ok(&.{ "config", "--local", "--add", "pull.twohead", "prefablens" });
+    try t.expectCode(try ctx.setup(git, &.{ "--no-strategy", "--local" }), 0, "driver-only setup");
+    try t.require(std.mem.eql(u8, merge_git.trim(try git.output(&.{ "config", "pull.twohead" })), "ort"), "driver-only setup still selects an external strategy");
+    try t.require(std.mem.eql(u8, global_before, try read(git, git.env.get("GIT_CONFIG_GLOBAL").?)), "repository opt-out changed user configuration");
+    const original = merge_git.trim(try git.output(&.{ "rev-parse", "HEAD" }));
+    // Git's ort strategy still delegates Unity file contents to the installed driver.
+    try expectMerge(git);
+    try git.ok(&.{ "reset", "--hard", original });
+    const trace = try git.path(".git/rebase.trace");
+    try git.env.put("GIT_TRACE", trace);
+    try t.expectCode(try git.run(&.{ "rebase", "remote" }), 0, "rebase after driver-only setup");
+    try t.expectFile(git.io, git.arena, git.cwd, "Assets/A.prefab", merged);
+    const commands = try read(git, trace);
+    try t.require(std.mem.indexOf(u8, commands, "merge-prefablens") == null, "rebase invoked the external strategy after opt-out");
+    try t.require(std.mem.indexOf(u8, commands, "merge-driver") != null, "rebase bypassed the Unity merge driver after opt-out");
+}
+
+fn driverOnlyScopes(parent: Context) !void {
+    const ctx = try parent.isolated("driver-only-scopes", false);
+    const project = try ctx.repo("project");
+    try t.expectCode(try ctx.setup(project, &.{ "--project", "--no-strategy" }), 0, "project driver-only setup");
+    try t.require(std.mem.eql(u8, merge_git.trim(try project.output(&.{ "config", "pull.twohead" })), "ort"), "project opt-out selected an external strategy");
+    try project.ok(&.{ "add", ".gitattributes" });
+    try project.ok(&.{ "commit", "-qm", "attributes" });
+    try expectMerge(project);
+
+    // Driver-only setup must work even when an unused strategy executable is incompatible.
+    const exec_path = try std.fs.path.join(ctx.git.arena, &.{ ctx.root, "exec" });
+    try std.Io.Dir.cwd().createDirPath(ctx.git.io, exec_path);
+    const shadow_name = if (builtin.os.tag == .windows) "git-merge-prefablens.exe" else "git-merge-prefablens";
+    try std.Io.Dir.cwd().copyFile(ctx.prefablens, .cwd(), try std.fs.path.join(ctx.git.arena, &.{ exec_path, shadow_name }), ctx.git.io, .{});
+    try ctx.git.env.put("GIT_EXEC_PATH", exec_path);
+    try ctx.git.ok(&.{ "config", "--global", "pull.twohead", "prefablens" });
+    try t.expectCode(try ctx.setup(ctx.git, &.{ "--user", "--no-strategy" }), 0, "user driver-only setup");
+    try t.require(std.mem.eql(u8, merge_git.trim(try ctx.git.output(&.{ "config", "--global", "pull.twohead" })), "ort"), "user opt-out retained the old strategy");
+    const user_repo = try ctx.repo("user");
+    try expectMerge(user_repo);
+}
+
+fn inheritedStrategy(parent: Context) !void {
+    const ctx = try parent.isolated("inherited-strategy", false);
+    const git = try ctx.repo("repo");
+    try git.ok(&.{ "config", "--global", "pull.twohead", "prefablens" });
+    const config = try read(git, try git.path(".git/config"));
+    // The sequencer reads the first value, so a local ort override cannot disable a global strategy.
+    const result = try ctx.setup(git, &.{ "--local", "--no-strategy" });
+    try t.expectCode(result, 2, "inherited strategy prevents repository-only opt-out");
+    try t.require(std.mem.indexOf(u8, result.stderr, "setup-merge --user --no-strategy") != null, "inherited strategy omitted repair guidance");
+    try t.require(std.mem.eql(u8, config, try read(git, try git.path(".git/config"))), "inherited strategy rejection changed repository configuration");
+    try expectAbsent(git, try git.path(".git/info/attributes"));
+    try expectAbsent(git, try git.path(".gitattributes"));
+}
+
+fn includedStrategy(parent: Context) !void {
+    const cases = [_]struct { name: []const u8, user: bool, included_first: bool }{
+        .{ .name = "local-include-first", .user = false, .included_first = true },
+        .{ .name = "local-include-last", .user = false, .included_first = false },
+        .{ .name = "user-include-first", .user = true, .included_first = true },
+        .{ .name = "user-include-last", .user = true, .included_first = false },
+    };
+    for (cases) |case| {
+        const ctx = try parent.isolated(case.name, false);
+        const git = if (case.user) ctx.git else try ctx.repo("repo");
+        const scope = if (case.user) "--global" else "--local";
+        const included = try std.fs.path.join(git.arena, &.{ ctx.root, "included.config" });
+        try git.ok(&.{ "config", "--file", included, "pull.twohead", "prefablens" });
+        if (case.included_first) try git.ok(&.{ "config", scope, "include.path", included });
+        try git.ok(&.{ "config", scope, "pull.twohead", "prefablens" });
+        if (!case.included_first) try git.ok(&.{ "config", scope, "include.path", included });
+        const path = if (case.user) git.env.get("GIT_CONFIG_GLOBAL").? else try git.path(".git/config");
+        const before = try read(git, path);
+        const included_before = try read(git, included);
+        // A surviving include can select PrefabLens for either replay or ordinary merge, depending on order.
+        const result = try ctx.setup(git, &.{ if (case.user) "--user" else "--local", "--no-strategy" });
+        try t.expectCode(result, 2, "included strategy prevents opt-out");
+        try t.require(std.mem.indexOf(u8, result.stderr, "--show-origin") != null, "included strategy omitted origin guidance");
+        try t.require(std.mem.eql(u8, before, try read(git, path)), "included strategy rejection changed root configuration");
+        try t.require(std.mem.eql(u8, included_before, try read(git, included)), "included strategy rejection changed included configuration");
+    }
 }

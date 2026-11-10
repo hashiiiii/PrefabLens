@@ -91,7 +91,7 @@ You do not need to run setup again after a complete upgrade.
 #### Setup scopes
 
 ```text
-prefablens setup-merge [--project|--local|--user]
+prefablens setup-merge [--project|--local|--user] [--no-strategy]
 ```
 
 | Scope | Attributes | Git configuration |
@@ -101,6 +101,17 @@ prefablens setup-merge [--project|--local|--user]
 | `--user` | User attributes file | Global |
 
 Choose at most one scope.
+
+Add `--no-strategy` to use Git's `ort` strategy with the PrefabLens merge driver and mergetool:
+
+```sh
+prefablens setup-merge --local --no-strategy
+```
+
+This writes `pull.twohead=ort` in the selected configuration file, replacing all earlier values there.
+Without this flag, setup continues to select the PrefabLens strategy.
+Driver-only setup does not require the `git-merge-prefablens` script.
+It preserves semantic file-content merging, but omits the strategy's repository-wide validation and structural conflict UI.
 
 Local and project setup require a Git working tree and also work from its subdirectories.
 Local setup resolves the attributes path through Git, including in linked worktrees.
@@ -125,7 +136,15 @@ Existing attribute lines are preserved, and repeated setup does not duplicate th
 If the user attributes file is a symlink, setup updates its target and preserves the link.
 
 User setup sets `pull.twohead=prefablens` globally, selecting PrefabLens for ordinary merges across all repositories, including repositories without Unity files.
-Repository configuration takes precedence over global configuration.
+For ordinary merges, repository configuration takes precedence over global configuration.
+Git's sequencer uses the first `pull.twohead` value when selecting the default strategy for `rebase` and `cherry-pick`.
+A local `ort` setting therefore cannot disable an earlier global PrefabLens setting in those commands.
+Setup rejects that repository-only opt-out before writing files.
+For a global installation, use `prefablens setup-merge --user --no-strategy`.
+Inspect other inherited settings with `git config --show-origin --show-scope --get-all pull.twohead`.
+Setup also rejects PrefabLens settings in included files within the selected scope.
+Change those settings in their reported files before retrying the opt-out.
+The check examines active settings; conditional includes can differ between repositories.
 For attributes, Git gives `info/attributes` precedence over `.gitattributes`, which takes precedence over user attributes.
 See [Git attributes](https://git-scm.com/docs/gitattributes) for the full precedence rules.
 
@@ -136,6 +155,13 @@ Before the strategy writes merge objects, the index, or working files, it checks
 If any command is missing or reports a different version, reinstall the release archive.
 
 The `pull.twohead=prefablens` configuration entry selects the strategy for ordinary two-head `git merge` commands.
+It also selects the default strategy for merge-based `git rebase` and `git cherry-pick`, potentially launching PrefabLens for every replayed commit.
+Use `git rebase -s ort <upstream>` or `git cherry-pick -s ort <commit>` to override the strategy for one operation.
+These commands still use the configured per-file merge driver.
+The PrefabLens strategy currently recomputes merge bases, so consecutive edits to the same path can produce replay conflicts that `ort` avoids.
+Prefer driver-only setup or an explicit `-s ort` for replay operations.
+Git v2.50.1 reads this setting for `revert`, but its revert execution uses the internal merge path.
+See [Git's sequencer implementation](https://github.com/git/git/blob/v2.50.1/sequencer.c).
 The strategy uses `git merge-tree --write-tree -z --messages` and requires Git 2.39 or later.
 It uses the output tree, index stages, and structured conflict types from the Git ort engine.
 It also tracks conflicts that have no unmerged index entries.

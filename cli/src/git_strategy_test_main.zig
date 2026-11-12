@@ -30,6 +30,10 @@ pub fn main(init: std.process.Init) !u8 {
     var env = try init.environ_map.clone(a);
     try env.put("PATH", try std.fmt.allocPrint(a, "{s}{c}{s}{c}{s}", .{ std.fs.path.dirname(prefablens).?, std.fs.path.delimiter, std.fs.path.dirname(strategy_path).?, std.fs.path.delimiter, env.get("PATH") orelse "" }));
     const ctx: Context = .{ .git = .{ .io = init.io, .arena = a, .env = &env }, .scratch = scratch, .prefablens = prefablens, .fixture_root = args[3] };
+    if (args.len == 5 and std.mem.eql(u8, args[4], "replay")) {
+        try @import("git_replay_tests.zig").run(ctx.git, scratch, prefablens);
+        return 0;
+    }
     if (args.len == 5 and std.mem.eql(u8, args[4], "private-permissions")) {
         if (supports_pty) try privatePermissions(ctx);
         return 0;
@@ -66,6 +70,7 @@ pub fn main(init: std.process.Init) !u8 {
         return 0;
     }
     try automatic(ctx);
+    try @import("git_replay_tests.zig").run(ctx.git, scratch, prefablens);
     try nonInteractive(ctx);
     try guards(ctx);
     try directoryConflict(ctx);

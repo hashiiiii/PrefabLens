@@ -9,6 +9,21 @@ pub const Sources = struct {
     bases: []const []const u8,
     known: ?context.Revisions,
 
+    pub fn mergeHeads(self: Sources, git: Git) ![2][]const u8 {
+        var parents: std.ArrayList([]const u8) = .empty;
+        for (self.bases) |base| {
+            const kind = merge_git.trim(try git.output(&.{ "cat-file", "-t", base }));
+            try parents.append(git.arena, if (std.mem.eql(u8, kind, "commit")) base else try commit(git, base, &.{}, "base"));
+        }
+        // Replay operations supply the parent of the picked commit, which need
+        // not be a merge base of the two heads. Isolated parents preserve that
+        // exact contract, including empty trees, on Git 2.39 as well.
+        return .{
+            try commit(git, self.ours, parents.items, "ours"),
+            try commit(git, self.theirs, parents.items, "theirs"),
+        };
+    }
+
     pub fn apply(self: Sources, env: *std.process.Environ.Map) !void {
         // An inherited handoff can describe another merge, including a recursive driver call.
         for ([_][]const u8{ "PREFABLENS_MERGE_BASE", "PREFABLENS_MERGE_OURS", "PREFABLENS_MERGE_THEIRS" }) |key| _ = env.swapRemove(key);
@@ -19,6 +34,14 @@ pub const Sources = struct {
         }
     }
 };
+
+pub fn fromBases(git: Git, bases: []const []const u8, local: []const u8, remote: []const u8) !Sources {
+    const ours = try identity(git, local);
+    const theirs = try identity(git, remote);
+    const ancestors = try git.arena.alloc([]const u8, bases.len);
+    for (bases, ancestors) |base, *ancestor| ancestor.* = try identity(git, base);
+    return init(ours, theirs, ancestors);
+}
 
 pub fn read(git: Git, local: []const u8, remote: []const u8) !Sources {
     const ours = try identity(git, local);
@@ -34,6 +57,10 @@ pub fn read(git: Git, local: []const u8, remote: []const u8) !Sources {
     }
     if (code == 1 and bases.items.len != 0) return error.InvalidRevision;
     const ancestors = try bases.toOwnedSlice(git.arena);
+    return init(ours, theirs, ancestors);
+}
+
+fn init(ours: []const u8, theirs: []const u8, ancestors: []const []const u8) Sources {
     return .{
         .ours = ours,
         .theirs = theirs,
@@ -43,10 +70,30 @@ pub fn read(git: Git, local: []const u8, remote: []const u8) !Sources {
 }
 
 fn identity(git: Git, name: []const u8) ![]const u8 {
-    const expression = try std.fmt.allocPrint(git.arena, "{s}^{{commit}}", .{name});
+    const expression = try std.fmt.allocPrint(git.arena, "{s}^{{}}", .{name});
     const oid = merge_git.trim(try git.output(&.{ "rev-parse", "--verify", "--end-of-options", expression }));
     if (!validOid(oid)) return error.InvalidRevision;
+    // Root cherry-picks pass the empty tree as Base. Reject blobs while keeping
+    // both commits and trees usable as immutable source snapshots.
+    _ = try git.output(&.{ "rev-parse", "--verify", "--end-of-options", try std.fmt.allocPrint(git.arena, "{s}^{{tree}}", .{oid}) });
     return oid;
+}
+
+fn commit(git: Git, treeish: []const u8, parents: []const []const u8, label: []const u8) ![]const u8 {
+    var env = try git.env.clone(git.arena);
+    defer env.deinit();
+    for ([_][]const u8{ "GIT_AUTHOR_NAME", "GIT_COMMITTER_NAME" }) |key| try env.put(key, "PrefabLens");
+    for ([_][]const u8{ "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_EMAIL" }) |key| try env.put(key, "merge@prefablens.invalid");
+    for ([_][]const u8{ "GIT_AUTHOR_DATE", "GIT_COMMITTER_DATE" }) |key| try env.put(key, "@0 +0000");
+    var isolated = git;
+    isolated.env = &env;
+    const tree = merge_git.trim(try git.output(&.{ "rev-parse", "--verify", try std.fmt.allocPrint(git.arena, "{s}^{{tree}}", .{treeish}) }));
+    var args: std.ArrayList([]const u8) = .empty;
+    try args.appendSlice(git.arena, &.{ "commit-tree", tree, "--no-gpg-sign", "-m", label });
+    for (parents) |parent| try args.appendSlice(git.arena, &.{ "-p", parent });
+    // These objects have no refs; the caller still owns the real history and
+    // commit metadata, and normal Git garbage collection can reclaim them.
+    return merge_git.trim(try isolated.output(args.items));
 }
 
 fn validOid(oid: []const u8) bool {
@@ -57,7 +104,7 @@ fn validOid(oid: []const u8) bool {
 
 const testing = std.testing;
 
-fn commit(git: Git, parents: []const []const u8, message: []const u8) ![]const u8 {
+fn fixtureCommit(git: Git, parents: []const []const u8, message: []const u8) ![]const u8 {
     const tree = merge_git.trim(try git.output(&.{"write-tree"}));
     var args: std.ArrayList([]const u8) = .empty;
     try args.appendSlice(git.arena, &.{ "commit-tree", tree, "-m", message });
@@ -84,9 +131,9 @@ test "strategy revisions: use immutable commits and replace inherited handoff" {
     defer tmp.cleanup();
     var env = std.process.Environ.Map.init(arena);
     const git = try fixture(&tmp, arena, &env);
-    const base = try commit(git, &.{}, "base");
-    const ours = try commit(git, &.{base}, "ours");
-    const theirs = try commit(git, &.{base}, "theirs");
+    const base = try fixtureCommit(git, &.{}, "base");
+    const ours = try fixtureCommit(git, &.{base}, "ours");
+    const theirs = try fixtureCommit(git, &.{base}, "theirs");
     try git.ok(&.{ "update-ref", "refs/heads/local", ours });
     try git.ok(&.{ "symbolic-ref", "HEAD", "refs/heads/local" });
     try git.ok(&.{ "update-ref", "refs/heads/remote", theirs });
@@ -113,12 +160,12 @@ test "strategy revisions: retain all real bases and clear unknown context" {
     defer tmp.cleanup();
     var env = std.process.Environ.Map.init(arena);
     const git = try fixture(&tmp, arena, &env);
-    const root = try commit(git, &.{}, "root");
-    const left = try commit(git, &.{root}, "left");
-    const right = try commit(git, &.{root}, "right");
-    const ours = try commit(git, &.{ left, right }, "merge left");
-    const theirs = try commit(git, &.{ right, left }, "merge right");
-    const unrelated = try commit(git, &.{}, "unrelated");
+    const root = try fixtureCommit(git, &.{}, "root");
+    const left = try fixtureCommit(git, &.{root}, "left");
+    const right = try fixtureCommit(git, &.{root}, "right");
+    const ours = try fixtureCommit(git, &.{ left, right }, "merge left");
+    const theirs = try fixtureCommit(git, &.{ right, left }, "merge right");
+    const unrelated = try fixtureCommit(git, &.{}, "unrelated");
     for ([_][]const u8{ theirs, unrelated }, [_]usize{ 2, 0 }) |remote, count| {
         for ([_][]const u8{ "PREFABLENS_MERGE_BASE", "PREFABLENS_MERGE_OURS", "PREFABLENS_MERGE_THEIRS" }) |key| try env.put(key, root);
         const sources = try read(git, ours, remote);

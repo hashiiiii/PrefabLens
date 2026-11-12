@@ -124,6 +124,12 @@ Use the normal merge command:
 git merge origin/main
 ```
 
+Setup also selects PrefabLens's strategy for cherry-pick and merge-backend rebase,
+including the merge or rebase performed by `git pull`.
+The file driver applies to UnityYAML content merges in other operations, including `git revert`.
+Git owns commits and operation state. If conflicts remain, resolve and stage them,
+then use the original command's `--continue` or `--abort`.
+
 https://github.com/user-attachments/assets/2ad6a2e9-5562-40b8-ab7e-c5f277da3d8b
 
 Set the installed PrefabLens executable as your GUI client's external merge tool on macOS or Windows.  

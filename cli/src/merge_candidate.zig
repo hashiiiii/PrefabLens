@@ -41,7 +41,6 @@ pub const Candidate = struct {
     store: revision.Store,
     nodes: std.ArrayList(Node) = .empty,
     node_index: std.StringHashMap(usize),
-    blobs: std.StringHashMap([]const u8),
     batch: ?revision.Batch = null,
     relevance: std.StringHashMap(bool),
     items: std.ArrayList(Item) = .empty,
@@ -63,7 +62,7 @@ pub const Candidate = struct {
         var alternate = git;
         alternate.env = env;
         try alternate.ok(&.{ "read-tree", result.tree });
-        var self: Candidate = .{ .git = git, .alternate = alternate, .scratch = absolute, .result = result, .store = revision.Store.init(git), .node_index = .init(git.arena), .blobs = .init(git.arena), .relevance = .init(git.arena) };
+        var self: Candidate = .{ .git = git, .alternate = alternate, .scratch = absolute, .result = result, .store = revision.Store.init(git), .node_index = .init(git.arena), .relevance = .init(git.arena) };
         errdefer if (self.batch) |*batch| batch.child.kill(git.io);
         const sources = result.sources orelse return error.MissingMergeSources;
         for (sources.bases) |base| try self.scan(base);
@@ -88,19 +87,18 @@ pub const Candidate = struct {
         return index;
     }
 
-    fn readBlob(self: *Candidate, oid: []const u8) ![]const u8 {
-        if (self.blobs.get(oid)) |bytes| return bytes;
+    fn readBlob(self: *Candidate, oid: []const u8, arena: std.mem.Allocator) ![]const u8 {
         if (self.batch == null) self.batch = try revision.Batch.init(self.git);
-        const bytes = try self.batch.?.read(self.git, oid, 256 * 1024 * 1024);
-        try self.blobs.put(oid, bytes);
-        return bytes;
+        var temporary = self.git;
+        temporary.arena = arena;
+        return self.batch.?.read(temporary, oid, 256 * 1024 * 1024);
     }
 
     fn collectionRelevant(self: *Candidate, oid: []const u8, bytes: []const u8) !bool {
         if (self.relevance.get(oid)) |value| return value;
         // Inspect parsed structure only. A script binding needs schema inspection
         // because Unity can serialize a typed collection as a scalar token.
-        var memory = std.heap.ArenaAllocator.init(self.git.arena);
+        var memory = std.heap.ArenaAllocator.init(std.heap.page_allocator);
         defer memory.deinit();
         const built = core.merge.build(memory.allocator(), bytes, bytes, bytes) catch {
             try self.relevance.put(oid, true);
@@ -115,17 +113,32 @@ pub const Candidate = struct {
 
     fn scan(self: *Candidate, tree: []const u8) !void {
         const a = self.git.arena;
-        const snapshot = try treeEntries(self.git, tree);
-        try self.snapshots.append(a, snapshot);
-        for (snapshot.entries) |entry| {
-            _ = try self.node(entry.path);
-            if (!std.ascii.endsWithIgnoreCase(entry.path, ".meta")) continue;
+        const entries = try treeEntries(self.git, tree);
+        try self.snapshots.append(a, entries);
+        for (entries.entries) |entry| _ = try self.node(entry.path);
+    }
+
+    fn inspect(self: *Candidate, n: *Node, metadata: bool) !void {
+        for (self.snapshots.items) |entries| {
+            const entry = entries.get(n.path) orelse continue;
             if (!regular(entry.mode)) {
-                self.nodes.items[self.node_index.get(entry.path).?].uncertain_identity = true;
+                if (metadata) n.uncertain_identity = true;
                 continue;
             }
-            const bytes = try self.readBlob(entry.oid);
-            if ((try revision.metadataGuid(a, bytes)) == null) self.nodes.items[self.node_index.get(entry.path).?].uncertain_identity = true;
+            // Classification must not retain every asset's bytes or parsed YAML
+            // for the lifetime of a replay step.
+            var memory = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+            defer memory.deinit();
+            var temporary = self.git;
+            temporary.arena = memory.allocator();
+            if (self.batch == null) self.batch = try revision.Batch.init(self.git);
+            const bytes = try self.batch.?.read(temporary, entry.oid, 256 * 1024 * 1024);
+            if (metadata) {
+                if ((try revision.metadataGuid(temporary.arena, bytes)) == null) n.uncertain_identity = true;
+            } else if (core.isUnityYaml(bytes)) {
+                n.unity = true;
+                n.relevant = n.relevant or try self.collectionRelevant(entry.oid, bytes);
+            }
         }
     }
 
@@ -135,7 +148,7 @@ pub const Candidate = struct {
         // remain part of the candidate set.
         for (self.nodes.items) |*n| {
             const first = self.snapshots.items[0].get(n.path);
-            for (self.snapshots.items[1..]) |snapshot| if (!equalEntry(first, snapshot.get(n.path))) {
+            for (self.snapshots.items[1..]) |entries| if (!equalEntry(first, entries.get(n.path))) {
                 n.changed = true;
                 break;
             };
@@ -148,23 +161,21 @@ pub const Candidate = struct {
                 if (std.ascii.endsWithIgnoreCase(path, ".meta")) self.nodes.items[index].uncertain_identity = true;
             }
         }
+        for (self.nodes.items) |*n| {
+            if (n.changed and std.ascii.endsWithIgnoreCase(n.path, ".meta") and !n.uncertain_identity) try self.inspect(n, true);
+        }
         // Declaration/assembly changes can alter name lookup anywhere. Evidence
         // for semantic work does not prove that unrelated assets conflict.
         var schema_paths: std.ArrayList([]const u8) = .empty;
         for (self.nodes.items) |n| if (n.changed and (schemaPath(n.path) or n.uncertain_identity)) try schema_paths.append(a, n.path);
         self.evidence_paths = schema_paths.items;
-        // Unchanged assets need content inspection only when schema or identity
-        // evidence changed. Reading them earlier retains the entire repository.
-        for (self.snapshots.items) |snapshot| for (snapshot.entries) |entry| {
-            if (!regular(entry.mode) or !assetPath(entry.path)) continue;
-            const n = &self.nodes.items[self.node_index.get(entry.path).?];
-            if (!n.changed and schema_paths.items.len == 0) continue;
-            const bytes = try self.readBlob(entry.oid);
-            if (!core.isUnityYaml(bytes)) continue;
-            n.unity = true;
-            n.relevant = n.relevant or try self.collectionRelevant(entry.oid, bytes);
-            if (schema_paths.items.len != 0) n.changed = true;
-        };
+        for (self.nodes.items) |*n| {
+            if (!assetPath(n.path) or (!n.changed and schema_paths.items.len == 0)) continue;
+            try self.inspect(n, false);
+            // Source changes can invalidate even unchanged dependents, so their
+            // semantic review must survive the changed-path filter.
+            if (n.unity and schema_paths.items.len != 0) n.changed = true;
+        }
         for (self.nodes.items) |n| {
             if (!n.unity or !n.relevant or !n.changed or self.covered(n.path)) continue;
             // Deleted paths and structural groups retain Git's own relationship.
@@ -218,19 +229,15 @@ pub const Candidate = struct {
     }
 
     pub fn buildForReview(self: *Candidate, index: usize, output: core.merge_context.Snapshot) !?core.merge.BuildResult {
-        return self.buildWithMode(index, output, true);
+        return self.buildWithMode(index, output, true, self.git.arena);
     }
 
-    pub fn build(self: *Candidate, index: usize, output: core.merge_context.Snapshot) !?core.merge.BuildResult {
-        return self.buildWithMode(index, output, false);
-    }
-
-    fn buildWithMode(self: *Candidate, index: usize, output: core.merge_context.Snapshot, review: bool) !?core.merge.BuildResult {
+    fn buildWithMode(self: *Candidate, index: usize, output: core.merge_context.Snapshot, review: bool, arena: std.mem.Allocator) !?core.merge.BuildResult {
         const item = self.items.items[index];
         if (item.paths.len != 1 or (item.conflict != null and !std.mem.eql(u8, item.conflict.?.kind, "CONFLICT (contents)"))) return null;
         const path = item.paths[0];
         const paths = item.input_paths orelse return null;
-        const inputs = try self.readInputs(path);
+        const inputs = try self.readInputsWithAllocator(path, arena);
         for ([_][]const u8{ inputs.base, inputs.ours, inputs.theirs }) |bytes| if (bytes.len != 0 and !core.isUnityYaml(bytes)) return null;
         if (inputs.ours.len == 0 and inputs.theirs.len == 0) return null;
         var context: core.merge_context.Context = .{};
@@ -238,7 +245,7 @@ pub const Candidate = struct {
             context = (try session.bind(&self.store, known, paths, inputs)) orelse return null;
         } else return null;
         context.output = output;
-        return (if (review) core.merge.buildForReview(self.git.arena, inputs.base, inputs.ours, inputs.theirs, context) else core.merge.buildWithContext(self.git.arena, inputs.base, inputs.ours, inputs.theirs, context)) catch null;
+        return (if (review) core.merge.buildForReview(arena, inputs.base, inputs.ours, inputs.theirs, context) else core.merge.buildWithContext(arena, inputs.base, inputs.ours, inputs.theirs, context)) catch null;
     }
 
     fn inputPaths(self: *Candidate, path: []const u8) ?session.Paths {
@@ -247,14 +254,18 @@ pub const Candidate = struct {
     }
 
     pub fn readInputs(self: *Candidate, path: []const u8) !session.Inputs {
-        const entries = try self.inputEntries(path);
-        return .{ .base = try self.readStage(entries[0]), .ours = try self.readStage(entries[1]), .theirs = try self.readStage(entries[2]) };
+        return self.readInputsWithAllocator(path, self.git.arena);
     }
 
-    fn readStage(self: *Candidate, stage: ?strategy.Stage) ![]const u8 {
+    fn readInputsWithAllocator(self: *Candidate, path: []const u8, arena: std.mem.Allocator) !session.Inputs {
+        const entries = try self.inputEntries(path);
+        return .{ .base = try self.readStage(entries[0], arena), .ours = try self.readStage(entries[1], arena), .theirs = try self.readStage(entries[2], arena) };
+    }
+
+    fn readStage(self: *Candidate, stage: ?strategy.Stage, arena: std.mem.Allocator) ![]const u8 {
         const entry = stage orelse return "";
         if (!regular(entry.mode)) return error.UnsupportedFileMode;
-        return self.readBlob(entry.oid);
+        return self.readBlob(entry.oid, arena);
     }
 
     fn inputEntries(self: *Candidate, path: []const u8) ![3]?strategy.Stage {
@@ -286,8 +297,12 @@ pub const Candidate = struct {
                 if (self.ready(i)) break i;
             } else break;
             self.items.items[index].attempted = true;
-            var built = (try self.build(index, try self.selected())) orelse continue;
-            const bytes = core.merge.finish(self.git.arena, &built.plan) catch continue;
+            // Automatic plans are independent. Keeping their parse trees until
+            // process exit made a schema-wide replay grow with every asset.
+            var memory = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+            defer memory.deinit();
+            var built = (try self.buildWithMode(index, try self.selected(), false, memory.allocator())) orelse continue;
+            const bytes = core.merge.finish(memory.allocator(), &built.plan) catch continue;
             const path = self.items.items[index].paths[0];
             const entry = (try files.treeEntry(self.git, self.result.tree, path)) orelse continue;
             try self.put(path, entry.mode, bytes);

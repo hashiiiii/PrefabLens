@@ -75,7 +75,7 @@ pub fn run(io: std.Io, arena: std.mem.Allocator, args: []const []const u8, env: 
     } else return error.InvalidStrategyArguments;
     if (args.len - separator != 3) return error.InvalidStrategyArguments;
     var options: std.ArrayList([]const u8) = .empty;
-    var base_count: usize = 0;
+    var bases: std.ArrayList([]const u8) = .empty;
     for (args[0..separator]) |arg| {
         if (std.mem.startsWith(u8, arg, "--")) {
             if (!v.atLeast(2, 43)) {
@@ -85,21 +85,22 @@ pub fn run(io: std.Io, arena: std.mem.Allocator, args: []const []const u8, env: 
             try options.append(arena, try std.fmt.allocPrint(arena, "-X{s}", .{arg[2..]}));
         } else {
             if (!validOid(arg)) return error.InvalidStrategyArguments;
-            base_count += 1;
+            try bases.append(arena, arg);
         }
     }
     const head = args[separator + 1];
     const remote = args[separator + 2];
     if (!validOid(remote) or (!std.mem.eql(u8, head, "HEAD") and !validOid(head))) return error.InvalidStrategyArguments;
-    const sources = try strategy_revisions.read(git, head, remote);
+    const sources = try strategy_revisions.fromBases(git, bases.items, head, remote);
     try sources.apply(&git_env);
     const index_before = try std.Io.Dir.cwd().readFileAlloc(io, try indexPath(git), arena, .limited(256 * 1024 * 1024));
     if (merge_git.exitCode(try git.run(&.{ "diff-index", "--cached", "--quiet", sources.ours, "--" })) != 0) {
         try stderr.writeAll("prefablens: Commit or unstage index changes before this merge.\n");
         return 2;
     }
-    if (base_count == 0) try options.append(arena, "--allow-unrelated-histories");
-    const merge_args = try std.mem.concat(arena, []const u8, &.{ &.{ "merge-tree", "--write-tree", "-z", "--messages" }, options.items, &.{ sources.ours, sources.theirs } });
+    if (sources.bases.len == 0) try options.append(arena, "--allow-unrelated-histories");
+    const heads = try sources.mergeHeads(git);
+    const merge_args = try std.mem.concat(arena, []const u8, &.{ &.{ "merge-tree", "--write-tree", "-z", "--messages" }, options.items, &heads });
     const output = try git.run(merge_args);
     if (merge_git.exitCode(output) > 1) {
         try stderr.writeAll(output.stderr);

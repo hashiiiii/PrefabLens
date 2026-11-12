@@ -5,6 +5,7 @@ Issue: [#467](https://github.com/hashiiiii/PrefabLens/issues/467).
 Measurements used macOS 27.0.1 on arm64, 32 GiB RAM, Git 2.54.0 (Apple Git-157), and Zig 0.17.0 ReleaseFast builds.
 The baseline was `9f840447c9b81137174f5930d532600f9603e158`.
 The reporter's PrefabLens version and Windows repository were unavailable; these are local reproductions, not measurements of that environment.
+The tables record the initial performance changes at `9469fefc24241878e7a254c890b522cb43bd86cc`; they do not include the subsequent replay-input and per-file allocation changes.
 
 ## Confirmed causes
 
@@ -17,7 +18,9 @@ Git v2.50.1 has the same selection logic and an internal revert execution path i
 A separate replay check edited the same text file in consecutive commits.
 PrefabLens stopped at the second commit with a conflict; `ort` completed successfully.
 The trace's explicit base differed from the base recomputed by the strategy.
-This change provides the `ort` opt-out; it does not redesign replay-base handling.
+Replay-input handling has since been corrected: the strategy preserves Git's supplied bases, including the empty-tree base of a root pick and the index-tree Ours of `--no-commit`.
+The repeated-edit regression and exclusion of unpicked ancestor changes are covered by `zig build test-merge-strategy -- replay`.
+The optional `ort` configuration remains available; normal setup continues to enable the PrefabLens strategy.
 
 Each strategy eagerly read all asset versions into `Candidate.blobs`, including unchanged files.
 A repository with 768 unchanged assets, each containing a 4 MiB scalar, retained 3,221,313,898 bytes of blob content.

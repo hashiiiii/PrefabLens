@@ -135,7 +135,7 @@ Setup registers this default path in global configuration so that a system `core
 Existing attribute lines are preserved, and repeated setup does not duplicate the rules.
 If the user attributes file is a symlink, setup updates its target and preserves the link.
 
-User setup sets `pull.twohead=prefablens` globally, selecting PrefabLens for ordinary merges across all repositories, including repositories without Unity files.
+User setup sets `pull.twohead=prefablens` globally, selecting PrefabLens for ordinary merges, cherry-picks, and merge-backend rebases across all repositories, including repositories without Unity files.
 For ordinary merges, repository configuration takes precedence over global configuration.
 Git's sequencer uses the first `pull.twohead` value when selecting the default strategy for `rebase` and `cherry-pick`.
 A local `ort` setting therefore cannot disable an earlier global PrefabLens setting in those commands.
@@ -155,14 +155,18 @@ Before the strategy writes merge objects, the index, or working files, it checks
 If any command is missing or reports a different version, reinstall the release archive.
 
 The `pull.twohead=prefablens` configuration entry selects the strategy for ordinary two-head `git merge` commands.
-It also selects the default strategy for merge-based `git rebase` and `git cherry-pick`, potentially launching PrefabLens for every replayed commit.
-Use `git rebase -s ort <upstream>` or `git cherry-pick -s ort <commit>` to override the strategy for one operation.
-These commands still use the configured per-file merge driver.
-The PrefabLens strategy currently recomputes merge bases, so consecutive edits to the same path can produce replay conflicts that `ort` avoids.
-Prefer driver-only setup or an explicit `-s ort` for replay operations.
-Git v2.50.1 reads this setting for `revert`, but its revert execution uses the internal merge path.
+Despite its name, Git's sequencer also uses this setting for cherry-pick and merge-backend rebase.
+`git pull` uses the selected merge or rebase path; fast-forward updates need no content merge.
+Git 2.50.1's revert path uses its internal strategy rather than the external strategy, but still uses the configured file driver.
+Use `git rebase -s ort <upstream>` or `git cherry-pick -s ort <commit>` to choose Git's strategy for one operation while keeping the configured file driver.
 See [Git's sequencer implementation](https://github.com/git/git/blob/v2.50.1/sequencer.c).
+
 The strategy uses `git merge-tree --write-tree -z --messages` and requires Git 2.39 or later.
+It honors the bases supplied by Git instead of recomputing ancestry from the heads.
+For a pick, the base is the selected commit's parent; for a root pick, it is an empty tree.
+`--no-commit` can supply the current index tree as Ours.
+Temporary commit objects give ort exactly the supplied parents, including multiple bases, without moving any refs or modifying the caller's history.
+These objects use fixed metadata, ignore commit signing settings, and are reclaimable by normal Git garbage collection.
 It uses the output tree, index stages, and structured conflict types from the Git ort engine.
 It also tracks conflicts that have no unmerged index entries.
 Strategy options (`-X`) require Git 2.43 or later.
@@ -176,10 +180,15 @@ The UI supports choices for file deletions, renames, and matching GUID metadata.
 PrefabLens writes a file resolution only after you complete these choices.
 Ambiguous paths, GUIDs, or metadata content remain unresolved.
 
-The outer Git command owns merge commits, `MERGE_HEAD`, `--no-commit`, `--squash`, and abort.
+The outer Git command owns commits, operation refs, `--no-commit`, `--squash`, continue, and abort.
 Before the strategy can return 0, every conflict must have a resolution.
 If a conflict remains after the strategy installs the merge state, it returns 1.
 A failure before installation returns 2.
+
+Candidate discovery compares tree entries before reading asset contents.
+Unchanged assets are inspected only when changed source or metadata evidence can affect them.
+Classification buffers and automatic merge plans are released per file, rather than retained until the end of each replay step.
+Changed source evidence still causes dependent assets to be revalidated even if Git would skip their file driver.
 
 #### Content adapters
 
@@ -190,7 +199,7 @@ prefablens mergetool [--terminal] <base> <local> <remote> <merged>
 
 | Driver argument | Git placeholder | Meaning |
 | --- | --- | --- |
-| `<base>` | `%O` | Common ancestor |
+| `<base>` | `%O` | Base selected by the Git operation |
 | `<ours-and-output>` | `%A` | Ours input and result output |
 | `<theirs>` | `%B` | Theirs input |
 | `<path>` | `%P` | Repository-relative path |
@@ -198,6 +207,12 @@ prefablens mergetool [--terminal] <base> <local> <remote> <merged>
 
 The mergetool arguments map to `$BASE`, `$LOCAL`, `$REMOTE`, and `$MERGED`.
 `$MERGED` contains the current working file and receives a resolution only after completion.
+
+A resumed tool can discover single-parent cherry-pick, rebase, and revert inputs from Git's operation refs.
+Revert reverses the input roles: Base is the reverted commit, and Theirs is its parent.
+An unrecorded mainline for a picked merge commit is not guessed.
+Historical type evidence is used only when the supplied file bytes match the corresponding snapshots; otherwise resolution remains conservative.
+The file driver alone does not run the strategy's repository-wide dependent validation.
 
 | Command | Exit 0 | Exit 1 | Exit 2 |
 | --- | --- | --- | --- |

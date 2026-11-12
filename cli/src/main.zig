@@ -88,7 +88,6 @@ pub fn main(init: std.process.Init) !u8 {
                     error.InvalidSetupArguments => try stderr.writeAll("usage: " ++ merge_setup.usage ++ "\n"),
                     error.SetupRequiresRepository => try stderr.writeAll("prefablens: Merge setup requires a Git working tree.\nRun this command inside a repository, or use: prefablens setup-merge --user\n"),
                     error.InvalidUserAttributesPath => try stderr.writeAll("prefablens: Global core.attributesFile must name an absolute path or start with ~/.\nSet it with git config --global core.attributesFile <path>, then run setup again.\n"),
-                    error.InheritedMergeStrategy => try stderr.writeAll("prefablens: A Git setting outside the selected config file still selects PrefabLens.\nInspect it with git config --show-origin --show-scope --get-all pull.twohead.\nChange the PrefabLens setting in its reported file before using --no-strategy.\nFor a direct global setting, run prefablens setup-merge --user --no-strategy.\nYou can also pass -s ort to an individual Git command.\nNo setup files were changed.\n"),
                     else => try stderr.print("prefablens: Merge setup failed: {s}.\n", .{@errorName(err)}),
                 };
                 break :blk @as(u8, 2);

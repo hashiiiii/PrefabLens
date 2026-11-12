@@ -5,23 +5,15 @@ const unity_path = @import("unity_path.zig");
 const installation = @import("installation.zig");
 
 const Scope = enum { project, local, user };
-const Options = struct { scope: Scope = .local, strategy: bool = true };
-pub const usage = "prefablens setup-merge [--project|--local|--user] [--no-strategy]";
+pub const usage = "prefablens setup-merge [--project|--local|--user]";
 
-fn parseOptions(args: []const []const u8) !Options {
-    var result: Options = .{};
-    var scoped = false;
-    for (args) |arg| {
-        if (std.mem.eql(u8, arg, "--no-strategy")) {
-            if (!result.strategy) return error.InvalidSetupArguments;
-            result.strategy = false;
-            continue;
-        }
-        if (scoped) return error.InvalidSetupArguments;
-        result.scope = if (std.mem.eql(u8, arg, "--project")) .project else if (std.mem.eql(u8, arg, "--local")) .local else if (std.mem.eql(u8, arg, "--user")) .user else return error.InvalidSetupArguments;
-        scoped = true;
-    }
-    return result;
+fn parseScope(args: []const []const u8) !Scope {
+    if (args.len == 0) return .local;
+    if (args.len != 1) return error.InvalidSetupArguments;
+    if (std.mem.eql(u8, args[0], "--project")) return .project;
+    if (std.mem.eql(u8, args[0], "--local")) return .local;
+    if (std.mem.eql(u8, args[0], "--user")) return .user;
+    return error.InvalidSetupArguments;
 }
 
 const UserAttributes = struct {
@@ -55,8 +47,7 @@ fn userAttributes(git: merge_git.Git) !UserAttributes {
 }
 
 pub fn run(io: std.Io, arena: std.mem.Allocator, args: []const []const u8, env: *std.process.Environ.Map, stdout: *std.Io.Writer) !void {
-    const options = try parseOptions(args);
-    const scope = options.scope;
+    const scope = try parseScope(args);
     var git: merge_git.Git = .{ .io = io, .arena = arena, .env = env };
     if (!(try merge_git.version(git)).atLeast(2, 39)) return error.Git239Required;
     if (scope != .user) {
@@ -65,32 +56,7 @@ pub fn run(io: std.Io, arena: std.mem.Allocator, args: []const []const u8, env: 
         };
         git.cwd = merge_git.trim(root);
     }
-    if (!options.strategy) {
-        const config_scope = if (scope == .user) "--global" else "--local";
-        const own = try git.run(&.{ "config", config_scope, "--no-includes", "--null", "--show-origin", "--get-all", "pull.twohead" });
-        if (merge_git.exitCode(own) > 1) return error.GitFailed;
-        var own_fields = std.mem.splitScalar(u8, own.stdout, 0);
-        const own_origin = own_fields.next() orelse "";
-        const configured = try git.run(&.{ "config", "--null", "--show-scope", "--show-origin", "--get-all", "pull.twohead" });
-        if (merge_git.exitCode(configured) > 1) return error.GitFailed;
-        var fields = std.mem.splitScalar(u8, configured.stdout, 0);
-        var first = true;
-        while (fields.next()) |source_scope| {
-            if (source_scope.len == 0) break;
-            const origin = fields.next() orelse return error.GitFailed;
-            var strategies = std.mem.tokenizeAny(u8, fields.next() orelse return error.GitFailed, "\t ");
-            const selected = strategies.next() orelse "";
-            // Replay uses the first value; ordinary merge can use a later included value.
-            // Neither is disabled by changing a different configuration file.
-            const inherited = first and (std.mem.eql(u8, source_scope, "system") or (scope != .user and std.mem.eql(u8, source_scope, "global")));
-            const included = std.mem.eql(u8, source_scope, if (scope == .user) "global" else "local") and !std.mem.eql(u8, origin, own_origin);
-            if (std.mem.eql(u8, selected, "prefablens") and
-                (inherited or included))
-                return error.InheritedMergeStrategy;
-            first = false;
-        }
-    }
-    if (options.strategy) try installation.requireCompatible(git) else try installation.requireDriverCompatible(git);
+    try installation.requireCompatible(git);
     var default_user_path: ?[]const u8 = null;
     const path = switch (scope) {
         .project => try git.path(".gitattributes"),
@@ -129,12 +95,7 @@ pub fn run(io: std.Io, arena: std.mem.Allocator, args: []const []const u8, env: 
     try git.ok(&.{ "config", config_scope, "merge.prefablens.recursive", "text" });
     try git.ok(&.{ "config", config_scope, "mergetool.prefablens.cmd", "prefablens mergetool \"$BASE\" \"$LOCAL\" \"$REMOTE\" \"$MERGED\"" });
     try git.ok(&.{ "config", config_scope, "mergetool.prefablens.trustExitCode", "true" });
-    // Re-running setup must replace the strategy installed by an earlier setup in this scope.
-    if (options.strategy)
-        try git.ok(&.{ "config", config_scope, "pull.twohead", "prefablens" })
-    else
-        try git.ok(&.{ "config", config_scope, "--replace-all", "pull.twohead", "ort" });
+    try git.ok(&.{ "config", config_scope, "pull.twohead", "prefablens" });
     try stdout.print("PrefabLens merge is ready for {s}. Run git merge as usual.\n", .{if (scope == .user) "your repositories" else "this repository"});
-    if (!options.strategy) try stdout.writeAll("Git uses ort; PrefabLens handles Unity file contents through its merge driver.\n");
     if (scope == .project) try stdout.writeAll("Commit .gitattributes to share the rules. Each clone needs setup unless your user configuration already provides it.\n");
 }

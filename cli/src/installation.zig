@@ -7,7 +7,7 @@ pub fn requireCompatible(git: merge_git.Git) !void {
     // Git searches its exec path before PATH for an external strategy.
     try checkedVersion(git, .strategy);
     // The driver inherits Git's PATH, which can differ from the terminal PATH during setup.
-    try requireDriverCompatible(git);
+    try checkedVersion(git, .driver);
 
     // Git excludes unknown exec-path commands from the custom merge strategy list.
     var commands = std.mem.tokenizeAny(u8, try git.output(&.{"--list-cmds=others"}), "\r\n");
@@ -15,10 +15,6 @@ pub fn requireCompatible(git: merge_git.Git) !void {
         if (std.mem.eql(u8, command, "merge-prefablens")) return;
     }
     return error.MergeStrategyUnavailable;
-}
-
-pub fn requireDriverCompatible(git: merge_git.Git) !void {
-    try checkedVersion(git, .driver);
 }
 
 fn checkedVersion(git: merge_git.Git, command: Command) !void {

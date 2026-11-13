@@ -30,6 +30,10 @@ pub fn main(init: std.process.Init) !u8 {
     var env = try init.environ_map.clone(a);
     try env.put("PATH", try std.fmt.allocPrint(a, "{s}{c}{s}{c}{s}", .{ std.fs.path.dirname(prefablens).?, std.fs.path.delimiter, std.fs.path.dirname(strategy_path).?, std.fs.path.delimiter, env.get("PATH") orelse "" }));
     const ctx: Context = .{ .git = .{ .io = init.io, .arena = a, .env = &env }, .scratch = scratch, .prefablens = prefablens, .fixture_root = args[3] };
+    if (args.len == 5 and std.mem.eql(u8, args[4], "nonunity")) {
+        try @import("git_nonunity_tests.zig").run(ctx.git, scratch, prefablens);
+        return 0;
+    }
     if (args.len == 5 and std.mem.eql(u8, args[4], "replay")) {
         try @import("git_replay_tests.zig").run(ctx.git, scratch, prefablens);
         return 0;
@@ -70,6 +74,7 @@ pub fn main(init: std.process.Init) !u8 {
         return 0;
     }
     try automatic(ctx);
+    try @import("git_nonunity_tests.zig").run(ctx.git, scratch, prefablens);
     try @import("git_replay_tests.zig").run(ctx.git, scratch, prefablens);
     try nonInteractive(ctx);
     try guards(ctx);
@@ -152,11 +157,6 @@ fn guards(ctx: Context) !void {
     try t.expectNonzero(try git.run(&.{ "merge", "--no-edit", "remote" }), "overlapping local edits");
     try expectFile(git, "Assets/A.prefab", "manual edit\n");
     try t.require((try git.output(&.{ "ls-files", "-u" })).len == 0, "refused merge changed conflict stages");
-    const v = try merge_git.version(git);
-    if (!v.atLeast(2, 43)) {
-        try t.expectNonzero(try git.run(&.{ "merge", "-Xours", "--no-edit", "remote" }), "old Git strategy option");
-        try expectFile(git, "Assets/A.prefab", "manual edit\n");
-    }
 }
 fn runPty(git: merge_git.Git, keys: []const u8) !std.process.RunResult {
     // Git's external strategy inherits this PATH from the shell in the real terminal.
@@ -421,6 +421,8 @@ fn addedUnity(ctx: Context) !void {
 fn candidateEncoding(ctx: Context) !void {
     const root = try std.fs.path.join(ctx.git.arena, &.{ ctx.fixture_root, "cases", "array-separate-insert" });
     const path = if (builtin.os.tag == .windows) "Assets/CRLF.prefab" else "Assets/a\tb\nc.prefab";
+    const script = try readCollectionFile(ctx, ctx.fixture_root, "unity/Assets/AuditBehaviour.cs");
+    const meta = try readCollectionFile(ctx, ctx.fixture_root, "unity/Assets/AuditBehaviour.cs.meta");
     for ([_]bool{ false, true }) |filtered| {
         var sides: [3][]const u8 = undefined;
         for ([_][]const u8{ "base", "ours", "theirs" }, 0..) |name, i| {
@@ -430,7 +432,13 @@ fn candidateEncoding(ctx: Context) !void {
             else
                 try std.mem.replaceOwned(u8, ctx.git.arena, bytes, "\n", "\r\n");
         }
-        const git = try ctx.repo(if (filtered) "candidate-filter" else "candidate-crlf-path-mode", &.{.{ .path = path, .base = sides[0], .ours = sides[1], .theirs = sides[2] }});
+        // Encoding checks need the fixture's real array declaration so missing
+        // type evidence cannot obscure the canonical-byte and file-mode checks.
+        const git = try ctx.repo(if (filtered) "candidate-filter" else "candidate-crlf-path-mode", &.{
+            .{ .path = path, .base = sides[0], .ours = sides[1], .theirs = sides[2] },
+            .{ .path = "Assets/AuditBehaviour.cs", .base = script, .ours = script, .theirs = script },
+            .{ .path = "Assets/AuditBehaviour.cs.meta", .base = meta, .ours = meta, .theirs = meta },
+        });
         const source_expected = try readCollectionFile(ctx, root, "expected.prefab");
         const expected = if (filtered)
             try std.fmt.allocPrint(git.arena, "{s}# canonical-token\n", .{source_expected})

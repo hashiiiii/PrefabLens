@@ -103,6 +103,9 @@ pub fn discover(git: Git) !?Revisions {
             .theirs = (try snapshotIdentity(git, theirs.?)) orelse return null,
         };
     }
+    if (try @import("merge_replay_context.zig").discover(git)) |saved| {
+        return .{ .base = saved.base, .ours = saved.ours, .theirs = saved.theirs };
+    }
     const merge_path_result = try git.run(&.{ "rev-parse", "--git-path", "MERGE_HEAD" });
     if (merge_git.exitCode(merge_path_result) != 0) return null;
     const merge_path = merge_git.trim(merge_path_result.stdout);
@@ -175,12 +178,17 @@ pub fn bind(store: *revision.Store, revisions: Revisions, paths: Paths, inputs: 
         .ours = ours,
         .theirs = theirs,
         .output = if (revisions.output) |output| try store.snapshot(output) else .{},
+        .require_script_schema = true,
     };
 }
 
 fn matches(git: Git, tree: []const u8, path: []const u8, bytes: []const u8) !bool {
     if (path.len == 0 or std.fs.path.isAbsolute(path) or std.mem.indexOfScalar(u8, path, 0) != null) return false;
-    const result = try git.run(&.{ "--literal-pathspecs", "ls-tree", "-z", "--full-tree", tree, "--", path });
+    var memory = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer memory.deinit();
+    var temporary = git;
+    temporary.arena = memory.allocator();
+    const result = try temporary.run(&.{ "--literal-pathspecs", "ls-tree", "-z", "--full-tree", tree, "--", path });
     if (merge_git.exitCode(result) != 0) return false;
     const entry = result.stdout;
     if (entry.len == 0) return bytes.len == 0;
@@ -193,7 +201,7 @@ fn matches(git: Git, tree: []const u8, path: []const u8, bytes: []const u8) !boo
     const oid = fields.next() orelse return false;
     if (fields.next() != null or !std.mem.eql(u8, kind, "blob") or
         (!std.mem.eql(u8, mode, "100644") and !std.mem.eql(u8, mode, "100755"))) return false;
-    const blob = try git.run(&.{ "cat-file", "blob", oid });
+    const blob = try temporary.run(&.{ "cat-file", "blob", oid });
     return merge_git.exitCode(blob) == 0 and std.mem.eql(u8, bytes, blob.stdout);
 }
 
@@ -251,6 +259,37 @@ test "session context binds exact historical inputs and ignores dirty declaratio
     // A manually edited temporary input cannot borrow a matching path's old type proof.
     try testing.expectEqual(null, try bind(&store, revisions, paths, .{ .base = base_bytes, .ours = "edited input", .theirs = theirs_bytes }));
     try testing.expectEqual(null, try bind(&store, revisions, .{ .base = "Assets/Missing.prefab", .ours = asset_path, .theirs = asset_path }, inputs));
+}
+
+test "session context does not retain repeated large inputs" {
+    var setup_memory = std.heap.ArenaAllocator.init(testing.allocator);
+    defer setup_memory.deinit();
+    const setup = setup_memory.allocator();
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var env = std.process.Environ.Map.init(setup);
+    const git = try fixtureGit(&tmp, setup, &env);
+    const padding = try setup.alloc(u8, 1024 * 1024);
+    @memset(padding, 'x');
+    const bytes = try std.fmt.allocPrint(setup, "--- !u!114 &1\nMonoBehaviour:\n  m_Script: {{fileID: 11500000, guid: {s}, type: 3}}\n  values: 01000000i\n  padding: {s}\n", .{ script_guid, padding });
+    const commit = try fixtureCommit(git, bytes);
+    const revisions: Revisions = .{ .base = commit, .ours = commit, .theirs = commit };
+    const paths: Paths = .{ .base = asset_path, .ours = asset_path, .theirs = asset_path };
+    const inputs: Inputs = .{ .base = bytes, .ours = bytes, .theirs = bytes };
+
+    // Replayed files can be much larger than the persistent historical context.
+    var memory = std.heap.ArenaAllocator.init(testing.allocator);
+    defer memory.deinit();
+    var limited = git;
+    limited.arena = memory.allocator();
+    var store = revision.Store.init(limited);
+    defer store.deinit();
+
+    for (0..4) |_| {
+        const context = (try bind(&store, revisions, paths, inputs)) orelse return error.TestUnexpectedResult;
+        try testing.expectEqual(@as(usize, 1), context.base.scripts.len);
+    }
+    try testing.expect(memory.queryCapacity() < 512 * 1024);
 }
 
 test "session context discovers only complete strategy revisions or a single merge head" {

@@ -9,19 +9,21 @@ pub const Sources = struct {
     bases: []const []const u8,
     known: ?context.Revisions,
 
-    pub fn mergeHeads(self: Sources, git: Git) ![2][]const u8 {
-        var parents: std.ArrayList([]const u8) = .empty;
-        for (self.bases) |base| {
-            const kind = merge_git.trim(try git.output(&.{ "cat-file", "-t", base }));
-            try parents.append(git.arena, if (std.mem.eql(u8, kind, "commit")) base else try commit(git, base, &.{}, "base"));
+    pub fn hasNativeBases(self: Sources, git: Git) !bool {
+        const result = try git.run(&.{ "merge-base", "--all", self.ours, self.theirs });
+        const code = merge_git.exitCode(result);
+        // A staged Ours tree has no ancestry. Replay must use the supplied base.
+        if (code > 1) return false;
+        var count: usize = 0;
+        var lines = std.mem.tokenizeAny(u8, result.stdout, "\r\n");
+        while (lines.next()) |base| {
+            const found = for (self.bases) |supplied| {
+                if (std.mem.eql(u8, supplied, base)) break true;
+            } else false;
+            if (!found) return false;
+            count += 1;
         }
-        // Replay operations supply the parent of the picked commit, which need
-        // not be a merge base of the two heads. Isolated parents preserve that
-        // exact contract, including empty trees, on Git 2.39 as well.
-        return .{
-            try commit(git, self.ours, parents.items, "ours"),
-            try commit(git, self.theirs, parents.items, "theirs"),
-        };
+        return count == self.bases.len;
     }
 
     pub fn apply(self: Sources, env: *std.process.Environ.Map) !void {
@@ -77,23 +79,6 @@ fn identity(git: Git, name: []const u8) ![]const u8 {
     // both commits and trees usable as immutable source snapshots.
     _ = try git.output(&.{ "rev-parse", "--verify", "--end-of-options", try std.fmt.allocPrint(git.arena, "{s}^{{tree}}", .{oid}) });
     return oid;
-}
-
-fn commit(git: Git, treeish: []const u8, parents: []const []const u8, label: []const u8) ![]const u8 {
-    var env = try git.env.clone(git.arena);
-    defer env.deinit();
-    for ([_][]const u8{ "GIT_AUTHOR_NAME", "GIT_COMMITTER_NAME" }) |key| try env.put(key, "PrefabLens");
-    for ([_][]const u8{ "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_EMAIL" }) |key| try env.put(key, "merge@prefablens.invalid");
-    for ([_][]const u8{ "GIT_AUTHOR_DATE", "GIT_COMMITTER_DATE" }) |key| try env.put(key, "@0 +0000");
-    var isolated = git;
-    isolated.env = &env;
-    const tree = merge_git.trim(try git.output(&.{ "rev-parse", "--verify", try std.fmt.allocPrint(git.arena, "{s}^{{tree}}", .{treeish}) }));
-    var args: std.ArrayList([]const u8) = .empty;
-    try args.appendSlice(git.arena, &.{ "commit-tree", tree, "--no-gpg-sign", "-m", label });
-    for (parents) |parent| try args.appendSlice(git.arena, &.{ "-p", parent });
-    // These objects have no refs; the caller still owns the real history and
-    // commit metadata, and normal Git garbage collection can reclaim them.
-    return merge_git.trim(try isolated.output(args.items));
 }
 
 fn validOid(oid: []const u8) bool {

@@ -29,11 +29,81 @@ pub fn run(git: Git, scratch: []const u8, prefablens: []const u8) !void {
     try pickedDelta(ctx);
     try repeatedReplay(ctx);
     try packedReplay(ctx);
+    try pausedNoCommitContext(ctx);
+    try defaultOrderedPairs(ctx);
     try rootPick(ctx);
     try multipleBases(ctx);
     try conflictLifecycle(ctx);
     try pull(ctx);
     try std.Io.File.stdout().writeStreamingAll(git.io, "git replay integration: passed\n");
+}
+
+fn defaultOrderedPairs(ctx: Context) !void {
+    var git = ctx.git;
+    git.cwd = try std.fs.path.join(git.arena, &.{ ctx.scratch, "default-ordered-pairs" });
+    const prefix = "--- !u!114 &1\nMonoBehaviour:\n  m_Script: {fileID: 11500000, guid: 11111111111111111111111111111111, type: 3}\n  values: ";
+    const script = "using UnityEngine; using System.Collections.Generic; class Example : MonoBehaviour { public List<Pair> values; } [System.Serializable] struct Pair { public string key; public int value; }\n";
+    const meta = "guid: 11111111111111111111111111111111\n";
+    try t.prepareRepository(git.io, git.arena, git.cwd, ctx.prefablens, .local, &.{
+        .{ .path = path, .base = prefix ++ "[]\n", .ours = prefix ++ "[{key: a, value: 1}]\n", .theirs = prefix ++ "[{key: b, value: 2}]\n" },
+        .{ .path = "Assets/Example.cs", .base = script, .ours = script, .theirs = script },
+        .{ .path = "Assets/Example.cs.meta", .base = meta, .ours = meta, .theirs = meta },
+    });
+    const setup = try std.process.run(git.arena, git.io, .{
+        .argv = &.{ ctx.prefablens, "setup-merge", "--local" },
+        .cwd = .{ .path = git.cwd },
+        .environ_map = git.env,
+    });
+    try t.expectCode(setup, 0, "default setup before ordered pair replay");
+    // List<Pair> resembles a serialized dictionary. Missing history must not
+    // authorize key-based merging that silently chooses the list's order.
+    try t.expectCode(try git.run(&.{ "cherry-pick", "--no-commit", "remote" }), 1, "require proof before combining ordered pairs");
+    try t.expectStage(git.io, git.arena, git.cwd, path, 2, prefix ++ "[{key: a, value: 1}]\n");
+    try t.expectStage(git.io, git.arena, git.cwd, path, 3, prefix ++ "[{key: b, value: 2}]\n");
+}
+
+fn pausedNoCommitContext(ctx: Context) !void {
+    const session = @import("merge_session_context.zig");
+    const revision = @import("merge_revision.zig");
+    const core = @import("core");
+    const prefix = "--- !u!114 &1\nMonoBehaviour:\n  m_Script: {fileID: 11500000, guid: 11111111111111111111111111111111, type: 3}\n";
+    var git = ctx.git;
+    git.cwd = try std.fs.path.join(git.arena, &.{ ctx.scratch, "paused-no-commit-context" });
+    try t.prepareRepository(git.io, git.arena, git.cwd, ctx.prefablens, .local, &.{
+        .{ .path = path, .base = prefix ++ "  scalar: 1\n  values: 01000000i\n", .ours = prefix ++ "  scalar: 2\n  values: 0100000002000000i\n", .theirs = prefix ++ "  scalar: 3\n  values: 0300000001000000i\n" },
+        .{ .path = "Assets/Example.cs", .base = "using UnityEngine; class Example : MonoBehaviour { public int scalar; public int[] values; }\n", .ours = "using UnityEngine; class Example : MonoBehaviour { public int scalar; public int[] values; }\n", .theirs = "using UnityEngine; class Example : MonoBehaviour { public int scalar; public int[] values; }\n" },
+        .{ .path = "Assets/Example.cs.meta", .base = "guid: 11111111111111111111111111111111\n", .ours = "guid: 11111111111111111111111111111111\n", .theirs = "guid: 11111111111111111111111111111111\n" },
+    });
+    // No-commit conflicts have no CHERRY_PICK_HEAD. Reopening must retain the
+    // strategy's exact index-tree Ours and historical packed-array type proof.
+    try t.expectCode(try git.run(&.{ "cherry-pick", "--no-commit", "--strategy=prefablens", "remote" }), 1, "pause semantic no-commit replay");
+    try t.require(merge_git.exitCode(try git.run(&.{ "rev-parse", "--verify", "CHERRY_PICK_HEAD" })) != 0, "no-commit unexpectedly recorded a picked commit");
+    const known = (try session.discover(git)) orelse return error.MissingReplayContext;
+    const kind = merge_git.trim(try git.output(&.{ "cat-file", "-t", known.ours }));
+    try t.require(std.mem.eql(u8, kind, "tree"), "no-commit recovery replaced staged Ours with HEAD");
+    var store = revision.Store.init(git);
+    defer store.deinit();
+    const bound = (try session.bind(&store, known, .{ .base = path, .ours = path, .theirs = path }, .{
+        .base = try git.output(&.{ "show", ":1:Assets/A.prefab" }),
+        .ours = try git.output(&.{ "show", ":2:Assets/A.prefab" }),
+        .theirs = try git.output(&.{ "show", ":3:Assets/A.prefab" }),
+    })) orelse return error.MissingReplayContext;
+    try t.require(bound.ours.kind("11111111111111111111111111111111", "values") == core.merge_context.Kind.int32_array, "resumed replay lost historical array type evidence");
+
+    try git.ok(&.{ "reset", "--hard", "HEAD" });
+    const setup = try std.process.run(git.arena, git.io, .{
+        .argv = &.{ ctx.prefablens, "setup-merge", "--local" },
+        .cwd = .{ .path = git.cwd },
+        .environ_map = git.env,
+    });
+    try t.expectCode(setup, 0, "default setup before no-commit replay");
+    // Native no-commit replay supplies no historical revisions to the driver.
+    // A previous explicit attempt must not turn missing proof into guessed types.
+    try t.expectCode(try git.run(&.{ "cherry-pick", "--no-commit", "remote" }), 1, "keep unproven native no-commit choices unresolved");
+    try t.require((try session.discover(git)) == null, "default replay reused an earlier strategy's type evidence");
+    try t.expectStage(git.io, git.arena, git.cwd, path, 1, prefix ++ "  scalar: 1\n  values: 01000000i\n");
+    try t.expectStage(git.io, git.arena, git.cwd, path, 2, prefix ++ "  scalar: 2\n  values: 0100000002000000i\n");
+    try t.expectStage(git.io, git.arena, git.cwd, path, 3, prefix ++ "  scalar: 3\n  values: 0300000001000000i\n");
 }
 
 fn multipleBases(ctx: Context) !void {

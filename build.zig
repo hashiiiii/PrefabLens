@@ -187,6 +187,7 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
             .imports = &.{
                 .{ .name = "build_options", .module = build_options_mod },
+                .{ .name = "core", .module = core_mod },
             },
         }),
     });

@@ -105,7 +105,7 @@ prefablens --open main                  # write the report to a temp file and op
 #### Merge
 
 > [!IMPORTANT]
-> PrefabLens uses Git **2.39 or later** to resolve UnityYAML conflicts during `git merge`.
+> PrefabLens uses Git **2.45 or later** to resolve UnityYAML conflicts during `git merge`.
 
 Choose a setup scope:
 
@@ -123,6 +123,17 @@ Use the normal merge command:
 ```bash
 git merge origin/main
 ```
+
+Git keeps its `ort` strategy. PrefabLens handles UnityYAML file contents through the merge driver.
+For repository-wide validation and the interactive conflict UI, select the full strategy explicitly:
+
+```bash
+git merge -s prefablens origin/main
+git rebase -s prefablens origin/main
+git cherry-pick --strategy=prefablens <commit>
+```
+
+After upgrading an older setup, rerun `setup-merge` in the same scope to remove its automatic strategy setting.
 
 https://github.com/user-attachments/assets/2ad6a2e9-5562-40b8-ab7e-c5f277da3d8b
 

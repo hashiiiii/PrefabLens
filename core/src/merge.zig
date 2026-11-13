@@ -81,7 +81,7 @@ fn verifyTheirsCoverage(
 ) Error!void {
     if (std.mem.eql(u8, ours.bytes, theirs.bytes)) return;
 
-    var replay = try merge_planner.buildSemanticWithContext(arena, base, base, theirs, .{ .base = context.base, .ours = context.base, .theirs = context.theirs, .output = context.theirs });
+    var replay = try merge_planner.buildSemanticWithContext(arena, base, base, theirs, .{ .base = context.base, .ours = context.base, .theirs = context.theirs, .output = context.theirs, .require_script_schema = context.require_script_schema });
     // Coverage checks reachability of Theirs bytes, including explicit context choices.
     for (replay.operations) |*operation| {
         if (operation.collection != null and operation.resolution == .unresolved) operation.resolution = .{ .take = .theirs };
@@ -911,6 +911,16 @@ test "collection public key value arrays merge by key without a schema" {
     const ordered_context = try collectionTestContext(.{ .path = "values", .kind = .ordered }, arena);
     var ordered = try buildWithContext(arena, base, ours, theirs, ordered_context);
     try testing.expect(collectionConflict(&ordered.plan, ordered.plan.operations[0].id).?.both_orders);
+
+    // Git's driver can have no revision identities during native replay. It
+    // must preserve an explicit choice rather than infer the script field type.
+    var strict = try buildWithContext(arena, base, ours, theirs, .{ .require_script_schema = true });
+    try testing.expectEqual(@as(usize, 1), strict.plan.unresolvedCount());
+    try testing.expectEqual(@import("merge_value.zig").Reason.context_required, collectionConflict(&strict.plan, strict.plan.operations[0].id).?.reason);
+    // Taking one unchanged source side needs no inferred collection semantics.
+    var one_side = try buildWithContext(arena, base, ours, base, .{ .require_script_schema = true });
+    try testing.expectEqual(@as(usize, 0), one_side.plan.unresolvedCount());
+    try testing.expectEqualStrings(ours, try finish(arena, &one_side.plan));
 }
 
 test "collection public dictionary reorder conflict does not offer both orders" {

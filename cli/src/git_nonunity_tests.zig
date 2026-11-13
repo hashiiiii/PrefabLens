@@ -165,7 +165,9 @@ fn replayTextConflict(ctx: Context) !void {
 
 fn nativeClone(ctx: Context, source: Git, name: []const u8, remote: []const u8) !Git {
     const destination = try std.fs.path.join(source.arena, &.{ ctx.scratch, name });
-    try source.ok(&.{ "clone", "--quiet", "--no-hardlinks", source.cwd, destination });
+    // Checkout must already use canonical bytes; changing autocrlf afterward
+    // can make the baseline dirty on Windows before ort has a chance to run.
+    try source.ok(&.{ "clone", "--quiet", "--no-hardlinks", "--config", "core.autocrlf=false", "--config", "core.eol=lf", source.cwd, destination });
     var native = source;
     native.cwd = destination;
     try native.ok(&.{ "update-ref", "refs/heads/remote", remote });
@@ -176,6 +178,7 @@ fn nativeClone(ctx: Context, source: Git, name: []const u8, remote: []const u8) 
     try native.ok(&.{ "config", "user.name", "PrefabLens tests" });
     try native.ok(&.{ "config", "user.email", "prefablens-tests@example.invalid" });
     try native.ok(&.{ "config", "merge.ff", "true" });
+    try t.expectCode(try native.run(&.{ "diff", "--quiet", "HEAD", "--" }), 0, "clean native comparison checkout");
     return native;
 }
 

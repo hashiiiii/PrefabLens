@@ -145,6 +145,9 @@ To opt in to the full strategy by default for this clone, set:
 git config --local --replace-all pull.twohead prefablens
 ```
 
+`--replace-all` replaces duplicate `pull.twohead` entries in the local configuration with one `prefablens` value.
+Without it, Git refuses to overwrite multiple entries.
+
 Git reads this setting for `git merge`, `git pull`, `git rebase`, and `git cherry-pick`.
 Without `--strategy`, setup leaves existing values unchanged and adds none when absent.
 For `git rebase` and `git cherry-pick`, Git uses the first configured `pull.twohead` value.

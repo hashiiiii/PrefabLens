@@ -133,13 +133,7 @@ To enable it persistently for this clone during setup, run:
 prefablens setup-merge --local --strategy
 ```
 
-This requires the compatible Git strategy helper as well as the UnityYAML merge driver.
-The equivalent Git configuration command is:
-
-```bash
-git config --local --replace-all pull.twohead prefablens
-```
-
+`--strategy` sets `pull.twohead=prefablens` in the selected Git configuration scope.
 Git reads this setting when selecting the default strategy for `git merge`, `git pull`, `git rebase`, and `git cherry-pick`.
 For rebase and cherry-pick, an earlier inherited value can take precedence; see [merge behavior](docs/cli.md#merge-behavior).
 To use the full strategy for one operation, select it with a command argument:

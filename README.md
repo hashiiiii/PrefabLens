@@ -118,22 +118,37 @@ Choose a setup scope:
 > [!NOTE]
 > `prefablens setup-merge` defaults to `--local`.
 
+By default, setup preserves existing `pull.twohead` values and does not add one when absent.
+When unset, Git uses its native `ort` strategy, and the PrefabLens merge driver handles UnityYAML file contents.
 Use the normal merge command:
 
 ```bash
 git merge origin/main
 ```
 
-Git keeps its `ort` strategy. PrefabLens handles UnityYAML file contents through the merge driver.
-For repository-wide validation and the interactive conflict UI, select the full strategy explicitly:
+The full strategy adds repository-wide dependency validation and interactive resolution of UnityYAML content and structural conflicts.
+To enable it persistently for this clone during setup, run:
+
+```bash
+prefablens setup-merge --local --strategy
+```
+
+This requires the compatible Git strategy helper as well as the UnityYAML merge driver.
+The equivalent Git configuration command is:
+
+```bash
+git config --local --replace-all pull.twohead prefablens
+```
+
+Git reads this setting when selecting the default strategy for `git merge`, `git pull`, `git rebase`, and `git cherry-pick`.
+For rebase and cherry-pick, an earlier inherited value can take precedence; see [merge behavior](docs/cli.md#merge-behavior).
+To use the full strategy for one operation, select it with a command argument:
 
 ```bash
 git merge -s prefablens origin/main
 git rebase -s prefablens origin/main
 git cherry-pick --strategy=prefablens <commit>
 ```
-
-After upgrading an older setup, rerun `setup-merge` in the same scope to remove its automatic strategy setting.
 
 https://github.com/user-attachments/assets/2ad6a2e9-5562-40b8-ab7e-c5f277da3d8b
 

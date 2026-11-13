@@ -76,7 +76,7 @@ pub fn main(init: std.process.Init) !u8 {
     var env = try init.environ_map.clone(a);
     try env.put("PATH", try std.fmt.allocPrint(a, "{s}{c}{s}{c}{s}", .{ std.fs.path.dirname(prefablens).?, std.fs.path.delimiter, std.fs.path.dirname(script).?, std.fs.path.delimiter, env.get("PATH") orelse "" }));
     const ctx: Context = .{ .git = .{ .io = init.io, .arena = a, .env = &env }, .root = scratch, .prefablens = prefablens, .strategy = script };
-    const cases = .{ repositoryScopes, linkedWorktree, legacyStrategyMigration, inheritedLegacyStrategy, userScopeRejectsLocalStrategy, defaultGitOperations, outsideRepository, invalidArguments, newUser, userScopes, systemAttributes, invalidUserPaths, userInstallationFailure };
+    const cases = .{ repositoryScopes, linkedWorktree, strategyOptIn, preservesExistingStrategies, preservesInheritedStrategies, userScopePreservesLocalStrategy, defaultGitOperations, outsideRepository, invalidArguments, newUser, userScopes, systemAttributes, invalidUserPaths, userInstallationFailure };
     var failures: usize = 0;
     inline for (cases) |case| {
         case(ctx) catch |err| {
@@ -193,27 +193,57 @@ fn expectPullStrategyValues(git: Git, scope: []const u8, expected_values: []cons
         try expected.appendSlice(git.arena, value);
         try expected.append(git.arena, 0);
     }
-    try t.require(std.mem.eql(u8, actual, expected.items), "setup did not remove only selected-scope legacy strategy values");
+    try t.require(std.mem.eql(u8, actual, expected.items), "setup changed the existing strategy selection");
 }
 
-fn legacyStrategyMigration(parent: Context) !void {
-    // Setup must remove its old token without discarding a custom strategy in the same value.
+fn strategyOptIn(parent: Context) !void {
+    const cases = [_]struct { name: []const u8, flags: []const []const u8, scope: []const u8, attributes: []const u8 }{
+        .{ .name = "local", .flags = &.{"--strategy"}, .scope = "--local", .attributes = ".git/info/attributes" },
+        .{ .name = "project", .flags = &.{ "--strategy", "--project" }, .scope = "--local", .attributes = ".gitattributes" },
+        .{ .name = "user", .flags = &.{ "--user", "--strategy" }, .scope = "--global", .attributes = "user/.config/git/attributes" },
+    };
+    for (cases) |case| {
+        const ctx = try parent.isolated(try std.fmt.allocPrint(parent.git.arena, "{s}-strategy-opt-in", .{case.name}), false);
+        const user_scope = std.mem.eql(u8, case.scope, "--global");
+        const git = if (user_scope) ctx.git else try ctx.repo("repo");
+        const attributes = if (user_scope) try std.fs.path.join(git.arena, &.{ ctx.root, case.attributes }) else try git.path(case.attributes);
+        try write(git, attributes, existing_attributes);
+        // Explicit opt-in replaces an existing strategy list; default setup must
+        // then retain that choice rather than silently disabling the full integration.
+        try git.ok(&.{ "config", case.scope, "--add", "pull.twohead", "ort" });
+        try git.ok(&.{ "config", case.scope, "--add", "pull.twohead", "prefablens" });
+        try t.expectCode(try ctx.setup(git, case.flags), 0, "enable the full strategy during setup");
+        try expectPullStrategyValues(git, case.scope, &.{"prefablens"});
+        try expectConfiguration(git, case.scope);
+        const repository = if (user_scope) try ctx.repo("repo") else git;
+        try expectAttributes(repository, attributes);
+
+        const normal_flags: []const []const u8 = if (user_scope) &.{"--user"} else if (std.mem.eql(u8, case.name, "project")) &.{"--project"} else &.{};
+        try t.expectCode(try ctx.setup(git, normal_flags), 0, "retain an explicit strategy on repeated setup");
+        try expectPullStrategyValues(git, case.scope, &.{"prefablens"});
+        try expectMerge(repository);
+    }
+}
+
+fn preservesExistingStrategies(parent: Context) !void {
+    // Updating the driver must not opt existing users out of their selected strategy.
     for ([_]bool{ false, true }) |user_scope| {
-        const ctx = try parent.isolated(if (user_scope) "user-strategy-migration" else "local-strategy-migration", false);
+        const ctx = try parent.isolated(if (user_scope) "user-existing-strategy" else "local-existing-strategy", false);
         var git = if (user_scope) ctx.git else try ctx.repo("repo");
         const config_scope = if (user_scope) "--global" else "--local";
         const setup_flags: []const []const u8 = if (user_scope) &.{"--user"} else &.{"--local"};
         const old_values = [_][]const u8{ "prefablens", "ort prefablens", "prefablens-extra", "prefablens ort", "prefablens", "custom" };
         for (old_values) |value| try git.ok(&.{ "config", config_scope, "--add", "pull.twohead", value });
-        try t.expectCode(try ctx.setup(git, setup_flags), 0, "migrate selected-scope pull.twohead values");
-        try expectPullStrategyValues(git, config_scope, &.{ "ort", "prefablens-extra", "ort", "custom" });
+        try t.expectCode(try ctx.setup(git, setup_flags), 0, "preserve selected-scope pull.twohead values");
+        try expectPullStrategyValues(git, config_scope, &.{ "prefablens", "ort prefablens", "prefablens-extra", "prefablens ort", "prefablens", "custom" });
         try expectConfiguration(git, config_scope);
     }
 }
 
 const InheritedSource = enum { global, included, system, command_line };
 
-fn inheritedLegacyStrategy(parent: Context) !void {
+fn preservesInheritedStrategies(parent: Context) !void {
+    // Strategy selection belongs to the user, including settings outside this setup scope.
     for ([_]InheritedSource{ .global, .included, .system, .command_line }) |source| {
         const label = try std.fmt.allocPrint(parent.git.arena, "{s}-legacy-strategy", .{@tagName(source)});
         const ctx = try parent.isolated(label, false);
@@ -221,7 +251,6 @@ fn inheritedLegacyStrategy(parent: Context) !void {
         try git.ok(&.{ "config", "--local", "--add", "pull.twohead", "prefablens" });
         const attributes = try git.path(".git/info/attributes");
         try write(git, attributes, existing_attributes);
-        const local_before = try read(git, try git.path(".git/config"));
         const global_path = git.env.get("GIT_CONFIG_GLOBAL").?;
         try write(git, global_path, "");
         var external_path: ?[]const u8 = null;
@@ -251,34 +280,34 @@ fn inheritedLegacyStrategy(parent: Context) !void {
         const global_before = try read(git, global_path);
         const external_before = if (external_path) |path| try read(git, path) else null;
         const result = try ctx.setup(git, &.{"--local"});
-        try t.expectCode(result, 2, "reject an inherited legacy merge strategy");
-        try t.require(std.mem.indexOf(u8, result.stderr, "pull.twohead") != null, "inherited strategy rejection omitted the configuration key");
-        try t.require(std.mem.eql(u8, local_before, try read(git, try git.path(".git/config"))), "inherited strategy rejection modified local configuration");
-        try t.require(std.mem.eql(u8, existing_attributes, try read(git, attributes)), "inherited strategy rejection modified attributes");
+        try t.expectCode(result, 0, "allow an inherited merge strategy");
+        try expectPullStrategyValues(git, "--local", &.{"prefablens"});
+        try expectConfiguration(git, "--local");
+        try expectAttributes(git, attributes);
         try expectAbsent(git, try git.path(".gitattributes"));
-        try t.require(std.mem.eql(u8, global_before, try read(git, global_path)), "inherited strategy rejection modified the global configuration");
-        if (external_path) |path| try t.require(std.mem.eql(u8, external_before.?, try read(git, path)), "inherited strategy rejection modified an included or system configuration");
+        try t.require(std.mem.eql(u8, global_before, try read(git, global_path)), "local setup modified the global configuration");
+        if (external_path) |path| try t.require(std.mem.eql(u8, external_before.?, try read(git, path)), "local setup modified an included or system configuration");
     }
 }
 
-fn userScopeRejectsLocalStrategy(parent: Context) !void {
+fn userScopePreservesLocalStrategy(parent: Context) !void {
+    // User-wide driver setup must work without changing a repository's existing opt-in.
     const ctx = try parent.isolated("user-scope-local-strategy", false);
     var git = try ctx.repo("repo");
     try git.ok(&.{ "config", "--local", "pull.twohead", "prefablens" });
     const local_before = try read(git, try git.path(".git/config"));
     const global_path = git.env.get("GIT_CONFIG_GLOBAL").?;
     try write(git, global_path, "");
-    const global_before = try read(git, global_path);
-
+    const user_attributes = try std.fs.path.join(git.arena, &.{ git.env.get("HOME").?, ".config/git/attributes" });
+    try write(git, user_attributes, existing_attributes);
     const result = try ctx.setup(git, &.{"--user"});
-    try t.expectCode(result, 2, "user setup must not leave repository-scoped PrefabLens strategy active");
-    try t.require(std.mem.indexOf(u8, result.stderr, "pull.twohead") != null, "user setup rejection omitted the configuration key");
-    try t.require(std.mem.eql(u8, local_before, try read(git, try git.path(".git/config"))), "user setup rejection modified repository configuration");
-    try t.require(std.mem.eql(u8, global_before, try read(git, global_path)), "user setup rejection modified global configuration");
+    try t.expectCode(result, 0, "user setup preserves a repository strategy");
+    try t.require(std.mem.eql(u8, local_before, try read(git, try git.path(".git/config"))), "user setup modified repository configuration");
+    try expectConfiguration(git, "--global");
+    try t.expectCode(try git.run(&.{ "config", "--global", "--get-all", "pull.twohead" }), 1, "user setup added a global strategy");
     try expectAbsent(git, try git.path(".git/info/attributes"));
     try expectAbsent(git, try git.path(".gitattributes"));
-    const user_attributes = try std.fs.path.join(git.arena, &.{ git.env.get("HOME").?, ".config/git/attributes" });
-    try expectAbsent(git, user_attributes);
+    try expectAttributes(git, user_attributes);
 }
 
 fn driverOnlyEnvironment(ctx: Context, git: Git) !std.process.Environ.Map {
@@ -358,8 +387,9 @@ fn invalidArguments(parent: Context) !void {
     const git = try ctx.repo("repo");
     const before = try read(git, try git.path(".git/config"));
     const cases = [_][]const []const u8{
-        &.{"--unknown"},             &.{"extra"},               &.{ "--local", "--project" },
-        &.{ "--project", "--user" }, &.{ "--user", "--local" },
+        &.{"--unknown"},                 &.{"extra"},                &.{ "--local", "--project" },
+        &.{ "--project", "--user" },     &.{ "--user", "--local" },  &.{ "--strategy", "--strategy" },
+        &.{ "--strategy", "--unknown" }, &.{ "--local", "--local" },
     };
     for (cases) |flags| {
         try t.expectCode(try ctx.setup(git, flags), 2, "invalid setup arguments");

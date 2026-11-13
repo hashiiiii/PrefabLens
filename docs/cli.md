@@ -80,21 +80,21 @@ exec prefablens merge-strategy "$@"
 Git needs the script name to select the merge strategy.
 Git for Windows recognizes its shebang and starts `sh` for the script.
 
-Before setup writes attributes or Git configuration, it verifies the driver through Git.
-An explicit strategy invocation also verifies the strategy script.
-Both commands must reach the installed `prefablens` version.
+Before setup writes attributes or Git configuration, it verifies the file driver through Git.
+With `--strategy`, it also verifies the strategy helper.
+Both must reach the installed `prefablens` version.
 
 The `git --exec-path` command prints the directory that Git searches before the other `PATH` directories.
 The script must be a custom Git command on `PATH`, outside this directory.
 
 The setup keeps existing attribute lines and unrelated configuration.
 The configuration uses command names without absolute paths.
-After upgrading an older setup, rerun setup in the same scope to migrate its automatic strategy setting.
+By default, setup leaves existing `pull.twohead` values unchanged and adds none when absent.
 
 #### Setup scopes
 
 ```text
-prefablens setup-merge [--project|--local|--user]
+prefablens setup-merge [--project|--local|--user] [--strategy]
 ```
 
 | Scope | Attributes | Git configuration |
@@ -104,6 +104,9 @@ prefablens setup-merge [--project|--local|--user]
 | `--user` | User attributes file | Global |
 
 Choose at most one scope.
+The scope defaults to `--local`.
+Add `--strategy` to set `pull.twohead=prefablens`, replacing existing values in the selected Git configuration scope.
+You may place `--strategy` before or after the scope option.
 
 Local and project setup require a Git working tree and also work from its subdirectories.
 Local setup resolves the attributes path through Git, including in linked worktrees.
@@ -127,20 +130,28 @@ Setup registers this default path in global configuration so that a system `core
 Existing attribute lines are preserved, and repeated setup does not duplicate the rules.
 If the user attributes file is a symlink, setup updates its target and preserves the link.
 
-Setup leaves Git's default `ort` strategy in place.
-It removes legacy `pull.twohead=prefablens` values only from the selected configuration file, preserving other strategy values.
-If a legacy value comes from another scope or an included file, setup reports its source and exits before writing files.
-Remove that value at its source, or rerun setup in the matching scope.
 For attributes, Git gives `info/attributes` precedence over `.gitattributes`, which takes precedence over user attributes.
 See [Git attributes](https://git-scm.com/docs/gitattributes) for the full precedence rules.
 
 #### Merge behavior
 
-Normal `git merge`, `git rebase`, `git cherry-pick`, and `git revert` use Git's own strategy.
-Attributes select the PrefabLens driver for Unity file contents.
-Non-Unity files retain Git's normal merge behavior.
+When `pull.twohead` is unset, Git uses its native `ort` strategy for `git merge`, `git pull`, `git rebase`, and `git cherry-pick`.
+Attributes select the PrefabLens driver for UnityYAML file contents.
+Other formats retain Git's normal merge behavior.
 
-Select the full strategy when repository-wide dependency validation or structural conflict decisions are needed:
+To opt in to the full strategy by default for this clone, set:
+
+```sh
+git config --local --replace-all pull.twohead prefablens
+```
+
+Git reads this setting for `git merge`, `git pull`, `git rebase`, and `git cherry-pick`.
+Without `--strategy`, setup leaves existing values unchanged and adds none when absent.
+For `git rebase` and `git cherry-pick`, Git uses the first configured `pull.twohead` value.
+An earlier system or global value can therefore take precedence over a local opt-in.
+Inspect configured values with `git config --show-origin --show-scope --get-all pull.twohead`.
+
+Select the full strategy for one operation when repository-wide dependency validation or structural conflict decisions are needed:
 
 ```sh
 git merge -s prefablens origin/main

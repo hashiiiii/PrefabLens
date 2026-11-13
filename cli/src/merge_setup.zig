@@ -5,100 +5,29 @@ const unity_path = @import("unity_path.zig");
 const installation = @import("installation.zig");
 
 const Scope = enum { project, local, user };
-pub const usage = "prefablens setup-merge [--project|--local|--user]";
-const strategy_separators = " \t\r\n\x0b\x0c";
+const Options = struct { scope: Scope, strategy: bool };
+pub const usage = "prefablens setup-merge [--project|--local|--user] [--strategy]";
 
-const ConfigEntry = struct { origin: []const u8, value: []const u8 };
-
-fn configEntries(git: merge_git.Git, args: []const []const u8) ![]ConfigEntry {
-    const result = try git.run(args);
-    switch (merge_git.exitCode(result)) {
-        0 => {},
-        1 => return &.{},
-        else => {
-            try std.Io.File.stderr().writeStreamingAll(git.io, result.stderr);
-            return error.GitFailed;
-        },
-    }
-
-    var entries: std.ArrayList(ConfigEntry) = .empty;
-    var fields = std.mem.splitScalar(u8, result.stdout, 0);
-    while (fields.next()) |origin| {
-        if (origin.len == 0) break;
-        const value = fields.next() orelse return error.InvalidGitConfigOutput;
-        try entries.append(git.arena, .{ .origin = origin, .value = value });
-    }
-    return entries.toOwnedSlice(git.arena);
-}
-
-fn containsLegacyStrategy(value: []const u8) bool {
-    var tokens = std.mem.tokenizeAny(u8, value, strategy_separators);
-    while (tokens.next()) |token| {
-        if (std.mem.eql(u8, token, "prefablens")) return true;
-    }
-    return false;
-}
-
-fn containsEntry(entries: []const ConfigEntry, target: ConfigEntry) bool {
-    for (entries) |entry| {
-        if (std.mem.eql(u8, entry.origin, target.origin) and std.mem.eql(u8, entry.value, target.value)) return true;
-    }
-    return false;
-}
-
-fn selectedPullStrategyValues(git: merge_git.Git, config_scope: []const u8) ![]ConfigEntry {
-    const selected = try configEntries(git, &.{ "config", config_scope, "--no-includes", "--null", "--show-origin", "--get-all", "pull.twohead" });
-    const effective = try configEntries(git, &.{ "config", "--includes", "--null", "--show-origin", "--get-all", "pull.twohead" });
-    for (effective) |entry| {
-        if (containsLegacyStrategy(entry.value) and !containsEntry(selected, entry)) {
-            try std.Io.File.stderr().writeStreamingAll(git.io, "prefablens: pull.twohead includes prefablens in ");
-            try std.Io.File.stderr().writeStreamingAll(git.io, entry.origin);
-            try std.Io.File.stderr().writeStreamingAll(git.io, ".\n");
-            return error.LegacyMergeStrategyOutsideScope;
-        }
-    }
-    return selected;
-}
-
-fn valueWithoutLegacyStrategy(git: merge_git.Git, value: []const u8) ![]const u8 {
-    var result: std.ArrayList(u8) = .empty;
-    var tokens = std.mem.tokenizeAny(u8, value, strategy_separators);
-    while (tokens.next()) |token| {
-        if (std.mem.eql(u8, token, "prefablens")) continue;
-        if (result.items.len != 0) try result.append(git.arena, ' ');
-        try result.appendSlice(git.arena, token);
-    }
-    return result.toOwnedSlice(git.arena);
-}
-
-fn removeLegacyStrategyValues(git: merge_git.Git, config_scope: []const u8, selected: []const ConfigEntry) !void {
-    for (selected, 0..) |entry, index| {
-        if (!containsLegacyStrategy(entry.value)) continue;
-        var already_updated = false;
-        for (selected[0..index]) |earlier| {
-            if (std.mem.eql(u8, earlier.value, entry.value)) {
-                already_updated = true;
-                break;
-            }
-        }
-        if (already_updated) continue;
-
-        const replacement = try valueWithoutLegacyStrategy(git, entry.value);
-        if (replacement.len == 0) {
-            try git.ok(&.{ "config", config_scope, "--no-includes", "--fixed-value", "--unset-all", "pull.twohead", entry.value });
+fn parseOptions(args: []const []const u8) !Options {
+    var scope: ?Scope = null;
+    var strategy = false;
+    for (args) |arg| {
+        if (std.mem.eql(u8, arg, "--strategy")) {
+            if (strategy) return error.InvalidSetupArguments;
+            strategy = true;
         } else {
-            try git.ok(&.{ "config", config_scope, "--no-includes", "--fixed-value", "--replace-all", "pull.twohead", replacement, entry.value });
+            if (scope != null) return error.InvalidSetupArguments;
+            scope = if (std.mem.eql(u8, arg, "--project"))
+                .project
+            else if (std.mem.eql(u8, arg, "--local"))
+                .local
+            else if (std.mem.eql(u8, arg, "--user"))
+                .user
+            else
+                return error.InvalidSetupArguments;
         }
     }
-}
-
-fn parseScope(args: []const []const u8) !Scope {
-    if (args.len == 0) return .local;
-    if (args.len != 1) return error.InvalidSetupArguments;
-    if (std.mem.eql(u8, args[0], "--project")) return .project;
-    if (std.mem.eql(u8, args[0], "--local")) return .local;
-    if (std.mem.eql(u8, args[0], "--user")) return .user;
-    return error.InvalidSetupArguments;
+    return .{ .scope = scope orelse .local, .strategy = strategy };
 }
 
 const UserAttributes = struct {
@@ -132,7 +61,8 @@ fn userAttributes(git: merge_git.Git) !UserAttributes {
 }
 
 pub fn run(io: std.Io, arena: std.mem.Allocator, args: []const []const u8, env: *std.process.Environ.Map, stdout: *std.Io.Writer) !void {
-    const scope = try parseScope(args);
+    const options = try parseOptions(args);
+    const scope = options.scope;
     var git: merge_git.Git = .{ .io = io, .arena = arena, .env = env };
     if (!(try merge_git.version(git)).atLeast(2, 45)) return error.Git245Required;
     if (scope != .user) {
@@ -142,8 +72,7 @@ pub fn run(io: std.Io, arena: std.mem.Allocator, args: []const []const u8, env: 
         git.cwd = merge_git.trim(root);
     }
     const config_scope = if (scope == .user) "--global" else "--local";
-    const selected_pull_values = try selectedPullStrategyValues(git, config_scope);
-    try installation.requireDriverCompatible(git);
+    if (options.strategy) try installation.requireCompatible(git) else try installation.requireDriverCompatible(git);
     var default_user_path: ?[]const u8 = null;
     const path = switch (scope) {
         .project => try git.path(".gitattributes"),
@@ -175,13 +104,13 @@ pub fn run(io: std.Io, arena: std.mem.Allocator, args: []const []const u8, env: 
     if (!std.mem.eql(u8, old, attributes.items)) try atomic_file.replace(io, arena, absolute, if (old.len == 0) null else old, attributes.items);
     // A system attributesFile setting would otherwise prevent Git from reading the fallback user file.
     if (default_user_path) |default| try git.ok(&.{ "config", "--global", "core.attributesFile", default });
-    try removeLegacyStrategyValues(git, config_scope, selected_pull_values);
     try git.ok(&.{ "config", config_scope, "merge.prefablens.name", "PrefabLens semantic Unity YAML merge" });
     try git.ok(&.{ "config", config_scope, "merge.prefablens.driver", "prefablens merge-driver %O %A %B %P %L %S %X %Y" });
     // Virtual merge bases must not ask for semantic decisions or contain a selected partial result.
     try git.ok(&.{ "config", config_scope, "merge.prefablens.recursive", "text" });
     try git.ok(&.{ "config", config_scope, "mergetool.prefablens.cmd", "prefablens mergetool \"$BASE\" \"$LOCAL\" \"$REMOTE\" \"$MERGED\"" });
     try git.ok(&.{ "config", config_scope, "mergetool.prefablens.trustExitCode", "true" });
+    if (options.strategy) try git.ok(&.{ "config", config_scope, "--replace-all", "pull.twohead", "prefablens" });
     try stdout.print("PrefabLens merge is ready for {s}. Run git merge as usual.\n", .{if (scope == .user) "your repositories" else "this repository"});
     if (scope == .project) try stdout.writeAll("Commit .gitattributes to share the rules. Each clone needs setup unless your user configuration already provides it.\n");
 }

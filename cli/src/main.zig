@@ -85,7 +85,6 @@ pub fn main(init: std.process.Init) !u8 {
             merge_setup.run(init.io, arena, setup_args, init.environ_map, stdout) catch |err| {
                 if (!try installation.writeError(stderr, err)) switch (err) {
                     error.Git245Required => try stderr.writeAll("prefablens: Automatic merge needs Git 2.45 or later.\n"),
-                    error.LegacyMergeStrategyOutsideScope => try stderr.writeAll("prefablens: Remove the outside prefablens strategy value, or rerun setup in its scope.\nInspect settings with: git config --show-origin --show-scope --get-all pull.twohead\nNo setup files were changed.\n"),
                     error.InvalidSetupArguments => try stderr.writeAll("usage: " ++ merge_setup.usage ++ "\n"),
                     error.SetupRequiresRepository => try stderr.writeAll("prefablens: Merge setup requires a Git working tree.\nRun this command inside a repository, or use: prefablens setup-merge --user\n"),
                     error.InvalidUserAttributesPath => try stderr.writeAll("prefablens: Global core.attributesFile must name an absolute path or start with ~/.\nSet it with git config --global core.attributesFile <path>, then run setup again.\n"),

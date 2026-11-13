@@ -13,6 +13,8 @@ const Context = struct {
         git.cwd = try std.fs.path.join(git.arena, &.{ self.scratch, name });
         try t.prepareRepository(git.io, git.arena, git.cwd, self.prefablens, .local, files);
         try git.ok(&.{ "config", "pull.twohead", "prefablens" });
+        // Divergent fixtures must reach ort even if the developer only permits fast-forwards.
+        try git.ok(&.{ "config", "merge.ff", "true" });
         return git;
     }
 };
@@ -63,6 +65,7 @@ fn ordinaryTextConflict(ctx: Context) !void {
     const native = try nativeClone(ctx, git, "native-nonunity-text-conflict", theirs);
     const native_result = try native.run(&.{ "merge", "--no-edit", "-s", "ort", "remote" });
     try t.expectCode(native_result, 1, "native ort non-Unity text conflict");
+    try t.require((try native.output(&.{ "ls-files", "--unmerged" })).len != 0, "native text baseline did not install conflict stages");
     const expected = try t.readFile(git.io, git.arena, native.cwd, path);
 
     // Conflict markers must name the same real sides as Git's built-in ort strategy.
@@ -92,6 +95,7 @@ fn directoryFileConflict(ctx: Context) !void {
     const native = try nativeClone(ctx, git, "native-nonunity-directory-file-conflict", theirs);
     const native_result = try native.run(&.{ "merge", "--no-edit", "-s", "ort", "remote" });
     try t.expectCode(native_result, 1, "native ort non-Unity file-directory conflict");
+    try t.require((try native.output(&.{ "ls-files", "--unmerged" })).len != 0, "native file-directory baseline did not install conflict stages");
     const expected_paths = try indexPaths(native);
 
     // File-versus-directory recovery paths must keep the names Git derives from real heads.
@@ -167,6 +171,11 @@ fn nativeClone(ctx: Context, source: Git, name: []const u8, remote: []const u8) 
     try native.ok(&.{ "update-ref", "refs/heads/remote", remote });
     try native.ok(&.{ "switch", "-q", "local" });
     try t.configureHermeticRepository(native.io, native.arena, native.cwd);
+    // Clones omit local identity settings; the comparison must not depend on
+    // a developer's global identity or Git's operating-system user lookup.
+    try native.ok(&.{ "config", "user.name", "PrefabLens tests" });
+    try native.ok(&.{ "config", "user.email", "prefablens-tests@example.invalid" });
+    try native.ok(&.{ "config", "merge.ff", "true" });
     return native;
 }
 

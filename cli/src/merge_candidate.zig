@@ -129,12 +129,9 @@ pub const Candidate = struct {
             // for the lifetime of a replay step.
             var memory = std.heap.ArenaAllocator.init(std.heap.page_allocator);
             defer memory.deinit();
-            var temporary = self.git;
-            temporary.arena = memory.allocator();
-            if (self.batch == null) self.batch = try revision.Batch.init(self.git);
-            const bytes = try self.batch.?.read(temporary, entry.oid, 256 * 1024 * 1024);
+            const bytes = try self.readBlob(entry.oid, memory.allocator());
             if (metadata) {
-                if ((try revision.metadataGuid(temporary.arena, bytes)) == null) n.uncertain_identity = true;
+                if ((try revision.metadataGuid(memory.allocator(), bytes)) == null) n.uncertain_identity = true;
             } else if (core.isUnityYaml(bytes)) {
                 n.unity = true;
                 n.relevant = n.relevant or try self.collectionRelevant(entry.oid, bytes);

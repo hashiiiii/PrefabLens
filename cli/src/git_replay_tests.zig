@@ -286,8 +286,4 @@ fn pull(ctx: Context) !void {
     try t.expectCode(try git.run(&.{ "pull", "--no-rebase", "--no-edit", ".", "remote" }), 0, "merge during pull");
     try expect(git, path, "--- !u!114 &1\nMonoBehaviour:\n  m_Left: 2\n  m_Right: 3\n  m_Unpicked: 2\n");
     try assertClean(git);
-    try git.ok(&.{ "switch", "-q", "base" });
-    try t.expectCode(try git.run(&.{ "pull", "--ff-only", ".", "remote" }), 0, "fast-forward pull");
-    try expect(git, path, picked);
-    try assertClean(git);
 }

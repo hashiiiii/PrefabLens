@@ -67,7 +67,9 @@ Test executables share helpers from `testing/` without importing one another.
 
 ### Git merge integration
 
-One native executable and the packaged `git-merge-prefablens` script must be on `PATH`.
+Setup and merge integration require Git 2.45 or later.
+The native executable must be on `PATH`.
+The full strategy also needs the packaged `git-merge-prefablens` script on `PATH`.
 The script contains only this command:
 
 ```sh
@@ -78,20 +80,21 @@ exec prefablens merge-strategy "$@"
 Git needs the script name to select the merge strategy.
 Git for Windows recognizes its shebang and starts `sh` for the script.
 
-Before setup writes attributes or Git configuration, it verifies the strategy and driver through Git.
-Each route must reach the installed `prefablens` version.
+Before setup writes attributes or Git configuration, it verifies the file driver through Git.
+With `--strategy`, it also verifies the strategy helper.
+Both must reach the installed `prefablens` version.
 
 The `git --exec-path` command prints the directory that Git searches before the other `PATH` directories.
 The script must be a custom Git command on `PATH`, outside this directory.
 
 The setup keeps existing attribute lines and unrelated configuration.
 The configuration uses command names without absolute paths.
-You do not need to run setup again after a complete upgrade.
+By default, setup leaves existing `pull.twohead` values unchanged and adds none when absent.
 
 #### Setup scopes
 
 ```text
-prefablens setup-merge [--project|--local|--user]
+prefablens setup-merge [--project|--local|--user] [--strategy]
 ```
 
 | Scope | Attributes | Git configuration |
@@ -101,6 +104,9 @@ prefablens setup-merge [--project|--local|--user]
 | `--user` | User attributes file | Global |
 
 Choose at most one scope.
+The scope defaults to `--local`.
+Add `--strategy` to set `pull.twohead=prefablens`, replacing existing values in the selected Git configuration scope.
+You may place `--strategy` before or after the scope option.
 
 Local and project setup require a Git working tree and also work from its subdirectories.
 Local setup resolves the attributes path through Git, including in linked worktrees.
@@ -109,7 +115,7 @@ The message also suggests `prefablens setup-merge --user` for user configuration
 This failure does not write setup files.
 
 With `--project`, commit `.gitattributes` to share the attribute rules.
-The merge driver, mergetool, and strategy settings remain local to the clone.
+The merge driver and mergetool settings remain local to the clone.
 Each clone needs setup unless those settings are already available from user configuration.
 
 User setup also works outside repositories and writes merge settings with `git config --global`.
@@ -124,23 +130,52 @@ Setup registers this default path in global configuration so that a system `core
 Existing attribute lines are preserved, and repeated setup does not duplicate the rules.
 If the user attributes file is a symlink, setup updates its target and preserves the link.
 
-User setup sets `pull.twohead=prefablens` globally, selecting PrefabLens for ordinary merges across all repositories, including repositories without Unity files.
-Repository configuration takes precedence over global configuration.
 For attributes, Git gives `info/attributes` precedence over `.gitattributes`, which takes precedence over user attributes.
 See [Git attributes](https://git-scm.com/docs/gitattributes) for the full precedence rules.
 
 #### Merge behavior
 
+When `pull.twohead` is unset, Git uses its native `ort` strategy for `git merge`, `git pull`, `git rebase`, and `git cherry-pick`.
+Attributes select the PrefabLens driver for UnityYAML file contents.
+Other formats retain Git's normal merge behavior.
+
+To opt in to the full strategy by default for this clone, set:
+
+```sh
+git config --local --replace-all pull.twohead prefablens
+```
+
+`--replace-all` replaces duplicate `pull.twohead` entries in the local configuration with one `prefablens` value.
+Without it, Git refuses to overwrite multiple entries.
+
+Git reads this setting for `git merge`, `git pull`, `git rebase`, and `git cherry-pick`.
+Without `--strategy`, setup leaves existing values unchanged and adds none when absent.
+For `git rebase` and `git cherry-pick`, Git uses the first configured `pull.twohead` value.
+An earlier system or global value can therefore take precedence over a local opt-in.
+Inspect configured values with `git config --show-origin --show-scope --get-all pull.twohead`.
+
+Select the full strategy for one operation when repository-wide dependency validation or structural conflict decisions are needed:
+
+```sh
+git merge -s prefablens origin/main
+git rebase -s prefablens origin/main
+git cherry-pick --strategy=prefablens <commit>
+```
+
+Git's revert implementation uses its internal strategy; the PrefabLens file driver and mergetool still apply.
+
 Before the strategy writes merge objects, the index, or working files, it checks the installed CLI version.
 
 If any command is missing or reports a different version, reinstall the release archive.
 
-The `pull.twohead=prefablens` configuration entry selects the strategy for ordinary two-head `git merge` commands.
-The strategy uses `git merge-tree --write-tree -z --messages` and requires Git 2.39 or later.
+The strategy uses `git merge-tree --write-tree -z --messages` and requires Git 2.45 or later.
 It uses the output tree, index stages, and structured conflict types from the Git ort engine.
 It also tracks conflicts that have no unmerged index entries.
-Strategy options (`-X`) require Git 2.43 or later.
-On older Git versions, the strategy refuses these options before it writes working files.
+Git 2.45 can merge tree inputs with an explicit base, including root picks and staged `cherry-pick --no-commit` inputs.
+Replay uses Git's supplied parent and staged Ours, without creating synthetic commits.
+Ordinary merges retain native recursive consolidation when there are multiple bases.
+Explicit-strategy replay conflict labels identify the real source objects.
+Older versions are rejected before setup writes configuration or the strategy writes working files.
 
 The strategy prepares the index, then uses the Git two-tree checkout to protect local edits and untracked paths.
 It writes the conflict index before any UI starts.
@@ -155,10 +190,17 @@ Before the strategy can return 0, every conflict must have a resolution.
 If a conflict remains after the strategy installs the merge state, it returns 1.
 A failure before installation returns 2.
 
+Paused `--no-commit` picks with the explicit strategy retain their exact historical inputs in the worktree's Git directory.
+The mergetool reuses this evidence only while HEAD and the operation's `MERGE_MSG` file remain unchanged.
+It also checks the supplied file bytes against those historical inputs.
+Native `ort` does not supply historical revision identities to a file driver during a `--no-commit` pick.
+Without that evidence, type-dependent choices remain unresolved and retain their original index stages.
+Use `--strategy=prefablens` when exact historical type evidence is needed for this operation.
+
 #### Content adapters
 
 ```text
-prefablens merge-driver <base> <ours-and-output> <theirs> <path> [<marker-size>]
+prefablens merge-driver <base> <ours-and-output> <theirs> <path> [<marker-size> [<base-label> <ours-label> <theirs-label>]]
 prefablens mergetool [--terminal] <base> <local> <remote> <merged>
 ```
 
@@ -169,6 +211,7 @@ prefablens mergetool [--terminal] <base> <local> <remote> <merged>
 | `<theirs>` | `%B` | Theirs input |
 | `<path>` | `%P` | Repository-relative path |
 | `<marker-size>` | `%L` | Conflict marker width, default 7 |
+| `<base-label>`, `<ours-label>`, `<theirs-label>` | `%S`, `%X`, `%Y` | Git's original conflict labels |
 
 The mergetool arguments map to `$BASE`, `$LOCAL`, `$REMOTE`, and `$MERGED`.
 `$MERGED` contains the current working file and receives a resolution only after completion.
@@ -182,6 +225,7 @@ The driver uses the original three inputs for Git text fallback.
 The `merge.conflictStyle` configuration and `conflict-marker-size` attribute control the markers.
 If the text merge is clean but semantic resolution is incomplete, the driver emits a whole-file conflict block.
 Files other than UnityYAML use Git's text or binary fallback.
+Setup passes Git's conflict labels to this fallback, including during replay and for non-Unity contents with a Unity file extension.
 
 The semantic plan and valid partial result remain in memory.
 At startup, the mergetool reads the three original inputs and records a snapshot of `$MERGED`.

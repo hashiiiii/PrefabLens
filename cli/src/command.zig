@@ -7,6 +7,9 @@ pub const MergeDriverArgs = struct {
     theirs: []const u8,
     path: []const u8,
     marker_size: u31 = 7,
+    base_label: []const u8 = "base",
+    ours_label: []const u8 = "ours",
+    theirs_label: []const u8 = "theirs",
 };
 
 pub const MergetoolArgs = struct {
@@ -40,8 +43,8 @@ pub fn parse(args: []const []const u8) Error!Command {
     if (std.mem.eql(u8, args[0], "setup-merge")) return .{ .setup_merge = args[1..] };
     if (std.mem.eql(u8, args[0], "merge-strategy")) return .{ .merge_strategy = args[1..] };
     if (std.mem.eql(u8, args[0], "merge-driver")) {
-        if (args.len != 5 and args.len != 6) return error.InvalidArguments;
-        const marker_size = if (args.len == 6)
+        if (args.len != 5 and args.len != 6 and args.len != 9) return error.InvalidArguments;
+        const marker_size = if (args.len >= 6)
             std.fmt.parseInt(u31, args[5], 10) catch return error.InvalidArguments
         else
             7;
@@ -52,6 +55,9 @@ pub fn parse(args: []const []const u8) Error!Command {
             .theirs = args[3],
             .path = args[4],
             .marker_size = marker_size,
+            .base_label = if (args.len == 9) args[6] else "base",
+            .ours_label = if (args.len == 9) args[7] else "ours",
+            .theirs_label = if (args.len == 9) args[8] else "theirs",
         } };
     }
     if (std.mem.eql(u8, args[0], "mergetool")) {
@@ -100,6 +106,16 @@ test "command: merge driver accepts a positive marker size operand" {
     try testing.expectError(error.InvalidArguments, parse(&.{ "merge-driver", "base", "ours", "theirs", "path", "0" }));
     try testing.expectError(error.InvalidArguments, parse(&.{ "merge-driver", "base", "ours", "theirs", "path", "-1" }));
     try testing.expectError(error.InvalidArguments, parse(&.{ "merge-driver", "base", "ours", "theirs", "path", "11", "extra" }));
+}
+
+test "command: merge driver preserves Git conflict labels as separate operands" {
+    // Commit subjects can contain spaces and quotes; shifted labels would misidentify the conflict sides.
+    const driver = (try parse(&.{ "merge-driver", "base", "ours", "theirs", "path", "7", "parent", "HEAD", "abc1234 (picked 'change')" })).merge_driver;
+    try testing.expectEqualStrings("path", driver.path);
+    try testing.expectEqualStrings("parent", driver.base_label);
+    try testing.expectEqualStrings("HEAD", driver.ours_label);
+    try testing.expectEqualStrings("abc1234 (picked 'change')", driver.theirs_label);
+    try testing.expectError(error.InvalidArguments, parse(&.{ "merge-driver", "base", "ours", "theirs", "path", "7", "parent", "HEAD" }));
 }
 
 test "command: only the first argument selects a reserved subcommand" {

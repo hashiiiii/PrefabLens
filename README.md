@@ -105,7 +105,7 @@ prefablens --open main                  # write the report to a temp file and op
 #### Merge
 
 > [!IMPORTANT]
-> PrefabLens uses Git **2.39 or later** to resolve UnityYAML conflicts during `git merge`.
+> PrefabLens uses Git **2.45 or later** to resolve UnityYAML conflicts during `git merge`.
 
 Choose a setup scope:
 
@@ -118,10 +118,30 @@ Choose a setup scope:
 > [!NOTE]
 > `prefablens setup-merge` defaults to `--local`.
 
+By default, setup preserves existing `pull.twohead` values and does not add one when absent.
+When unset, Git uses its native `ort` strategy, and the PrefabLens merge driver handles UnityYAML file contents.
 Use the normal merge command:
 
 ```bash
 git merge origin/main
+```
+
+The full strategy adds repository-wide dependency validation and interactive resolution of UnityYAML content and structural conflicts.
+To enable it persistently for this clone during setup, run:
+
+```bash
+prefablens setup-merge --local --strategy
+```
+
+`--strategy` sets `pull.twohead=prefablens` in the selected Git configuration scope.
+Git reads this setting when selecting the default strategy for `git merge`, `git pull`, `git rebase`, and `git cherry-pick`.
+For rebase and cherry-pick, an earlier inherited value can take precedence; see [merge behavior](docs/cli.md#merge-behavior).
+To use the full strategy for one operation, select it with a command argument:
+
+```bash
+git merge -s prefablens origin/main
+git rebase -s prefablens origin/main
+git cherry-pick --strategy=prefablens <commit>
 ```
 
 https://github.com/user-attachments/assets/2ad6a2e9-5562-40b8-ab7e-c5f277da3d8b

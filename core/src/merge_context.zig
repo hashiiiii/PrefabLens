@@ -46,6 +46,7 @@ pub const Context = struct {
     ours: Snapshot = .{},
     theirs: Snapshot = .{},
     output: Snapshot = .{},
+    require_script_schema: bool = false,
 };
 
 test "duplicate script GUID with unknown fields cannot authorize a kind" {

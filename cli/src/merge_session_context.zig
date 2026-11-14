@@ -98,17 +98,21 @@ pub fn discover(git: Git) !?Revisions {
         if (base == null or ours == null or theirs == null) return null;
         if (!validOid(base.?) or !validOid(ours.?) or !validOid(theirs.?)) return null;
         return .{
-            .base = (try commitIdentity(git, base.?)) orelse return null,
-            .ours = (try commitIdentity(git, ours.?)) orelse return null,
-            .theirs = (try commitIdentity(git, theirs.?)) orelse return null,
+            .base = (try snapshotIdentity(git, base.?)) orelse return null,
+            .ours = (try snapshotIdentity(git, ours.?)) orelse return null,
+            .theirs = (try snapshotIdentity(git, theirs.?)) orelse return null,
         };
+    }
+    if (try @import("merge_replay_context.zig").discover(git)) |saved| {
+        return .{ .base = saved.base, .ours = saved.ours, .theirs = saved.theirs };
     }
     const merge_path_result = try git.run(&.{ "rev-parse", "--git-path", "MERGE_HEAD" });
     if (merge_git.exitCode(merge_path_result) != 0) return null;
     const merge_path = merge_git.trim(merge_path_result.stdout);
     const absolute = if (std.fs.path.isAbsolute(merge_path)) merge_path else try git.path(merge_path);
     const merge_head = std.Io.Dir.cwd().readFileAlloc(git.io, absolute, git.arena, .limited(1024)) catch |err| switch (err) {
-        error.FileNotFound, error.StreamTooLong => return null,
+        error.FileNotFound => return discoverReplay(git),
+        error.StreamTooLong => return null,
         else => return err,
     };
     const remote = merge_git.trim(merge_head);
@@ -120,6 +124,31 @@ pub fn discover(git: Git) !?Revisions {
     const ancestor = merge_git.trim(bases.stdout);
     if (!validOid(ancestor)) return null;
     return .{ .base = ancestor, .ours = local, .theirs = resolved_remote };
+}
+
+fn discoverReplay(git: Git) !?Revisions {
+    const local = (try commitIdentity(git, "HEAD")) orelse return null;
+    for ([_][]const u8{ "CHERRY_PICK_HEAD", "REVERT_HEAD", "REBASE_HEAD" }) |name| {
+        const picked = (try commitIdentity(git, name)) orelse continue;
+        const history = try git.output(&.{ "rev-list", "--parents", "-n", "1", picked });
+        var parents = std.mem.tokenizeAny(u8, history, " \r\n");
+        _ = parents.next();
+        const parent = parents.next() orelse merge_git.trim(try git.output(&.{"mktree"}));
+        // A merge commit needs its selected mainline, which is not always
+        // persisted for a resumed single pick. Do not guess that parent.
+        if (parents.next() != null) return null;
+        return if (std.mem.eql(u8, name, "REVERT_HEAD"))
+            .{ .base = picked, .ours = local, .theirs = parent }
+        else
+            .{ .base = parent, .ours = local, .theirs = picked };
+    }
+    return null;
+}
+
+fn snapshotIdentity(git: Git, value: []const u8) !?[]const u8 {
+    const result = try git.run(&.{ "rev-parse", "--verify", "--end-of-options", try std.fmt.allocPrint(git.arena, "{s}^{{tree}}", .{value}) });
+    if (merge_git.exitCode(result) != 0) return null;
+    return value;
 }
 
 fn validOid(oid: []const u8) bool {
@@ -149,12 +178,17 @@ pub fn bind(store: *revision.Store, revisions: Revisions, paths: Paths, inputs: 
         .ours = ours,
         .theirs = theirs,
         .output = if (revisions.output) |output| try store.snapshot(output) else .{},
+        .require_script_schema = true,
     };
 }
 
 fn matches(git: Git, tree: []const u8, path: []const u8, bytes: []const u8) !bool {
     if (path.len == 0 or std.fs.path.isAbsolute(path) or std.mem.indexOfScalar(u8, path, 0) != null) return false;
-    const result = try git.run(&.{ "--literal-pathspecs", "ls-tree", "-z", "--full-tree", tree, "--", path });
+    var memory = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer memory.deinit();
+    var temporary = git;
+    temporary.arena = memory.allocator();
+    const result = try temporary.run(&.{ "--literal-pathspecs", "ls-tree", "-z", "--full-tree", tree, "--", path });
     if (merge_git.exitCode(result) != 0) return false;
     const entry = result.stdout;
     if (entry.len == 0) return bytes.len == 0;
@@ -167,7 +201,7 @@ fn matches(git: Git, tree: []const u8, path: []const u8, bytes: []const u8) !boo
     const oid = fields.next() orelse return false;
     if (fields.next() != null or !std.mem.eql(u8, kind, "blob") or
         (!std.mem.eql(u8, mode, "100644") and !std.mem.eql(u8, mode, "100755"))) return false;
-    const blob = try git.run(&.{ "cat-file", "blob", oid });
+    const blob = try temporary.run(&.{ "cat-file", "blob", oid });
     return merge_git.exitCode(blob) == 0 and std.mem.eql(u8, bytes, blob.stdout);
 }
 
@@ -227,6 +261,37 @@ test "session context binds exact historical inputs and ignores dirty declaratio
     try testing.expectEqual(null, try bind(&store, revisions, .{ .base = "Assets/Missing.prefab", .ours = asset_path, .theirs = asset_path }, inputs));
 }
 
+test "session context does not retain repeated large inputs" {
+    var setup_memory = std.heap.ArenaAllocator.init(testing.allocator);
+    defer setup_memory.deinit();
+    const setup = setup_memory.allocator();
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var env = std.process.Environ.Map.init(setup);
+    const git = try fixtureGit(&tmp, setup, &env);
+    const padding = try setup.alloc(u8, 1024 * 1024);
+    @memset(padding, 'x');
+    const bytes = try std.fmt.allocPrint(setup, "--- !u!114 &1\nMonoBehaviour:\n  m_Script: {{fileID: 11500000, guid: {s}, type: 3}}\n  values: 01000000i\n  padding: {s}\n", .{ script_guid, padding });
+    const commit = try fixtureCommit(git, bytes);
+    const revisions: Revisions = .{ .base = commit, .ours = commit, .theirs = commit };
+    const paths: Paths = .{ .base = asset_path, .ours = asset_path, .theirs = asset_path };
+    const inputs: Inputs = .{ .base = bytes, .ours = bytes, .theirs = bytes };
+
+    // Replayed files can be much larger than the persistent historical context.
+    var memory = std.heap.ArenaAllocator.init(testing.allocator);
+    defer memory.deinit();
+    var limited = git;
+    limited.arena = memory.allocator();
+    var store = revision.Store.init(limited);
+    defer store.deinit();
+
+    for (0..4) |_| {
+        const context = (try bind(&store, revisions, paths, inputs)) orelse return error.TestUnexpectedResult;
+        try testing.expectEqual(@as(usize, 1), context.base.scripts.len);
+    }
+    try testing.expect(memory.queryCapacity() < 512 * 1024);
+}
+
 test "session context discovers only complete strategy revisions or a single merge head" {
     var memory = std.heap.ArenaAllocator.init(testing.allocator);
     defer memory.deinit();
@@ -259,6 +324,49 @@ test "session context discovers only complete strategy revisions or a single mer
     // Internal handoff accepts immutable identities, never branch names that can move.
     try env.put("PREFABLENS_MERGE_OURS", "HEAD");
     try testing.expectEqual(null, try discover(git));
+}
+
+test "session context resumes replay conflicts with the operation's historical schema" {
+    const Operation = enum { pick, rebase, revert };
+    for (std.enums.values(Operation)) |operation| {
+        var memory = std.heap.ArenaAllocator.init(testing.allocator);
+        defer memory.deinit();
+        const arena = memory.allocator();
+        var tmp = testing.tmpDir(.{});
+        defer tmp.cleanup();
+        var env = std.process.Environ.Map.init(arena);
+        const git = try fixtureGit(&tmp, arena, &env);
+        try @import("testing/git.zig").configureHermeticRepository(testing.io, arena, git.cwd);
+        try git.ok(&.{ "config", "pull.twohead", "ort" });
+        const base = try fixtureCommit(git, base_bytes);
+        const ours = try fixtureCommit(git, ours_bytes);
+        try git.ok(&.{ "checkout", "-q", "--detach", base });
+        const theirs = try fixtureCommit(git, theirs_bytes);
+        try git.ok(&.{ "checkout", "-q", "--detach", ours });
+        if (operation == .revert) _ = try fixtureCommit(git, theirs_bytes);
+        // Real Git writes different state refs for each paused operation. The
+        // resumed mergetool must bind its type proof to those exact inputs.
+        const result = try git.run(switch (operation) {
+            .pick => &.{ "cherry-pick", theirs },
+            .rebase => &.{ "rebase", theirs },
+            .revert => &.{ "revert", "--no-edit", ours },
+        });
+        try testing.expectEqual(@as(u8, 1), merge_git.exitCode(result));
+        const sources = (try discover(git)) orelse return error.TestUnexpectedResult;
+        try testing.expectEqualStrings(if (operation == .revert) ours else base, sources.base);
+        try testing.expectEqualStrings(if (operation == .rebase) ours else if (operation == .revert) base else theirs, sources.theirs);
+        var store = revision.Store.init(git);
+        defer store.deinit();
+        const paths: Paths = .{ .base = asset_path, .ours = asset_path, .theirs = asset_path };
+        const bound = (try bind(&store, sources, paths, .{
+            .base = try git.output(&.{ "show", ":1:Assets/Thing.prefab" }),
+            .ours = try git.output(&.{ "show", ":2:Assets/Thing.prefab" }),
+            .theirs = try git.output(&.{ "show", ":3:Assets/Thing.prefab" }),
+        })) orelse return error.TestUnexpectedResult;
+        try testing.expectEqual(core.merge_context.Kind.int32_array, bound.base.kind(script_guid, "values").?);
+        try testing.expectEqual(core.merge_context.Kind.int32_array, bound.ours.kind(script_guid, "values").?);
+        try testing.expectEqual(core.merge_context.Kind.int32_array, bound.theirs.kind(script_guid, "values").?);
+    }
 }
 
 test "session context preserves schema evidence and detects index changes" {

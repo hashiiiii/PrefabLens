@@ -16,6 +16,7 @@ Try the [live demo](https://prefablens.hashiiiii.workers.dev/).
 | Review a GitHub pull request | [Chrome extension](#chrome-extension) | [Authentication, supported files, and development](docs/extension.md) |
 | Review changes in a Unity project | [Unity Editor package](#unity-editor) | [CLI setup, window controls, and development](docs/editor.md) |
 | Compare or merge assets locally | [CLI](#cli) | [Commands, merge behavior, and key bindings](docs/cli.md) |
+| Review semantic diffs with `git diff` | [CLI](#cli) + [Lantana](https://github.com/hashiiiii/Lantana#installation) | [Git diff integration](#use-with-git-diff) |
 
 Assets must use Unity's text serialization format.  
 Binary assets do not produce semantic diffs.  
@@ -112,6 +113,26 @@ prefablens --json before.prefab after.prefab
 <p align="center">
   <img width="924" src="docs/images/cli.png" alt="Semantic diff in the terminal" />
 </p>
+
+### Use with git diff
+
+To view semantic UnityYAML changes through `git diff`, install [Lantana](https://github.com/hashiiiii/Lantana#installation) alongside the PrefabLens CLI.  
+Follow Lantana's [PrefabLens renderer setup](https://github.com/hashiiiii/Lantana#example-prefablens) to configure `renderers.json`, then run these commands in your repository:
+
+```bash
+lantana set
+git diff
+git diff --cached
+```
+
+Lantana uses PrefabLens for matching UnityYAML files and shows raw Git diffs for other files.  
+`lantana set` configures the diff pager for the current clone; use `lantana unset` in that clone to remove it.
+
+For a single comparison without changing Git configuration, use:
+
+```bash
+git diff | lantana
+```
 
 ### Merge with Git
 

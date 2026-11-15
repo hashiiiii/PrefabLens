@@ -179,7 +179,7 @@ pub fn analyze(arena: std.mem.Allocator, source: []const u8, class_name: []const
         if (tokens[prefix].is("partial")) return .{};
     }
     if (!names.mono_behaviour or class_at + 3 >= tokens.len) return .{};
-    if (!tokens[class_at + 2].is(":")) return .{ .complete = tokens[class_at + 2].is("{") };
+    if (!tokens[class_at + 2].is(":")) return .{};
     var open = class_at + 3;
     while (open < tokens.len and !tokens[open].is("{")) : (open += 1) {}
     if (open == tokens.len) return .{};
@@ -277,7 +277,9 @@ fn fieldDeclaration(declaration: []const Token, imports: Imports, names: Names, 
             public = true;
         } else if (token.is("private") or token.is("protected") or token.is("internal")) {
             continue;
-        } else if (token.is("static") or token.is("readonly") or token.is("const") or token.is("new") or token.is("event")) {
+        } else if (token.is("new")) {
+            return unproven(complete);
+        } else if (token.is("static") or token.is("readonly") or token.is("const") or token.is("event")) {
             return null;
         } else break;
     }

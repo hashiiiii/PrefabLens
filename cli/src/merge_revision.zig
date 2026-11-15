@@ -44,6 +44,21 @@ test "schema fingerprints retain opaque source identity" {
     var store = Store.init(git);
     defer store.deinit();
     try testing.expect(!std.mem.eql(u8, &(try store.schemaFingerprint(base)).?, &(try store.schemaFingerprint(changed)).?));
+    // The parser also declines shadowing declarations; a `new` field is not
+    // equivalent to a known nonserialized static or readonly member.
+    try fixtureWrite(&tmp, "Example.cs", "using UnityEngine; class Example : MonoBehaviour { public new int[] values; }\n");
+    const shadowed = try fixtureCommit(git);
+    try fixtureWrite(&tmp, "Example.cs", "using UnityEngine; class Example : MonoBehaviour { public new string[] values; }\n");
+    const shadowed_change = try fixtureCommit(git);
+    try testing.expect(!std.mem.eql(u8, &(try store.schemaFingerprint(shadowed)).?, &(try store.schemaFingerprint(shadowed_change)).?));
+    // Non-MonoBehaviour classes may be nested serialized data. Their unparsed
+    // fields must not disappear from a repository-wide schema comparison.
+    try fixtureWrite(&tmp, "Helper.cs.meta", "guid: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n");
+    try fixtureWrite(&tmp, "Helper.cs", "class Helper { public int[] values; }\n");
+    const helper = try fixtureCommit(git);
+    try fixtureWrite(&tmp, "Helper.cs", "class Helper { public string[] values; }\n");
+    const helper_change = try fixtureCommit(git);
+    try testing.expect(!std.mem.eql(u8, &(try store.schemaFingerprint(helper)).?, &(try store.schemaFingerprint(helper_change)).?));
 }
 
 // All returned slices belong to git.arena. Keep that arena alive while using
@@ -179,7 +194,12 @@ pub const Store = struct {
         for (entries.items) |entry| {
             if (!ends(entry.path, ".cs")) continue;
             const meta_path = try std.fmt.allocPrint(arena, "{s}.meta", .{entry.path});
-            const meta_index = paths.get(meta_path) orelse continue;
+            const meta_index = paths.get(meta_path) orelse {
+                // A missing script identity cannot prove that changed source
+                // leaves unknown bindings in unchanged assets unaffected.
+                fingerprint_allowed = false;
+                continue;
+            };
             const guid = entries.items[meta_index].guid orelse continue;
             if (guids.get(guid).? != 1) continue;
             const filename = std.fs.path.basename(entry.path);
@@ -422,7 +442,8 @@ test "revision snapshots decline absent metadata duplicate GUIDs and unknown ass
     for ([_][]const u8{ absent, duplicate, assembly }) |revision| {
         try testing.expectEqual(null, (try store.snapshot(revision)).kind(script_guid, "values"));
     }
-    // Ambiguous identity and assembly evidence must never authorize skipping dependent assets.
+    // Missing or ambiguous identity and assembly evidence must never authorize skipping dependent assets.
+    try testing.expectEqual(null, try store.schemaFingerprint(absent));
     try testing.expectEqual(null, try store.schemaFingerprint(duplicate));
     try testing.expectEqual(null, try store.schemaFingerprint(assembly));
 }

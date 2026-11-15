@@ -66,8 +66,8 @@ pub fn run(io: std.Io, arena: std.mem.Allocator, args: []const []const u8, env: 
     const git: Git = .{ .io = io, .arena = arena, .env = &git_env };
     try installation.requireCompatible(git);
     const v = try merge_git.version(git);
-    if (!v.atLeast(2, 39)) {
-        try stderr.writeAll("prefablens: Automatic merge needs Git 2.39 or later.\n");
+    if (!v.atLeast(2, 45)) {
+        try stderr.writeAll("prefablens: Automatic merge needs Git 2.45 or later.\n");
         return 2;
     }
     const separator = for (args, 0..) |arg, i| {
@@ -75,36 +75,53 @@ pub fn run(io: std.Io, arena: std.mem.Allocator, args: []const []const u8, env: 
     } else return error.InvalidStrategyArguments;
     if (args.len - separator != 3) return error.InvalidStrategyArguments;
     var options: std.ArrayList([]const u8) = .empty;
-    var base_count: usize = 0;
+    var bases: std.ArrayList([]const u8) = .empty;
     for (args[0..separator]) |arg| {
         if (std.mem.startsWith(u8, arg, "--")) {
-            if (!v.atLeast(2, 43)) {
-                try stderr.writeAll("prefablens: Git strategy options (-X) need Git 2.43 or later. No merge files were changed.\n");
-                return 2;
-            }
             try options.append(arena, try std.fmt.allocPrint(arena, "-X{s}", .{arg[2..]}));
         } else {
             if (!validOid(arg)) return error.InvalidStrategyArguments;
-            base_count += 1;
+            try bases.append(arena, arg);
         }
     }
     const head = args[separator + 1];
     const remote = args[separator + 2];
     if (!validOid(remote) or (!std.mem.eql(u8, head, "HEAD") and !validOid(head))) return error.InvalidStrategyArguments;
-    const sources = try strategy_revisions.read(git, head, remote);
+    const sources = try strategy_revisions.fromBases(git, bases.items, head, remote);
     try sources.apply(&git_env);
     const index_before = try std.Io.Dir.cwd().readFileAlloc(io, try indexPath(git), arena, .limited(256 * 1024 * 1024));
     if (merge_git.exitCode(try git.run(&.{ "diff-index", "--cached", "--quiet", sources.ours, "--" })) != 0) {
         try stderr.writeAll("prefablens: Commit or unstage index changes before this merge.\n");
         return 2;
     }
-    if (base_count == 0) try options.append(arena, "--allow-unrelated-histories");
-    const merge_args = try std.mem.concat(arena, []const u8, &.{ &.{ "merge-tree", "--write-tree", "-z", "--messages" }, options.items, &.{ sources.ours, sources.theirs } });
+    const native_bases = try sources.hasNativeBases(git);
+    if (native_bases) {
+        if (sources.bases.len == 0) try options.append(arena, "--allow-unrelated-histories");
+    } else {
+        // Replay's selected parent can differ from the heads' common ancestor.
+        // Git 2.45 accepts all three trees without inventing commit identities.
+        const base = switch (sources.bases.len) {
+            0 => merge_git.trim(try git.output(&.{"mktree"})),
+            1 => sources.bases[0],
+            else => return error.InvalidStrategyBases,
+        };
+        try options.append(arena, try std.fmt.allocPrint(arena, "--merge-base={s}", .{base}));
+    }
+    var heads: [2][]const u8 = .{ sources.ours, sources.theirs };
+    if (native_bases and std.mem.eql(u8, head, "HEAD")) {
+        heads[0] = "HEAD";
+        const key = try std.fmt.allocPrint(arena, "GITHEAD_{s}", .{sources.theirs});
+        if (git_env.get(key)) |label| {
+            if (try namesSnapshot(git, label, sources.theirs)) heads[1] = label;
+        }
+    }
+    const merge_args = try std.mem.concat(arena, []const u8, &.{ &.{ "merge-tree", "--write-tree", "-z", "--messages" }, options.items, &.{"--"}, &heads });
     const output = try git.run(merge_args);
     if (merge_git.exitCode(output) > 1) {
         try stderr.writeAll(output.stderr);
         return 2;
     }
+    if (!try namesSnapshot(git, heads[0], sources.ours) or !try namesSnapshot(git, heads[1], sources.theirs)) return error.SourceChanged;
     var result = try parse(arena, output.stdout);
     result.ours = sources.ours;
     result.theirs = sources.theirs;
@@ -115,10 +132,32 @@ pub fn run(io: std.Io, arena: std.mem.Allocator, args: []const []const u8, env: 
     defer candidate.deinit();
     try candidate.automatic();
     try install(git, sources.ours, candidate.result);
-    return resolveSession(git, &candidate, env, stderr) catch |err| {
+    const code = resolveSession(git, &candidate, env, stderr) catch |err| blk: {
         try stderr.print("prefablens: Merge remains unresolved: {s}.\n", .{@errorName(err)});
-        return 1;
+        break :blk @as(u8, 1);
     };
+    if (code == 1) if (sources.known) |known| {
+        const needs_context = pending: {
+            for (candidate.items.items) |item| {
+                if (item.done) continue;
+                for (item.paths) |path| if (candidate.node_index.get(path)) |index| {
+                    if (candidate.nodes.items[index].unity) break :pending true;
+                };
+            }
+            break :pending false;
+        };
+        if (needs_context) _ = @import("merge_replay_context.zig").save(git, .{ .base = known.base, .ours = known.ours, .theirs = known.theirs }) catch |err| blk: {
+            try stderr.print("prefablens: Cannot save replay type evidence: {s}.\n", .{@errorName(err)});
+            break :blk false;
+        };
+    };
+    return code;
+}
+
+fn namesSnapshot(git: Git, name: []const u8, expected: []const u8) !bool {
+    const expression = try std.fmt.allocPrint(git.arena, "{s}^{{}}", .{name});
+    const result = try git.run(&.{ "rev-parse", "--verify", "--end-of-options", expression });
+    return merge_git.exitCode(result) == 0 and std.mem.eql(u8, merge_git.trim(result.stdout), expected);
 }
 
 fn resolveSession(git: Git, candidate: *candidate_module.Candidate, env: *std.process.Environ.Map, stderr: *std.Io.Writer) !u8 {

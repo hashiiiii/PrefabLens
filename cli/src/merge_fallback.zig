@@ -31,15 +31,14 @@ pub fn build(
     const size_option = try std.fmt.allocPrint(arena, "--marker-size={d}", .{args.marker_size});
     const native = try std.process.run(arena, io, .{
         .argv = &.{
-            "git",     "merge-file", "-p", size_option,
+            "git",             "merge-file",    "-p",             "--diff-algorithm=histogram", size_option,
             switch (style) {
                 .merge => "--no-diff3",
                 .diff3 => "--diff3",
                 .zdiff3 => "--zdiff3",
             },
-            "-L",      "ours",       "-L", "base",
-            "-L",      "theirs",     "--", args.ours_output,
-            args.base, args.theirs,
+            "-L",              args.ours_label, "-L",             args.base_label,              "-L",
+            args.theirs_label, "--",            args.ours_output, args.base,                    args.theirs,
         },
         .stdout_limit = .limited(merge_io.max_output_bytes),
         .stderr_limit = .limited(64 * 1024),
@@ -51,15 +50,15 @@ pub fn build(
 
     // A clean text merge does not resolve a semantic or unsupported structural conflict.
     var output = std.Io.Writer.Allocating.init(arena);
-    try marker(&output.writer, '<', args.marker_size, "ours");
+    try marker(&output.writer, '<', args.marker_size, args.ours_label);
     try side(&output.writer, ours);
     if (style != .merge) {
-        try marker(&output.writer, '|', args.marker_size, "base");
+        try marker(&output.writer, '|', args.marker_size, args.base_label);
         try side(&output.writer, base);
     }
     try marker(&output.writer, '=', args.marker_size, null);
     try side(&output.writer, theirs);
-    try marker(&output.writer, '>', args.marker_size, "theirs");
+    try marker(&output.writer, '>', args.marker_size, args.theirs_label);
     return .{ .bytes = try output.toOwnedSlice(), .conflicted = true };
 }
 

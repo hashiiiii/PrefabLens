@@ -5,15 +5,29 @@ const unity_path = @import("unity_path.zig");
 const installation = @import("installation.zig");
 
 const Scope = enum { project, local, user };
-pub const usage = "prefablens setup-merge [--project|--local|--user]";
+const Options = struct { scope: Scope, strategy: bool };
+pub const usage = "prefablens setup-merge [--project|--local|--user] [--strategy]";
 
-fn parseScope(args: []const []const u8) !Scope {
-    if (args.len == 0) return .local;
-    if (args.len != 1) return error.InvalidSetupArguments;
-    if (std.mem.eql(u8, args[0], "--project")) return .project;
-    if (std.mem.eql(u8, args[0], "--local")) return .local;
-    if (std.mem.eql(u8, args[0], "--user")) return .user;
-    return error.InvalidSetupArguments;
+fn parseOptions(args: []const []const u8) !Options {
+    var scope: ?Scope = null;
+    var strategy = false;
+    for (args) |arg| {
+        if (std.mem.eql(u8, arg, "--strategy")) {
+            if (strategy) return error.InvalidSetupArguments;
+            strategy = true;
+        } else {
+            if (scope != null) return error.InvalidSetupArguments;
+            scope = if (std.mem.eql(u8, arg, "--project"))
+                .project
+            else if (std.mem.eql(u8, arg, "--local"))
+                .local
+            else if (std.mem.eql(u8, arg, "--user"))
+                .user
+            else
+                return error.InvalidSetupArguments;
+        }
+    }
+    return .{ .scope = scope orelse .local, .strategy = strategy };
 }
 
 const UserAttributes = struct {
@@ -47,16 +61,18 @@ fn userAttributes(git: merge_git.Git) !UserAttributes {
 }
 
 pub fn run(io: std.Io, arena: std.mem.Allocator, args: []const []const u8, env: *std.process.Environ.Map, stdout: *std.Io.Writer) !void {
-    const scope = try parseScope(args);
+    const options = try parseOptions(args);
+    const scope = options.scope;
     var git: merge_git.Git = .{ .io = io, .arena = arena, .env = env };
-    if (!(try merge_git.version(git)).atLeast(2, 39)) return error.Git239Required;
+    if (!(try merge_git.version(git)).atLeast(2, 45)) return error.Git245Required;
     if (scope != .user) {
         const root = git.output(&.{ "rev-parse", "--show-toplevel" }) catch |err| {
             return if (err == error.GitFailed) error.SetupRequiresRepository else err;
         };
         git.cwd = merge_git.trim(root);
     }
-    try installation.requireCompatible(git);
+    const config_scope = if (scope == .user) "--global" else "--local";
+    if (options.strategy) try installation.requireCompatible(git) else try installation.requireDriverCompatible(git);
     var default_user_path: ?[]const u8 = null;
     const path = switch (scope) {
         .project => try git.path(".gitattributes"),
@@ -88,14 +104,13 @@ pub fn run(io: std.Io, arena: std.mem.Allocator, args: []const []const u8, env: 
     if (!std.mem.eql(u8, old, attributes.items)) try atomic_file.replace(io, arena, absolute, if (old.len == 0) null else old, attributes.items);
     // A system attributesFile setting would otherwise prevent Git from reading the fallback user file.
     if (default_user_path) |default| try git.ok(&.{ "config", "--global", "core.attributesFile", default });
-    const config_scope = if (scope == .user) "--global" else "--local";
     try git.ok(&.{ "config", config_scope, "merge.prefablens.name", "PrefabLens semantic Unity YAML merge" });
-    try git.ok(&.{ "config", config_scope, "merge.prefablens.driver", "prefablens merge-driver %O %A %B %P %L" });
+    try git.ok(&.{ "config", config_scope, "merge.prefablens.driver", "prefablens merge-driver %O %A %B %P %L %S %X %Y" });
     // Virtual merge bases must not ask for semantic decisions or contain a selected partial result.
     try git.ok(&.{ "config", config_scope, "merge.prefablens.recursive", "text" });
     try git.ok(&.{ "config", config_scope, "mergetool.prefablens.cmd", "prefablens mergetool \"$BASE\" \"$LOCAL\" \"$REMOTE\" \"$MERGED\"" });
     try git.ok(&.{ "config", config_scope, "mergetool.prefablens.trustExitCode", "true" });
-    try git.ok(&.{ "config", config_scope, "pull.twohead", "prefablens" });
+    if (options.strategy) try git.ok(&.{ "config", config_scope, "--replace-all", "pull.twohead", "prefablens" });
     try stdout.print("PrefabLens merge is ready for {s}. Run git merge as usual.\n", .{if (scope == .user) "your repositories" else "this repository"});
     if (scope == .project) try stdout.writeAll("Commit .gitattributes to share the rules. Each clone needs setup unless your user configuration already provides it.\n");
 }

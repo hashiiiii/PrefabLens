@@ -41,10 +41,10 @@ pub fn runWithGit(
         const context = if (git) |repository|
             inputContext(repository, args.path, .{ .base = base, .ours = original, .theirs = theirs }) catch |err| switch (err) {
                 error.OutOfMemory => return merge_io.reportFailure(stderr, args.path),
-                else => core.merge_context.Context{},
+                else => core.merge_context.Context{ .require_script_schema = true },
             }
         else
-            core.merge_context.Context{};
+            core.merge_context.Context{ .require_script_schema = true };
         const built = core.merge.buildWithContext(arena, base, original, theirs, context) catch |err| switch (err) {
             error.OutOfMemory => return merge_io.reportFailure(stderr, args.path),
             else => null,
@@ -73,12 +73,12 @@ pub fn runWithGit(
 }
 
 fn inputContext(git: merge_git.Git, path: []const u8, inputs: session_context.Inputs) !core.merge_context.Context {
-    const revisions = (try session_context.discover(git)) orelse return .{};
+    const revisions = (try session_context.discover(git)) orelse return .{ .require_script_schema = true };
     var store = revision.Store.init(git);
     defer store.deinit();
     // A file driver runs before Git selects the candidate tree. The strategy
     // provides the immutable revisions needed for schema evidence.
-    return (try session_context.bind(&store, revisions, .{ .base = path, .ours = path, .theirs = path }, inputs)) orelse .{};
+    return (try session_context.bind(&store, revisions, .{ .base = path, .ours = path, .theirs = path }, inputs)) orelse .{ .require_script_schema = true };
 }
 
 fn runDriverCase(

@@ -12,7 +12,7 @@ const suffix = if (builtin.os.tag == .windows) ".exe" else "";
 const primary_name = "prefablens" ++ suffix;
 const strategy_name = "git-merge-prefablens";
 const stale_strategy_name = "git-merge-prefablens" ++ suffix;
-const driver = "prefablens merge-driver %O %A %B %P %L";
+const driver = "prefablens merge-driver %O %A %B %P %L %S %X %Y";
 
 const File = enum { missing, primary, script, alternate_primary };
 const SetupCase = struct {
@@ -24,18 +24,24 @@ const SetupCase = struct {
     valid: bool = false,
     split: bool = false,
     symlinks: bool = false,
+    select_strategy: bool = false,
+    existing_pull_strategy: ?[]const u8 = null,
 };
 const setup_cases = [_]SetupCase{
     .{ .name = "mixed-primary", .primary = .alternate_primary },
     .{ .name = "missing-primary", .primary = .missing },
-    .{ .name = "missing-strategy", .strategy = .missing },
-    .{ .name = "stale-native-helper", .strategy = .primary },
-    .{ .name = "exec-path-strategy-shadow", .exec_strategy = .primary },
+    .{ .name = "missing-strategy", .strategy = .missing, .valid = true, .existing_pull_strategy = "ort" },
+    .{ .name = "stale-native-helper", .strategy = .primary, .valid = true },
+    .{ .name = "exec-path-strategy-shadow", .exec_strategy = .primary, .valid = true },
     // Git prepends exec-path for the driver too, so a valid terminal PATH alone is insufficient.
     .{ .name = "exec-path-primary-shadow", .exec_primary = .alternate_primary },
     // Git excludes unknown exec-path commands from its custom merge strategy list, even when PATH also contains the name.
-    .{ .name = "exec-path-hidden-strategy", .exec_strategy = .script },
+    .{ .name = "exec-path-hidden-strategy", .exec_strategy = .script, .valid = true },
     .{ .name = "complete", .valid = true },
+    // Explicit opt-in must verify the helper before setup changes any files.
+    .{ .name = "strategy-selected", .valid = true, .select_strategy = true },
+    .{ .name = "strategy-missing-helper", .strategy = .missing, .select_strategy = true },
+    .{ .name = "strategy-stale-helper", .strategy = .primary, .select_strategy = true },
     .{ .name = "same-release-copies", .valid = true, .split = true },
     .{ .name = "same-release-symlinks", .valid = true, .symlinks = true },
 };
@@ -156,9 +162,16 @@ fn read(git: Git, path: []const u8) ![]const u8 {
     return std.Io.Dir.cwd().readFileAlloc(git.io, try git.path(path), git.arena, .limited(1024 * 1024));
 }
 
-fn setup(ctx: Context, git: Git, project: bool) !std.process.RunResult {
+fn setup(ctx: Context, git: Git, project: bool, select_strategy: bool) !std.process.RunResult {
     return std.process.run(git.arena, git.io, .{
-        .argv = if (project) &.{ ctx.artifacts[0], "setup-merge", "--project" } else &.{ ctx.artifacts[0], "setup-merge" },
+        .argv = if (project and select_strategy)
+            &.{ ctx.artifacts[0], "setup-merge", "--project", "--strategy" }
+        else if (project)
+            &.{ ctx.artifacts[0], "setup-merge", "--project" }
+        else if (select_strategy)
+            &.{ ctx.artifacts[0], "setup-merge", "--strategy" }
+        else
+            &.{ ctx.artifacts[0], "setup-merge" },
         .cwd = .{ .path = git.cwd },
         .environ_map = git.env,
         .timeout = .{ .duration = .{ .clock = .awake, .raw = .fromSeconds(30) } },
@@ -177,8 +190,9 @@ fn setupCase(ctx: Context, case: SetupCase) !void {
         const attributes_path = if (project) ".gitattributes" else ".git/info/attributes";
         const attributes = "# Keep the project rules.\n*.txt text\n";
         try std.Io.Dir.cwd().writeFile(git.io, .{ .sub_path = try git.path(attributes_path), .data = attributes });
+        if (case.existing_pull_strategy) |existing_strategy| try git.ok(&.{ "config", "--local", "pull.twohead", existing_strategy });
         const config = try read(git, ".git/config");
-        const result = try setup(ctx, git, project);
+        const result = try setup(ctx, git, project, case.select_strategy);
         try t.expectCode(result, if (case.valid) 0 else 2, case.name);
         if (!case.valid) {
             try t.expectFile(git.io, a, git.cwd, attributes_path, attributes);
@@ -188,6 +202,16 @@ fn setupCase(ctx: Context, case: SetupCase) !void {
             continue;
         }
         try t.require(std.mem.eql(u8, merge_git.trim(try git.output(&.{ "config", "merge.prefablens.driver" })), driver), "setup pinned the driver to an installation path");
+        const pull_strategy = try git.run(&.{ "config", "--local", "--get", "pull.twohead" });
+        if (case.select_strategy) {
+            try t.expectCode(pull_strategy, 0, case.name);
+            try t.require(std.mem.eql(u8, merge_git.trim(pull_strategy.stdout), "prefablens"), "--strategy did not select PrefabLens for pull.twohead");
+        } else if (case.existing_pull_strategy) |existing_strategy| {
+            try t.expectCode(pull_strategy, 0, case.name);
+            try t.require(std.mem.eql(u8, merge_git.trim(pull_strategy.stdout), existing_strategy), "default setup changed the existing pull.twohead strategy");
+        } else {
+            try t.expectCode(pull_strategy, 1, case.name);
+        }
         if (project) {
             try git.ok(&.{ "add", ".gitattributes" });
             try git.ok(&.{ "commit", "-qm", "Share merge rules" });
@@ -205,7 +229,7 @@ fn runtimeCase(ctx: Context, drift: Drift) !void {
     var env = try ctx.environment(&.{current}, empty_exec);
     var git = try ctx.repo(name);
     git.env = &env;
-    try t.expectCode(try setup(ctx, git, false), 0, "setup before PATH drift");
+    try t.expectCode(try setup(ctx, git, false, false), 0, "setup before PATH drift");
     const changed = try ctx.layout(try std.fmt.allocPrint(a, "{s}-changed", .{name}), switch (drift) {
         .upgrade => .alternate_primary,
         .missing_primary => .missing,
@@ -220,7 +244,10 @@ fn runtimeCase(ctx: Context, drift: Drift) !void {
     const index = try git.output(&.{ "ls-files", "--stage", "-z" });
     const head = try git.output(&.{ "rev-parse", "HEAD" });
     const objects = try git.output(&.{ "count-objects", "-v" });
-    const result = try git.run(&.{ "merge", "--no-edit", "remote" });
+    const result = if (drift == .upgrade)
+        try git.run(&.{ "merge", "--no-edit", "remote" })
+    else
+        try git.run(&.{ "merge", "-s", "prefablens", "--no-edit", "remote" });
     if (drift == .upgrade) {
         try t.expectCode(result, 0, "matching release upgrade without setup");
         try t.expectFile(git.io, a, git.cwd, "Assets/A.prefab", merged);

@@ -9,11 +9,13 @@ const ours = "--- !u!114 &1\nMonoBehaviour:\n  m_Left: 2\n  m_Right: 1\n";
 const theirs = "--- !u!114 &1\nMonoBehaviour:\n  m_Left: 1\n  m_Right: 3\n";
 const merged = "--- !u!114 &1\nMonoBehaviour:\n  m_Left: 2\n  m_Right: 3\n";
 const existing_attributes = "# Keep existing rules.\n*.txt text";
+const expected_driver = "prefablens merge-driver %O %A %B %P %L %S %X %Y";
 
 const Context = struct {
     git: Git,
     root: []const u8,
     prefablens: []const u8,
+    strategy: []const u8,
 
     fn setup(self: Context, git: Git, flags: []const []const u8) !std.process.RunResult {
         return std.process.run(git.arena, git.io, .{
@@ -58,7 +60,7 @@ const Context = struct {
         try env.put("GIT_ATTR_NOSYSTEM", "1");
         try env.put("GIT_CEILING_DIRECTORIES", root);
         if (xdg) try env.put("XDG_CONFIG_HOME", try std.fs.path.join(a, &.{ root, "config" }));
-        return .{ .git = .{ .io = self.git.io, .arena = a, .env = env, .cwd = outside }, .root = root, .prefablens = self.prefablens };
+        return .{ .git = .{ .io = self.git.io, .arena = a, .env = env, .cwd = outside }, .root = root, .prefablens = self.prefablens, .strategy = self.strategy };
     }
 };
 
@@ -73,8 +75,8 @@ pub fn main(init: std.process.Init) !u8 {
     const script = try std.Io.Dir.cwd().realPathFileAlloc(init.io, args[2], a);
     var env = try init.environ_map.clone(a);
     try env.put("PATH", try std.fmt.allocPrint(a, "{s}{c}{s}{c}{s}", .{ std.fs.path.dirname(prefablens).?, std.fs.path.delimiter, std.fs.path.dirname(script).?, std.fs.path.delimiter, env.get("PATH") orelse "" }));
-    const ctx: Context = .{ .git = .{ .io = init.io, .arena = a, .env = &env }, .root = scratch, .prefablens = prefablens };
-    const cases = .{ repositoryScopes, linkedWorktree, outsideRepository, invalidArguments, newUser, userScopes, systemAttributes, invalidUserPaths, userInstallationFailure };
+    const ctx: Context = .{ .git = .{ .io = init.io, .arena = a, .env = &env }, .root = scratch, .prefablens = prefablens, .strategy = script };
+    const cases = .{ repositoryScopes, linkedWorktree, strategyOptIn, preservesExistingStrategies, preservesInheritedStrategies, defaultGitOperations, outsideRepository, invalidArguments, newUser, userScopes, systemAttributes, invalidUserPaths, userInstallationFailure };
     var failures: usize = 0;
     inline for (cases) |case| {
         case(ctx) catch |err| {
@@ -116,16 +118,20 @@ fn expectAttributes(git: Git, path: []const u8) !void {
 fn expectConfiguration(git: Git, scope: []const u8) !void {
     const expected = [_][2][]const u8{
         .{ "merge.prefablens.name", "PrefabLens semantic Unity YAML merge" },
-        .{ "merge.prefablens.driver", "prefablens merge-driver %O %A %B %P %L" },
+        .{ "merge.prefablens.driver", expected_driver },
         .{ "merge.prefablens.recursive", "text" },
         .{ "mergetool.prefablens.cmd", "prefablens mergetool \"$BASE\" \"$LOCAL\" \"$REMOTE\" \"$MERGED\"" },
         .{ "mergetool.prefablens.trustExitCode", "true" },
-        .{ "pull.twohead", "prefablens" },
     };
     for (expected) |entry| {
         const actual = merge_git.trim(try git.output(&.{ "config", scope, "--get", entry[0] }));
         try t.require(std.mem.eql(u8, actual, entry[1]), "setup wrote the wrong merge configuration or scope");
     }
+}
+
+fn expectNoPullStrategy(git: Git) !void {
+    const pull_strategy = try git.run(&.{ "config", "--null", "--get-all", "pull.twohead" });
+    try t.expectCode(pull_strategy, 1, "default setup must leave Git's merge strategy unset");
 }
 
 fn expectMerge(git: Git) !void {
@@ -153,6 +159,7 @@ fn repositoryScopes(parent: Context) !void {
         git.cwd = std.fs.path.dirname(git.cwd).?;
         try expectAttributes(git, path);
         try expectConfiguration(git, "--local");
+        try expectNoPullStrategy(git);
         try t.require(std.mem.eql(u8, try read(git, global_path), global_before), "repository setup modified global configuration");
         try t.require(std.mem.eql(u8, merge_git.trim(try git.output(&.{ "config", "--local", "prefablens.test.setting" })), "keep"), "setup changed unrelated local configuration");
         try expectAbsent(git, try git.path(if (case.project) ".git/info/attributes" else ".gitattributes"));
@@ -175,7 +182,138 @@ fn linkedWorktree(parent: Context) !void {
     try t.expectCode(try ctx.setup(git, &.{"--local"}), 0, "setup in a linked worktree");
     try expectAttributes(git, attributes);
     try expectConfiguration(git, "--local");
+    try expectNoPullStrategy(git);
     try expectMerge(git);
+}
+
+fn expectPullStrategyValues(git: Git, scope: []const u8, expected_values: []const []const u8) !void {
+    const actual = try git.output(&.{ "config", scope, "--null", "--get-all", "pull.twohead" });
+    var expected: std.ArrayList(u8) = .empty;
+    for (expected_values) |value| {
+        try expected.appendSlice(git.arena, value);
+        try expected.append(git.arena, 0);
+    }
+    try t.require(std.mem.eql(u8, actual, expected.items), "setup changed the existing strategy selection");
+}
+
+fn strategyOptIn(parent: Context) !void {
+    const cases = [_]struct { name: []const u8, flags: []const []const u8, scope: []const u8, attributes: []const u8 }{
+        .{ .name = "local", .flags = &.{"--strategy"}, .scope = "--local", .attributes = ".git/info/attributes" },
+        .{ .name = "project", .flags = &.{ "--strategy", "--project" }, .scope = "--local", .attributes = ".gitattributes" },
+        .{ .name = "user", .flags = &.{ "--user", "--strategy" }, .scope = "--global", .attributes = "user/.config/git/attributes" },
+    };
+    for (cases) |case| {
+        const ctx = try parent.isolated(try std.fmt.allocPrint(parent.git.arena, "{s}-strategy-opt-in", .{case.name}), false);
+        const user_scope = std.mem.eql(u8, case.scope, "--global");
+        const git = if (user_scope) ctx.git else try ctx.repo("repo");
+        const attributes = if (user_scope) try std.fs.path.join(git.arena, &.{ ctx.root, case.attributes }) else try git.path(case.attributes);
+        try write(git, attributes, existing_attributes);
+        // Explicit opt-in replaces an existing strategy list; default setup must
+        // then retain that choice rather than silently disabling the full integration.
+        try git.ok(&.{ "config", case.scope, "--add", "pull.twohead", "ort" });
+        try git.ok(&.{ "config", case.scope, "--add", "pull.twohead", "prefablens" });
+        try t.expectCode(try ctx.setup(git, case.flags), 0, "enable the full strategy during setup");
+        try expectPullStrategyValues(git, case.scope, &.{"prefablens"});
+        try expectConfiguration(git, case.scope);
+        const repository = if (user_scope) try ctx.repo("repo") else git;
+        try expectAttributes(repository, attributes);
+
+        const normal_flags: []const []const u8 = if (user_scope) &.{"--user"} else if (std.mem.eql(u8, case.name, "project")) &.{"--project"} else &.{};
+        try t.expectCode(try ctx.setup(git, normal_flags), 0, "retain an explicit strategy on repeated setup");
+        try expectPullStrategyValues(git, case.scope, &.{"prefablens"});
+        try expectMerge(repository);
+    }
+}
+
+fn preservesExistingStrategies(parent: Context) !void {
+    // Updating the driver must not opt existing users out of their selected strategy.
+    for ([_]bool{ false, true }) |user_scope| {
+        const ctx = try parent.isolated(if (user_scope) "user-existing-strategy" else "local-existing-strategy", false);
+        var git = if (user_scope) ctx.git else try ctx.repo("repo");
+        const config_scope = if (user_scope) "--global" else "--local";
+        const setup_flags: []const []const u8 = if (user_scope) &.{"--user"} else &.{"--local"};
+        const old_values = [_][]const u8{ "prefablens", "ort prefablens", "prefablens-extra", "prefablens ort", "prefablens", "custom" };
+        for (old_values) |value| try git.ok(&.{ "config", config_scope, "--add", "pull.twohead", value });
+        try t.expectCode(try ctx.setup(git, setup_flags), 0, "preserve selected-scope pull.twohead values");
+        try expectPullStrategyValues(git, config_scope, &.{ "prefablens", "ort prefablens", "prefablens-extra", "prefablens ort", "prefablens", "custom" });
+        try expectConfiguration(git, config_scope);
+    }
+}
+
+fn preservesInheritedStrategies(parent: Context) !void {
+    // Local setup must preserve user-selected strategies inherited from other configuration files.
+    const ctx = try parent.isolated("inherited-strategy", false);
+    var git = try ctx.repo("repo");
+    try git.ok(&.{ "config", "--local", "--add", "pull.twohead", "prefablens" });
+    const attributes = try git.path(".git/info/attributes");
+    try write(git, attributes, existing_attributes);
+    const included = try std.fs.path.join(git.arena, &.{ ctx.root, "included config" });
+    try git.ok(&.{ "config", "--file", included, "pull.twohead", "ort prefablens" });
+    try ctx.git.ok(&.{ "config", "--global", "include.path", included });
+    const global_path = git.env.get("GIT_CONFIG_GLOBAL").?;
+    const global_before = try read(git, global_path);
+    const included_before = try read(git, included);
+
+    try t.expectCode(try ctx.setup(git, &.{"--local"}), 0, "allow an inherited merge strategy");
+    try expectPullStrategyValues(git, "--local", &.{"prefablens"});
+    try expectConfiguration(git, "--local");
+    try expectAttributes(git, attributes);
+    try expectAbsent(git, try git.path(".gitattributes"));
+    try t.require(std.mem.eql(u8, global_before, try read(git, global_path)), "local setup modified the global configuration");
+    try t.require(std.mem.eql(u8, included_before, try read(git, included)), "local setup modified an included configuration");
+}
+
+fn driverOnlyEnvironment(ctx: Context, git: Git) !std.process.Environ.Map {
+    const a = git.arena;
+    const directory = try std.fs.path.join(a, &.{ ctx.root, "driver only bin" });
+    try std.Io.Dir.cwd().createDirPath(git.io, directory);
+    const driver_name = if (builtin.os.tag == .windows) "prefablens.exe" else "prefablens";
+    const strategy_names = [_][]const u8{ std.fs.path.basename(ctx.strategy), "git-merge-prefablens", "git-merge-prefablens.exe" };
+    try std.Io.Dir.cwd().copyFile(ctx.prefablens, .cwd(), try std.fs.path.join(a, &.{ directory, driver_name }), git.io, .{});
+
+    var env = try git.env.clone(a);
+    var path: std.ArrayList(u8) = .empty;
+    try path.appendSlice(a, directory);
+    const current_path = env.get("PATH") orelse "";
+    var entries = std.mem.splitScalar(u8, current_path, std.fs.path.delimiter);
+    while (entries.next()) |entry| {
+        if (entry.len == 0) continue;
+        var has_strategy = false;
+        for (strategy_names) |name| {
+            std.Io.Dir.cwd().access(git.io, try std.fs.path.join(a, &.{ entry, name }), .{}) catch continue;
+            has_strategy = true;
+            break;
+        }
+        if (!has_strategy) {
+            try path.append(a, std.fs.path.delimiter);
+            try path.appendSlice(a, entry);
+        }
+    }
+    try env.put("PATH", path.items);
+    const empty_exec = try std.fs.path.join(a, &.{ ctx.root, "empty exec path" });
+    try std.Io.Dir.cwd().createDirPath(git.io, empty_exec);
+    try env.put("GIT_EXEC_PATH", empty_exec);
+    return env;
+}
+
+fn defaultGitOperations(parent: Context) !void {
+    const ctx = try parent.isolated("default-git-operations", false);
+    const operations = [_]struct { name: []const u8, args: []const []const u8 }{
+        .{ .name = "rebase", .args = &.{ "rebase", "remote" } },
+        .{ .name = "cherry-pick", .args = &.{ "cherry-pick", "remote" } },
+    };
+    for (operations) |operation| {
+        var git = try ctx.repo(operation.name);
+        // The supported default operations must still work when only the per-file driver is installed.
+        var env = try driverOnlyEnvironment(ctx, git);
+        git.env = &env;
+        try t.expectCode(try ctx.setup(git, &.{"--local"}), 0, operation.name);
+        try expectNoPullStrategy(git);
+        const available = try git.output(&.{"--list-cmds=others"});
+        try t.require(std.mem.indexOf(u8, available, "merge-prefablens") == null, "the default operation fixture unexpectedly has the PrefabLens strategy installed");
+        try t.expectCode(try git.run(operation.args), 0, operation.name);
+        try t.expectFile(git.io, git.arena, git.cwd, "Assets/A.prefab", merged);
+    }
 }
 
 fn outsideRepository(parent: Context) !void {
@@ -201,8 +339,9 @@ fn invalidArguments(parent: Context) !void {
     const git = try ctx.repo("repo");
     const before = try read(git, try git.path(".git/config"));
     const cases = [_][]const []const u8{
-        &.{"--unknown"},             &.{"extra"},               &.{ "--local", "--project" },
-        &.{ "--project", "--user" }, &.{ "--user", "--local" },
+        &.{"--unknown"},                 &.{"extra"},                &.{ "--local", "--project" },
+        &.{ "--project", "--user" },     &.{ "--user", "--local" },  &.{ "--strategy", "--strategy" },
+        &.{ "--strategy", "--unknown" }, &.{ "--local", "--local" },
     };
     for (cases) |flags| {
         try t.expectCode(try ctx.setup(git, flags), 2, "invalid setup arguments");
@@ -222,6 +361,7 @@ fn newUser(parent: Context) !void {
     try expectAbsent(ctx.git, ctx.git.env.get("GIT_CONFIG_GLOBAL").?);
     try t.expectCode(try ctx.setup(ctx.git, &.{"--user"}), 0, "first user setup");
     try expectConfiguration(ctx.git, "--global");
+    try expectNoPullStrategy(ctx.git);
     const repo = try ctx.repo("repo");
     const actual = try repo.output(&.{ "check-attr", "merge", "--", "Assets/A.prefab" });
     try t.require(std.mem.eql(u8, actual, "Assets/A.prefab: merge: prefablens\n"), "first user setup did not create active attributes");
@@ -255,13 +395,17 @@ fn userScopes(parent: Context) !void {
         }
         try t.expectCode(try ctx.setup(git, &.{"--user"}), 0, @tagName(case));
         try expectConfiguration(git, "--global");
+        try expectNoPullStrategy(git);
         const repo = try ctx.repo("repo");
         const local_attributes = try repo.path("local attributes");
         try write(repo, local_attributes, "*.prefab merge=text\n");
+        // User setup must preserve both the clone's strategy and its attributes override.
+        try repo.ok(&.{ "config", "--local", "pull.twohead", "prefablens" });
         try repo.ok(&.{ "config", "--local", "core.attributesFile", local_attributes });
         const config_before = try read(repo, try repo.path(".git/config"));
-        // A local override must not redirect a later user setup into this repository's attributes file.
         try t.expectCode(try ctx.setup(repo, &.{"--user"}), 0, "repeat user setup inside a repository");
+        try expectConfiguration(git, "--global");
+        try expectNoPullStrategy(git);
         try t.require(std.mem.eql(u8, config_before, try read(repo, try repo.path(".git/config"))), "user setup changed local configuration");
         try t.require(std.mem.eql(u8, try read(repo, local_attributes), "*.prefab merge=text\n"), "user setup followed a local attributes override");
         try expectAbsent(repo, try repo.path(".gitattributes"));
@@ -319,13 +463,27 @@ fn userInstallationFailure(parent: Context) !void {
     try ctx.git.ok(&.{ "config", "--global", "core.attributesFile", attributes });
     const global_path = ctx.git.env.get("GIT_CONFIG_GLOBAL").?;
     const before = try read(ctx.git, global_path);
-    const exec_path = try std.fs.path.join(ctx.git.arena, &.{ ctx.root, "exec" });
-    try std.Io.Dir.cwd().createDirPath(ctx.git.io, exec_path);
-    // A real incompatible executable in Git's exec path must fail validation before any setup writes.
-    const shadow_name = if (builtin.os.tag == .windows) "git-merge-prefablens.exe" else "git-merge-prefablens";
-    try std.Io.Dir.cwd().copyFile(ctx.prefablens, .cwd(), try std.fs.path.join(ctx.git.arena, &.{ exec_path, shadow_name }), ctx.git.io, .{});
-    try ctx.git.env.put("GIT_EXEC_PATH", exec_path);
-    const result = try ctx.setup(ctx.git, &.{"--user"});
+    var env = try ctx.git.env.clone(ctx.git.arena);
+    var path: std.ArrayList(u8) = .empty;
+    const driver_name = if (builtin.os.tag == .windows) "prefablens.exe" else "prefablens";
+    const command_names = [_][]const u8{ driver_name, std.fs.path.basename(ctx.strategy), "git-merge-prefablens", "git-merge-prefablens.exe" };
+    var entries = std.mem.splitScalar(u8, env.get("PATH") orelse "", std.fs.path.delimiter);
+    while (entries.next()) |entry| {
+        if (entry.len == 0) continue;
+        var has_prefablens = false;
+        for (command_names) |command| {
+            std.Io.Dir.cwd().access(ctx.git.io, try std.fs.path.join(ctx.git.arena, &.{ entry, command }), .{}) catch continue;
+            has_prefablens = true;
+        }
+        if (has_prefablens) continue;
+        if (path.items.len != 0) try path.append(ctx.git.arena, std.fs.path.delimiter);
+        try path.appendSlice(ctx.git.arena, entry);
+    }
+    try env.put("PATH", path.items);
+    var git = ctx.git;
+    git.env = &env;
+    // Setup must reject a missing file driver before changing either selected config or attributes.
+    const result = try ctx.setup(git, &.{"--user"});
     try t.expectCode(result, 2, "invalid user installation");
     try t.require(std.mem.indexOf(u8, result.stderr, "PATH") != null, "invalid installation omitted repair guidance");
     try t.require(std.mem.eql(u8, before, try read(ctx.git, global_path)), "invalid installation changed global configuration");

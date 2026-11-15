@@ -120,6 +120,37 @@ pub fn build(b: *std.Build) void {
     const keymap_setup_test_step = b.step("test-keymap-setup", "Run user keymap setup integration tests");
     keymap_setup_test_step.dependOn(&run_keymap_setup_tests.step);
 
+    const merge_benchmark = b.addExecutable(.{
+        .name = "merge-strategy-benchmark",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("e2e/merge_strategy_benchmark.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{.{ .name = "integration", .module = b.createModule(.{
+                .root_source_file = b.path("cli/src/testing/git.zig"),
+                .target = target,
+                .optimize = optimize,
+            }) }},
+        }),
+    });
+    const run_merge_benchmark = b.addRunArtifact(merge_benchmark);
+    run_merge_benchmark.addFileArg2(b.path("cli/bin/git-merge-prefablens"), .{ .make_absolute = true });
+    run_merge_benchmark.addPassthruArgs();
+    run_merge_benchmark.has_side_effects = true;
+    const merge_benchmark_step = b.step("benchmark-merge-strategy", "Compare native merge and replay time, memory, and Git calls");
+    merge_benchmark_step.dependOn(&run_merge_benchmark.step);
+    const benchmark_smoke = b.addRunArtifact(merge_benchmark);
+    benchmark_smoke.addFileArg2(b.path("cli/bin/git-merge-prefablens"), .{ .make_absolute = true });
+    benchmark_smoke.addArg("--before");
+    benchmark_smoke.addArtifactArg2(exe, .{ .make_absolute = true });
+    benchmark_smoke.addArg("--after");
+    benchmark_smoke.addArtifactArg2(exe, .{ .make_absolute = true });
+    benchmark_smoke.addArgs(&.{ "--files", "2", "--fields", "2", "--padding", "256", "--commits", "2", "--runs", "1", "--operations", "strategy", "rebase", "ort", "--output" });
+    _ = benchmark_smoke.addOutputFileArg2("merge-benchmark.json", .{ .make_absolute = true });
+    benchmark_smoke.expectExitCode(0);
+    benchmark_smoke.has_side_effects = true;
+    test_step.dependOn(&benchmark_smoke.step);
+
     const git_merge_tests = b.addExecutable(.{
         .name = "git-merge-tests",
         .root_module = b.createModule(.{
@@ -156,6 +187,7 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
             .imports = &.{
                 .{ .name = "build_options", .module = build_options_mod },
+                .{ .name = "core", .module = core_mod },
             },
         }),
     });

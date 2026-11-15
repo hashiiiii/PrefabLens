@@ -12,7 +12,12 @@ pub const State = struct {
 };
 pub fn collect(arena: std.mem.Allocator, state: *State, operations: *std.ArrayList(mm.Operation), atomics: *std.ArrayList(mm.AtomicOperation), document: mm.DocumentId, path: []const u8, hierarchy: []const u8, nodes: value.Nodes, files: [3]source.ParsedFile) mm.Error!void {
     const original = nodes.ours;
-    const evidence = schema(state.context, document, path, files);
+    var evidence = schema(state.context, document, path, files);
+    // A script's key/value sequence can be an ordered list. Its shape alone
+    // cannot authorize dictionary semantics when combining independent edits.
+    if (state.context.require_script_schema and evidence.field == null and
+        !same(nodes.base, nodes.ours) and !same(nodes.base, nodes.theirs) and !same(nodes.ours, nodes.theirs) and
+        scriptSequence(document, nodes, files)) evidence.conflict = true;
     var plan = value.build(arena, .{ .nodes = nodes, .schema = evidence.field, .context_conflict = evidence.conflict, .review = state.review }) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         else => return error.InvalidResolution,
@@ -81,6 +86,22 @@ pub fn collect(arena: std.mem.Allocator, state: *State, operations: *std.ArrayLi
         try ids.append(arena, id);
     }
     try state.bindings.append(arena, .{ .plan = plan, .source_nodes = nodes, .original = original, .identity = .{ .document = document, .property_path = path }, .operation_ids = try ids.toOwnedSlice(arena) });
+}
+
+fn same(a: ?*const model.Node, b: ?*const model.Node) bool {
+    if (a == null or b == null) return a == null and b == null;
+    return model.Node.eql(a.?, b.?);
+}
+
+fn scriptSequence(document: mm.DocumentId, nodes: value.Nodes, files: [3]source.ParsedFile) bool {
+    const sequence = for ([_]?*const model.Node{ nodes.base, nodes.ours, nodes.theirs }) |entry| {
+        if (entry) |n| if (n.* == .seq) break true;
+    } else false;
+    if (!sequence) return false;
+    for (files) |file| for (file.documents) |doc| {
+        if (doc.class_id == document.class_id and doc.file_id == document.file_id and doc.body.get("m_Script") != null) return true;
+    };
+    return false;
 }
 
 fn reviewGroup(groups: []const value.ReviewGroup, conflict_id: usize) ?value.ReviewGroup {

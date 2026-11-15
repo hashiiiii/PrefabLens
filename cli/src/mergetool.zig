@@ -39,7 +39,7 @@ pub fn prepareWithGit(
     const base = try merge_io.readLimited(io, arena, args.base);
     const local = try merge_io.readLimited(io, arena, args.local);
     const remote = try merge_io.readLimited(io, arena, args.remote);
-    var context: core.merge_context.Context = .{};
+    var context: core.merge_context.Context = .{ .require_script_schema = true };
     var source_index: ?session_context.Index = null;
     if (git) |repository| {
         const revisions = session_context.discover(repository) catch |err| switch (err) {

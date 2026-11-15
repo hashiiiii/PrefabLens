@@ -5,284 +5,183 @@
 [![Release](https://img.shields.io/github/v/release/hashiiiii/PrefabLens)](https://github.com/hashiiiii/PrefabLens/releases)
 [![CI](https://img.shields.io/github/actions/workflow/status/hashiiiii/PrefabLens/ci.yml?branch=main&label=CI)](https://github.com/hashiiiii/PrefabLens/actions/workflows/ci.yml)
 
-PrefabLens shows semantic diffs and merges for UnityYAML assets, including changes to GameObjects, components, and fields.
+PrefabLens shows changes to GameObjects, components, and fields in UnityYAML assets.  
+Review diffs in GitHub pull requests, the Unity Editor, or the terminal.  
+Use the CLI to merge conflicting assets.
 
-Use the [Chrome extension](#chrome-extension), [Unity Editor package](#unity-editor), or [CLI](#cli).  
 Try the [live demo](https://prefablens.hashiiiii.workers.dev/).
+
+| Use case | Install | Guide |
+| --- | --- | --- |
+| Review a GitHub pull request | [Chrome extension](#chrome-extension) | [Authentication, supported files, and development](docs/extension.md) |
+| Review changes in a Unity project | [Unity Editor package](#unity-editor) | [CLI setup, window controls, and development](docs/editor.md) |
+| Compare or merge assets locally | [CLI](#cli) | [Commands, merge behavior, and key bindings](docs/cli.md) |
+
+Assets must use Unity's text serialization format.  
+Binary assets do not produce semantic diffs.  
+In Unity's Editor settings, set **Asset Serialization > Mode** to **Force Text** for text serialization.
 
 ## Chrome extension
 
-The extension shows semantic diffs in GitHub pull requests, only on `github.com`.
+Install from the [Chrome Web Store](https://chromewebstore.google.com/detail/dlhnalbfkikchkfedfneiimadommcnip), then open a pull request's **Files changed** page on `github.com`.  
+Select **Semantic** in the PrefabLens control.  
+If prompted, sign in through the panel to give the extension GitHub API access.
 
 <p align="center">
   <img width="924" src="docs/images/extension.png" alt="Semantic diff in a GitHub pull request" />
 </p>
 
-Install the extension from the [Chrome Web Store](https://chromewebstore.google.com/detail/dlhnalbfkikchkfedfneiimadommcnip).
+See the [extension guide](docs/extension.md) for authentication, privacy, and troubleshooting.
 
 ## Unity Editor
 
-<p align="center">
-  <img width="924" src="docs/images/editor.png" alt="Semantic diff in the Unity Editor" />
-</p>
+Requires Unity **2022.3 or later**.
 
-> [!IMPORTANT]
-> The package requires Unity **2022.3 or later**.
-
-### Installation
-
-#### OpenUPM
+Install with OpenUPM:
 
 ```bash
 openupm add com.hashiiiii.prefablens
 ```
 
-For scoped registry installation without [openupm-cli](https://github.com/openupm/openupm-cli), see the [package page](https://openupm.com/packages/com.hashiiiii.prefablens/).
+For scoped registry setup, see the [OpenUPM package page](https://openupm.com/packages/com.hashiiiii.prefablens/).
 
-#### UPM
+Alternatively, open **Window > Package Manager**, choose **Add package from git URL**, and enter:
 
-1. Open `Window > Package Manager` in Unity.
-2. Click + in the top left corner, then select `Add package from git URL....`
-3. Enter `https://github.com/hashiiiii/PrefabLens.git?path=editor`.
-4. Click Add.
+```text
+https://github.com/hashiiiii/PrefabLens.git?path=editor
+```
 
-See the [Unity manual](https://docs.unity3d.com/6000.6/Documentation/Manual/upm-ui-giturl.html) for details.
+Open **Window > PrefabLens**.  
+The package downloads the CLI automatically when needed, so the first download requires internet access.  
+To use an installed executable, select it in **Preferences > PrefabLens**.  
+Select a changed asset in the left pane to view its semantic diff.  
+**Base** selects the Git revision to compare with the working tree; an empty value uses `HEAD`.
 
-### Usage
+<p align="center">
+  <img width="924" src="docs/images/editor.png" alt="Semantic diff in the Unity Editor" />
+</p>
 
-Open `Window > PrefabLens`.
-
-The left pane lists UnityYAML assets changed from **Base**, or **HEAD** when **Base** is empty.  
-Select an asset to view its semantic diff on the right.
+See the [Editor guide](docs/editor.md) for CLI settings and troubleshooting.
 
 ## CLI
 
-<p align="center">
-  <img width="924" src="docs/images/cli.png" alt="Semantic diff in the CLI" />
-</p>
+### Install
 
-### Installation
-
-#### Homebrew (macOS / Linux)
+Homebrew on macOS or Linux:
 
 ```bash
 brew install hashiiiii/tap/prefablens
 ```
 
-#### Scoop (Windows)
+Scoop on Windows:
 
 ```bash
 scoop bucket add hashiiiii https://github.com/hashiiiii/scoop-bucket
 scoop install prefablens
 ```
 
-#### mise
+With mise:
 
 ```bash
 mise use -g github:hashiiiii/PrefabLens
 ```
 
-#### Manual
+For manual installation, download your platform's ZIP from [GitHub Releases](https://github.com/hashiiiii/PrefabLens/releases).  
+Extract it and add its directory to `PATH`.  
+Each archive contains the native `prefablens` executable and the `git-merge-prefablens` script; keep them together for Git merge integration.
 
-Download your platform's ZIP from [GitHub Releases](https://github.com/hashiiiii/PrefabLens/releases).  
-Each archive contains one native `prefablens` executable and the `git-merge-prefablens` script.
+### Compare assets
 
-### Usage
-
-#### Diff
+Run Git comparisons from your repository:
 
 ```bash
 prefablens                              # HEAD vs working tree, all changed UnityYAML files
 prefablens Assets/Foo.prefab            # HEAD vs working tree, one file
-prefablens main                         # ref vs working tree, all changed UnityYAML files
-prefablens HEAD~1 HEAD Assets/Foo.prefab  # ref vs ref, one file
-prefablens before.prefab after.prefab   # plain comparison of two files
-
-prefablens --json before.prefab after.prefab
-prefablens --open main                  # write the report to a temp file and open it
+prefablens main                         # main vs working tree
+prefablens HEAD~1 HEAD Assets/Foo.prefab  # two revisions, one file
+prefablens --open main                  # open an HTML report in your browser
 ```
 
-#### Merge
-
-> [!IMPORTANT]
-> PrefabLens uses Git **2.45 or later** to resolve UnityYAML conflicts during `git merge`.
-
-Choose a setup scope:
-
-| Command                            | Attributes             | Git configuration |
-| ---------------------------------- | ---------------------- | ----------------- |
-| `prefablens setup-merge --project` | `.gitattributes`       | Current clone     |
-| `prefablens setup-merge --local`   | `.git/info/attributes` | Current clone     |
-| `prefablens setup-merge --user`    | User attributes file   | Global            |
-
-> [!NOTE]
-> `prefablens setup-merge` defaults to `--local`.
-
-By default, setup preserves existing `pull.twohead` values and does not add one when absent.
-When unset, Git uses its native `ort` strategy, and the PrefabLens merge driver handles UnityYAML file contents.
-Use the normal merge command:
+Compare two files without Git, or produce JSON for another tool:
 
 ```bash
+prefablens before.prefab after.prefab
+prefablens --json before.prefab after.prefab
+```
+
+<p align="center">
+  <img width="924" src="docs/images/cli.png" alt="Semantic diff in the terminal" />
+</p>
+
+### Merge with Git
+
+Merge integration requires Git **2.45 or later**.  
+Run setup in your repository:
+
+```bash
+prefablens setup-merge
 git merge origin/main
 ```
 
-The full strategy adds repository-wide dependency validation and interactive resolution of UnityYAML content and structural conflicts.
-To enable it persistently for this clone during setup, run:
+The command registers the UnityYAML merge driver and merge tool for the current clone.  
+The driver merges compatible content changes automatically.  
+Resolve remaining conflicts with `git mergetool --tool=prefablens`.
+
+Choose a different scope when needed:
+
+| Command | Attribute rules | Git configuration |
+| --- | --- | --- |
+| `prefablens setup-merge --local` (default) | `.git/info/attributes` | Current clone |
+| `prefablens setup-merge --project` | `.gitattributes` | Current clone |
+| `prefablens setup-merge --user` | User attributes file | Global |
+
+Commit `.gitattributes` when using `--project`.  
+Each clone still needs the Git configuration from setup.
+
+For repository-wide dependency validation and interactive resolution of content and structural conflicts, select the full merge strategy:
 
 ```bash
 prefablens setup-merge --local --strategy
+git merge origin/main
 ```
 
-`--strategy` sets `pull.twohead=prefablens` in the selected Git configuration scope.
-Git reads this setting when selecting the default strategy for `git merge`, `git pull`, `git rebase`, and `git cherry-pick`.
-For rebase and cherry-pick, an earlier inherited value can take precedence; see [merge behavior](docs/cli.md#merge-behavior).
-To use the full strategy for one operation, select it with a command argument:
-
-```bash
-git merge -s prefablens origin/main
-git rebase -s prefablens origin/main
-git cherry-pick --strategy=prefablens <commit>
-```
+`--strategy` selects PrefabLens as the default strategy through `pull.twohead`.  
+This setting also affects pull, rebase, and cherry-pick.  
+To select the strategy for a single merge after ordinary setup, use `git merge -s prefablens origin/main`.  
+See [merge behavior](docs/cli.md#merge-behavior) for operation-specific details and inherited Git settings.
 
 https://github.com/user-attachments/assets/2ad6a2e9-5562-40b8-ab7e-c5f277da3d8b
 
-Set the installed PrefabLens executable as your GUI client's external merge tool on macOS or Windows.  
-Use these arguments:
+### Use a GUI merge tool
+
+On macOS or Windows, select the installed PrefabLens executable as your Git client's external merge tool and use these arguments:
 
 ```text
 mergetool --terminal <base> <local> <remote> <merged>
 ```
 
-Replace the four paths with your client's placeholders.  
-Open a conflicted file with the tool, resolve it in PrefabLens, then stage it in your Git client.
+Replace the four paths with your client's placeholders, quoting each path if the client requires it.  
+Open a conflicted file with the tool, complete the resolution in PrefabLens, then stage the result in your Git client.
 
 [Fork](https://fork.dev/) example:
 
 https://github.com/user-attachments/assets/d6dd0038-498f-42f3-8447-77a6e597ddf2
 
-#### Key bindings
-
-Create an editable keymap after installing the CLI:
+### Customize key bindings
 
 ```bash
 prefablens setup-keymap
 ```
 
-The command prints the file path and preserves existing files.  
-Edit that file, then reopen the merge tool to apply changes.
+Edit the file at the printed path, then reopen the merge tool.  
+See [key bindings](docs/cli.md#key-bindings) for contexts, actions, and examples.
 
-| Environment | Path |
-| --- | --- |
-| Nonempty `XDG_CONFIG_HOME` | `$XDG_CONFIG_HOME/prefablens/keymap.json` |
-| Windows | `%APPDATA%\prefablens\keymap.json` |
-| macOS / Linux | `~/.config/prefablens/keymap.json` |
+## Contribute
 
-##### Contexts
-
-Place bindings in the context for their UI:
-
-| Context | Active UI |
-| --- | --- |
-| `global` | Merge screen display controls and Complete button; inactive while editing Result or in dialogs |
-| `tree` | Left hierarchy, when focused |
-| `content` | Right Base / Ours / Theirs / Result panes, when focused; Result editing |
-| `dialog` | Quit and empty value confirmations, or file conflict choices; all other contexts are inactive |
-
-<p align="center">
-  <img width="924" src="docs/images/tree-content.png" alt="Left tree and right content contexts in the merge TUI" />
-</p>
-
-<p align="center">
-  <img width="924" src="docs/images/dialog.png" alt="Quit confirmation dialog context in the merge TUI" />
-</p>
-
-Edit entries in the generated file, such as these two shortcuts:
-
-```json
-{
-  "global": { "toggle_raw_view": ["Ctrl+r"] },
-  "content": { "activate": ["Ctrl+x Ctrl+Enter"] }
-}
-```
-
-`content.activate` selects a value, starts Result editing, or accepts the edit, depending on focus and editing state.
-See [available actions](docs/cli.md#key-bindings) and [key names](https://github.com/hashiiiii/zig-keymap#keys).
-
-## Development
-
-Install [mise](https://mise.jdx.dev/), then install the toolchain from the repository root:
-
-```bash
-mise install
-```
-
-### Folder structure
-
-| Directory    | Description                                                        |
-| ------------ | ------------------------------------------------------------------ |
-| `core/`      | Zig semantic diff engine for the CLI and WASM                      |
-| `cli/`       | Native `prefablens` CLI                                            |
-| `extension/` | Chrome extension for semantic GitHub pull request diffs            |
-| `editor/`    | Unity Editor package for semantic diffs                            |
-| `site/`      | Live demo on Cloudflare Workers using CLI and extension artifacts   |
-
-### Build and test
-
-Run these commands from the repository root.
-
-#### Core and CLI
-
-```bash
-zig build
-zig build wasm
-zig build test
-```
-
-`zig build` installs the CLI and Git strategy script to `zig-out/bin/`.  
-`zig build wasm` compiles `core/` to WASM for the extension and site.  
-`zig build test` runs native core and CLI tests.
-
-#### Chrome extension
-
-Build and test commands run `zig build wasm` when needed.
-
-```bash
-(cd extension && pnpm install && pnpm run build && pnpm test)
-```
-
-#### Unity Editor
-
-These .NET tests call the native CLI and run without Unity.
-
-```bash
-zig build test-installation-binaries -Doptimize=ReleaseSafe
-PREFABLENS_TEST_BIN_DIR="$PWD/zig-out/bin" \
-PREFABLENS_TEST_ALT_BIN_DIR="$PWD/zig-out/test-alternate-bin" \
-  dotnet test editor/DotNetTests~/Tests
-```
-
-#### Site
-
-The site build needs the CLI, the WASM module, and the extension demo bundle.
-
-```bash
-zig build
-zig build wasm
-(cd extension && pnpm install && pnpm run demo)
-(cd site && pnpm install && pnpm test && pnpm run build)
-```
-
-### Further reading
-
-- [CLI](docs/cli.md)
-- [Chrome extension](docs/extension.md)
-- [Unity Editor package](docs/editor.md)
-
-## Contributing
-
-Open an issue first and wait for its `approved` label before submitting a pull request.  
-Read [CONTRIBUTING.md](CONTRIBUTING.md).
+Read [CONTRIBUTING.md](CONTRIBUTING.md) for the issue approval process, toolchain setup, build commands, and checks.  
+Use the [CLI](docs/cli.md), [extension](docs/extension.md), and [Editor](docs/editor.md) guides for component-specific behavior and code structure.
 
 ## License
 
-[Apache License 2.0](LICENSE)
+[Apache License 2.0](LICENSE).  
+See [third-party notices](THIRD_PARTY_NOTICES.md) for dependency licenses.

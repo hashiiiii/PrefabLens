@@ -21,7 +21,6 @@ namespace PrefabLens
 
         const int VersionTimeoutMs = 5_000;
 
-        /// A validation error, or null when the binary reports a compatible version.
         static string ValidateCli(string cliPath, string requiredVersion)
         {
             if (!File.Exists(cliPath))
@@ -60,7 +59,7 @@ namespace PrefabLens
         /// Result of the CLI lookup. OverrideError is non-null when the EditorPrefs override is invalid.
         public readonly struct Location
         {
-            /// Executable to run, or null when neither the override nor the default exists.
+            /// Executable to run, or null when neither the override nor the cached CLI passes validation.
             public readonly string Path;
 
             public readonly string OverrideError;

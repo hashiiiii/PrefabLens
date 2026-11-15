@@ -1,17 +1,17 @@
 ## Summary
 
-<!-- What does this PR do, in one or two sentences? -->
+<!-- Describe the change in one or two sentences. -->
 
 ## Motivation
 
-<!-- Why is this change needed? Keep the Closes line below because the issue gate reads it. -->
+<!-- Explain why this change is needed. Keep the closing reference below to link the approved issue. -->
 
 Closes #NNN
 
 ## Changes
 
-<!-- Notable changes, as a bullet list. -->
+<!-- List the notable changes. -->
 
 ## Testing
 
-<!-- List the commands you ran and their results. Include actual output from real dependencies. Do not use mocks or stubs. -->
+<!-- List the commands you ran and their results. Use real dependencies; do not use mocks or stubs. -->

@@ -1,12 +1,12 @@
 ---
-title: PrefabLens | Extension demo
+title: PrefabLens | Chrome extension demo
 permalink: extension.html
 layout: layout.liquid
 ---
-<h1>Extension demo</h1>
+<h1>GitHub pull requests</h1>
 <p class="hint">
-  This page simulates a pull request. The Raw / Semantic toggle uses the real extension code and the WASM
-  diff engine.
+  Compare GitHub's text diff with a semantic view of changed UnityYAML assets. The sample pull request below uses
+  fixture files and the extension's WebAssembly diff engine; it does not connect to GitHub.
 </p>
 
 <div class="window">
@@ -14,7 +14,7 @@ layout: layout.liquid
   <div class="gh-page">
     <h1 class="pr-header">Rebalance robot physics and rework the playground scene <span class="pr-number">#1</span></h1>
     <p class="pr-meta">
-      {{ pullRequest.files.size }} commits into <span class="branch">{{ pullRequest.base }}</span> from
+      {{ pullRequest.files.size }} files changed between <span class="branch">{{ pullRequest.base }}</span> and
       <span class="branch">{{ pullRequest.head }}</span>
     </p>
     {% for file in pullRequest.files %}
@@ -23,3 +23,10 @@ layout: layout.liquid
   </div>
 </div>
 <script src="demo.js" defer></script>
+
+<h2>Try the demo</h2>
+<p>Use the PrefabLens switch above the changed files, or the switch beside a file, to move between <strong>Raw</strong> and <strong>Semantic</strong> views. The sample data is bundled with this page, so the demo does not need GitHub sign-in.</p>
+
+<h2>Use PrefabLens on GitHub</h2>
+<p><a href="https://chromewebstore.google.com/detail/dlhnalbfkikchkfedfneiimadommcnip">Install PrefabLens from the Chrome Web Store</a>, then open the <strong>Files changed</strong> tab of a pull request. Select <strong>Semantic</strong>. If asked, sign in through GitHub Device Flow to load the pull request's file contents.</p>
+<p>The extension requests file contents and pull request metadata from GitHub. Read the <a href="https://github.com/hashiiiii/PrefabLens/blob/main/PRIVACY.md">privacy policy</a> and the <a href="https://github.com/hashiiiii/PrefabLens/blob/main/docs/extension.md">extension guide</a>.</p>

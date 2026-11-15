@@ -3,10 +3,10 @@ title: PrefabLens
 permalink: index.html
 layout: layout.liquid
 ---
-<h1>Semantic diffs for UnityYAML assets</h1>
+<h1>Review changes to Unity assets</h1>
 <p>
-  PrefabLens shows semantic diffs in views like Unity's Hierarchy and Inspector.
-  Use PrefabLens on GitHub pull requests, in the terminal, and in the Unity Editor.
+  PrefabLens shows changes to GameObjects, components, and fields in text-serialized Unity assets.
+  Review diffs in GitHub pull requests, the terminal, or the Unity Editor. Use the CLI to merge conflicting assets.
 </p>
 
 <!--
@@ -33,10 +33,9 @@ layout: layout.liquid
 <h2 id="demos"><a href="#demos">Demos</a></h2>
 <ul>
   <li>
-    <a href="extension.html">GitHub pull requests</a>: a simulated Files changed page with the real
-    extension and the WASM diff engine.
+    <a href="extension.html">GitHub pull requests</a>: try the Raw / Semantic toggle on a sample pull request.
   </li>
-  <li><a href="cli.html">CLI</a>: the terminal tree, the HTML report, and git merge.</li>
+  <li><a href="cli.html">CLI</a>: compare terminal and HTML output, and watch a merge conflict resolution.</li>
   <li><a href="editor.html">Unity Editor</a>: a window that shows semantic diffs for changed assets.</li>
 </ul>
 
@@ -44,16 +43,26 @@ layout: layout.liquid
 
 <h3 id="chrome-extension"><a href="#chrome-extension">Chrome extension</a></h3>
 <p><a href="https://chromewebstore.google.com/detail/dlhnalbfkikchkfedfneiimadommcnip">Chrome Web Store</a></p>
+<p>Open a pull request's Files changed page on <code>github.com</code> and select <strong>Semantic</strong>. If prompted, sign in through the PrefabLens panel.</p>
 
 <h3 id="cli"><a href="#cli">CLI</a></h3>
+<p>Homebrew on macOS or Linux:</p>
 <pre><code><span class="cmd">brew</span> install hashiiiii/tap/prefablens</code></pre>
+<p>Scoop on Windows:</p>
 <pre><code><span class="cmd">scoop</span> bucket add hashiiiii https://github.com/hashiiiii/scoop-bucket
 <span class="cmd">scoop</span> install prefablens</code></pre>
+<p>With mise:</p>
 <pre><code><span class="cmd">mise</span> use -g github:hashiiiii/PrefabLens</code></pre>
+<p>
+  Or download your platform's ZIP from <a href="https://github.com/hashiiiii/PrefabLens/releases">GitHub Releases</a>.
+  Extract it and add its directory to <code>PATH</code>.
+  Run <code>prefablens</code> in your repository to compare <code>HEAD</code> with the working tree.
+  See the <a href="https://github.com/hashiiiii/PrefabLens/blob/main/docs/cli.md">CLI guide</a> for commands and merge setup.
+</p>
 
 <h3 id="unity-editor"><a href="#unity-editor">Unity Editor</a></h3>
+<p>Requires Unity 2022.3 or later. Install with OpenUPM:</p>
 <pre><code><span class="cmd">openupm</span> add com.hashiiiii.prefablens</code></pre>
 <p>Or use the Package Manager Git URL: <code>https://github.com/hashiiiii/PrefabLens.git?path=editor</code></p>
 
-<h3 id="other-installs"><a href="#other-installs">Other installs</a></h3>
-<p>Download prebuilt binaries from the <a href="https://github.com/hashiiiii/PrefabLens/releases">releases page</a>.</p>
+<p>Open <strong>Window &gt; PrefabLens</strong> to select a changed asset and review its diff.</p>

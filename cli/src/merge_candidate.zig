@@ -9,6 +9,7 @@ const Git = merge_git.Git;
 
 const Entry = struct { path: []const u8, mode: []const u8, oid: []const u8 };
 const Snapshot = struct {
+    tree: []const u8,
     entries: []const Entry,
     paths: std.StringHashMap(usize),
 
@@ -164,12 +165,13 @@ pub const Candidate = struct {
         var schema_paths: std.ArrayList([]const u8) = .empty;
         for (self.nodes.items) |n| if (n.changed and (schemaPath(n.path) or n.uncertain_identity)) try schema_paths.append(a, n.path);
         self.evidence_paths = schema_paths.items;
+        const recheck = schema_paths.items.len != 0 and try self.schemaChanged();
         for (self.nodes.items) |*n| {
-            if (!assetPath(n.path) or (!n.changed and schema_paths.items.len == 0)) continue;
+            if (!assetPath(n.path) or (!n.changed and !recheck)) continue;
             try self.inspect(n, false);
             // Source changes can invalidate even unchanged dependents, so their
             // semantic review must survive the changed-path filter.
-            if (n.unity and schema_paths.items.len != 0) n.changed = true;
+            if (n.unity and recheck) n.changed = true;
         }
         for (self.nodes.items) |n| {
             if (!n.unity or !n.relevant or !n.changed or self.covered(n.path)) continue;
@@ -186,6 +188,26 @@ pub const Candidate = struct {
 
     fn covered(self: *const Candidate, path: []const u8) bool {
         for (self.items.items) |item| for (item.paths) |p| if (pathUnder(path, p)) return true;
+        return false;
+    }
+
+    fn schemaChanged(self: *Candidate) !bool {
+        for (self.nodes.items) |n| if (n.changed and n.uncertain_identity) return true;
+        for (self.result.conflicts) |conflict| for (conflict.paths) |path| {
+            if (schemaPath(path)) return true;
+        };
+        var first: ?[32]u8 = null;
+        for (self.snapshots.items) |snapshot| {
+            // Optional schema comparison must not introduce failures when the
+            // original candidate discovery could continue conservatively.
+            const fingerprint = (self.store.schemaFingerprint(snapshot.tree) catch |err| switch (err) {
+                error.OutOfMemory => return err,
+                else => return true,
+            }) orelse return true;
+            if (first) |known| {
+                if (!std.mem.eql(u8, &known, &fingerprint)) return true;
+            } else first = fingerprint;
+        }
         return false;
     }
 
@@ -438,7 +460,7 @@ fn treeEntries(git: Git, tree: []const u8) !Snapshot {
         try paths.put(path, entries.items.len);
         try entries.append(git.arena, .{ .path = path, .mode = mode, .oid = oid });
     }
-    return .{ .entries = entries.items, .paths = paths };
+    return .{ .tree = tree, .entries = entries.items, .paths = paths };
 }
 
 fn marker(writer: *std.Io.Writer, byte: u8, size: u31, label: []const u8, bytes: []const u8) !void {

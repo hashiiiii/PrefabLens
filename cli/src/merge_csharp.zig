@@ -3,6 +3,7 @@ const testing = std.testing;
 
 pub const Kind = enum { ordered_array, int32_array, dictionary };
 pub const Field = struct { name: []const u8, kind: Kind };
+pub const Analysis = struct { fields: []const Field = &.{}, complete: bool = false };
 
 // A revision reader must inspect all available source declarations before read().
 // Unknown syntax removes name evidence instead of inventing a type.
@@ -134,9 +135,13 @@ pub fn declaredNames(arena: std.mem.Allocator, source: []const u8) std.mem.Alloc
 const Imports = struct { unity: bool = false };
 
 pub fn read(arena: std.mem.Allocator, source: []const u8, class_name: []const u8, names: Names) std.mem.Allocator.Error![]const Field {
+    return (try analyze(arena, source, class_name, names)).fields;
+}
+
+pub fn analyze(arena: std.mem.Allocator, source: []const u8, class_name: []const u8, names: Names) std.mem.Allocator.Error!Analysis {
     const tokens = tokenize(arena, source) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
-        error.UnsupportedSource => return &.{},
+        error.UnsupportedSource => return .{},
     };
     var imports: Imports = .{};
     var target: ?usize = null;
@@ -150,11 +155,11 @@ pub fn read(arena: std.mem.Allocator, source: []const u8, class_name: []const u8
         }
         if (token.is(";")) namespace_pending = false;
         if (token.is("}")) _ = scopes.pop();
-        if (token.is("#")) return &.{};
+        if (token.is("#")) return .{};
         if (token.is("using")) {
             var end = i + 1;
             while (end < tokens.len and !tokens[end].is(";")) : (end += 1) {
-                if (tokens[end].is("=")) return &.{};
+                if (tokens[end].is("=")) return .{};
             }
             const path = tokens[i + 1 .. end];
             // Only file-scope imports are evidence. Namespace-local imports need
@@ -162,46 +167,53 @@ pub fn read(arena: std.mem.Allocator, source: []const u8, class_name: []const u8
             if (scopes.items.len == 0 and pathIs(path, "UnityEngine")) imports.unity = true;
         }
         if (token.is("class") and i + 1 < tokens.len and tokens[i + 1].is(class_name)) {
-            if (target != null) return &.{};
-            for (scopes.items) |is_namespace| if (!is_namespace) return &.{};
+            if (target != null) return .{};
+            for (scopes.items) |is_namespace| if (!is_namespace) return .{};
             target = i;
         }
     }
-    const class_at = target orelse return &.{};
+    const class_at = target orelse return .{};
     var prefix = class_at;
     while (prefix > 0 and !tokens[prefix - 1].is(";") and !tokens[prefix - 1].is("{") and !tokens[prefix - 1].is("}")) {
         prefix -= 1;
-        if (tokens[prefix].is("partial")) return &.{};
+        if (tokens[prefix].is("partial")) return .{};
     }
-    if (!names.mono_behaviour or class_at + 3 >= tokens.len or !tokens[class_at + 2].is(":")) return &.{};
+    if (!names.mono_behaviour or class_at + 3 >= tokens.len) return .{};
+    if (!tokens[class_at + 2].is(":")) return .{ .complete = tokens[class_at + 2].is("{") };
     var open = class_at + 3;
     while (open < tokens.len and !tokens[open].is("{")) : (open += 1) {}
-    if (open == tokens.len) return &.{};
+    if (open == tokens.len) return .{};
     const base = tokens[class_at + 3 .. open];
     if (!(pathIs(base, "UnityEngine.MonoBehaviour") or pathIs(base, "global::UnityEngine.MonoBehaviour") or
-        (imports.unity and pathIs(base, "MonoBehaviour")))) return &.{};
-    const close = match(tokens, open, "{", "}") orelse return &.{};
+        (imports.unity and pathIs(base, "MonoBehaviour")))) return .{};
+    const close = match(tokens, open, "{", "}") orelse return .{};
 
     var fields: std.ArrayList(Field) = .empty;
     var start = open + 1;
     var i = start;
     var initializer = false;
+    var complete = true;
     while (i < close) : (i += 1) {
         if (tokens[i].is("=")) initializer = true;
         if (tokens[i].is("{")) {
-            const end = match(tokens, i, "{", "}") orelse return &.{};
-            if (!initializer) start = end + 1;
+            const end = match(tokens, i, "{", "}") orelse return .{};
+            if (!initializer) {
+                // Method bodies do not declare serialized fields. Unknown member
+                // forms retain their source identity instead of proving equivalence.
+                if (i == start or !tokens[i - 1].is(")")) complete = false;
+                start = end + 1;
+            }
             i = end;
         } else if (tokens[i].is(";")) {
-            if (fieldDeclaration(tokens[start..i], imports, names)) |field| {
-                if (find(fields.items, field.name) != null) return &.{};
+            if (fieldDeclaration(tokens[start..i], imports, names, &complete)) |field| {
+                if (find(fields.items, field.name) != null) return .{};
                 try fields.append(arena, field);
             }
             start = i + 1;
             initializer = false;
         }
     }
-    return fields.items;
+    return .{ .fields = fields.items, .complete = complete };
 }
 
 fn match(tokens: []const Token, start: usize, open: []const u8, close: []const u8) ?usize {
@@ -226,17 +238,17 @@ fn pathIs(tokens: []const Token, expected: []const u8) bool {
     return offset == expected.len;
 }
 
-fn fieldDeclaration(declaration: []const Token, imports: Imports, names: Names) ?Field {
+fn fieldDeclaration(declaration: []const Token, imports: Imports, names: Names, complete: *bool) ?Field {
     var at: usize = 0;
     var serialized = false;
     var public = false;
     while (at < declaration.len and declaration[at].is("[")) {
-        const end = match(declaration, at, "[", "]") orelse return null;
+        const end = match(declaration, at, "[", "]") orelse return unproven(complete);
         var part = at + 1;
         var j = part;
         while (j <= end) : (j += 1) {
             if (j < end and declaration[j].is("(")) {
-                j = match(declaration, j, "(", ")") orelse return null;
+                j = match(declaration, j, "(", ")") orelse return unproven(complete);
                 continue;
             }
             if (j == end or declaration[j].is(",")) {
@@ -252,7 +264,7 @@ fn fieldDeclaration(declaration: []const Token, imports: Imports, names: Names) 
                 } else {
                     // Unknown attributes may change serialization. Decline the
                     // field until its attribute identity is proven.
-                    return null;
+                    return unproven(complete);
                 }
                 part = j + 1;
             }
@@ -272,14 +284,24 @@ fn fieldDeclaration(declaration: []const Token, imports: Imports, names: Names) 
     if (!public and !serialized) return null;
     var end = at;
     while (end < declaration.len and !declaration[end].is("=")) : (end += 1) {}
-    if (end < at + 2 or declaration[end - 1].kind != .identifier) return null;
+    if (end < at + 2 or declaration[end - 1].kind != .identifier) return unproven(complete);
     const field_name = declaration[end - 1].text;
     const type_tokens = declaration[at .. end - 1];
     if (dictionaryType(type_tokens)) return .{ .name = field_name, .kind = .dictionary };
-    if (type_tokens.len < 3 or !type_tokens[type_tokens.len - 2].is("[") or !type_tokens[type_tokens.len - 1].is("]")) return null;
+    if (type_tokens.len < 3 or !type_tokens[type_tokens.len - 2].is("[") or !type_tokens[type_tokens.len - 1].is("]")) {
+        for ([_][]const u8{ "bool", "byte", "sbyte", "short", "ushort", "int", "uint", "long", "ulong", "float", "double", "decimal", "char", "string", "object" }) |scalar| {
+            if (pathIs(type_tokens, scalar)) return null;
+        }
+        return unproven(complete);
+    }
     const element = type_tokens[0 .. type_tokens.len - 2];
-    for (element) |token| if (token.kind != .identifier and !token.is(".") and !token.is(":")) return null;
+    for (element) |token| if (token.kind != .identifier and !token.is(".") and !token.is(":")) return unproven(complete);
     return .{ .name = field_name, .kind = if (pathIs(element, "int")) .int32_array else .ordered_array };
+}
+
+fn unproven(complete: *bool) ?Field {
+    complete.* = false;
+    return null;
 }
 
 fn dictionaryType(type_tokens: []const Token) bool {

@@ -4,12 +4,55 @@ const schema = @import("merge_csharp.zig");
 const context = @import("core").merge_context;
 const testing = std.testing;
 
+test "schema fingerprints ignore method edits but preserve array type changes" {
+    // Logic edits must avoid asset scans without hiding changes to serialized collection types.
+    var memory = std.heap.ArenaAllocator.init(testing.allocator);
+    defer memory.deinit();
+    const arena = memory.allocator();
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var env = std.process.Environ.Map.init(arena);
+    const git = try fixtureGit(&tmp, arena, &env);
+    try fixtureWrite(&tmp, "Example.cs.meta", "guid: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n");
+    try fixtureWrite(&tmp, "Example.cs", "using UnityEngine; class Example : MonoBehaviour { public int[] values; public void Tick() { } }\n");
+    const base = try fixtureCommit(git);
+    try fixtureWrite(&tmp, "Example.cs", "// logic only\nusing UnityEngine; class Example : MonoBehaviour { public int[] values; public void Tick() { int n = 1; } }\n");
+    const logic = try fixtureCommit(git);
+    try fixtureWrite(&tmp, "Example.cs", "using UnityEngine; class Example : MonoBehaviour { public string[] values; public void Tick() { } }\n");
+    const changed = try fixtureCommit(git);
+    var store = Store.init(git);
+    defer store.deinit();
+    const original = (try store.schemaFingerprint(base)).?;
+    try testing.expectEqual(original, (try store.schemaFingerprint(logic)).?);
+    try testing.expect(!std.mem.eql(u8, &original, &(try store.schemaFingerprint(changed)).?));
+}
+
+test "schema fingerprints retain opaque source identity" {
+    // Two empty field lists are not proof that unsupported serialized declarations are unchanged.
+    var memory = std.heap.ArenaAllocator.init(testing.allocator);
+    defer memory.deinit();
+    const arena = memory.allocator();
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var env = std.process.Environ.Map.init(arena);
+    const git = try fixtureGit(&tmp, arena, &env);
+    try fixtureWrite(&tmp, "Example.cs.meta", "guid: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n");
+    try fixtureWrite(&tmp, "Example.cs", "using UnityEngine; class Example : MonoBehaviour { [Unknown] public int[] values; }\n");
+    const base = try fixtureCommit(git);
+    try fixtureWrite(&tmp, "Example.cs", "using UnityEngine; class Example : MonoBehaviour { [Unknown] public string[] values; }\n");
+    const changed = try fixtureCommit(git);
+    var store = Store.init(git);
+    defer store.deinit();
+    try testing.expect(!std.mem.eql(u8, &(try store.schemaFingerprint(base)).?, &(try store.schemaFingerprint(changed)).?));
+}
+
 // All returned slices belong to git.arena. Keep that arena alive while using
 // snapshots. No source file or metadata is read from the current worktree.
 pub const Store = struct {
     git: Git,
     objects: std.StringHashMapUnmanaged([]const u8) = .empty,
     snapshots: std.StringHashMapUnmanaged(context.Snapshot) = .empty,
+    schema_fingerprints: std.StringHashMapUnmanaged([32]u8) = .empty,
     cached_bytes: usize = 0,
 
     pub fn init(git: Git) Store {
@@ -19,10 +62,29 @@ pub const Store = struct {
     pub fn deinit(self: *Store) void {
         self.objects.deinit(self.git.arena);
         self.snapshots.deinit(self.git.arena);
+        self.schema_fingerprints.deinit(self.git.arena);
     }
 
     pub fn cachedObjectCount(self: *const Store) usize {
         return self.objects.count();
+    }
+
+    pub fn schemaFingerprint(self: *Store, revision: []const u8) !?[32]u8 {
+        const value = try self.snapshot(revision);
+        return self.schema_fingerprints.get(value.revision);
+    }
+
+    fn recordSchema(self: *Store, identity: []const u8, proofs: []SchemaProof) !void {
+        std.mem.sort(SchemaProof, proofs, {}, struct {
+            fn less(_: void, a: SchemaProof, b: SchemaProof) bool {
+                return std.mem.lessThan(u8, a.guid, b.guid);
+            }
+        }.less);
+        const bytes = try std.json.Stringify.valueAlloc(self.git.arena, proofs, .{});
+        defer self.git.arena.free(bytes);
+        var digest: [32]u8 = undefined;
+        std.crypto.hash.sha2.Sha256.hash(bytes, &digest, .{});
+        try self.schema_fingerprints.put(self.git.arena, identity, digest);
     }
 
     pub fn snapshot(self: *Store, revision: []const u8) !context.Snapshot {
@@ -68,7 +130,10 @@ pub const Store = struct {
             if (size > max_object_bytes) return error.SourceTooLarge;
             try entries.append(arena, .{ .path = path, .oid = oid, .size = size });
         }
-        if (entries.items.len == 0) return .{ .revision = identity };
+        if (entries.items.len == 0) {
+            if (names.serialize_field and names.mono_behaviour) try self.recordSchema(identity, &.{});
+            return .{ .revision = identity };
+        }
 
         var batch = try Batch.init(self.git);
         defer batch.child.kill(self.git.io);
@@ -105,6 +170,12 @@ pub const Store = struct {
         if (ambiguous_metadata) return .{ .revision = identity };
 
         var scripts: std.ArrayList(context.Script) = .empty;
+        var proofs: std.ArrayList(SchemaProof) = .empty;
+        var fingerprint_allowed = names.serialize_field and names.mono_behaviour;
+        var guid_counts = guids.valueIterator();
+        while (guid_counts.next()) |count| if (count.* != 1) {
+            fingerprint_allowed = false;
+        };
         for (entries.items) |entry| {
             if (!ends(entry.path, ".cs")) continue;
             const meta_path = try std.fmt.allocPrint(arena, "{s}.meta", .{entry.path});
@@ -114,17 +185,31 @@ pub const Store = struct {
             const filename = std.fs.path.basename(entry.path);
             const class_name = filename[0 .. filename.len - 3];
             var fields: std.ArrayList(context.Field) = .empty;
+            var complete = false;
             if ((declarations.get(class_name) orelse 0) == 1) {
-                for (try schema.read(arena, entry.bytes, class_name, names)) |field| {
+                const analysis = try schema.analyze(arena, entry.bytes, class_name, names);
+                complete = analysis.complete;
+                for (analysis.fields) |field| {
                     try fields.append(arena, .{ .path = field.name, .kind = switch (field.kind) {
                         .ordered_array => .ordered,
                         .int32_array => .int32_array,
                         .dictionary => .dictionary,
                     } });
                 }
+            } else {
+                fingerprint_allowed = false;
             }
+            std.mem.sort(context.Field, fields.items, {}, struct {
+                fn less(_: void, a: context.Field, b: context.Field) bool {
+                    return std.mem.lessThan(u8, a.path, b.path);
+                }
+            }.less);
             try scripts.append(arena, .{ .guid = guid, .fields = fields.items });
+            // Opaque analysis must compare the source itself. Empty field lists
+            // alone cannot prove that unsupported type evidence is unchanged.
+            try proofs.append(arena, .{ .guid = guid, .fields = fields.items, .opaque_source = if (complete) null else entry.oid });
         }
+        if (fingerprint_allowed) try self.recordSchema(identity, proofs.items);
         return .{ .revision = identity, .scripts = scripts.items };
     }
 
@@ -142,6 +227,7 @@ pub const Store = struct {
 const max_object_bytes = 64 * 1024 * 1024;
 const max_cached_bytes = 256 * 1024 * 1024;
 const Entry = struct { path: []const u8, oid: []const u8, size: usize, bytes: []const u8 = "", guid: ?[]const u8 = null };
+const SchemaProof = struct { guid: []const u8, fields: []const context.Field, opaque_source: ?[]const u8 };
 
 pub const Batch = struct {
     child: std.process.Child,
@@ -336,6 +422,9 @@ test "revision snapshots decline absent metadata duplicate GUIDs and unknown ass
     for ([_][]const u8{ absent, duplicate, assembly }) |revision| {
         try testing.expectEqual(null, (try store.snapshot(revision)).kind(script_guid, "values"));
     }
+    // Ambiguous identity and assembly evidence must never authorize skipping dependent assets.
+    try testing.expectEqual(null, try store.schemaFingerprint(duplicate));
+    try testing.expectEqual(null, try store.schemaFingerprint(assembly));
 }
 
 test "revision batch drains source objects and ignores unrelated files" {

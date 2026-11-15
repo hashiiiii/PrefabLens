@@ -196,6 +196,10 @@ pub fn validate(arena: std.mem.Allocator, bytes: []const u8) merge_model.Error!v
     try check(arena, bytes, null);
 }
 
+pub fn validateParsed(arena: std.mem.Allocator, parsed: @import("source.zig").ParsedFile) merge_model.Error!void {
+    try checkParsed(arena, parsed, null);
+}
+
 pub fn diagnose(arena: std.mem.Allocator, bytes: []const u8) std.mem.Allocator.Error!?Diagnostic {
     var diagnostic: Diagnostic = .{};
     check(arena, bytes, &diagnostic) catch |err| switch (err) {
@@ -207,6 +211,10 @@ pub fn diagnose(arena: std.mem.Allocator, bytes: []const u8) std.mem.Allocator.E
 
 fn check(arena: std.mem.Allocator, bytes: []const u8, diagnostic: ?*Diagnostic) merge_model.Error!void {
     const parsed = try parser.parseSpanned(arena, bytes);
+    try checkParsed(arena, parsed, diagnostic);
+}
+
+fn checkParsed(arena: std.mem.Allocator, parsed: @import("source.zig").ParsedFile, diagnostic: ?*Diagnostic) merge_model.Error!void {
     if (parsed.diagnostics.len != 0) return error.InvalidMerge;
     var index = try Index.init(arena, parsed.documents);
     index.diagnostic = diagnostic;

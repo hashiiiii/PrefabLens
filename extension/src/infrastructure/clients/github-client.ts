@@ -11,7 +11,7 @@ import { err, ok, type Result } from "../../domain/result";
 import { createQueue, type Queue } from "../internal/fetch-queue";
 
 // retry-after (seconds) wins. Else x-ratelimit-reset (epoch seconds) applies, relative to now.
-// Number(null) is 0 and Number("") is NaN, so absent headers fail the > 0 guards.
+// Number(null) and Number("") evaluate to 0, so absent or empty headers fail the > 0 guards.
 function adviceMs(headers: Headers): number | undefined {
   const retryAfter = Number(headers.get("retry-after"));
   if (retryAfter > 0) return retryAfter * 1000;

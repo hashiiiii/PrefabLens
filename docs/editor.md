@@ -1,148 +1,76 @@
-# Unity Editor package
+# Unity Editor Package
 
-This page describes the `editor/` package for contributors.
-For installation and usage, see the [README](../README.md).
-For the contribution process, see [CONTRIBUTING.md](../CONTRIBUTING.md).
+PrefabLens adds a window for reviewing semantic diffs of changed UnityYAML assets.  
+The package uses the PrefabLens CLI for Git operations and diff generation, then resolves GUID references to asset paths in Unity.
 
-## Purpose
+For the main product overview and other tools, see the [README](../README.md).  
+For contributor workflow, see [CONTRIBUTING.md](../CONTRIBUTING.md).
 
-The Editor package shows semantic diffs for UnityYAML assets inside Unity.
-Authors can review changes in the Editor without opening a separate CLI session for each asset.
+## Install and Use
 
-It runs the `prefablens` CLI as a child process and displays its `--json` output.
-The CLI handles Git operations and runs the shared diff engine.
-See [CLI documentation](cli.md).
+The package requires Unity 2022.3 or later.  
+Install it through [OpenUPM](https://openupm.com/packages/com.hashiiiii.prefablens/) or add the Git URL `https://github.com/hashiiiii/PrefabLens.git?path=editor` in Unity Package Manager.  
+The [README](../README.md#unity-editor) has step-by-step installation instructions.
 
-The UI resolves GUIDs with the local `AssetDatabase`.
-It displays script and prefab references as project paths.
-The CLI can also run its own `.meta` scan when the working directory is the
-project root.
+After installation:
 
-## Tech stack
+1. Open **Window > PrefabLens**.
+2. On first use, the package automatically downloads its pinned CLI from GitHub Releases.  
+   The download needs network access and can be canceled from the window.
+3. Leave **Base** empty to compare the working tree with `HEAD`, or enter a branch, tag, or commit to use as the base.
+4. Select an asset in the left pane to view its semantic diff.  
+   Change **Base** and press Enter, move focus out of the field, or click **Refresh** to run the comparison again.
 
-| Piece | Choice |
-|---|---|
-| Package ID | `com.hashiiiii.prefablens` (`editor/package.json`) |
-| Unity minimum | 2022.3 |
-| Language | C# (Unity Editor assemblies) |
-| Diff engine | External `prefablens` CLI (pinned version in `Editor/Cli.cs`) |
-| Headless tests | `DotNetTests~/` via `dotnet test` (Unity stubs, no Editor app) |
-| Editor tests | `Tests/Editor/` (needs a real Unity Editor) |
-| Lint / format | CSharpier (`dotnet csharpier check`) |
+The window refreshes when it opens or regains focus.  
+It lists changed UnityYAML assets; the right pane shows the selected asset's GameObjects, components, and fields.
 
-## Design
+## Troubleshooting
 
-### Layout
+### CLI Download Fails
 
-| Path | Role |
-|---|---|
-| `editor/Editor/` | Window, CLI locate/download/run, models, settings |
-| `editor/Tests/Editor/` | Unity EditMode tests |
-| `editor/DotNetTests~/` | Headless harness. The trailing `~` hides it from the Unity asset importer |
-| `editor/package.json` | UPM package manifest |
+The window shows the download error and offers a retry.  
+Check network access to GitHub Releases, then click **Download from GitHub Releases**.  
+To use a local executable, open **Preferences > PrefabLens** and choose the `prefablens` file (or `prefablens.exe` on Windows).  
+Clear **CLI path override** to return to the package-managed CLI.
 
-Types under `Editor/`:
+The package stores its downloaded CLI under `Library/PrefabLens/`.  
+Unity does not track `Library/` in Git.  
+The override is stored in Unity's `EditorPrefs`, so it applies to the Editor on this machine rather than to the project.  
+Lookup order is a valid override, the pinned CLI in `Library/PrefabLens/`, then a download.  
+An override is accepted if it runs and reports a version; it does not have to match the package's pinned version.  
+If an override is invalid, the package reports the reason and continues to the pinned CLI or download.  
+The automatic download checks the archive against the release's `SHA256SUMS` and verifies the pinned CLI version before installing it.
 
-- `PrefabLensWindow.cs`: window layout and refresh flow
-- `Cli.cs`, `Cli.Download.cs`, `Cli.Run.cs`: locate, download, and run the CLI
-- `BulkModel.cs`, `DiffModel.cs`, `DiffTree.cs`: JSON models and the tree of display rows
-- `DiffTreeView.cs`: UI Toolkit rows, status badges, and TreeView wiring
-- `RefreshGate.cs`: one in-flight CLI run, with a queue for later Base edits
-- `PrefabLensSettings.cs`: Preferences UI for the CLI path override
-- `BuiltinRefs.cs`, `ValueFormat.cs`: built-in names and field text
-- `MiniJson.cs`: bundled JSON reader for CLI output
+### Refresh Reports an Error
 
-Rows store visible text spans and a separate status.
-`DiffTreeView` derives status badges from that status.
-The CLI tests follow the source split: `CliTests.cs`, `CliTests.Download.cs`, and `CliTests.Run.cs`.
-They share one fixture and helpers for the real native CLI.
+The window displays the CLI's error text.  
+Confirm that the Unity project is in a Git working tree and that the selected Base ref exists.  
+To inspect the same comparison outside Unity, run `prefablens --json` for `HEAD` or `prefablens <base-ref> --json` from the project root.  
+See the [CLI guide](cli.md) for command details.
 
-### CLI run contract
+### An Asset Does Not Appear
 
-The refresh command is:
+The window lists changed UnityYAML assets.  
+Check that the asset is in the Git comparison and uses Unity's text-based YAML serialization.  
+If the list is empty, the status line reports that there are no changes against the selected Base (or `HEAD` when Base is empty).
 
-```
-prefablens [<base-ref>] --json
-```
+## How the Package Works
 
-The working directory is the Unity project root.
-An empty Base field omits the ref operand (HEAD vs working tree, bulk mode).
-The window parses a `[{path, diff}]` array.
-Each `diff` uses `prefablens.diff.v2`.
+The Editor window passes `--json` to the CLI from the Unity project root.  
+When Base is set, it passes the ref before `--json`.  
+The CLI owns Git and diff behavior; the C# package displays its JSON result and uses Unity's `AssetDatabase` to resolve each GUID to an asset path.  
+Keep new Git or semantic-diff behavior in the CLI rather than duplicating it in the Editor package.
 
-CLI runs time out after 90 s.
-If the window closes, the package kills an in-flight run.
+The package code lives in `editor/Editor/`.  
+`PrefabLensWindow.cs` owns the window and refresh flow, `Cli.cs` and its partial files locate, download, and run the CLI, and the model and tree-view files parse and display CLI output.  
+The `DotNetTests~/` folder is hidden from Unity's asset importer and runs the Editor tests without a Unity installation.
 
-### CLI executable lookup and download
+## Contributor Checks
 
-The pinned CLI version is `Cli.Version` in `Editor/Cli.cs`.
-Release automation keeps it in sync with `editor/package.json` and
-`build.zig.zon`.
+Install the repository toolchain from the root, then build the real native CLI binaries used by the C# checks:
 
-The package installs one native CLI at `Library/PrefabLens/<version>/prefablens`.
-On Windows, the filename has an `.exe` suffix.
-
-Git does not track `Library/`.
-The CLI must stay outside the repository.
-
-On first use, the package downloads the pinned ZIP from GitHub Releases.
-It compares the ZIP digest with `SHA256SUMS` before extraction.
-The archive must contain the exact native CLI name at its root.
-
-The package extracts the archive into a staging directory.
-It extracts only the native CLI.
-On macOS and Linux, it marks the CLI as executable.
-It runs `--version` from the staging directory.
-The CLI must report `Cli.Version`.
-
-After these checks pass, the package replaces the version directory.
-A failed check leaves an existing cache unchanged.
-After a successful install, it deletes older cached versions under
-`Library/PrefabLens/`.
-
-The download has a 120 s cap.
-The window can cancel it.
-
-### `PrefabLens.CliPath` resolution
-
-The Preferences UI stores an optional absolute path in the EditorPrefs key
-`PrefabLens.CliPath` (per machine, not per project).
-This path selects the `prefablens` executable.
-
-Resolution order:
-
-1. If the override runs and reports a version, the package uses it.
-   A manual CLI can use a version other than `Cli.Version`.
-2. If the override is invalid, the package reports the cause.
-   If a valid downloaded CLI exists, the package uses that CLI.
-   Otherwise, the window offers the pinned download.
-3. If the override is empty, the package uses a downloaded CLI that matches `Cli.Version`.
-   If the CLI fails the version check, the window offers the pinned download.
-
-During a window refresh or a Preferences update, the package checks the CLI version.
-It does not run version commands during a UI repaint.
-
-The package reports an invalid override in the console once per distinct error.
-It also reports the error on the missing-CLI screen and the Preferences page.
-
-### GUID resolution in the UI
-
-After parsing the JSON, the window resolves remaining GUIDs with
-`AssetDatabase.GUIDToAssetPath`.
-Built-in engine references use `BuiltinRefs.cs`
-(aligned with `cli/src/builtin_refs.zig`).
-
-## Verification
-
-Install the toolchain from the repository root:
-
-```bash
+```sh
 mise install
-```
-
-Then run the headless Editor checks:
-
-```bash
 mise exec -- zig build test-installation-binaries -Doptimize=ReleaseSafe
 cd editor
 dotnet tool restore
@@ -152,52 +80,9 @@ PREFABLENS_TEST_ALT_BIN_DIR="$PWD/../zig-out/test-alternate-bin" \
   dotnet test DotNetTests~/Tests
 ```
 
-The installation tests run real native commands from both directories.
-The headless C# harness does not require the Unity Editor application.
+The headless test project compiles the package against small Unity API stubs and runs the C# tests with real native CLI binaries.  
+It does not cover Unity's actual Editor runtime.  
+For that, open the package in Unity 2022.3 or later, set `PREFABLENS_TEST_BIN_DIR` and `PREFABLENS_TEST_ALT_BIN_DIR` in the Unity process environment, then run the EditMode tests in `editor/Tests/Editor/`.
 
-To run the EditMode tests in `Tests/Editor/`:
-
-1. Build the two native test CLIs with the build command in this section.
-2. Set `PREFABLENS_TEST_BIN_DIR` and `PREFABLENS_TEST_ALT_BIN_DIR` for the Unity process.
-3. Open the package in Unity 2022.3 or newer.
-4. Run the EditMode test runner there.
-
-For a local CLI build from the Editor:
-
-Windows executable names have an `.exe` suffix.
-
-1. Build the CLI with `zig build` at the repository root.
-2. Set `PrefabLens.CliPath` to the absolute path of `zig-out/bin/prefablens`.
-3. Open **Window > PrefabLens**.
-4. Refresh the window.
-
-CI runs CSharpier and `DotNetTests~/` on Windows, macOS, and Linux in the
-`editor_native` job of
-[`.github/workflows/ci.yml`](../.github/workflows/ci.yml).
-The `editor` job reports the combined result for branch protection.
-CI does not run the EditMode suite inside the Unity Editor.
-
-## Deploy
-
-The Editor package ships as UPM content under `editor/` in this repository.
-
-1. Run [`.github/workflows/release.yml`](../.github/workflows/release.yml)
-   with `workflow_dispatch` and a version `X.Y.Z` (no `v` prefix).
-2. Verify that `Cli.Version` stays aligned with the release tag (`v$VERSION`).
-   The bump step updates the version files that must stay in sync.
-
-The workflow updates `editor/package.json` and related version files.
-It tags `v$VERSION` and publishes GitHub Release assets that the package
-downloads at runtime.
-
-OpenUPM serves `com.hashiiiii.prefablens` from the `editor` path in this repository.
-This repository has no OpenUPM publish job.
-OpenUPM tracks the package outside this workflow.
-
-After a tag reaches `main`:
-
-1. Verify that the OpenUPM package page shows the new version.
-2. If the page is stale, update the OpenUPM registration.
-3. If you cannot update the registration, ask the maintainer responsible for the listing.
-
-Users can also install from the Git URL with `?path=editor` (see the README).
+CI runs CSharpier and the headless .NET tests on Windows, macOS, and Linux.  
+It does not run the EditMode tests inside Unity; see the `editor_native` and `editor` jobs in [`.github/workflows/ci.yml`](../.github/workflows/ci.yml).

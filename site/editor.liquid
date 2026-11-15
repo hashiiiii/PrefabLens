@@ -4,7 +4,9 @@ permalink: editor.html
 layout: layout.liquid
 ---
 <h1>Unity Editor</h1>
-<p class="hint">Review semantic diffs for changed UnityYAML assets in the Unity Editor.</p>
+<p class="hint">
+  Review semantic diffs for changed UnityYAML assets in the Unity Editor. Requires Unity 2022.3 or later.
+</p>
 
 <div class="window">
   <div class="window-title">Unity Editor</div>
@@ -13,6 +15,21 @@ layout: layout.liquid
     src="images/editor.png"
     width="924"
     height="565"
-    alt="PrefabLens window in the Unity Editor"
+    alt="PrefabLens window in the Unity Editor, with changed assets on the left and a semantic diff on the right"
   />
 </div>
+
+<h2>Install</h2>
+<p>
+  Install through <a href="https://openupm.com/packages/com.hashiiiii.prefablens/">OpenUPM</a>, or add
+  <code>https://github.com/hashiiiii/PrefabLens.git?path=editor</code> in Unity Package Manager. See the
+  <a href="https://github.com/hashiiiii/PrefabLens#unity-editor">installation steps</a>.
+</p>
+
+<h2>Use it</h2>
+<ol>
+  <li>Open <strong>Window &gt; PrefabLens</strong>.</li>
+  <li>Leave <strong>Base</strong> empty to compare the working tree against <code>HEAD</code>, or enter a branch, tag, or commit as the base.</li>
+  <li>Select a changed asset to view its semantic diff. Click <strong>Refresh</strong> to run the comparison again.</li>
+</ol>
+<p>On first use, the package downloads its CLI from GitHub Releases. For setup and troubleshooting, see the <a href="https://github.com/hashiiiii/PrefabLens/blob/main/docs/editor.md">Editor guide</a>.</p>

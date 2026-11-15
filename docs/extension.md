@@ -1,308 +1,73 @@
-# Chrome extension
+# Chrome Extension
 
-This page describes the `extension/` code for contributors.
-For installation and usage, see the [README](../README.md).
-For the contribution process, see [CONTRIBUTING.md](../CONTRIBUTING.md).
+The PrefabLens extension adds a **Raw / Semantic** switch to supported GitHub diff pages.  
+Semantic view replaces GitHub's text diff for UnityYAML assets with a tree of changed GameObjects, components, and fields.
 
-## Purpose
+Install it from the [Chrome Web Store](https://chromewebstore.google.com/detail/dlhnalbfkikchkfedfneiimadommcnip).  
+The [README](../README.md#chrome-extension) has the project overview.  
+To try the interface without connecting to GitHub, use the [interactive demo](https://prefablens.hashiiiii.workers.dev/extension.html).
 
-The extension uses the same Zig diff engine as the CLI.
-The build compiles the engine to WASM.
-The extension does not send asset contents to a PrefabLens server.
-The PR panel uses GitHub Device Flow for GitHub API access.
+## Use the Extension
 
-## Tech stack
+1. Open a GitHub pull request's **Files changed** tab in Chrome.
+2. Select **Semantic** in the PrefabLens control above the changed files, or on an individual UnityYAML file.
+3. If prompted, select **Sign in with GitHub**.  
+   Enter the displayed code on GitHub and authorize PrefabLens.  
+   The extension resumes the diff when authorization succeeds.
+4. Select **Raw** to return to GitHub's text diff.  
+   The page-wide view preference is saved in Chrome.  
+   A file-level choice applies to that file on the current diff page; selecting a page-wide view applies it to all matching files.
 
-| Piece | Choice |
-|---|---|
-| Runtime | Chrome Manifest V3 (service worker + content script) |
-| Language | TypeScript |
-| Diff engine | Zig `core/`, built with `zig build wasm` |
-| Bundle | esbuild (`extension/build.mjs`) → `extension/dist/` |
-| Unit tests | Vitest (`pnpm test`), with `pretest` building WASM |
-| E2E | Playwright with Chromium and `--load-extension` |
-| Lint / format | Biome |
-| Package manager | pnpm (see root `mise.toml` for the Node version) |
+The extension runs on `github.com` and requests file contents and pull request metadata from GitHub.  
+Its semantic diff engine runs in the browser.  
+GitHub Device Flow requests the `repo` OAuth scope.  
+The token and view preference stay in Chrome storage; the extension sends requests only to GitHub and does not send data to a PrefabLens server.  
+See the [privacy policy](../PRIVACY.md) for details.
 
-The release package is a ZIP archive of `extension/dist/`.
-The archive places `manifest.json` at its root.
-The live demo site uses a `--demo` bundle from the same build script.
+The extension detects UnityYAML files on pull request file diffs, commit diffs, and same-repository compare pages.  
+A file must be a text-based Unity asset to produce a semantic diff.
 
-## Design
+## Troubleshooting
 
-### Overview
+- **No PrefabLens control appears:** confirm that the page is on `github.com`, is a supported diff page, and includes a changed UnityYAML file.  
+  The extension does not add controls for other file extensions.
+- **GitHub sign-in fails:** retry **Sign in with GitHub**.  
+  If the code expires, start sign-in again and enter the new code on GitHub.
+- **GitHub rate limit or unresolved references:** if a rate-limit error appears, wait and select **Semantic** again.  
+  If the semantic view shows an unresolved-reference message, select **Retry** there.  
+  GitHub can limit requests while the extension loads file contents or resolves Unity references.
+- **A large file is not rendered yet:** files larger than 25 megabytes ask for confirmation. Select **Render anyway** to continue.
+- **A file cannot be diffed:** use **Raw** to see GitHub's text diff.  
+  Non-text Unity assets cannot produce a semantic diff.
 
-Dependencies point inward. Infrastructure also depends on
-`application/gateway/` so its clients can implement gateways:
+## Contributor Guide
 
-```
-Presentation -> Application -> Domain
-                     ^              ^
-                     |              |
-              Infrastructure -------+
-              (implements gateway + repository)
-```
+### Data Flow and Code Boundaries
 
-`test/architecture/` enforces these rules:
+The extension has three browser contexts: the content script attaches controls to GitHub pages, the service worker fetches GitHub data and runs the shared WebAssembly diff engine, and the site demo uses fixture files with the same renderer.  
+Entry points are under `extension/src/presentation/`.
 
-- the import direction
-- the domain isolation
-- infrastructure does not import application public functions
-- only presentation entry points import `src/container.ts`
-- `infrastructure/clients/` contains only interface implementations in `*-client.ts` files
-- an `internal/` directory is private. Only files under its parent directory can import it.
-  Because `src/internal/` is under the source root, every source file can import it.
-- a presentation object type has no `Map` or `Set` field
-- a presentation value has no exported function that takes the value and mutates it
+Keep each responsibility in its existing layer:
 
-Two modules are outside the four layers:
+- `domain/` defines diff and repository types plus pure functions.
+- `application/` contains use cases that combine domain logic with gateway or repository interfaces.
+- `infrastructure/clients/` implements those interfaces for GitHub, Chrome storage and messaging, and WebAssembly.
+- `presentation/` handles DOM events, Chrome events, view state, and context entry points.
 
-| Module | Role |
-|---|---|
-| `src/container.ts` | Composition root. DI factories only |
-| `src/internal/` | Shared helpers that no layer owns (for example `must`) |
+The entry points use `src/container.ts` to create their clients.  
+Infrastructure clients handle GitHub requests and shared storage or messaging adapters.  
+Presentation code owns the page DOM, view state, and browser-context event handling.  
+`application/internal/` and `infrastructure/internal/` hold helpers for their respective layers; `presentation/internal/` holds UI helpers shared across contexts.
 
-The extension runs in three JavaScript contexts.
-Each context has its own entry point and container setup:
+### Build and Verify
 
-| Context | Entry point |
-|---|---|
-| Service worker | `presentation/background/index.ts` |
-| Content script | `presentation/content/index.ts` |
-| Site demo | `presentation/demo/index.ts` |
+Install the repository toolchain from the root.  
+Then install the extension dependencies and run the checks:
 
-### Layout
-
-`<area>` matches an existing concept folder (`diff`, `guid`, `auth`, …).
-Add a new area only when a new concept appears.
-Use kebab-case for file names.
-
-#### Domain (`src/domain/`)
-
-```
-domain/
-  result.ts                   # Result plus the ok / err constructors
-  <area>/
-    <type>.ts                 # domain types
-    <noun>-repository.ts      # repository interfaces
-    fn/<name>.ts              # pure functions that read or build domain types
-```
-
-- Put domain types, including `Result`, in `domain/<area>/`, outside `fn/`.
-  Type files hold types plus constructors and type guards only
-  (for example `ok` / `err` next to `Result`).
-  Put queries and transforms under `fn/`.
-- Put repository interfaces for domain model persistence in `domain/<area>/<noun>-repository.ts`.
-  Public functions depend on these interfaces.
-  Clients in `infrastructure/` implement these interfaces.
-- Put pure functions that read or build domain types in `domain/<area>/fn/<name>.ts`.
-- If a helper is not a domain type, keep it out of `domain/`.
-  Put cross-layer helpers in `src/internal/` (see Overview).
-
-#### Application (`src/application/`)
-
-```
-application/
-  <area>/
-    <verb>-<noun>.ts   # one public function (use case or state factory)
-  internal/
-    <noun>.ts          # shared helpers that are not public functions
-  gateway/
-    <name>.ts          # gateway types (XxxGateway)
-```
-
-- Put public application functions (use cases or state factories) in `application/<area>/<verb>-<noun>.ts`.
-  Export one function per file.
-  If a helper serves one public function only, keep it non-exported in that file.
-- Put helpers shared by multiple application callers in `application/internal/<noun>.ts`, unless they are public functions.
-  Examples include `raw-diff.ts` and `repo-index.ts`.
-- Gateway types owned by the application live in `application/gateway/<name>.ts`
-  as `XxxGateway`:
-  `GithubGateway`, `DifferGateway` (WASM), `MessengerGateway` (chrome.runtime),
-  `GithubAuthGateway` (Device Flow), `FixturesGateway` (demo fixture files).
-  A gateway file holds types plus small type guards and converters for its
-  failure union (for example `isRateLimited`, `toBackgroundError`).
-
-#### Infrastructure (`src/infrastructure/`)
-
-```
-infrastructure/
-  clients/             # implementations of the repository interfaces and the gateway types
-  internal/            # helpers that implement no interface
-```
-
-- A client implements a repository interface from `domain/` or a gateway type
-  from `application/gateway/`.
-- Put each client in `clients/` as `*-client.ts`
-  (for example `github-client.ts`, `chrome-auth-client.ts`).
-- Put helpers that implement no interface in `internal/`
-  (for example `fetch-queue.ts`, `merge-store.ts`, `storage-area.ts`).
-- Only infrastructure files can import `internal/` (the internal rule in Overview).
-
-`createGithubGateway(base, token, fetchFn)` creates one GitHub client.
-`createQueuedGithubGateway(concurrency, fetchFn, sleep)` creates a factory whose clients share one queue.
-`createDifferGateway(wasmBytes)` instantiates WASM, while `createDifferLoader(wasmUrl, fetchBytes)` loads one instance lazily.
-Each function has one input contract; callers do not select behavior by changing an argument's type.
-
-#### Presentation (`src/presentation/`)
-
-```
-presentation/
-  background/          # service worker entry
-  content/
-    overlay/           # per-file view state
-  demo/                # site demo entry
-  internal/            # helpers shared by two or more JS contexts
-```
-
-- Each JS context has its own entry under its folder (`*/index.ts`).
-- Per-file UI state lives next to the content script under `content/overlay/`.
-- Use explicit subscriptions when a UI event has more than one consumer.
-- Register subscriptions before initial activation.
-- Put helpers shared by multiple presentation contexts in `presentation/internal/`.
-  Examples include rendering, the view toggle, and view state.
-- Presentation types are values or objects.
-- Do not mix the two shapes in one type.
-- This split applies to `presentation/` only.
-- A value is data. Construction is a literal or a parser
-  (`ViewMode`, `DiffPage`, `parseDiffUrl`).
-- If construction is only a literal, build the value in presentation.
-  Do not add a factory.
-- Do not put value queries under `fn/`. That layout is for `domain/` only.
-- An object is the return value of a factory
-  (`Toggle`, `FileView`, `FileViewController`, `ViewState`).
-- A method is a function on the object type. Methods define the public surface.
-- Keep `Map`, `Set`, and listener collections inside the factory.
-- A public `Map` or `Set` field lets a caller change working memory and bypass
-  the methods.
-- If a caller must change working memory, call a method on the object.
-- A type alias that is a `Map` is not an object field (`FileRegistry`).
-- If an object only wraps nodes already held by a scan, the scan can build that
-  adapter inline (`FileEntry`).
-- Do not export a function that takes a value and mutates that value.
-  That shape belongs to domain types and `domain/<area>/fn/`.
-
-#### Tests
-
-- Put all extension tests under `test/`.
-- Mirror the production path under `test/` for unit and integration tests.
-- Put layer rules under `test/architecture/`.
-- Put browser tests and their HTML files under `test/e2e/`.
-- `test/fixtures/` contains shared static test data.
-- `test/support/` contains shared test implementations, such as storage with a configurable capacity.
-- Keep test-only helpers in test files when one file uses them.
-- Do not put test-only helpers in `src/`.
-- An in-memory storage implementation derives failures from its complete state and capacity.
-- A virtual clock advances time when `sleep(ms)` runs.
-- Test implementations do not use programmed responses, dependency bags, spies, or private call counts.
-
-### Layer contracts
-
-#### Domain (`src/domain/`)
-
-**Role.** Domain vocabulary only.
-
-**Imports.** Files in this layer import nothing outside `domain/`.
-
-**Notes.**
-
-- Expected failures travel as tagged unions via `Result<T, E>` from `domain/result.ts`.
-- Expected failures do not use `Error` subclasses.
-- Expected failures do not use `throw`.
-- Infrastructure adapters can reject for unexpected failures.
-  The nearest public function converts them to `Result` at the boundary.
-
-#### Application (`src/application/`)
-
-**Role.** Public functions that compose domain logic and gateways.
-A public function is a use case or a state factory.
-
-**Imports.** This layer can import `domain/`.
-It cannot import `infrastructure/` or `presentation/`.
-
-**Notes.**
-
-- Use CRUD names for use-case verbs: `create`, `get`, `update`, `delete`.
-  If a CRUD name hides the intent, use a domain verb
-  (for example `sign-in`, `prefetch-pr`).
-- Export a plain verb function `<verb>(gateways…, [state,] input)`.
-- Use an async generator when a use case must emit ordered progress events.
-- Internal modules can export several sibling functions.
-- Send and receive domain models through repository interfaces in `domain/`.
-- Talk to outside systems that do not load or save domain models through gateways.
-- A single-function dependency is a plain parameter
-  (for example `fetchBytes`, `makeGithubGateway`, `getDiffer`).
-- A multi-method outside capability lives in `application/gateway/`.
-- UI event and subscription types are presentation vocabulary.
-- When construction of working memory needs real logic, application exports a
-  state factory (for example `createDiffSession`).
-  When construction is only a literal, presentation builds that value itself.
-- Data that must cross JS contexts is not in-memory working memory.
-  That data goes through a repository or a gateway.
-
-#### Infrastructure (`src/infrastructure/`)
-
-**Role.** Clients that implement the repository interfaces and the gateway types.
-
-**Imports.** This layer can import `domain/` and `application/gateway/`.
-It cannot import anything else under `application/`.
-
-**Notes.**
-
-- Infrastructure does not own the composition root.
-  Entry points import `src/container.ts` to create the clients.
-- Helpers that implement no interface go in `infrastructure/internal/`.
-  Only infrastructure files can import them.
-
-#### Presentation (`src/presentation/`)
-
-**Role.** This layer receives outside input, holds non-persistent working memory
-for its JS context, and calls application public functions for multi-step work.
-Transport-only work can call a gateway or repository method directly.
-
-**Imports.**
-
-- Can import: application public functions (and their types),
-  `application/gateway`, domain types, `domain/<area>/fn` pure functions,
-  other presentation files, `src/container.ts`, and `src/internal/`.
-- Cannot import: `application/internal/` or any infrastructure file.
-  Entry points import `src/container.ts` to create the clients.
-
-**Notes.**
-
-- Outbound transport-only work can call a gateway or repository method
-  directly (content → background messaging, thin repository reads for UI pre-fill).
-- Multi-step business work stays in application public functions
-  (GitHub Device Flow sign-in, semantic diff pipeline, PR prefetch).
-  Presentation passes gateways, repositories, and working memory into those verbs.
-- Inbound transport events are presentation work, like HTTP routes
-  (`chrome.runtime.onMessage`, `chrome.storage.onChanged`, DOM events).
-- The `viewMode` storage key is a UI preference.
-  Presentation reads and writes it directly.
-- The `accessToken` and `signin` keys belong to the auth repository.
-  Presentation only observes their change events.
-
-### Startup
-
-Each entry point follows this sequence:
-
-```
-createX() -> createDiffSession() (if needed) -> subscribe -> start or iterate
-```
-
-## Verification
-
-Install the toolchain from the repository root:
-
-```bash
+```sh
 mise install
-```
-
-Then run the extension checks:
-
-```bash
 cd extension
-pnpm install
+pnpm install --frozen-lockfile
 pnpm run size
 pnpm run lint
 pnpm run typecheck
@@ -310,50 +75,22 @@ pnpm test
 pnpm run build
 ```
 
-`pnpm run size`, `pnpm test`, and `pnpm run build` each run `zig build wasm` when they need the WASM file.
-If the gzip-compressed WASM bundle exceeds the budget in
-`scripts/check-wasm-size.mjs`, `pnpm run size` fails.
+The size check, test setup, and build compile `core/` to WebAssembly with `zig build wasm`.  
+The size check enforces the gzip size limit in `scripts/check-wasm-size.mjs`.
 
-For end-to-end checks:
+To run the browser suite, install Playwright's Chromium dependencies once and run:
 
-```bash
-cd extension
-pnpm exec playwright install --with-deps chromium   # first time on a machine
+```sh
+pnpm exec playwright install --with-deps chromium
 pnpm run e2e
 ```
 
-`pnpm run e2e` builds with `--e2e` to use the local API origin, then runs Playwright.
+`pnpm run e2e` builds the extension with a local API origin and runs Playwright against Chromium.  
+It does not use a real GitHub account.  
+CI runs these checks in the `extension` job of [`.github/workflows/ci.yml`](../.github/workflows/ci.yml).
 
-To load a local build in Chrome manually:
+To load a local build manually, run `pnpm run build`, open `chrome://extensions`, enable **Developer mode**, choose **Load unpacked**, and select `extension/dist/`.
 
-1. Run `pnpm run build` in `extension/`.
-2. Open `chrome://extensions`.
-3. Enable Developer mode.
-4. Select **Load unpacked**.
-5. Select `extension/dist/`.
-
-CI runs the same checks in the `extension` job of
-[`.github/workflows/ci.yml`](../.github/workflows/ci.yml).
-
-## Deploy
-
-Maintainers publish the extension through the Release workflow on `main`.
-
-1. Run [`.github/workflows/release.yml`](../.github/workflows/release.yml)
-   with `workflow_dispatch` and a version `X.Y.Z` (no `v` prefix).
-2. Leave `skip_chrome_extension` unchecked to submit the extension to the Chrome Web Store.
-   Check it to skip that submission. The GitHub Release still includes the extension ZIP.
-3. Verify that the `CWS_*` repository secrets are set before you rely on
-   `publish-extension`.
-
-The workflow updates the versions.
-It builds the CLI ZIP files and `prefablens-extension-$VERSION.zip`.
-The workflow commits the changes, tags `v$VERSION`, and creates the GitHub Release.
-Unless `skip_chrome_extension` is set, the `publish-extension` job then downloads that ZIP file.
-The job uploads the ZIP file to the Chrome Web Store and submits it for review.
-The store publishes the extension after approval.
-
-If a submission remains under review, rerunning `publish-extension` fails
-until the store finishes processing it.
-If no Chrome Web Store submission is pending, you can re-run
-`publish-extension` alone.
+The release ZIP contains `extension/dist/` with `manifest.json` at its root.  
+The release workflow can submit that build to the Chrome Web Store; the store publishes it after review.  
+Maintainer release steps are in [`.github/workflows/release.yml`](../.github/workflows/release.yml).

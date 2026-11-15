@@ -1,54 +1,45 @@
 # Privacy policy: PrefabLens Chrome extension
 
-Last updated: 2026-07-12
+Last updated: 2026-11-15
 
-PrefabLens shows semantic diffs for UnityYAML files on GitHub pull request pages.
-The extension runs only in your browser.
-The extension has no developer-operated server.
-It sends data only through requests to GitHub.
+PrefabLens displays semantic diffs for UnityYAML files on GitHub pull request pages.  
+It runs in your browser, has no developer-operated server, and makes network requests only to GitHub.
 
 ## Data the extension handles
 
-- **GitHub OAuth token (authentication information).** GitHub issues this token after you authenticate with GitHub Device Flow. The extension uses it to authenticate requests to the GitHub API.
-- **Extension settings.** These include your view preference (semantic or raw) and a GUID index built from each repository's contents. The index makes diff rendering faster.
-- **Diff cache.** The extension caches rendered diffs for the pull requests you view. The cache lasts for the browser session.
+- **GitHub access token.** GitHub issues the token through Device Flow with the `repo` scope.  
+  The extension uses it to read pull request metadata and repository contents through the GitHub API.
+- **Pending sign-in state.** While sign-in is in progress, the extension stores the temporary GitHub user code and its expiry time.
+- **Settings and repository index.** The extension stores your view preference and GUID-to-path mappings built from repository contents.
+- **Rendered diff cache.** The extension caches rendered diffs for pull requests you view.  
+  Chrome clears this cache when the browser closes.
 
-## How data is collected and used
+## Collection and use
 
-GitHub issues the token after you complete the GitHub Device Flow authorization.
-The extension uses the token only to fetch file contents and pull request metadata from the GitHub API.
-These requests supply the data for semantic diffs.
-It collects no other data.
-It does not collect browsing history.
-It does not collect page content from any site other than `https://github.com`.
-It does not collect personal information.
+The extension reads GitHub pull request pages to find UnityYAML files, then fetches the data needed to render their diffs from GitHub.  
+It does not collect browsing history or page content from other websites.  
+It has no analytics, tracking, or telemetry.
 
-## Where data is stored
+## Storage
 
-The extension stores data only on your device:
+The extension stores the token, pending sign-in state, settings, and repository index in `chrome.storage.local` on your device.  
+It stores the diff cache in `chrome.storage.session`, which Chrome clears when the browser closes.  
+The extension does not sync this data to other devices.
 
-- The token and settings are stored locally in `chrome.storage.local`.
-- The diff cache is stored in `chrome.storage.session`. The browser discards the cache when it closes.
+## Sharing
 
-The extension does not sync data to other devices.
-It does not upload data anywhere else.
-
-## Who data is shared with
-
-The extension shares data only with GitHub.
-The extension sends the token over HTTPS only to `github.com` and `api.github.com`.
-These hosts serve GitHub Device Flow, file contents, and pull request metadata.
-It uses no service other than GitHub and has no analytics, tracking, or telemetry.
+The extension sends the access token over HTTPS to `api.github.com` for authenticated API requests.  
+Device Flow requests go to `github.com`; they do not include the access token.  
+The extension uses no external service other than GitHub.
 
 ## Data removal
 
-Remove the extension to delete all data it stored on your device.
-You can also revoke the token at any time from your GitHub account settings under [Applications](https://github.com/settings/applications).
+Remove the extension to delete its locally stored data.  
+You can also revoke its token in your GitHub account settings under [Applications](https://github.com/settings/applications).
 
 ## Changes to this policy
 
-Changes to this policy appear in this file.
-The revision history is in the Git log.
+Changes appear in this file; the revision history is in the Git log.
 
 ## Contact
 

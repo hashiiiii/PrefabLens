@@ -26,6 +26,9 @@ const help_text = usage_line ++ "\nGit merge setup: " ++ merge_setup.usage ++ "\
     \\  --project              Share .gitattributes; configure the current clone
     \\  --local                Configure the current clone (default)
     \\  --user                 Configure all your repositories with global settings
+    \\  --strategy             Select the full strategy for merge, pull, rebase, and cherry-pick
+    \\                         Without this flag, setup leaves strategy selection unchanged
+    \\  Merge setup requires Git 2.45 or later and prefablens on PATH.
     \\
     \\External merge tool: prefablens mergetool [--terminal] <base> <local> <remote> <merged>
     \\  --terminal             Open a terminal on macOS or Windows and wait for the result
@@ -33,22 +36,23 @@ const help_text = usage_line ++ "\nGit merge setup: " ++ merge_setup.usage ++ "\
     \\Keymap setup: prefablens setup-keymap
     \\  Create keymap.json if missing and print its path
     \\
-    \\Operands ending in a Unity YAML extension (.prefab, .unity, .asset, ...)
-    \\are paths; anything else is a git ref.
+    \\Diff operands ending in a UnityYAML extension (.prefab, .unity, .asset, ...)
+    \\are paths; other operands are Git refs. Assets must use text serialization.
     \\
-    \\  (no operands)          HEAD vs working tree, all changed Unity files
+    \\  (no operands)          HEAD vs working tree, all changed UnityYAML files
     \\  <path>                 HEAD vs working tree, one file
     \\  <ref> [<path>]         ref vs working tree
     \\  <ref> <ref> [<path>]   ref vs ref
-    \\  <before> <after>       compare two files directly (no git)
+    \\  <before> <after>       compare two files directly (no Git)
     \\
     \\options:
     \\  --json         prefablens.diff.v2 JSON ({path, diff} array in bulk mode)
     \\  --html         self-contained HTML report on stdout
     \\  --open         write the HTML report to a temp file and open it in a browser
-    \\  --project DIR  Unity project root; git uses its containing repository;
-    \\                 git mode resolves against the repository root by default
-    \\  --no-project   skip the default guid-resolution scan
+    \\  --project DIR  resolve GUIDs from this Unity project root;
+    \\                 Git comparisons use its containing repository;
+    \\                 the default is the repository root for Git comparisons
+    \\  --no-project   skip the default GUID scan in Git comparisons
     \\  --color        force ANSI colors when stdout is not a TTY (e.g. piping)
     \\  --no-color     disable ANSI colors (overrides TTY detection and --color)
     \\  --version      print the version and exit
@@ -63,7 +67,6 @@ fn readFile(io: std.Io, arena: std.mem.Allocator, path: []const u8) ![]u8 {
 /// Writes the report under `dir` with a collision-resistant name and
 /// returns the full path.
 pub fn writeReportFile(io: std.Io, arena: std.mem.Allocator, dir: []const u8, name_stem: []const u8, html: []const u8) ![]const u8 {
-    // Zig 0.16 clocks go through Io: no std.time.milliTimestamp anymore.
     const millis: u64 = @intCast(std.Io.Clock.now(.real, io).toMilliseconds());
     const path = try std.fmt.allocPrint(arena, "{s}/prefablens-{s}-{d}.html", .{ dir, name_stem, millis });
     try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = html });

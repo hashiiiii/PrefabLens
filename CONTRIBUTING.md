@@ -49,7 +49,7 @@ zig build perf
 ```
 
 `zig build` installs the CLI and Git strategy script in `zig-out/bin/`.  
-`zig build test` runs core, CLI, and integration tests.
+`zig build test` runs core, CLI, and integration tests.  
 `zig build perf` measures a 50,000-object diff and a 50,000-file GUID scan against performance budgets.
 
 Build and test the extension:

@@ -28,12 +28,15 @@ layout: layout.liquid
 
 <h2 id="git-merge"><a href="#git-merge">Git merge</a></h2>
 <p>
-  With Git 2.45 or later, run <code>prefablens setup-merge --strategy</code> in your repository to enable the full
-  merge strategy. During <code>git merge</code> in an interactive terminal, PrefabLens merges compatible changes and
+  With Git 2.45 or later, run these commands in your repository to enable the full merge strategy:
+</p>
+<pre><code>prefablens setup-merge --local
+git config --local --replace-all pull.twohead prefablens</code></pre>
+<p>
+  During <code>git merge</code> in an interactive terminal, PrefabLens merges compatible changes and
   opens its resolver for UnityYAML conflicts that need your input.
 </p>
 <p>
-  For automatic content merges with Git's default strategy, use <code>prefablens setup-merge</code>.
   Resolve remaining conflicts with <code>git mergetool --tool=prefablens</code>.
 </p>
 <div class="window">

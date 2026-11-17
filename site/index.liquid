@@ -52,9 +52,9 @@ layout: layout.liquid
 <pre><code><span class="cmd">scoop</span> bucket add hashiiiii https://github.com/hashiiiii/scoop-bucket
 <span class="cmd">scoop</span> install prefablens</code></pre>
 <p>With mise:</p>
-<pre><code><span class="cmd">mise</span> use -g github:hashiiiii/PrefabLens</code></pre>
+<pre><code><span class="cmd">mise</span> use -g github:hashiiiii/PrefabLens@latest</code></pre>
 <p>
-  Or download your platform's ZIP from <a href="https://github.com/hashiiiii/PrefabLens/releases">GitHub Releases</a>.
+  Or download your platform's ZIP from the <a href="https://github.com/hashiiiii/PrefabLens/releases/latest">latest GitHub Release</a>.
   Extract it and add its directory to <code>PATH</code>.
   Run <code>prefablens</code> in your repository to compare <code>HEAD</code> with the working tree.
   See the <a href="https://github.com/hashiiiii/PrefabLens/blob/main/docs/cli.md">CLI guide</a> for commands and merge setup.
@@ -63,6 +63,7 @@ layout: layout.liquid
 <h3 id="unity-editor"><a href="#unity-editor">Unity Editor</a></h3>
 <p>Requires Unity 2022.3 or later. Install with OpenUPM:</p>
 <pre><code><span class="cmd">openupm</span> add com.hashiiiii.prefablens</code></pre>
-<p>Or use the Package Manager Git URL: <code>https://github.com/hashiiiii/PrefabLens.git?path=editor</code></p>
+<p>Or use the Package Manager Git URL for the latest release: <code>https://github.com/hashiiiii/PrefabLens.git?path=editor#v0.12.0</code></p>
+<p>The Release workflow updates this URL for each new version. Use the current URL when upgrading a Git installation.</p>
 
 <p>Open <strong>Window &gt; PrefabLens</strong> to select a changed asset and review its diff.</p>

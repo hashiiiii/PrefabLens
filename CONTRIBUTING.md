@@ -8,7 +8,8 @@
    Link the approved issue in this repository with `Closes #NNN` and complete every section of the pull request template.
 
 The PR gate also accepts an `approved` label applied to the pull request by a maintainer.  
-If neither the linked PrefabLens issue nor the pull request has that label, the gate comments and converts the pull request to draft.
+Pull requests from the repository owner, Renovate, and `unidog-bot[bot]` are exempt from the gate.  
+For other pull requests, if neither the linked PrefabLens issue nor the pull request has that label, the gate comments and converts the pull request to draft.
 
 Use English for issues, pull requests, and documentation so contributors can follow earlier decisions.  
 Use `type: subject` for pull request titles.
@@ -86,7 +87,9 @@ For product workflows, see the [CLI guide](docs/cli.md), [extension guide](docs/
 Before the release, confirm the GitHub App has `Contents: Read and write` permission and access to the PrefabLens, `homebrew-tap`, and `scoop-bucket` repositories.  
 Run the [Release workflow](.github/workflows/release.yml) from `main` and enter a version as `X.Y.Z`, without a `v` prefix.
 
-The workflow updates the version fields for the CLI, extension, and Editor package automatically.  
+The workflow updates the version fields for the CLI, extension, and Editor package, along with the release-pinned Editor Git URLs in the README, Editor guide, and site.  
+It also updates the CLI guide's link to the documentation for the published release.  
+The version sync guard checks these URLs in CI and after the release version bump.  
 After the builds succeed, it commits the version bump, creates the `vX.Y.Z` tag, and publishes a GitHub Release.  
 It also updates the Homebrew and Scoop packages.  
 Generated release notes use squash-merged pull request titles unchanged; the project does not maintain a curated changelog.

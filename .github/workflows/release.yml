@@ -37,6 +37,7 @@ jobs:
         run: |
           set -euo pipefail
           bump-my-version bump --new-version "$VERSION"
+          .github/scripts/check-version-sync.sh
           git add -u
           git diff --cached --name-only -z | tar --null -T - -czf "$RUNNER_TEMP/version-bump.tar.gz"
       - uses: actions/upload-artifact@v7.0.2

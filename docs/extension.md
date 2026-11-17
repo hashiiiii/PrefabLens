@@ -24,7 +24,8 @@ GitHub Device Flow requests the `repo` OAuth scope.
 The token and view preference stay in Chrome storage; the extension sends requests only to GitHub and does not send data to a PrefabLens server.  
 See the [privacy policy](../PRIVACY.md) for details.
 
-The extension detects UnityYAML files on pull request file diffs, commit diffs, and same-repository compare pages.  
+The extension detects UnityYAML files on pull request file diffs, commit diffs, and same-repository three-dot compare pages (`base...head`).  
+Compare pages with `owner:branch` refs are unsupported.  
 A file must be a text-based Unity asset to produce a semantic diff.
 
 ## Troubleshooting
@@ -36,7 +37,7 @@ A file must be a text-based Unity asset to produce a semantic diff.
 - **GitHub rate limit or unresolved references:** if a rate-limit error appears, wait and select **Semantic** again.  
   If the semantic view shows an unresolved-reference message, select **Retry** there.  
   GitHub can limit requests while the extension loads file contents or resolves Unity references.
-- **A large file is not rendered yet:** files larger than 25 megabytes ask for confirmation. Select **Render anyway** to continue.
+- **A large file is not rendered yet:** the extension asks for confirmation when a file's before and after contents total more than 25 mebibytes. Select **Render anyway** to continue.
 - **A file cannot be diffed:** use **Raw** to see GitHub's text diff.  
   Non-text Unity assets cannot produce a semantic diff.
 

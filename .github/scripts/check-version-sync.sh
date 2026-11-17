@@ -1,8 +1,6 @@
 #!/bin/sh
-# Guard that the release version stays in sync across the five version-pinned
-# files fanned out by .bumpversion.toml. Each extraction below mirrors that
-# file's search pattern in .bumpversion.toml, so this guard and the release
-# tooling agree on what "the version" is.
+# Keep installation URLs in sync with release builds so users install the
+# version whose artifacts the Release workflow publishes.
 set -eu
 
 cd "$(dirname "$0")/../.."
@@ -12,16 +10,16 @@ reference=""
 
 # $1: file path, $2: extracted version (empty when the marker is missing)
 check() {
-  file=$1
-  version=$2
-  if [ -z "$version" ]; then
-    version="(version marker not found)"
+  checked_file=$1
+  checked_version=$2
+  if [ -z "$checked_version" ]; then
+    checked_version="(version marker not found)"
     status=1
   fi
-  printf '%s: %s\n' "$file" "$version"
+  printf '%s: %s\n' "$checked_file" "$checked_version"
   if [ -z "$reference" ]; then
-    reference=$version
-  elif [ "$version" != "$reference" ]; then
+    reference=$checked_version
+  elif [ "$checked_version" != "$reference" ]; then
     status=1
   fi
 }
@@ -36,6 +34,24 @@ check editor/Editor/Cli.cs \
   "$(sed -n 's/.*public const string Version = "\([^"]*\)".*/\1/p' editor/Editor/Cli.cs | head -n 1)"
 check extension/package.json \
   "$(sed -n 's/.*"version": "\([^"]*\)".*/\1/p' extension/package.json | head -n 1)"
+
+editor_url='https://github.com/hashiiiii/PrefabLens.git?path=editor#v'
+for file in README.md docs/editor.md site/index.liquid site/editor.liquid; do
+  urls=$(grep -oE 'https://github[.]com/hashiiiii/PrefabLens[.]git[?]path=editor[^<`"[:space:]]*' "$file" || true)
+  if [ -z "$urls" ]; then
+    check "$file (Editor Git URL)" ""
+    continue
+  fi
+  # A valid example must not hide another URL that would still install main.
+  while IFS= read -r url; do
+    check "$file (Editor Git URL)" "${url#"$editor_url"}"
+  done <<EOF
+$urls
+EOF
+done
+
+check "docs/cli.md (Release guide URL)" \
+  "$(sed -n 's|.*https://github.com/hashiiiii/PrefabLens/blob/v\([^/]*\)/docs/cli.md.*|\1|p' docs/cli.md)"
 
 if [ "$status" -ne 0 ]; then
   echo "Version mismatch: the files above must all carry the same version." >&2

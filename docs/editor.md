@@ -9,7 +9,9 @@ For contributor workflow, see [CONTRIBUTING.md](../CONTRIBUTING.md).
 ## Install and Use
 
 The package requires Unity 2022.3 or later.  
-Install it through [OpenUPM](https://openupm.com/packages/com.hashiiiii.prefablens/) or add the Git URL `https://github.com/hashiiiii/PrefabLens.git?path=editor` in Unity Package Manager.  
+Install it through [OpenUPM](https://openupm.com/packages/com.hashiiiii.prefablens/) or add the Git URL `https://github.com/hashiiiii/PrefabLens.git?path=editor#v0.12.0` in Unity Package Manager.  
+The Release workflow updates this URL to the latest release.  
+Use the current URL when upgrading a Git installation.  
 The [README](../README.md#unity-editor) has step-by-step installation instructions.
 
 After installation:

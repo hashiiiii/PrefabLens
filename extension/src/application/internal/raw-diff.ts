@@ -15,7 +15,8 @@ import {
 } from "../gateway/github";
 
 const EMPTY = new Uint8Array(0);
-const TOO_LARGE_BYTES = 25 * 1024 * 1024; // Files over 25MB render only on click.
+// Both revisions consume memory, so the automatic rendering limit counts their combined size.
+const TOO_LARGE_BYTES = 25 * 1024 * 1024;
 const MAX_CONCURRENT_META_FETCHES = 8;
 const utf8 = new TextDecoder();
 

@@ -2,7 +2,7 @@
 
 [![Zig](https://img.shields.io/badge/zig-0.17.0-f7a41d.svg?logo=zig&logoColor=white)](https://ziglang.org)
 [![License](https://img.shields.io/github/license/hashiiiii/PrefabLens)](LICENSE)
-[![Release](https://img.shields.io/github/v/release/hashiiiii/PrefabLens)](https://github.com/hashiiiii/PrefabLens/releases)
+[![Release](https://img.shields.io/github/v/release/hashiiiii/PrefabLens)](https://github.com/hashiiiii/PrefabLens/releases/latest)
 [![CI](https://img.shields.io/github/actions/workflow/status/hashiiiii/PrefabLens/ci.yml?branch=main&label=CI)](https://github.com/hashiiiii/PrefabLens/actions/workflows/ci.yml)
 
 PrefabLens shows changes to GameObjects, components, and fields in UnityYAML assets.  
@@ -49,8 +49,11 @@ For scoped registry setup, see the [OpenUPM package page](https://openupm.com/pa
 Alternatively, open **Window > Package Manager**, choose **Add package from git URL**, and enter:
 
 ```text
-https://github.com/hashiiiii/PrefabLens.git?path=editor
+https://github.com/hashiiiii/PrefabLens.git?path=editor#v0.12.0
 ```
+
+The Release workflow updates this Git URL to the latest release.  
+To upgrade a Git installation, use the current URL from this section in Package Manager.
 
 Open **Window > PrefabLens**.  
 The package downloads the CLI automatically when needed, so the first download requires internet access.  
@@ -84,10 +87,10 @@ scoop install prefablens
 With mise:
 
 ```bash
-mise use -g github:hashiiiii/PrefabLens
+mise use -g github:hashiiiii/PrefabLens@latest
 ```
 
-For manual installation, download your platform's ZIP from [GitHub Releases](https://github.com/hashiiiii/PrefabLens/releases).  
+For manual installation, download your platform's ZIP from the [latest GitHub Release](https://github.com/hashiiiii/PrefabLens/releases/latest).  
 Extract it and add its directory to `PATH`.  
 Each archive contains the native `prefablens` executable and the `git-merge-prefablens` script; keep them together for Git merge integration.
 
@@ -162,13 +165,14 @@ Each clone still needs the Git configuration from setup.
 For repository-wide dependency validation and interactive resolution of content and structural conflicts, select the full merge strategy:
 
 ```bash
-prefablens setup-merge --local --strategy
+prefablens setup-merge --local
+git config --local --replace-all pull.twohead prefablens
 git merge origin/main
 ```
 
-`--strategy` selects PrefabLens as the default strategy through `pull.twohead`.  
+`pull.twohead` selects PrefabLens as the default strategy.  
 This setting also affects pull, rebase, and cherry-pick.  
-To select the strategy for a single merge after ordinary setup, use `git merge -s prefablens origin/main`.  
+You can also select the strategy explicitly for one merge with `git merge -s prefablens origin/main`.  
 See [merge behavior](docs/cli.md#merge-behavior) for operation-specific details and inherited Git settings.
 
 https://github.com/user-attachments/assets/2ad6a2e9-5562-40b8-ab7e-c5f277da3d8b

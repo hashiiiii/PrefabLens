@@ -32,3 +32,28 @@ replace = 'public const string Version = "{new_version}"'
 filename = "extension/package.json"
 search = '"version": "{current_version}"'
 replace = '"version": "{new_version}"'
+
+[[tool.bumpversion.files]]
+filename = "README.md"
+search = 'https://github.com/hashiiiii/PrefabLens.git?path=editor#v{current_version}'
+replace = 'https://github.com/hashiiiii/PrefabLens.git?path=editor#v{new_version}'
+
+[[tool.bumpversion.files]]
+filename = "docs/editor.md"
+search = 'https://github.com/hashiiiii/PrefabLens.git?path=editor#v{current_version}'
+replace = 'https://github.com/hashiiiii/PrefabLens.git?path=editor#v{new_version}'
+
+[[tool.bumpversion.files]]
+filename = "docs/cli.md"
+search = 'https://github.com/hashiiiii/PrefabLens/blob/v{current_version}/docs/cli.md'
+replace = 'https://github.com/hashiiiii/PrefabLens/blob/v{new_version}/docs/cli.md'
+
+[[tool.bumpversion.files]]
+filename = "site/index.liquid"
+search = 'https://github.com/hashiiiii/PrefabLens.git?path=editor#v{current_version}'
+replace = 'https://github.com/hashiiiii/PrefabLens.git?path=editor#v{new_version}'
+
+[[tool.bumpversion.files]]
+filename = "site/editor.liquid"
+search = 'https://github.com/hashiiiii/PrefabLens.git?path=editor#v{current_version}'
+replace = 'https://github.com/hashiiiii/PrefabLens.git?path=editor#v{new_version}'

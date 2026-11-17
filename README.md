@@ -49,7 +49,7 @@ For scoped registry setup, see the [OpenUPM package page](https://openupm.com/pa
 Alternatively, open **Window > Package Manager**, choose **Add package from git URL**, and enter:
 
 ```text
-https://github.com/hashiiiii/PrefabLens.git?path=editor#v0.12.0
+https://github.com/hashiiiii/PrefabLens.git?path=editor#v0.13.0
 ```
 
 Open **Window > PrefabLens**.  

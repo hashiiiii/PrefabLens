@@ -4,7 +4,7 @@
 Its tree output shows semantic changes rather than raw YAML line diffs.
 
 This guide describes CLI commands, Git merge integration, merge-tool controls, and the CLI source boundary for the current source checkout.  
-For the latest published CLI, see the [released CLI guide](https://github.com/hashiiiii/PrefabLens/blob/v0.12.0/docs/cli.md).  
+For the latest published CLI, see the [released CLI guide](https://github.com/hashiiiii/PrefabLens/blob/v0.13.0/docs/cli.md).  
 For installation and everyday workflows, see the [README](../README.md).  
 For contributor workflows and checks, see [CONTRIBUTING.md](../CONTRIBUTING.md).
 

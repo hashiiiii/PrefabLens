@@ -52,9 +52,6 @@ Alternatively, open **Window > Package Manager**, choose **Add package from git 
 https://github.com/hashiiiii/PrefabLens.git?path=editor#v0.12.0
 ```
 
-The Release workflow updates this Git URL to the latest release.  
-To upgrade a Git installation, use the current URL from this section in Package Manager.
-
 Open **Window > PrefabLens**.  
 The package downloads the CLI automatically when needed, so the first download requires internet access.  
 To use an installed executable, select it in **Preferences > PrefabLens**.  

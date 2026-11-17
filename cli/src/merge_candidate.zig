@@ -9,6 +9,7 @@ const Git = merge_git.Git;
 
 const Entry = struct { path: []const u8, mode: []const u8, oid: []const u8 };
 const Snapshot = struct {
+    tree: []const u8,
     entries: []const Entry,
     paths: std.StringHashMap(usize),
 
@@ -23,6 +24,7 @@ const Node = struct {
     changed: bool = false,
     uncertain_identity: bool = false,
 };
+const Classification = struct { unity: bool = false, relevant: bool = false };
 pub const Item = struct {
     paths: []const []const u8,
     conflict: ?strategy.Conflict = null,
@@ -42,7 +44,7 @@ pub const Candidate = struct {
     nodes: std.ArrayList(Node) = .empty,
     node_index: std.StringHashMap(usize),
     batch: ?revision.Batch = null,
-    relevance: std.StringHashMap(bool),
+    classifications: std.StringHashMap(Classification),
     items: std.ArrayList(Item) = .empty,
     snapshots: std.ArrayList(Snapshot) = .empty,
     evidence_paths: []const []const u8 = &.{},
@@ -62,7 +64,7 @@ pub const Candidate = struct {
         var alternate = git;
         alternate.env = env;
         try alternate.ok(&.{ "read-tree", result.tree });
-        var self: Candidate = .{ .git = git, .alternate = alternate, .scratch = absolute, .result = result, .store = revision.Store.init(git), .node_index = .init(git.arena), .relevance = .init(git.arena) };
+        var self: Candidate = .{ .git = git, .alternate = alternate, .scratch = absolute, .result = result, .store = revision.Store.init(git), .node_index = .init(git.arena), .classifications = .init(git.arena) };
         errdefer if (self.batch) |*batch| batch.child.kill(git.io);
         const sources = result.sources orelse return error.MissingMergeSources;
         for (sources.bases) |base| try self.scan(base);
@@ -94,21 +96,17 @@ pub const Candidate = struct {
         return self.batch.?.read(temporary, oid, 256 * 1024 * 1024);
     }
 
-    fn collectionRelevant(self: *Candidate, oid: []const u8, bytes: []const u8) !bool {
-        if (self.relevance.get(oid)) |value| return value;
-        // Inspect parsed structure only. A script binding needs schema inspection
-        // because Unity can serialize a typed collection as a scalar token.
+    fn classify(self: *Candidate, oid: []const u8) !Classification {
+        if (self.classifications.get(oid)) |value| return value;
+        // Immutable objects repeat across historical trees; cache facts before
+        // reading bytes, without retaining every asset's contents or parse tree.
         var memory = std.heap.ArenaAllocator.init(std.heap.page_allocator);
         defer memory.deinit();
-        const built = core.merge.build(memory.allocator(), bytes, bytes, bytes) catch {
-            try self.relevance.put(oid, true);
-            return true;
-        };
-        const relevant = for (built.plan.ours.documents) |document| {
-            if (document.class_id == 1001 or containsSequence(document.body)) break true;
-        } else false;
-        try self.relevance.put(oid, relevant);
-        return relevant;
+        const bytes = try self.readBlob(oid, memory.allocator());
+        const unity = core.isUnityYaml(bytes);
+        const value: Classification = .{ .unity = unity, .relevant = unity and (core.merge.needsSemanticReview(memory.allocator(), bytes) catch true) };
+        try self.classifications.put(oid, value);
+        return value;
     }
 
     fn scan(self: *Candidate, tree: []const u8) !void {
@@ -125,17 +123,18 @@ pub const Candidate = struct {
                 if (metadata) n.uncertain_identity = true;
                 continue;
             }
+            if (!metadata) {
+                const value = try self.classify(entry.oid);
+                n.unity = n.unity or value.unity;
+                n.relevant = n.relevant or value.relevant;
+                continue;
+            }
             // Classification must not retain every asset's bytes or parsed YAML
             // for the lifetime of a replay step.
             var memory = std.heap.ArenaAllocator.init(std.heap.page_allocator);
             defer memory.deinit();
             const bytes = try self.readBlob(entry.oid, memory.allocator());
-            if (metadata) {
-                if ((try revision.metadataGuid(memory.allocator(), bytes)) == null) n.uncertain_identity = true;
-            } else if (core.isUnityYaml(bytes)) {
-                n.unity = true;
-                n.relevant = n.relevant or try self.collectionRelevant(entry.oid, bytes);
-            }
+            if ((try revision.metadataGuid(memory.allocator(), bytes)) == null) n.uncertain_identity = true;
         }
     }
 
@@ -166,12 +165,13 @@ pub const Candidate = struct {
         var schema_paths: std.ArrayList([]const u8) = .empty;
         for (self.nodes.items) |n| if (n.changed and (schemaPath(n.path) or n.uncertain_identity)) try schema_paths.append(a, n.path);
         self.evidence_paths = schema_paths.items;
+        const recheck = schema_paths.items.len != 0 and try self.schemaChanged();
         for (self.nodes.items) |*n| {
-            if (!assetPath(n.path) or (!n.changed and schema_paths.items.len == 0)) continue;
+            if (!assetPath(n.path) or (!n.changed and !recheck)) continue;
             try self.inspect(n, false);
             // Source changes can invalidate even unchanged dependents, so their
             // semantic review must survive the changed-path filter.
-            if (n.unity and schema_paths.items.len != 0) n.changed = true;
+            if (n.unity and recheck) n.changed = true;
         }
         for (self.nodes.items) |n| {
             if (!n.unity or !n.relevant or !n.changed or self.covered(n.path)) continue;
@@ -188,6 +188,26 @@ pub const Candidate = struct {
 
     fn covered(self: *const Candidate, path: []const u8) bool {
         for (self.items.items) |item| for (item.paths) |p| if (pathUnder(path, p)) return true;
+        return false;
+    }
+
+    fn schemaChanged(self: *Candidate) !bool {
+        for (self.nodes.items) |n| if (n.changed and n.uncertain_identity) return true;
+        for (self.result.conflicts) |conflict| for (conflict.paths) |path| {
+            if (schemaPath(path)) return true;
+        };
+        var first: ?[32]u8 = null;
+        for (self.snapshots.items) |snapshot| {
+            // Optional schema comparison must not introduce failures when the
+            // original candidate discovery could continue conservatively.
+            const fingerprint = (self.store.schemaFingerprint(snapshot.tree) catch |err| switch (err) {
+                error.OutOfMemory => return err,
+                else => return true,
+            }) orelse return true;
+            if (first) |known| {
+                if (!std.mem.eql(u8, &known, &fingerprint)) return true;
+            } else first = fingerprint;
+        }
         return false;
     }
 
@@ -440,7 +460,7 @@ fn treeEntries(git: Git, tree: []const u8) !Snapshot {
         try paths.put(path, entries.items.len);
         try entries.append(git.arena, .{ .path = path, .mode = mode, .oid = oid });
     }
-    return .{ .entries = entries.items, .paths = paths };
+    return .{ .tree = tree, .entries = entries.items, .paths = paths };
 }
 
 fn marker(writer: *std.Io.Writer, byte: u8, size: u31, label: []const u8, bytes: []const u8) !void {
@@ -449,16 +469,6 @@ fn marker(writer: *std.Io.Writer, byte: u8, size: u31, label: []const u8, bytes:
     try writer.writeByte('\n');
     try writer.writeAll(bytes);
     if (bytes.len != 0 and bytes[bytes.len - 1] != '\n') try writer.writeByte('\n');
-}
-
-fn containsSequence(value: *const core.model.Node) bool {
-    return switch (value.*) {
-        .seq => true,
-        .map => |entries| for (entries) |entry| {
-            if (std.mem.eql(u8, entry.key, "m_Script") or containsSequence(entry.value)) break true;
-        } else false,
-        .scalar, .ref => false,
-    };
 }
 
 test "candidate discovery keeps unchanged asset contents outside the memory budget" {

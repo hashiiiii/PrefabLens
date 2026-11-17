@@ -24,6 +24,49 @@ pub const BuildResult = struct {
     partial: []const u8,
 };
 
+test "semantic classification keeps scalar assets outside schema review" {
+    var memory = std.heap.ArenaAllocator.init(testing.allocator);
+    defer memory.deinit();
+    // A script edit must not turn unrelated large scalar assets into full merge plans.
+    try testing.expect(!try needsSemanticReview(memory.allocator(), "--- !u!114 &1\nMonoBehaviour:\n  value: 1\n"));
+}
+
+test "semantic classification retains collections script bindings and prefab instances" {
+    var memory = std.heap.ArenaAllocator.init(testing.allocator);
+    defer memory.deinit();
+    // Packed arrays can look scalar; their script binding still needs historical type evidence.
+    try testing.expect(try needsSemanticReview(memory.allocator(), "--- !u!114 &1\nMonoBehaviour:\n  m_Script: {fileID: 11500000, guid: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, type: 3}\n  values: 01000000i\n"));
+    try testing.expect(try needsSemanticReview(memory.allocator(), "--- !u!114 &1\nMonoBehaviour:\n  values: [a, b]\n"));
+    try testing.expect(try needsSemanticReview(memory.allocator(), "--- !u!1001 &1\nPrefabInstance:\n  value: 1\n"));
+}
+
+test "semantic classification rejects malformed and structurally invalid assets" {
+    var memory = std.heap.ArenaAllocator.init(testing.allocator);
+    defer memory.deinit();
+    // Classification failures must retain the full strategy's existing conservative review path.
+    try testing.expectError(error.MalformedInput, needsSemanticReview(memory.allocator(), "--- !u!114 &1\nMonoBehaviour:\n  value: 1\n  value: 2\n"));
+    try testing.expectError(error.InvalidMerge, needsSemanticReview(memory.allocator(), "--- !u!114 &1\nMonoBehaviour:\n  target: {fileID: 99}\n"));
+}
+
+pub fn needsSemanticReview(arena: std.mem.Allocator, bytes: []const u8) Error!bool {
+    const parsed = try merge_planner.parseMergeSide(arena, bytes);
+    try merge_validate.validateParsed(arena, parsed);
+    for (parsed.documents) |document| {
+        if (document.class_id == 1001 or containsCollection(document.body)) return true;
+    }
+    return false;
+}
+
+fn containsCollection(node: *const model.Node) bool {
+    return switch (node.*) {
+        .seq => true,
+        .map => |entries| for (entries) |entry| {
+            if (std.mem.eql(u8, entry.key, "m_Script") or containsCollection(entry.value)) break true;
+        } else false,
+        .scalar, .ref => false,
+    };
+}
+
 pub fn build(
     arena: std.mem.Allocator,
     base: []const u8,

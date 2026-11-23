@@ -26,7 +26,7 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         run: .github/scripts/check-version-sync.sh
       - name: Install tools
-        uses: jdx/mise-action@v5.2.7
+        uses: jdx/mise-action@v5.2.9
       - name: Zig and ZLS compatibility
         uses: actions/github-script@v9.0.0
         with:
@@ -70,7 +70,7 @@ jobs:
           - aarch64-windows
     steps:
       - uses: actions/checkout@v7.0.1
-      - uses: jdx/mise-action@v5.2.7
+      - uses: jdx/mise-action@v5.2.9
       - uses: $/.github/actions/setup-zig-cache
       - run: zig build -Dtarget=${{ matrix.target }} -Doptimize=ReleaseSafe
 
@@ -79,7 +79,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7.0.1
       - name: Install tools
-        uses: jdx/mise-action@v5.2.7
+        uses: jdx/mise-action@v5.2.9
       - name: Restore Zig global cache
         uses: $/.github/actions/setup-zig-cache
       - name: Restore pnpm store cache
@@ -135,7 +135,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7.0.1
       - name: Install tools
-        uses: jdx/mise-action@v5.2.7
+        uses: jdx/mise-action@v5.2.9
       - name: Restore NuGet package cache
         uses: actions/cache@v6.1.0
         with:

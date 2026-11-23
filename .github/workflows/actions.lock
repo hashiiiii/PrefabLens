@@ -7,7 +7,7 @@ workflows:
         - 'actions/cache@v6.1.0'
         - 'actions/checkout@v7.0.1'
         - 'actions/github-script@v9.0.0'
-        - 'jdx/mise-action@v5.2.7'
+        - 'jdx/mise-action@v5.2.9'
     '.github/workflows/labeler.yml':
         - 'actions/labeler@v7.0.0'
     '.github/workflows/pages-redirect.yml':
@@ -22,11 +22,11 @@ workflows:
         - 'actions/create-github-app-token@v3.3.0'
         - 'actions/download-artifact@v8.0.2'
         - 'actions/upload-artifact@v7.0.2'
-        - 'jdx/mise-action@v5.2.7'
+        - 'jdx/mise-action@v5.2.9'
     '.github/workflows/site.yml':
         - 'actions/cache@v6.1.0'
         - 'actions/checkout@v7.0.1'
-        - 'jdx/mise-action@v5.2.7'
+        - 'jdx/mise-action@v5.2.9'
     '.github/workflows/verify-lockfile.yml':
         - 'actions/checkout@v7.0.1'
 dependencies:
@@ -82,8 +82,8 @@ dependencies:
         repo_id: 496012378
         uses:
             - 'actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f'
-    'jdx/mise-action@v5.2.7':
-        ref: 'v5.2.7'
-        commit: 'sha1-b44d12e7d0d8ee7461bb893e1b1993500433185b'
+    'jdx/mise-action@v5.2.9':
+        ref: 'v5.2.9'
+        commit: 'sha1-236a21c3b91f5db6d4e174b348674a0f0caac06d'
         owner_id: 216188
         repo_id: 738284564
